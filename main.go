@@ -12,7 +12,7 @@ var (
 )
 
 var rootCmd = &cobra.Command{
-	Use: "tfverify",
+	Use: "tinfoil",
 }
 
 func init() {
