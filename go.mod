@@ -1,4 +1,4 @@
-module github.com/tinfoilanalytics/verifier-cli
+module github.com/tinfoilanalytics/tinfoil-cli
 
 go 1.23.2
 
