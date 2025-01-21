@@ -1,0 +1,16 @@
+version: 2
+
+builds:
+  - binary: tinfoil
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
