@@ -54,7 +54,6 @@ var attestationVerifyCmd = &cobra.Command{
 		if err != nil {
 			log.Fatal(err)
 		}
-		log.Printf("Enclave TLS public key fingerprint: %x", enclaveCertFP)
 
 		log.Println("Verifying enclave measurements")
 		var attestedCertFP []byte
@@ -63,12 +62,12 @@ var attestationVerifyCmd = &cobra.Command{
 			log.Fatalf("Failed to parse enclave attestation doc: %v", err)
 		}
 
-		log.Printf("TLS certificate fingerprint: %x", attestedCertFP)
-
 		if !bytes.Equal(enclaveCertFP, attestedCertFP) {
+			log.Printf("Enclave TLS cert fingerprint: %x", enclaveCertFP)
+			log.Printf("Attestation TLS cert fingerprint: %x", attestedCertFP)
 			log.Fatalf("Certificate fingerprint mismatch")
 		} else {
-			log.Println("Certificate fingerprint match")
+			log.Printf("Certificate fingerprint match: %x", attestedCertFP)
 		}
 
 		if codeMeasurements != nil && enclaveMeasurements != nil {
