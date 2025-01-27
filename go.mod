@@ -4,7 +4,7 @@ go 1.23.2
 
 require (
 	github.com/spf13/cobra v1.8.1
-	github.com/tinfoilanalytics/verifier v0.0.2
+	github.com/tinfoilanalytics/verifier v0.0.5
 )
 
 require (
@@ -32,6 +32,8 @@ require (
 	github.com/go-openapi/validate v0.24.0 // indirect
 	github.com/google/certificate-transparency-go v1.2.1 // indirect
 	github.com/google/go-containerregistry v0.20.2 // indirect
+	github.com/google/go-sev-guest v0.0.0-00010101000000-000000000000 // indirect
+	github.com/google/logger v1.1.1 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/hashicorp/go-cleanhttp v0.5.2 // indirect
 	github.com/hashicorp/go-retryablehttp v0.7.7 // indirect
@@ -91,3 +93,5 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	k8s.io/klog/v2 v2.120.1 // indirect
 )
+
+replace github.com/google/go-sev-guest => github.com/jraman567/go-sev-guest v0.0.0-20250117204014-6339110611c9
