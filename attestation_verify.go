@@ -2,8 +2,8 @@ package main
 
 import (
 	"bytes"
-	"log"
 
+	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 
 	"github.com/tinfoilanalytics/verifier/pkg/attestation"
@@ -34,23 +34,19 @@ var attestationVerifyCmd = &cobra.Command{
 				log.Fatal(err)
 			}
 
-			sigstoreRootBytes, err := sigstore.FetchTrustRoot()
+			log.Println("Fetching trust root")
+			trustRootJSON, err := sigstore.FetchTrustRoot()
 			if err != nil {
 				log.Fatal(err)
 			}
 
 			log.Println("Verifying code measurements")
-			codeMeasurements, err = sigstore.VerifyMeasurementAttestation(
-				sigstoreRootBytes,
-				bundleBytes,
-				eifHash,
-				repo,
-			)
+			codeMeasurements, err = sigstore.VerifyAttestation(trustRootJSON, bundleBytes, eifHash, repo)
 			if err != nil {
 				log.Fatalf("Failed to verify source measurements: %v", err)
 			}
 		} else {
-			log.Print("WARN: No --repo specified, skipping code measurement verification")
+			log.Warn("No --repo specified, skipping code measurement verification")
 		}
 
 		log.Printf("Fetching attestation doc from %s", enclaveHost)
@@ -84,6 +80,8 @@ var attestationVerifyCmd = &cobra.Command{
 					log.Println("Verification successful, measurements match")
 				}
 			}
+		} else {
+			log.Printf("Enclave measurement: %s", enclaveMeasurements.Fingerprint())
 		}
 	},
 }
