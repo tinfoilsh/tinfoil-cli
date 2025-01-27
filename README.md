@@ -13,9 +13,9 @@ Available Commands:
   http        Make verified HTTP requests
 
 Flags:
-  -e, --enclave-host string   Enclave hostname (default "inference-enclave.tinfoil.sh")
+  -e, --enclave-host string   Enclave hostname (default "models.default.tinfoil.sh")
   -h, --help                  help for tinfoil
-  -r, --repo string           Source repo (default "tinfoilanalytics/nitro-enclave-build-demo")
+  -r, --repo string           Source repo (default "tinfoilanalytics/default-models-nitro")
 
 Use "tinfoil [command] --help" for more information about a command.
 ```
