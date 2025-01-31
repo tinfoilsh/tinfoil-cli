@@ -16,8 +16,8 @@ var rootCmd = &cobra.Command{
 }
 
 func init() {
-	rootCmd.PersistentFlags().StringVarP(&enclaveHost, "enclave-host", "e", "models.default.tinfoil.sh", "Enclave hostname")
-	rootCmd.PersistentFlags().StringVarP(&repo, "repo", "r", "tinfoilanalytics/default-models-nitro", "Source repo")
+	rootCmd.PersistentFlags().StringVarP(&enclaveHost, "enclave-host", "e", "", "Enclave hostname")
+	rootCmd.PersistentFlags().StringVarP(&repo, "repo", "r", "", "Source repo")
 }
 
 func main() {
