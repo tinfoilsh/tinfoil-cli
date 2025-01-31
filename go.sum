@@ -315,6 +315,8 @@ github.com/theupdateframework/go-tuf v0.7.0 h1:CqbQFrWo1ae3/I0UCblSbczevCCbS31Qv
 github.com/theupdateframework/go-tuf v0.7.0/go.mod h1:uEB7WSY+7ZIugK6R1hiBMBjQftaFzn7ZCDJcp1tCUug=
 github.com/theupdateframework/go-tuf/v2 v2.0.0 h1:rD8d9RotYBprZVgC+9oyTZ5MmawepnTSTqoDuxjWgbs=
 github.com/theupdateframework/go-tuf/v2 v2.0.0/go.mod h1:baB22nBHeHBCeuGZcIlctNq4P61PcOdyARlplg5xmLA=
+github.com/theupdateframework/go-tuf/v2 v2.0.2 h1:PyNnjV9BJNzN1ZE6BcWK+5JbF+if370jjzO84SS+Ebo=
+github.com/theupdateframework/go-tuf/v2 v2.0.2/go.mod h1:baB22nBHeHBCeuGZcIlctNq4P61PcOdyARlplg5xmLA=
 github.com/tinfoilanalytics/verifier v0.0.10 h1:k57BBAVBwE8V/GIQkcCLnqACSOVMFV0gge9SQuEF+Ps=
 github.com/tinfoilanalytics/verifier v0.0.10/go.mod h1:5uFC4CYbQvfwGY8rcXO1gEnj1PujzOq3C+6mqKcIoNk=
 github.com/titanous/rocacheck v0.0.0-20171023193734-afe73141d399 h1:e/5i7d4oYZ+C1wj2THlRK+oAhjeS/TRQwMfkIuet3w0=
