@@ -8,6 +8,22 @@ A command-line interface for making verified HTTP requests to Tinfoil enclaves a
 
 Download the latest release for your OS from the [Releases](https://github.com/tinfoilanalytics/tinfoil-cli/releases) page.
 
+### Install Script
+
+You can also install tinfoil CLI using our install script. This script automatically detects your operating system and architecture, downloads the correct binary, and installs it to `/usr/local/bin`.
+
+Run the following command:
+
+```sh
+curl -fsSL https://github.com/tinfoilanalytics/tinfoil-cli/raw/main/install.sh | sh
+```
+
+Note: If you receive permission errors (for example, if you’re not running as root), you may need to run the command with sudo:
+
+```sh
+sudo curl -fsSL https://github.com/tinfoilanalytics/tinfoil-cli/raw/main/install.sh | sh
+```
+
 ### Build from source
 
 1. Ensure you have Go installed.
