@@ -53,18 +53,55 @@ Usage:
   tinfoil [command]
 
 Available Commands:
-  attestation Attestation commands
-  completion  Generate the autocompletion script for the specified shell
-  help        Help about any command
-  http        Make verified HTTP requests
+  attestation  Attestation commands
+  chat         Chat with a model using a simple prompt
+  completion   Generate the autocompletion script for the specified shell
+  help         Help about any command
+  http         Make verified HTTP requests
 
 Flags:
-  -e, --enclave-host string   Enclave hostname (default "models.default.tinfoil.sh")
+  -e, --enclave-host string   Enclave hostname
   -h, --help                  help for tinfoil
-  -r, --repo string           Source repo (default "tinfoilanalytics/default-models-nitro")
+  -r, --repo string           Source repo
 
 Use "tinfoil [command] --help" for more information about a command.
 ```
+
+## Chat
+
+The `chat` command lets you interact with a model by simply specifying a model name and your prompt. By default, the model used is `deepseek-r1:70b`.
+
+### Using the Chat Command
+
+#### With Default Model
+
+```bash
+tinfoil chat "Why is tinfoil now called aluminum foil?"
+```
+This command uses the default model `deepseek-r1:70b` and loads the enclave host and repo values from `config.json`.
+
+#### With another model available in `config.json`
+
+```bash
+tinfoil chat --model llama3.2:1b "Why is tinfoil now called aluminum foil?"
+```
+
+#### Specifying a Custom Model
+
+For custom models not included in `config.json`, supply the model name along with the `-e` and `-r` overrides:
+
+```bash
+tinfoil chat --model custom-model "Explain string theory" \
+  -e custom.enclave.example.com \
+  -r cool-user/custom-model-repo
+```
+If you omit `-e` or `-r` for a model that isn’t in the configuration, a warning will be displayed prompting you to specify these flags.
+
+### Command Options
+
+- `-m, --model`: The model name to use for chat. Defaults to `deepseek-r1:70b`.
+- `-e, --enclave-host`: The hostname of the enclave. Optional if defined in the config file.
+- `-r, --repo`: The GitHub repository containing code measurements. Optional if defined in the config file.
 
 ## Verified HTTP Requests
 
