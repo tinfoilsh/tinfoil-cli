@@ -54,7 +54,8 @@ Usage:
 
 Available Commands:
   attestation  Attestation commands (verify or audit)
-  chat         Chat with a model using a simple prompt
+  chat         Chat with a model
+  embed        Generate text embeddings
   completion   Generate the autocompletion script for the specified shell
   help         Help about any command
   http         Make verified HTTP requests
@@ -102,6 +103,35 @@ If you omit `-e` or `-r` for a model that isn’t in the configuration, a warnin
 - `-m, --model`: The model name to use for chat. Defaults to `deepseek-r1:70b`.
 - `-e, --enclave-host`: The hostname of the enclave. Optional if defined in the config file.
 - `-r, --repo`: The GitHub repository containing code measurements. Optional if defined in the config file.
+
+## Embed
+
+The `embed` command generates text embeddings using a specified model. By default, the model used is `nomic-embed-text`. You can use it as follows:
+
+```bash
+tinfoil embed "Why is tinfoil now called aluminum foil?" "What is the capital of France?"
+```
+
+Output example:
+
+```json
+[
+  [
+    0.010071029,
+    -0.0017594862,
+    0.05007221,
+    0.04692972,
+    0.054916814
+  ],
+  [
+    0.008599704,
+    0.105441414,
+    -0.025878139,
+    0.12958129,
+    0.031952348
+  ]
+]
+```
 
 ## Verified HTTP Requests
 

@@ -14,6 +14,10 @@
   "qwen2.5-coder:0.5b": {
     "enclave_host": "models.default.tinfoil.sh",
     "repo": "tinfoilanalytics/default-models-nitro"
+  },
+  "nomic-embed-text": {
+    "enclave_host": "models.default.tinfoil.sh",
+    "repo": "tinfoilanalytics/default-models-nitro"
   }
 }
   
