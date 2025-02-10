@@ -93,6 +93,18 @@ Flags:
 - `-r, --repo`: GitHub source repo containing code measurements.
 - `-b, --body`: Request body (POST only)
 
+### Streaming HTTP POST
+
+To receive the response in a streaming fashion (for example, when using endpoints that return newline-delimited chunks), add the `--stream` flag:
+
+```sh
+tinfoil http post "https://models.default.tinfoil.sh/api/chat" \
+  -e models.default.tinfoil.sh \
+  -r tinfoilanalytics/default-models-nitro \
+  --stream \
+  -b '{"model": "llama3.2:1b", "messages": [{"role": "system", "content": "You are a helpful assistant."}, {"role": "user", "content": "Why is tinfoil now called aluminum foil?"}], "stream": true}'
+```
+
 ## Attestation Verification
 
 Validate that the enclave is running authorized code.
