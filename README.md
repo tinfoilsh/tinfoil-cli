@@ -53,7 +53,7 @@ Usage:
   tinfoil [command]
 
 Available Commands:
-  attestation  Attestation commands
+  attestation  Attestation commands (verify or audit)
   chat         Chat with a model using a simple prompt
   completion   Generate the autocompletion script for the specified shell
   help         Help about any command
@@ -142,9 +142,11 @@ tinfoil http post "https://models.default.tinfoil.sh/api/chat" \
   -b '{"model": "llama3.2:1b", "messages": [{"role": "system", "content": "You are a helpful assistant."}, {"role": "user", "content": "Why is tinfoil now called aluminum foil?"}], "stream": true}'
 ```
 
-## Attestation Verification
+## Attestation
 
-Validate that the enclave is running authorized code.
+### Verify Attestation
+
+Use the `attestation verify` command to manually verify that an enclave is running the expected code. The output will be a series of INFO logs describing each verification step.
 
 Sample successful output:
 
@@ -161,6 +163,21 @@ INFO[0001] Verifying enclave measurements
 INFO[0001] Certificate fingerprint match: b3ca31564d143085005670b450ef3d64429aa1529c641ec897983f11c2726007 
 INFO[0001] Verification successful, measurements match
 ``` 
+
+### Audit Attestation
+
+You can also verify attestations at random and record a machine-readable audit log. Use the `attestation audit` command for this purpose.
+
+By default the audit record is printed to stdout as JSON. To write it to a file, use the `-l/--log-file` flag:
+
+```bash
+tinfoil attestation audit \
+  -e models.default.tinfoil.sh \
+  -r tinfoilanalytics/default-models-nitro \
+  -l /var/log/tinfoil_audit.log
+```
+The audit log record includes the timestamp, enclave host, code and enclave measurement fingerprints, and the verification status.
+
 
 ## Troubleshooting
 
