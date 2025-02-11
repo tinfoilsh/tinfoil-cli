@@ -6,7 +6,7 @@ A command-line interface for making verified HTTP requests to Tinfoil enclaves a
 
 ### Pre-built binaries
 
-Download the latest release for your OS from the [Releases](https://github.com/tinfoilanalytics/tinfoil-cli/releases) page.
+Download the latest release for your OS from the [Releases](https://github.com/tinfoilsh/tinfoil-cli/releases) page.
 
 ### Install Script
 
@@ -15,13 +15,13 @@ You can also install tinfoil CLI using our install script. This script automatic
 Run the following command:
 
 ```sh
-curl -fsSL https://github.com/tinfoilanalytics/tinfoil-cli/raw/main/install.sh | sh
+curl -fsSL https://github.com/tinfoilsh/tinfoil-cli/raw/main/install.sh | sh
 ```
 
 Note: If you receive permission errors (for example, if you’re not running as root), you may need to run the command with sudo:
 
 ```sh
-sudo curl -fsSL https://github.com/tinfoilanalytics/tinfoil-cli/raw/main/install.sh | sh
+sudo curl -fsSL https://github.com/tinfoilsh/tinfoil-cli/raw/main/install.sh | sh
 ```
 
 ### Build from source
@@ -30,7 +30,7 @@ sudo curl -fsSL https://github.com/tinfoilanalytics/tinfoil-cli/raw/main/install
 2. Clone the repository:
 
 ```bash
-git clone https://github.com/tinfoilanalytics/tinfoil-cli.git
+git clone https://github.com/tinfoilsh/tinfoil-cli.git
 cd tinfoil-cli
 ```
 
@@ -79,6 +79,7 @@ The `chat` command lets you interact with a model by simply specifying a model n
 ```bash
 tinfoil chat "Why is tinfoil now called aluminum foil?"
 ```
+
 This command uses the default model `deepseek-r1:70b` and loads the enclave host and repo values from `config.json`.
 
 #### With another model available in `config.json`
@@ -96,6 +97,7 @@ tinfoil chat --model custom-model "Explain string theory" \
   -e custom.enclave.example.com \
   -r cool-user/custom-model-repo
 ```
+
 If you omit `-e` or `-r` for a model that isn’t in the configuration, a warning will be displayed prompting you to specify these flags.
 
 ### Command Options
@@ -116,20 +118,8 @@ Output example:
 
 ```json
 [
-  [
-    0.010071029,
-    -0.0017594862,
-    0.05007221,
-    0.04692972,
-    0.054916814
-  ],
-  [
-    0.008599704,
-    0.105441414,
-    -0.025878139,
-    0.12958129,
-    0.031952348
-  ]
+  [0.010071029, -0.0017594862, 0.05007221, 0.04692972, 0.054916814],
+  [0.008599704, 0.105441414, -0.025878139, 0.12958129, 0.031952348]
 ]
 ```
 
@@ -142,7 +132,7 @@ Make requests to enclave endpoints with automatic attestation verification.
 ```bash
 tinfoil http get "https://{ENCLAVE_HOST}/endpoint" \
   -e models.default.tinfoil.sh \
-  -r tinfoilanalytics/default-models-nitro
+  -r tinfoilsh/default-models-nitro
 ```
 
 ### POST Request
@@ -150,7 +140,7 @@ tinfoil http get "https://{ENCLAVE_HOST}/endpoint" \
 ```bash
 tinfoil http post "https://{ENCLAVE_HOST}/endpoint" \
   -e models.default.tinfoil.sh \
-  -r tinfoilanalytics/default-models-nitro \
+  -r tinfoilsh/default-models-nitro \
   -b '{"input_data": "example"}'
 ```
 
@@ -167,7 +157,7 @@ To receive the response in a streaming fashion (for example, when using endpoint
 ```sh
 tinfoil http post "https://models.default.tinfoil.sh/api/chat" \
   -e models.default.tinfoil.sh \
-  -r tinfoilanalytics/default-models-nitro \
+  -r tinfoilsh/default-models-nitro \
   --stream \
   -b '{"model": "llama3.2:1b", "messages": [{"role": "system", "content": "You are a helpful assistant."}, {"role": "user", "content": "Why is tinfoil now called aluminum foil?"}], "stream": true}'
 ```
@@ -183,16 +173,16 @@ Sample successful output:
 ```bash
 $ tinfoil attestation verify \
   -e models.default.tinfoil.sh \
-  -r tinfoilanalytics/default-models-nitro
-INFO[0000] Fetching latest release for tinfoilanalytics/default-models-nitro 
-INFO[0000] Fetching sigstore bundle from v0.0.2 for latest version tinfoilanalytics/default-models-nitro EIF 906162aef9fb2d4731433421ae6050840a867ee4b7b9302ada6228a809e0cab5 
-INFO[0000] Fetching trust root                          
-INFO[0000] Verifying code measurements                  
-INFO[0000] Fetching attestation doc from models.default.tinfoil.sh 
-INFO[0001] Verifying enclave measurements               
-INFO[0001] Certificate fingerprint match: b3ca31564d143085005670b450ef3d64429aa1529c641ec897983f11c2726007 
+  -r tinfoilsh/default-models-nitro
+INFO[0000] Fetching latest release for tinfoilsh/default-models-nitro
+INFO[0000] Fetching sigstore bundle from v0.0.2 for latest version tinfoilsh/default-models-nitro EIF 906162aef9fb2d4731433421ae6050840a867ee4b7b9302ada6228a809e0cab5
+INFO[0000] Fetching trust root
+INFO[0000] Verifying code measurements
+INFO[0000] Fetching attestation doc from models.default.tinfoil.sh
+INFO[0001] Verifying enclave measurements
+INFO[0001] Certificate fingerprint match: b3ca31564d143085005670b450ef3d64429aa1529c641ec897983f11c2726007
 INFO[0001] Verification successful, measurements match
-``` 
+```
 
 ### Audit Attestation
 
@@ -203,11 +193,11 @@ By default the audit record is printed to stdout as JSON. To write it to a file,
 ```bash
 tinfoil attestation audit \
   -e models.default.tinfoil.sh \
-  -r tinfoilanalytics/default-models-nitro \
+  -r tinfoilsh/default-models-nitro \
   -l /var/log/tinfoil_audit.log
 ```
-The audit log record includes the timestamp, enclave host, code and enclave measurement fingerprints, and the verification status.
 
+The audit log record includes the timestamp, enclave host, code and enclave measurement fingerprints, and the verification status.
 
 ## Troubleshooting
 

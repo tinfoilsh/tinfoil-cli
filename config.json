@@ -1,24 +1,22 @@
 {
   "deepseek-r1:70b": {
     "enclave_host": "inference.delta.tinfoil.sh",
-    "repo": "tinfoilanalytics/provably-private-deepseek-r1"
+    "repo": "tinfoilsh/provably-private-deepseek-r1"
   },
   "llama3.2:1b": {
     "enclave_host": "models.default.tinfoil.sh",
-    "repo": "tinfoilanalytics/default-models-nitro"
+    "repo": "tinfoilsh/default-models-nitro"
   },
   "llama-guard3:1b": {
     "enclave_host": "models.default.tinfoil.sh",
-    "repo": "tinfoilanalytics/default-models-nitro"
+    "repo": "tinfoilsh/default-models-nitro"
   },
   "qwen2.5-coder:0.5b": {
     "enclave_host": "models.default.tinfoil.sh",
-    "repo": "tinfoilanalytics/default-models-nitro"
+    "repo": "tinfoilsh/default-models-nitro"
   },
   "nomic-embed-text": {
     "enclave_host": "models.default.tinfoil.sh",
-    "repo": "tinfoilanalytics/default-models-nitro"
+    "repo": "tinfoilsh/default-models-nitro"
   }
 }
-  
-  
