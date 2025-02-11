@@ -11,7 +11,7 @@ func TestAttestationVerifyNitro(t *testing.T) {
 		"attestation",
 		"verify",
 		"-e", "models.default.tinfoil.sh",
-		"-r", "tinfoilanalytics/default-models-nitro",
+		"-r", "tinfoilsh/default-models-nitro",
 	}
 	rootCmd.SetArgs(args)
 	assert.Nil(t, rootCmd.Execute())
@@ -22,7 +22,7 @@ func TestAttestationVerifySEV(t *testing.T) {
 		"attestation",
 		"verify",
 		"-e", "inference.delta.tinfoil.sh",
-		"-r", "tinfoilanalytics/provably-private-deepseek-r1",
+		"-r", "tinfoilsh/provably-private-deepseek-r1",
 	}
 	rootCmd.SetArgs(args)
 	assert.Nil(t, rootCmd.Execute())

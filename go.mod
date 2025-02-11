@@ -1,4 +1,4 @@
-module github.com/tinfoilanalytics/tinfoil-cli
+module github.com/tinfoilsh/tinfoil-cli
 
 go 1.23.2
 
@@ -6,7 +6,7 @@ require (
 	github.com/sirupsen/logrus v1.9.3
 	github.com/spf13/cobra v1.8.1
 	github.com/stretchr/testify v1.9.0
-	github.com/tinfoilanalytics/verifier v0.0.10
+	github.com/tinfoilsh/verifier v0.0.10
 )
 
 require (

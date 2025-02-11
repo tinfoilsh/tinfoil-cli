@@ -6,9 +6,9 @@ import (
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 
-	"github.com/tinfoilanalytics/verifier/attestation"
-	"github.com/tinfoilanalytics/verifier/github"
-	"github.com/tinfoilanalytics/verifier/sigstore"
+	"github.com/tinfoilsh/verifier/attestation"
+	"github.com/tinfoilsh/verifier/github"
+	"github.com/tinfoilsh/verifier/sigstore"
 )
 
 func init() {
