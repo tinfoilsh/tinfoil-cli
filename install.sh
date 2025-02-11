@@ -3,7 +3,7 @@
 # This script detects your OS/architecture, downloads the latest tinfoil-cli binary,
 # and installs it to /usr/local/bin.
 #
-# Usage: curl -fsSL https://github.com/tinfoilanalytics/tinfoil-cli/raw/main/install.sh | sh
+# Usage: curl -fsSL https://github.com/tinfoilsh/tinfoil-cli/raw/main/install.sh | sh
 
 set -eu
 
