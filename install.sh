@@ -64,7 +64,7 @@ main() {
   # -------------------------------
   # 4. Fetch the latest version using GitHub API
   # -------------------------------
-  API_URL="https://api.github.com/repos/tinfoilanalytics/tinfoil-cli/releases/latest"
+  API_URL="https://api.github.com/repos/tinfoilsh/tinfoil-cli/releases/latest"
   # The tag_name might be like "v0.0.2". We remove a leading "v" if present.
   VERSION="$($DOWNLOADER "$API_URL" | grep '"tag_name":' | sed -E 's/.*"v?([^"]+)".*/\1/')"
   if [ -z "$VERSION" ]; then
@@ -77,7 +77,7 @@ main() {
   # 5. Construct the download URL using the asset naming convention:
   #    tinfoil-cli_<version>_<os>_<arch>.tar.gz
   # -------------------------------
-  URL="https://github.com/tinfoilanalytics/tinfoil-cli/releases/latest/download/tinfoil-cli_${VERSION}_${OS}_${ARCH}.tar.gz"
+  URL="https://github.com/tinfoilsh/tinfoil-cli/releases/latest/download/tinfoil-cli_${VERSION}_${OS}_${ARCH}.tar.gz"
   echo "Downloading tinfoil-cli from: $URL"
 
   # -------------------------------
