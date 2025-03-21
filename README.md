@@ -118,8 +118,20 @@ Output example:
 
 ```json
 [
-  [0.010071029, -0.0017594862, 0.05007221, 0.04692972, 0.054916814],
-  [0.008599704, 0.105441414, -0.025878139, 0.12958129, 0.031952348]
+  [
+    0.010071029,
+    -0.0017594862,
+    0.05007221,
+    0.04692972,
+    0.054916814
+  ],
+  [
+    0.008599704,
+    0.105441414,
+    -0.025878139,
+    0.12958129,
+    0.031952348
+  ]
 ]
 ```
 
@@ -198,6 +210,21 @@ tinfoil attestation audit \
 ```
 
 The audit log record includes the timestamp, enclave host, code and enclave measurement fingerprints, and the verification status.
+
+### Proxy
+
+Use `tinfoil proxy` to start a local HTTP proxy that verifies connections and forwards them to the specified enclave.
+
+```bash
+tinfoil proxy \
+  -r tinfoilsh/confidential-llama3-3-70b-64k \
+  -e llama3-3-70b-64k.model.tinfoil.sh \
+  -p 8080
+```
+
+### Docker
+
+A docker image is available at `ghcr.io/tinfoilsh/tinfoil-cli`.
 
 ## Troubleshooting
 
