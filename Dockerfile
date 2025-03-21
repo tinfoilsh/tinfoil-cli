@@ -1,3 +1,3 @@
 FROM alpine:latest
-COPY tinfoil-cli /usr/bin/tinfoil-cli
-ENTRYPOINT ["/usr/bin/tinfoil-cli"]
+COPY tinfoil /usr/bin/tinfoil
+ENTRYPOINT ["/usr/bin/tinfoil"]
