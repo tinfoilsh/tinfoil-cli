@@ -2,3 +2,4 @@
 tinfoil-cli
 *.sigstore.dev.json
 *.log
+dist/
