@@ -315,8 +315,8 @@ github.com/theupdateframework/go-tuf v0.7.0 h1:CqbQFrWo1ae3/I0UCblSbczevCCbS31Qv
 github.com/theupdateframework/go-tuf v0.7.0/go.mod h1:uEB7WSY+7ZIugK6R1hiBMBjQftaFzn7ZCDJcp1tCUug=
 github.com/theupdateframework/go-tuf/v2 v2.0.2 h1:PyNnjV9BJNzN1ZE6BcWK+5JbF+if370jjzO84SS+Ebo=
 github.com/theupdateframework/go-tuf/v2 v2.0.2/go.mod h1:baB22nBHeHBCeuGZcIlctNq4P61PcOdyARlplg5xmLA=
-github.com/tinfoilsh/verifier v0.0.21 h1:x3xxSatT5ynd/2la5F3MgFdR50jKngqxE5F4fqOvYtc=
-github.com/tinfoilsh/verifier v0.0.21/go.mod h1:EBC+ujgeoeth0hs2m80ohDm7CX8MgCSMjT4W72Lyelg=
+github.com/tinfoilsh/verifier v0.0.23 h1:oVgMO9PAsAl26QeiOiKeZGehBo7I0xq3LPQFxCkzHnY=
+github.com/tinfoilsh/verifier v0.0.23/go.mod h1:EBC+ujgeoeth0hs2m80ohDm7CX8MgCSMjT4W72Lyelg=
 github.com/titanous/rocacheck v0.0.0-20171023193734-afe73141d399 h1:e/5i7d4oYZ+C1wj2THlRK+oAhjeS/TRQwMfkIuet3w0=
 github.com/titanous/rocacheck v0.0.0-20171023193734-afe73141d399/go.mod h1:LdwHTNJT99C5fTAzDz0ud328OgXz+gierycbcIx2fRs=
 github.com/transparency-dev/merkle v0.0.2 h1:Q9nBoQcZcgPamMkGn7ghV8XiTZ/kRxn1yCG81+twTK4=
