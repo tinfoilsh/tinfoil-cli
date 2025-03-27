@@ -16,8 +16,10 @@ var rootCmd = &cobra.Command{
 }
 
 func init() {
-	rootCmd.PersistentFlags().StringVarP(&enclaveHost, "enclave-host", "e", "", "Enclave hostname")
+	rootCmd.PersistentFlags().StringVarP(&enclaveHost, "host", "e", "", "Enclave hostname")
 	rootCmd.PersistentFlags().StringVarP(&repo, "repo", "r", "", "Source repo")
+	rootCmd.MarkPersistentFlagRequired("host")
+	rootCmd.MarkPersistentFlagRequired("repo")
 }
 
 func main() {
