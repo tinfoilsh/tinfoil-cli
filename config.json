@@ -1,7 +1,7 @@
 {
-  "deepseek-r1:70b": {
-    "enclave_host": "inference.delta.tinfoil.sh",
-    "repo": "tinfoilsh/provably-private-deepseek-r1"
+  "llama3.3:70b": {
+    "enclave_host": "llama3-3-70b-64k-prod.model.tinfoil.sh",
+    "repo": "tinfoilsh/confidential-llama3-3-70b-64k-prod"
   },
   "llama3.2:1b": {
     "enclave_host": "models.default.tinfoil.sh",

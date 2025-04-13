@@ -1,4 +1,3 @@
-// File: http_post.go
 package main
 
 import (
@@ -11,11 +10,12 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var body string
-var stream bool
+var (
+	body   string
+	stream bool
+)
 
 func init() {
-	// Register flags: -b for body and -s for streaming
 	httpPostCmd.Flags().StringVarP(&body, "body", "b", "", "HTTP POST body")
 	httpPostCmd.Flags().BoolVarP(&stream, "stream", "s", false, "Stream response output")
 	httpCmd.AddCommand(httpPostCmd)
@@ -27,9 +27,8 @@ var httpPostCmd = &cobra.Command{
 	Args:  cobra.MinimumNArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		url := args[0]
-		sc := secureClient() // Returns a *client.SecureClient
+		sc := secureClient()
 
-		// Branch based on the --stream flag.
 		if stream {
 			// Build a raw HTTP POST request with the provided body.
 			req, err := http.NewRequest("POST", url, bytes.NewBuffer([]byte(body)))
@@ -49,7 +48,6 @@ var httpPostCmd = &cobra.Command{
 			}
 			defer resp.Body.Close()
 
-			// Read the response body incrementally (for example, line by line).
 			scanner := bufio.NewScanner(resp.Body)
 			for scanner.Scan() {
 				fmt.Println(scanner.Text())
@@ -57,8 +55,7 @@ var httpPostCmd = &cobra.Command{
 			if err := scanner.Err(); err != nil {
 				log.Fatalf("Error reading stream: %v", err)
 			}
-		} else {
-			// Non-streaming: use the existing Post method which reads the full response.
+		} else { // Not streaming
 			resp, err := sc.Post(url, nil, []byte(body))
 			if err != nil {
 				log.Fatal(err)

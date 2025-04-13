@@ -13,8 +13,6 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// Embed the config.json file that is checked into the repository.
-//
 //go:embed config.json
 var configData []byte
 
@@ -37,12 +35,12 @@ type ChatResponse struct {
 	Done    bool        `json:"done"`
 }
 
-var modelName string
+var modelName, apiKey string
 
 func init() {
 	rootCmd.AddCommand(chatCmd)
-	// Add a flag for the model name, defaulting to deepseek-r1:70b.
-	chatCmd.Flags().StringVarP(&modelName, "model", "m", "deepseek-r1:70b", "Model name (default deepseek-r1:70b)")
+	chatCmd.Flags().StringVarP(&modelName, "model", "m", "", "Model name")
+	chatCmd.Flags().StringVarP(&apiKey, "api-key", "k", "", "API key")
 }
 
 var chatCmd = &cobra.Command{
@@ -50,11 +48,8 @@ var chatCmd = &cobra.Command{
 	Short: "Chat with the model using a simple prompt",
 	Args:  cobra.MinimumNArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
-		// Combine the arguments to form the prompt.
 		prompt := strings.Join(args, " ")
 
-		// If either enclaveHost or repo is not provided via flags,
-		// try to load them from the embedded JSON config.
 		if enclaveHost == "" || repo == "" {
 			loadedHost, loadedRepo, err := loadDefaultConfig(modelName)
 			if err != nil {
@@ -90,6 +85,9 @@ var chatCmd = &cobra.Command{
 			log.Fatalf("Error creating request: %v", err)
 		}
 		req.Header.Set("Content-Type", "application/json")
+		if apiKey != "" {
+			req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", apiKey))
+		}
 
 		client, err := sc.HTTPClient()
 		if err != nil {
@@ -101,6 +99,10 @@ var chatCmd = &cobra.Command{
 			log.Fatalf("Error performing request: %v", err)
 		}
 		defer resp.Body.Close()
+
+		if resp.StatusCode != 200 {
+			log.Fatalf("Enclave returned status code %d", resp.StatusCode)
+		}
 
 		// Stream the response, printing only the assistant's text.
 		scanner := bufio.NewScanner(resp.Body)

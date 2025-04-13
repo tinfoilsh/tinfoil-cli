@@ -61,7 +61,7 @@ Available Commands:
   http         Make verified HTTP requests
 
 Flags:
-  -e, --enclave-host string   Enclave hostname
+  -e, --host string           Enclave hostname
   -h, --help                  help for tinfoil
   -r, --repo string           Source repo
 
@@ -103,7 +103,7 @@ If you omit `-e` or `-r` for a model that isn’t in the configuration, a warnin
 ### Command Options
 
 - `-m, --model`: The model name to use for chat. Defaults to `deepseek-r1:70b`.
-- `-e, --enclave-host`: The hostname of the enclave. Optional if defined in the config file.
+- `-e, --host`: The hostname of the enclave. Optional if defined in the config file.
 - `-r, --repo`: The GitHub repository containing code measurements. Optional if defined in the config file.
 
 ## Embed
@@ -158,7 +158,7 @@ tinfoil http post "https://{ENCLAVE_HOST}/endpoint" \
 
 Flags:
 
-- `-e, --enclave-host`: The hostname of the enclave.
+- `-e, --host`: The hostname of the enclave.
 - `-r, --repo`: GitHub source repo containing code measurements.
 - `-b, --body`: Request body (POST only)
 
