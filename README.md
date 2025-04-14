@@ -77,7 +77,7 @@ The `chat` command lets you interact with a model by simply specifying a model n
 #### With Default Model
 
 ```bash
-tinfoil chat "Why is tinfoil now called aluminum foil?"
+tinfoil chat -k "YOUR_API_KEY" "Why is tinfoil now called aluminum foil?"
 ```
 
 This command uses the default model `deepseek-r1:70b` and loads the enclave host and repo values from `config.json`.
@@ -85,7 +85,7 @@ This command uses the default model `deepseek-r1:70b` and loads the enclave host
 #### With another model available in `config.json`
 
 ```bash
-tinfoil chat --model llama3.2:1b "Why is tinfoil now called aluminum foil?"
+tinfoil chat --model llama3.2:1b --api-key "YOUR_API_KEY" "Why is tinfoil now called aluminum foil?"
 ```
 
 #### Specifying a Custom Model
@@ -93,7 +93,7 @@ tinfoil chat --model llama3.2:1b "Why is tinfoil now called aluminum foil?"
 For custom models not included in `config.json`, supply the model name along with the `-e` and `-r` overrides:
 
 ```bash
-tinfoil chat --model custom-model "Explain string theory" \
+tinfoil chat --model custom-model --api-key "YOUR_API_KEY" "Explain string theory" \
   -e custom.enclave.example.com \
   -r cool-user/custom-model-repo
 ```
@@ -103,6 +103,7 @@ If you omit `-e` or `-r` for a model that isn’t in the configuration, a warnin
 ### Command Options
 
 - `-m, --model`: The model name to use for chat. Defaults to `deepseek-r1:70b`.
+- `-k, --api-key`: The API key for authentication.
 - `-e, --host`: The hostname of the enclave. Optional if defined in the config file.
 - `-r, --repo`: The GitHub repository containing code measurements. Optional if defined in the config file.
 
