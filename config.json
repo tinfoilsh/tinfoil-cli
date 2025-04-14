@@ -1,7 +1,11 @@
 {
-  "llama3.3:70b": {
+  "llama3.3-70b-64k": {
     "enclave_host": "llama3-3-70b-64k-prod.model.tinfoil.sh",
     "repo": "tinfoilsh/confidential-llama3-3-70b-64k-prod"
+  },
+  "deepseek-r1-70b-64k": {
+    "enclave_host": "deepseek-r1-70b-64k-prod.model.tinfoil.sh",
+    "repo": "tinfoilsh/confidential-deepseek-r1-70b-64k-prod"
   },
   "llama3.2:1b": {
     "enclave_host": "models.default.tinfoil.sh",
