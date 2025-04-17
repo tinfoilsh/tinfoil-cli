@@ -1,7 +1,7 @@
 {
   "llama3.3:70b": {
-    "enclave_host": "llama3-3-70b-64k-prod.model.tinfoil.sh",
-    "repo": "tinfoilsh/confidential-llama3-3-70b-64k-prod"
+    "enclave_host": "llama3-3-70b-p.model.tinfoil.sh",
+    "repo": "tinfoilsh/confidential-llama3-3-70b-prod"
   },
   "llama3.2:1b": {
     "enclave_host": "models.default.tinfoil.sh",
@@ -18,5 +18,13 @@
   "nomic-embed-text": {
     "enclave_host": "models.default.tinfoil.sh",
     "repo": "tinfoilsh/default-models-nitro"
+  },
+  "deepseek-r1:70b": {
+    "enclave_host": "deepseek-r1-70b-p.model.tinfoil.sh",
+    "repo": "tinfoilsh/confidential-deepseek-r1-70b-prod"
+  },
+  "mistral-small-3-1:24b": {
+    "enclave_host": "mistral-s-3-1-24b-p.model.tinfoil.sh",
+    "repo": "tinfoilsh/confidential-mistral-small-3-1"
   }
 }
