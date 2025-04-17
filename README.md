@@ -40,12 +40,6 @@ cd tinfoil-cli
 go build -o tinfoil
 ```
 
-4. (Optional) Move the binary to your PATH:
-
-```bash
-sudo mv tinfoil /usr/local/bin/
-```
-
 ## Command Reference
 
 ```text
@@ -107,73 +101,6 @@ If you omit `-e` or `-r` for a model that isn’t in the configuration, a warnin
 - `-e, --host`: The hostname of the enclave. Optional if defined in the config file.
 - `-r, --repo`: The GitHub repository containing code measurements. Optional if defined in the config file.
 
-## Embed
-
-The `embed` command generates text embeddings using a specified model. By default, the model used is `nomic-embed-text`. You can use it as follows:
-
-```bash
-tinfoil embed "Why is tinfoil now called aluminum foil?" "What is the capital of France?"
-```
-
-Output example:
-
-```json
-[
-  [
-    0.010071029,
-    -0.0017594862,
-    0.05007221,
-    0.04692972,
-    0.054916814
-  ],
-  [
-    0.008599704,
-    0.105441414,
-    -0.025878139,
-    0.12958129,
-    0.031952348
-  ]
-]
-```
-
-## Verified HTTP Requests
-
-Make requests to enclave endpoints with automatic attestation verification.
-
-### GET Request
-
-```bash
-tinfoil http get "https://{ENCLAVE_HOST}/endpoint" \
-  -e models.default.tinfoil.sh \
-  -r tinfoilsh/default-models-nitro
-```
-
-### POST Request
-
-```bash
-tinfoil http post "https://{ENCLAVE_HOST}/endpoint" \
-  -e models.default.tinfoil.sh \
-  -r tinfoilsh/default-models-nitro \
-  -b '{"input_data": "example"}'
-```
-
-Flags:
-
-- `-e, --host`: The hostname of the enclave.
-- `-r, --repo`: GitHub source repo containing code measurements.
-- `-b, --body`: Request body (POST only)
-
-### Streaming HTTP POST
-
-To receive the response in a streaming fashion (for example, when using endpoints that return newline-delimited chunks), add the `--stream` flag:
-
-```sh
-tinfoil http post "https://models.default.tinfoil.sh/api/chat" \
-  -e models.default.tinfoil.sh \
-  -r tinfoilsh/default-models-nitro \
-  --stream \
-  -b '{"model": "llama3.2:1b", "messages": [{"role": "system", "content": "You are a helpful assistant."}, {"role": "user", "content": "Why is tinfoil now called aluminum foil?"}], "stream": true}'
-```
 
 ## Attestation
 
@@ -232,3 +159,14 @@ A docker image is available at `ghcr.io/tinfoilsh/tinfoil-cli`.
 Common error resolutions:
 
 - `PCR register mismatch`: Running enclave code differs from source repo
+
+
+## Reporting Vulnerabilities
+
+Please report security vulnerabilities by either:
+
+- Emailing [security@tinfoil.sh](mailto:security@tinfoil.sh)
+
+- Opening an issue on GitHub on this repository
+
+We aim to respond to security reports within 24 hours and will keep you updated on our progress.
