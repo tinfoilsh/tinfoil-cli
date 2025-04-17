@@ -64,40 +64,72 @@ Use "tinfoil [command] --help" for more information about a command.
 
 ## Chat
 
-The `chat` command lets you interact with a model by simply specifying a model name and your prompt. By default, the model used is `deepseek-r1:70b`.
+The `chat` command lets you interact with a model by simply specifying a model name and your prompt. You need to specify the model with the `-m` flag.
 
 ### Using the Chat Command
 
-#### With Default Model
+#### Basic Usage (running DeepSeek R1)
 
 ```bash
-tinfoil chat -k "YOUR_API_KEY" "Why is tinfoil now called aluminum foil?"
+tinfoil chat -m deepseek-r1-70b -k "YOUR_API_KEY" "Why is tinfoil now called aluminum foil?"
 ```
 
-This command uses the default model `deepseek-r1:70b` and loads the enclave host and repo values from `config.json`.
+This command loads the enclave host and repo values for the specified model from `config.json`.
 
-#### With another model available in `config.json`
-
-```bash
-tinfoil chat --model llama3.2:1b --api-key "YOUR_API_KEY" "Why is tinfoil now called aluminum foil?"
-```
 
 #### Specifying a Custom Model
 
 For custom models not included in `config.json`, supply the model name along with the `-e` and `-r` overrides:
 
 ```bash
-tinfoil chat --model custom-model --api-key "YOUR_API_KEY" "Explain string theory" \
+tinfoil chat -m custom-model -k "YOUR_API_KEY" "Explain string theory" \
   -e custom.enclave.example.com \
   -r cool-user/custom-model-repo
 ```
 
-If you omit `-e` or `-r` for a model that isn’t in the configuration, a warning will be displayed prompting you to specify these flags.
+If you omit `-e` or `-r` for a model that isn't in the configuration, a warning will be displayed prompting you to specify these flags.
 
 ### Command Options
 
-- `-m, --model`: The model name to use for chat. Defaults to `deepseek-r1:70b`.
+- `-m, --model`: The model name to use for chat. Must be specified.
 - `-k, --api-key`: The API key for authentication.
+- `-e, --host`: The hostname of the enclave. Optional if defined in the config file.
+- `-r, --repo`: The GitHub repository containing code measurements. Optional if defined in the config file.
+
+
+## Embed
+
+The `embed` command allows you to generate embeddings for text inputs. By default, it uses the `nomic-embed-text` model.
+
+### Using the Embed Command
+
+#### With Default Model
+
+```bash
+tinfoil embed "This is a text I want to get embeddings for."
+```
+
+This command uses the default model `nomic-embed-text` and loads the enclave host and repo values from `config.json`.
+
+#### With Multiple Text Inputs
+
+You can provide multiple text inputs to get embeddings for all of them:
+
+```bash
+tinfoil embed "First text" "Second text" "Third text"
+```
+
+#### Specifying a Custom Model
+
+```bash
+tinfoil embed -m custom-embed-model -k "YOUR_API_KEY" "Text to embed" \
+  -e custom.enclave.example.com \
+  -r cool-user/custom-model-repo
+```
+
+### Command Options
+
+- `-m, --model`: The model name to use for embeddings. Defaults to `nomic-embed-text`.
 - `-e, --host`: The hostname of the enclave. Optional if defined in the config file.
 - `-r, --repo`: The GitHub repository containing code measurements. Optional if defined in the config file.
 
