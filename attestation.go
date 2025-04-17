@@ -66,8 +66,8 @@ func verifyAttestation() (map[string]any, error) {
 		return nil, fmt.Errorf("verifying attestation document: %v", err)
 	}
 	auditRecord["enclave_fingerprint"] = verification.Measurement.Fingerprint()
-	auditRecord["attested_cert_fp"] = fmt.Sprintf("%x", verification.CertFP)
-	log.Printf("Certificate fingerprint: %x", verification.CertFP)
+	auditRecord["attested_public_key"] = verification.PublicKeyFP
+	log.Printf("Certificate fingerprint: %s", verification.PublicKeyFP)
 
 	if repo != "" && codeMeasurements != nil && verification.Measurement != nil {
 		if err := codeMeasurements.Equals(verification.Measurement); err != nil {

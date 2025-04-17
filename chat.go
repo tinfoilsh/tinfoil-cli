@@ -6,8 +6,10 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -31,8 +33,21 @@ type ChatRequest struct {
 
 // ChatResponse represents one JSON chunk in the streaming response.
 type ChatResponse struct {
-	Message ChatMessage `json:"message"`
-	Done    bool        `json:"done"`
+	ID      string   `json:"id"`
+	Object  string   `json:"object"`
+	Created int64    `json:"created"`
+	Model   string   `json:"model"`
+	Choices []Choice `json:"choices"`
+}
+
+type Choice struct {
+	Index        int    `json:"index"`
+	Delta        Delta  `json:"delta"`
+	FinishReason string `json:"finish_reason"`
+}
+
+type Delta struct {
+	Content string `json:"content"`
 }
 
 var modelName, apiKey string
@@ -65,7 +80,6 @@ var chatCmd = &cobra.Command{
 			}
 		}
 
-		// Build the JSON request payload.
 		reqPayload := ChatRequest{
 			Model: modelName,
 			Messages: []ChatMessage{
@@ -80,8 +94,7 @@ var chatCmd = &cobra.Command{
 			log.Fatalf("Error marshaling JSON: %v", err)
 		}
 
-		// Construct the URL using the enclave host.
-		url := fmt.Sprintf("https://%s/api/chat", enclaveHost)
+		url := fmt.Sprintf("https://%s/v1/chat/completions", enclaveHost)
 		sc := secureClient()
 
 		req, err := http.NewRequest("POST", url, bytes.NewBuffer(payloadBytes))
@@ -105,19 +118,35 @@ var chatCmd = &cobra.Command{
 		defer resp.Body.Close()
 
 		if resp.StatusCode != 200 {
-			log.Fatalf("Enclave returned status code %d", resp.StatusCode)
+			bodyText, err := io.ReadAll(resp.Body)
+			if err != nil {
+				log.Fatalf("Error reading response body: %v", err)
+			}
+			log.Fatalf("Enclave returned status code %d: %s", resp.StatusCode, string(bodyText))
 		}
 
-		// Stream the response, printing only the assistant's text.
 		scanner := bufio.NewScanner(resp.Body)
 		for scanner.Scan() {
 			line := scanner.Text()
-			var chatResp ChatResponse
-			if err := json.Unmarshal([]byte(line), &chatResp); err != nil {
-				// Skip lines that don't match our expected JSON.
+      
+			if len(line) == 0 {
 				continue
 			}
-			fmt.Print(chatResp.Message.Content)
+
+			line = strings.TrimPrefix(line, "data: ")
+			if line == "[DONE]" || line == "" {
+				continue
+			}
+
+			var response ChatResponse
+			if err := json.Unmarshal([]byte(line), &response); err != nil {
+				fmt.Println(line)
+				continue
+			}
+
+			if len(response.Choices) > 0 && response.Choices[0].Delta.Content != "" {
+				fmt.Print(response.Choices[0].Delta.Content)
+			}
 		}
 		if err := scanner.Err(); err != nil {
 			log.Fatalf("Error reading stream: %v", err)
