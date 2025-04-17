@@ -68,9 +68,12 @@ var chatCmd = &cobra.Command{
 		if enclaveHost == "" || repo == "" {
 			loadedHost, loadedRepo, err := loadDefaultConfig(modelName)
 			if err != nil {
-				log.Printf("No config found for model %s: %v", modelName, err)
-				log.Printf("Please specify -e and -r flags for custom models")
-				os.Exit(1)
+				log.Printf("Error: Configuration not found for model '%s'", modelName)
+				log.Printf("The model '%s' is not in the default configuration. To use this model, please provide:", modelName)
+				log.Printf("  1. The enclave host with the -e flag (e.g., -e %s.model.tinfoil.sh)", modelName)
+				log.Printf("  2. The source repository with the -r flag (e.g., -r tinfoilsh/confidential-%s)", modelName)
+				log.Printf("Example: tinfoil chat -m %s -e <enclave-host> -r <repo> -k <api-key> \"Your prompt\"", modelName)
+				log.Fatalf("Aborting due to missing configuration")
 			} else {
 				enclaveHost = loadedHost
 				repo = loadedRepo
@@ -125,6 +128,7 @@ var chatCmd = &cobra.Command{
 		scanner := bufio.NewScanner(resp.Body)
 		for scanner.Scan() {
 			line := scanner.Text()
+      
 			if len(line) == 0 {
 				continue
 			}

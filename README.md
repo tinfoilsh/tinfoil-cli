@@ -40,12 +40,6 @@ cd tinfoil-cli
 go build -o tinfoil
 ```
 
-4. (Optional) Move the binary to your PATH:
-
-```bash
-sudo mv tinfoil /usr/local/bin/
-```
-
 ## Command Reference
 
 ```text
@@ -70,110 +64,75 @@ Use "tinfoil [command] --help" for more information about a command.
 
 ## Chat
 
-The `chat` command lets you interact with a model by simply specifying a model name and your prompt. By default, the model used is `deepseek-r1:70b`.
+The `chat` command lets you interact with a model by simply specifying a model name and your prompt. You need to specify the model with the `-m` flag.
 
 ### Using the Chat Command
 
-#### With Default Model
+#### Basic Usage (running DeepSeek R1)
 
 ```bash
-tinfoil chat -k "YOUR_API_KEY" "Why is tinfoil now called aluminum foil?"
+tinfoil chat -m deepseek-r1-70b -k "YOUR_API_KEY" "Why is tinfoil now called aluminum foil?"
 ```
 
-This command uses the default model `deepseek-r1:70b` and loads the enclave host and repo values from `config.json`.
+This command loads the enclave host and repo values for the specified model from `config.json`.
 
-#### With another model available in `config.json`
-
-```bash
-tinfoil chat --model llama3.2:1b --api-key "YOUR_API_KEY" "Why is tinfoil now called aluminum foil?"
-```
 
 #### Specifying a Custom Model
 
 For custom models not included in `config.json`, supply the model name along with the `-e` and `-r` overrides:
 
 ```bash
-tinfoil chat --model custom-model --api-key "YOUR_API_KEY" "Explain string theory" \
+tinfoil chat -m custom-model -k "YOUR_API_KEY" "Explain string theory" \
   -e custom.enclave.example.com \
   -r cool-user/custom-model-repo
 ```
 
-If you omit `-e` or `-r` for a model that isn’t in the configuration, a warning will be displayed prompting you to specify these flags.
+If you omit `-e` or `-r` for a model that isn't in the configuration, a warning will be displayed prompting you to specify these flags.
 
 ### Command Options
 
-- `-m, --model`: The model name to use for chat. Defaults to `deepseek-r1:70b`.
+- `-m, --model`: The model name to use for chat. Must be specified.
 - `-k, --api-key`: The API key for authentication.
 - `-e, --host`: The hostname of the enclave. Optional if defined in the config file.
 - `-r, --repo`: The GitHub repository containing code measurements. Optional if defined in the config file.
 
+
 ## Embed
 
-The `embed` command generates text embeddings using a specified model. By default, the model used is `nomic-embed-text`. You can use it as follows:
+The `embed` command allows you to generate embeddings for text inputs. By default, it uses the `nomic-embed-text` model.
+
+### Using the Embed Command
+
+#### With Default Model
 
 ```bash
-tinfoil embed "Why is tinfoil now called aluminum foil?" "What is the capital of France?"
+tinfoil embed "This is a text I want to get embeddings for."
 ```
 
-Output example:
+This command uses the default model `nomic-embed-text` and loads the enclave host and repo values from `config.json`.
 
-```json
-[
-  [
-    0.010071029,
-    -0.0017594862,
-    0.05007221,
-    0.04692972,
-    0.054916814
-  ],
-  [
-    0.008599704,
-    0.105441414,
-    -0.025878139,
-    0.12958129,
-    0.031952348
-  ]
-]
-```
+#### With Multiple Text Inputs
 
-## Verified HTTP Requests
-
-Make requests to enclave endpoints with automatic attestation verification.
-
-### GET Request
+You can provide multiple text inputs to get embeddings for all of them:
 
 ```bash
-tinfoil http get "https://{ENCLAVE_HOST}/endpoint" \
-  -e models.default.tinfoil.sh \
-  -r tinfoilsh/default-models-nitro
+tinfoil embed "First text" "Second text" "Third text"
 ```
 
-### POST Request
+#### Specifying a Custom Model
 
 ```bash
-tinfoil http post "https://{ENCLAVE_HOST}/endpoint" \
-  -e models.default.tinfoil.sh \
-  -r tinfoilsh/default-models-nitro \
-  -b '{"input_data": "example"}'
+tinfoil embed -m custom-embed-model -k "YOUR_API_KEY" "Text to embed" \
+  -e custom.enclave.example.com \
+  -r cool-user/custom-model-repo
 ```
 
-Flags:
+### Command Options
 
-- `-e, --host`: The hostname of the enclave.
-- `-r, --repo`: GitHub source repo containing code measurements.
-- `-b, --body`: Request body (POST only)
+- `-m, --model`: The model name to use for embeddings. Defaults to `nomic-embed-text`.
+- `-e, --host`: The hostname of the enclave. Optional if defined in the config file.
+- `-r, --repo`: The GitHub repository containing code measurements. Optional if defined in the config file.
 
-### Streaming HTTP POST
-
-To receive the response in a streaming fashion (for example, when using endpoints that return newline-delimited chunks), add the `--stream` flag:
-
-```sh
-tinfoil http post "https://models.default.tinfoil.sh/api/chat" \
-  -e models.default.tinfoil.sh \
-  -r tinfoilsh/default-models-nitro \
-  --stream \
-  -b '{"model": "llama3.2:1b", "messages": [{"role": "system", "content": "You are a helpful assistant."}, {"role": "user", "content": "Why is tinfoil now called aluminum foil?"}], "stream": true}'
-```
 
 ## Attestation
 
@@ -232,3 +191,14 @@ A docker image is available at `ghcr.io/tinfoilsh/tinfoil-cli`.
 Common error resolutions:
 
 - `PCR register mismatch`: Running enclave code differs from source repo
+
+
+## Reporting Vulnerabilities
+
+Please report security vulnerabilities by either:
+
+- Emailing [security@tinfoil.sh](mailto:security@tinfoil.sh)
+
+- Opening an issue on GitHub on this repository
+
+We aim to respond to security reports within 24 hours and will keep you updated on our progress.
