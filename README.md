@@ -144,16 +144,17 @@ Sample successful output:
 
 ```bash
 $ tinfoil attestation verify \
-  -e models.default.tinfoil.sh \
-  -r tinfoilsh/default-models-nitro
-INFO[0000] Fetching latest release for tinfoilsh/default-models-nitro
-INFO[0000] Fetching sigstore bundle from v0.0.2 for latest version tinfoilsh/default-models-nitro EIF 906162aef9fb2d4731433421ae6050840a867ee4b7b9302ada6228a809e0cab5
-INFO[0000] Fetching trust root
-INFO[0000] Verifying code measurements
-INFO[0000] Fetching attestation doc from models.default.tinfoil.sh
-INFO[0001] Verifying enclave measurements
-INFO[0001] Certificate fingerprint match: b3ca31564d143085005670b450ef3d64429aa1529c641ec897983f11c2726007
-INFO[0001] Verification successful, measurements match
+  -e llama3-3-70b.model.tinfoil.sh \
+  -r tinfoilsh/confidential-llama3-3-70b
+INFO[0000] Fetching latest release for tinfoilsh/confidential-llama3-3-70b 
+INFO[0000] Fetching sigstore bundle from tinfoilsh/confidential-llama3-3-70b for digest f2f48557c8b0c1b268f8d8673f380242ad8c4983fe9004c02a8688a89f94f333 
+INFO[0001] Fetching trust root                          
+INFO[0001] Verifying code measurements                  
+INFO[0001] Fetching attestation doc from llama3-3-70b.model.tinfoil.sh 
+INFO[0001] Verifying enclave measurements               
+INFO[0001] Public key fingerprint: 5f6c24f54ed862c404a558aa3fa85b686b77263ceeda86131e7acd90e8af5db2 
+INFO[0001] Remote public key fingerprint: 5f6c24f54ed862c404a558aa3fa85b686b77263ceeda86131e7acd90e8af5db2 
+INFO[0001] Measurements match  
 ```
 
 ### Audit Attestation
@@ -164,8 +165,8 @@ By default the audit record is printed to stdout as JSON. To write it to a file,
 
 ```bash
 tinfoil attestation audit \
-  -e models.default.tinfoil.sh \
-  -r tinfoilsh/default-models-nitro \
+  -e llama3-3-70b.model.tinfoil.sh \
+  -r tinfoilsh/confidential-llama3-3-70b \
   -l /var/log/tinfoil_audit.log
 ```
 

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/tls"
 	"fmt"
 	"time"
 
@@ -22,7 +23,23 @@ var attestationCmd = &cobra.Command{
 	Short:   "Attestation commands",
 }
 
+func tlsConnection(enclaveHost string) (*tls.ConnectionState, error) {
+	conn, err := tls.Dial("tcp", enclaveHost, &tls.Config{})
+	if err != nil {
+		return nil, fmt.Errorf("dialing enclave: %v", err)
+	}
+	cs := conn.ConnectionState()
+	return &cs, nil
+}
+
 func verifyAttestation() (map[string]any, error) {
+	if enclaveHost == "" {
+		return nil, fmt.Errorf("enclave host is required")
+	}
+	if repo == "" {
+		return nil, fmt.Errorf("repo is required")
+	}
+
 	auditRecord := make(map[string]any)
 	auditRecord["timestamp"] = time.Now().UTC().Format(time.RFC3339)
 	auditRecord["enclave_host"] = enclaveHost
@@ -67,7 +84,26 @@ func verifyAttestation() (map[string]any, error) {
 	}
 	auditRecord["enclave_fingerprint"] = verification.Measurement.Fingerprint()
 	auditRecord["attested_public_key"] = verification.PublicKeyFP
-	log.Printf("Certificate fingerprint: %s", verification.PublicKeyFP)
+	log.Printf("Public key fingerprint: %s", verification.PublicKeyFP)
+
+	// Get remote pubkey fingerprint
+	cs, err := tlsConnection(enclaveHost + ":443")
+	if err != nil {
+		return nil, fmt.Errorf("fetching remote public key fingerprint: %v", err)
+	}
+	pubkeyFP, err := attestation.ConnectionCertFP(*cs)
+	if err != nil {
+		return nil, fmt.Errorf("fetching remote public key fingerprint: %v", err)
+	}
+	auditRecord["remote_public_key"] = pubkeyFP
+	log.Printf("Remote public key fingerprint: %s", pubkeyFP)
+
+	// Compare remote public key fingerprint with attestation public key
+	if pubkeyFP != verification.PublicKeyFP {
+		auditRecord["status"] = "FAILED"
+		auditRecord["error"] = "Remote public key fingerprint does not match attestation public key"
+		log.Printf("Remote public key fingerprint does not match attestation public key")
+	}
 
 	if repo != "" && codeMeasurements != nil && verification.Measurement != nil {
 		if err := codeMeasurements.Equals(verification.Measurement); err != nil {
@@ -77,7 +113,7 @@ func verifyAttestation() (map[string]any, error) {
 			log.Printf("Code: %s", codeMeasurements.Fingerprint())
 			log.Printf("Enclave: %s", verification.Measurement.Fingerprint())
 		} else {
-			log.Println("Verification successful, measurements match")
+			log.Println("Measurements match")
 		}
 	} else {
 		log.Printf("Enclave measurement: %s", verification.Measurement.Fingerprint())
