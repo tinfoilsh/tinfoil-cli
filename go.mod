@@ -8,7 +8,7 @@ require (
 	github.com/sirupsen/logrus v1.9.3
 	github.com/spf13/cobra v1.9.1
 	github.com/stretchr/testify v1.10.0
-	github.com/tinfoilsh/verifier v0.1.3
+	github.com/tinfoilsh/verifier v0.1.4
 )
 
 require (
