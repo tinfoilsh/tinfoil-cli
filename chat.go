@@ -49,24 +49,43 @@ type Delta struct {
 	Content string `json:"content"`
 }
 
-var modelName, apiKey string
+var (
+	modelName, apiKey string
+	listModels        bool
+)
 
 func init() {
 	rootCmd.AddCommand(chatCmd)
 	chatCmd.Flags().StringVarP(&modelName, "model", "m", "", "Model name")
 	chatCmd.Flags().StringVarP(&apiKey, "api-key", "k", "", "API key")
+	chatCmd.Flags().BoolVarP(&listModels, "list", "l", false, "List available models")
 }
 
 var chatCmd = &cobra.Command{
 	Use:   "chat [prompt]",
 	Short: "Chat with the model using a simple prompt",
-	Args:  cobra.MinimumNArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
+		models, err := loadDefaultConfig()
+		if err != nil {
+			log.Fatalf("Error loading default config: %v", err)
+		}
+
+		if listModels {
+			for modelName := range models {
+				fmt.Println(modelName)
+			}
+			return
+		}
+
+		if len(args) == 0 {
+			log.Fatalf("Please provide a prompt")
+		}
+
 		prompt := strings.Join(args, " ")
 
 		if enclaveHost == "" || repo == "" {
-			loadedHost, loadedRepo, err := loadDefaultConfig(modelName)
-			if err != nil {
+			selectedModel, ok := models[modelName]
+			if !ok {
 				log.Printf("Error: Configuration not found for model '%s'", modelName)
 				log.Printf("The model '%s' is not in the default configuration. To use this model, please provide:", modelName)
 				log.Printf("  1. The enclave host with the -e flag (e.g., -e %s.model.tinfoil.sh)", modelName)
@@ -74,8 +93,8 @@ var chatCmd = &cobra.Command{
 				log.Printf("Example: tinfoil chat -m %s -e <enclave-host> -r <repo> -k <api-key> \"Your prompt\"", modelName)
 				log.Fatalf("Aborting due to missing configuration")
 			} else {
-				enclaveHost = loadedHost
-				repo = loadedRepo
+				enclaveHost = selectedModel.Enclave
+				repo = selectedModel.Repo
 			}
 		}
 
@@ -153,20 +172,16 @@ var chatCmd = &cobra.Command{
 	},
 }
 
-// loadDefaultConfig reads the embedded JSON configuration and returns the enclave host and repo
-// values for the given model.
-func loadDefaultConfig(model string) (string, string, error) {
-	// Define a map where keys are model names.
-	var cfg map[string]struct {
-		EnclaveHost string `json:"enclave_host"`
-		Repo        string `json:"repo"`
-	}
+type model struct {
+	Enclave string `json:"enclave"`
+	Repo    string `json:"repo"`
+}
 
+// loadDefaultConfig reads the embedded JSON configuration and returns the config structure
+func loadDefaultConfig() (map[string]model, error) {
+	cfg := make(map[string]model)
 	if err := json.Unmarshal(configData, &cfg); err != nil {
-		return "", "", err
+		return nil, err
 	}
-	if modelCfg, ok := cfg[model]; ok {
-		return modelCfg.EnclaveHost, modelCfg.Repo, nil
-	}
-	return "", "", fmt.Errorf("no configuration found for model: %s", model)
+	return cfg, nil
 }
