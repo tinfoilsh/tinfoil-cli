@@ -42,7 +42,7 @@ func verifyAttestation() (map[string]any, error) {
 
 	auditRecord := make(map[string]any)
 	auditRecord["timestamp"] = time.Now().UTC().Format(time.RFC3339)
-	auditRecord["enclave_host"] = enclaveHost
+	auditRecord["enclave"] = enclaveHost
 
 	log.Printf("Fetching latest release for %s", repo)
 	digest, err := github.FetchLatestDigest(repo)

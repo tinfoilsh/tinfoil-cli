@@ -38,14 +38,20 @@ var embedCmd = &cobra.Command{
 		// If enclaveHost or repo are not provided via flags,
 		// try to load them from the embedded config for the given model.
 		if enclaveHost == "" || repo == "" {
-			loadedHost, loadedRepo, err := loadDefaultConfig(embedModel)
+			models, err := loadDefaultConfig()
 			if err != nil {
+				log.Printf("Error loading default config: %v", err)
+				os.Exit(1)
+			}
+
+			selectedModel, ok := models[embedModel]
+			if !ok {
 				log.Printf("No config found for model %s: %v", embedModel, err)
 				log.Printf("Please specify -e and -r flags for custom models")
 				os.Exit(1)
 			}
-			enclaveHost = loadedHost
-			repo = loadedRepo
+			enclaveHost = selectedModel.Enclave
+			repo = selectedModel.Repo
 		}
 
 		// Support both a single input (string) and multiple inputs (slice of strings)
