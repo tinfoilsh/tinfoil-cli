@@ -18,7 +18,7 @@ Run the following command:
 curl -fsSL https://github.com/tinfoilsh/tinfoil-cli/raw/main/install.sh | sh
 ```
 
-Note: If you receive permission errors (for example, if you’re not running as root), you may need to run the command with sudo:
+Note: If you receive permission errors (for example, if you're not running as root), you may need to run the command with sudo:
 
 ```sh
 sudo curl -fsSL https://github.com/tinfoilsh/tinfoil-cli/raw/main/install.sh | sh
@@ -48,7 +48,9 @@ Usage:
 
 Available Commands:
   attestation  Attestation commands (verify or audit)
-  chat         Chat with a model
+  infer        Run inference with a model (chat completion or audio transcription)
+  chat         Chat with a language model
+  audio        Transcribe audio files using Whisper
   embed        Generate text embeddings
   completion   Generate the autocompletion script for the specified shell
   help         Help about any command

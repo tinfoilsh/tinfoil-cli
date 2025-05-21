@@ -10,5 +10,9 @@
   "mistral-small-3-1-24b": {
     "enclave": "mistral-s-3-1-24b-p.model.tinfoil.sh",
     "repo": "tinfoilsh/confidential-mistral-small-3-1"
+  },
+  "whisper-large-v3-turbo": {
+    "enclave": "whisper-large-v3-turbo.model.tinfoil.sh",
+    "repo": "tinfoilsh/confidential-whisper-large-v3"
   }
 }
