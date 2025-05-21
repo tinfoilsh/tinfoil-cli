@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"embed"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -16,6 +17,7 @@ import (
 )
 
 //go:embed config.json
+var configFS embed.FS
 var configData []byte
 
 type model struct {
@@ -77,16 +79,26 @@ func loadDefaultConfig() (map[string]model, error) {
 }
 
 func init() {
-	rootCmd.AddCommand(inferenceCmd)
-	inferenceCmd.Flags().StringVarP(&modelName, "model", "m", "", "Model name")
-	inferenceCmd.Flags().StringVarP(&apiKey, "api-key", "k", "", "API key")
-	inferenceCmd.Flags().BoolVarP(&listModels, "list", "l", false, "List available models")
-	inferenceCmd.Flags().StringVarP(&audioFile, "audio-file", "a", "", "Audio file for transcription (required for whisper models)")
+	var err error
+	configData, err = configFS.ReadFile("config.json")
+	if err != nil {
+		log.Fatalf("Error reading config.json: %v", err)
+	}
+
+	rootCmd.AddCommand(chatCmd)
+	chatCmd.Flags().StringVarP(&modelName, "model", "m", "", "Model name")
+	chatCmd.Flags().StringVarP(&apiKey, "api-key", "k", "", "API key")
+	chatCmd.Flags().BoolVarP(&listModels, "list", "l", false, "List available chat models")
+
+	rootCmd.AddCommand(audioCmd)
+	audioCmd.Flags().StringVarP(&modelName, "model", "m", "whisper-large-v3-turbo", "Model name (default: whisper-large-v3-turbo)")
+	audioCmd.Flags().StringVarP(&apiKey, "api-key", "k", "", "API key")
+	audioCmd.Flags().StringVarP(&audioFile, "file", "f", "", "Audio file to transcribe")
 }
 
-var inferenceCmd = &cobra.Command{
-	Use:   "infer [prompt]",
-	Short: "Run inference with a model (chat completion or audio transcription)",
+var chatCmd = &cobra.Command{
+	Use:   "chat [prompt]",
+	Short: "Chat with a language model",
 	Run: func(cmd *cobra.Command, args []string) {
 		models, err := loadDefaultConfig()
 		if err != nil {
@@ -95,13 +107,19 @@ var inferenceCmd = &cobra.Command{
 
 		if listModels {
 			for modelName := range models {
-				fmt.Println(modelName)
+				if !strings.HasPrefix(modelName, "whisper") {
+					fmt.Println(modelName)
+				}
 			}
 			return
 		}
 
-		if len(args) == 0 && audioFile == "" {
-			log.Fatalf("Please provide either a prompt or an audio file")
+		if len(args) == 0 {
+			log.Fatalf("Please provide a prompt")
+		}
+
+		if modelName == "" {
+			log.Fatalf("Please specify a model using the -m flag")
 		}
 
 		if enclaveHost == "" || repo == "" {
@@ -111,7 +129,7 @@ var inferenceCmd = &cobra.Command{
 				log.Printf("The model '%s' is not in the default configuration. To use this model, please provide:", modelName)
 				log.Printf("  1. The enclave host with the -e flag (e.g., -e %s.model.tinfoil.sh)", modelName)
 				log.Printf("  2. The source repository with the -r flag (e.g., -r tinfoilsh/confidential-%s)", modelName)
-				log.Printf("Example: tinfoil infer -m %s -e <enclave-host> -r <repo> -k <api-key> \"Your prompt\"", modelName)
+				log.Printf("Example: tinfoil chat -m %s -e <enclave-host> -r <repo> -k <api-key> \"Your prompt\"", modelName)
 				log.Fatalf("Aborting due to missing configuration")
 			} else {
 				enclaveHost = selectedModel.Enclave
@@ -119,12 +137,43 @@ var inferenceCmd = &cobra.Command{
 			}
 		}
 
-		// Determine the model type and handle accordingly
-		if strings.HasPrefix(modelName, "whisper") {
-			handleWhisperInference()
-		} else {
-			handleChatInference(strings.Join(args, " "))
+		handleChatInference(strings.Join(args, " "))
+	},
+}
+
+var audioCmd = &cobra.Command{
+	Use:   "audio",
+	Short: "Transcribe audio files using Whisper",
+	Run: func(cmd *cobra.Command, args []string) {
+		models, err := loadDefaultConfig()
+		if err != nil {
+			log.Fatalf("Error loading default config: %v", err)
 		}
+
+		if audioFile == "" {
+			log.Fatalf("Please specify an audio file using the -f flag")
+		}
+
+		if !strings.HasPrefix(modelName, "whisper") {
+			log.Fatalf("Invalid model. Must use a whisper model for audio transcription")
+		}
+
+		if enclaveHost == "" || repo == "" {
+			selectedModel, ok := models[modelName]
+			if !ok {
+				log.Printf("Error: Configuration not found for model '%s'", modelName)
+				log.Printf("The model '%s' is not in the default configuration. To use this model, please provide:", modelName)
+				log.Printf("  1. The enclave host with the -e flag (e.g., -e %s.model.tinfoil.sh)", modelName)
+				log.Printf("  2. The source repository with the -r flag (e.g., -r tinfoilsh/confidential-%s)", modelName)
+				log.Printf("Example: tinfoil audio -f audio.mp3 -m %s -e <enclave-host> -r <repo> -k <api-key>", modelName)
+				log.Fatalf("Aborting due to missing configuration")
+			} else {
+				enclaveHost = selectedModel.Enclave
+				repo = selectedModel.Repo
+			}
+		}
+
+		handleWhisperInference()
 	},
 }
 
@@ -204,7 +253,7 @@ func handleChatInference(prompt string) {
 
 func handleWhisperInference() {
 	if audioFile == "" {
-		log.Fatalf("Audio file is required for whisper models. Use the --audio-file flag.")
+		log.Fatalf("Audio file is required for whisper models. Use the --file flag.")
 	}
 
 	file, err := os.Open(audioFile)
