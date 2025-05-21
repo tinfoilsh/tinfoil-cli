@@ -18,7 +18,7 @@ Run the following command:
 curl -fsSL https://github.com/tinfoilsh/tinfoil-cli/raw/main/install.sh | sh
 ```
 
-Note: If you receive permission errors (for example, if you’re not running as root), you may need to run the command with sudo:
+Note: If you receive permission errors (for example, if you're not running as root), you may need to run the command with sudo:
 
 ```sh
 sudo curl -fsSL https://github.com/tinfoilsh/tinfoil-cli/raw/main/install.sh | sh
@@ -48,7 +48,7 @@ Usage:
 
 Available Commands:
   attestation  Attestation commands (verify or audit)
-  chat         Chat with a model
+  infer        Run inference with a model (chat completion or audio transcription)
   embed        Generate text embeddings
   completion   Generate the autocompletion script for the specified shell
   help         Help about any command
@@ -62,27 +62,33 @@ Flags:
 Use "tinfoil [command] --help" for more information about a command.
 ```
 
-## Chat
+## Inference
 
-The `chat` command lets you interact with a model by simply specifying a model name and your prompt. You need to specify the model with the `-m` flag.
+The `infer` command lets you interact with a model by simply specifying a model name and your prompt or audio file. You need to specify the model with the `-m` flag.
 
-### Using the Chat Command
+### Using the Inference Command
 
 #### Basic Usage (running DeepSeek R1)
 
 ```bash
-tinfoil chat -m deepseek-r1-70b -k "YOUR_API_KEY" "Why is tinfoil now called aluminum foil?"
+tinfoil infer -m deepseek-r1-70b -k "YOUR_API_KEY" "Why is tinfoil now called aluminum foil?"
 ```
 
 This command loads the enclave host and repo values for the specified model from `config.json`.
 
+#### Using Whisper Large for Audio Transcription
+
+```bash
+# First, ensure you have an audio file to transcribe
+tinfoil infer -m whisper-large-v3-turbo -k "YOUR_API_KEY" --audio-file "path/to/audio.mp3"
+```
 
 #### Specifying a Custom Model
 
 For custom models not included in `config.json`, supply the model name along with the `-e` and `-r` overrides:
 
 ```bash
-tinfoil chat -m custom-model -k "YOUR_API_KEY" "Explain string theory" \
+tinfoil infer -m custom-model -k "YOUR_API_KEY" "Explain string theory" \
   -e custom.enclave.example.com \
   -r cool-user/custom-model-repo
 ```
@@ -91,10 +97,11 @@ If you omit `-e` or `-r` for a model that isn't in the configuration, a warning 
 
 ### Command Options
 
-- `-m, --model`: The model name to use for chat. Must be specified.
+- `-m, --model`: The model name to use for inference. Must be specified.
 - `-k, --api-key`: The API key for authentication.
 - `-e, --host`: The hostname of the enclave. Optional if defined in the config file.
 - `-r, --repo`: The GitHub repository containing code measurements. Optional if defined in the config file.
+- `-a, --audio-file`: The audio file to transcribe (required for whisper models).
 
 
 ## Embed
