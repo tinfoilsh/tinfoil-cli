@@ -3,17 +3,20 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"embed"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
-	"mime/multipart"
 	"net/http"
 	"os"
 	"strings"
 
+	"github.com/openai/openai-go"
+	"github.com/openai/openai-go/option"
 	"github.com/spf13/cobra"
+	"github.com/tinfoilsh/tinfoil-go"
 )
 
 //go:embed config.json
@@ -311,59 +314,30 @@ func handleWhisperInference() {
 		log.Fatalf("Audio file is required for whisper models. Use the --file flag.")
 	}
 
-	file, err := os.Open(audioFile)
+	client, err := tinfoil.NewClientWithParams(
+		enclaveHost,
+		repo,
+		option.WithAPIKey(apiKey),
+	)
+	if err != nil {
+		log.Fatalf("Error creating client: %v", err)
+	}
+
+	audioFileReader, err := os.Open(audioFile)
 	if err != nil {
 		log.Fatalf("Error opening audio file: %v", err)
 	}
-	defer file.Close()
 
-	url := fmt.Sprintf("https://%s/v1/audio/transcriptions", enclaveHost)
-	sc := secureClient()
-
-	body := &bytes.Buffer{}
-	writer := multipart.NewWriter(body)
-	part, err := writer.CreateFormFile("file", audioFile)
+	resp, err := client.Audio.Transcriptions.New(
+		context.Background(),
+		openai.AudioTranscriptionNewParams{
+			File:  audioFileReader,
+			Model: modelName,
+		},
+	)
 	if err != nil {
-		log.Fatalf("Error creating form file: %v", err)
-	}
-	if _, err = io.Copy(part, file); err != nil {
-		log.Fatalf("Error copying file to form: %v", err)
+		log.Fatalf("Error transcribing audio: %v", err)
 	}
 
-	writer.WriteField("model", modelName)
-	writer.Close()
-
-	req, err := http.NewRequest("POST", url, body)
-	if err != nil {
-		log.Fatalf("Error creating request: %v", err)
-	}
-	req.Header.Set("Content-Type", writer.FormDataContentType())
-	if apiKey != "" {
-		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", apiKey))
-	}
-
-	client, err := sc.HTTPClient()
-	if err != nil {
-		log.Fatalf("Error getting HTTP client: %v", err)
-	}
-
-	resp, err := client.Do(req)
-	if err != nil {
-		log.Fatalf("Error performing request: %v", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != 200 {
-		bodyText, _ := io.ReadAll(resp.Body)
-		log.Fatalf("Enclave returned status code %d: %s", resp.StatusCode, string(bodyText))
-	}
-
-	var result struct {
-		Text string `json:"text"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		log.Fatalf("Error decoding response: %v", err)
-	}
-
-	fmt.Println(result.Text)
+	fmt.Println(resp.Text)
 }
