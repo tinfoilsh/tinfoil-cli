@@ -136,6 +136,36 @@ tinfoil embed -m custom-embed-model -k "YOUR_API_KEY" "Text to embed" \
 - `-r, --repo`: The GitHub repository containing code measurements. Optional if defined in the config file.
 
 
+## Audio
+
+The `audio` command allows you to transcribe audio files using Whisper. By default, it uses the `whisper-large-v3` model.
+
+### Using the Audio Command
+
+#### Basic Usage
+
+```bash
+tinfoil audio -k "YOUR_API_KEY" path/to/audio/file.mp3
+```
+
+This command uses the default model `whisper-large-v3` and loads the enclave host and repo values from `config.json`.
+
+#### Specifying a Custom Model
+
+```bash
+tinfoil audio -m custom-whisper-model -k "YOUR_API_KEY" path/to/audio/file.mp3 \
+  -e custom.enclave.example.com \
+  -r cool-user/custom-model-repo
+```
+
+### Command Options
+
+- `-m, --model`: The model name to use for transcription. Defaults to `whisper-large-v3`.
+- `-k, --api-key`: The API key for authentication.
+- `-e, --host`: The hostname of the enclave. Optional if defined in the config file.
+- `-r, --repo`: The GitHub repository containing code measurements. Optional if defined in the config file.
+
+
 ## Attestation
 
 ### Verify Attestation
