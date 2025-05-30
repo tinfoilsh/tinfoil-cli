@@ -21,7 +21,7 @@ curl -fsSL https://github.com/tinfoilsh/tinfoil-cli/raw/main/install.sh | sh
 Note: If you receive permission errors (for example, if you're not running as root), you may need to run the command with sudo:
 
 ```sh
-sudo curl -fsSL https://github.com/tinfoilsh/tinfoil-cli/raw/main/install.sh | sh
+curl -fsSL https://github.com/tinfoilsh/tinfoil-cli/raw/main/install.sh | sh
 ```
 
 ### Build from source
