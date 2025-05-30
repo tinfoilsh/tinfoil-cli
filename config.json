@@ -12,7 +12,7 @@
     "repo": "tinfoilsh/confidential-mistral-small-3-1"
   },
   "qwen2-5-72b": {
-    "enclave": "qwen2-5-72b-p.model.tinfoil.sh",
+    "enclave": "qwen2-5-72b.model.tinfoil.sh",
     "repo": "tinfoilsh/confidential-qwen2-5-72b"
   },
   "whisper-large-v3-turbo": {
