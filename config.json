@@ -14,5 +14,9 @@
   "whisper-large-v3-turbo": {
     "enclave": "audio-processing.model.tinfoil.sh",
     "repo": "tinfoilsh/confidential-audio-processing"
+  },
+  "nomic-embed-text": {
+    "enclave": "nomic-embed-text.model.tinfoil.sh",
+    "repo": "tinfoilsh/confidential-nomic-embed-text"
   }
 }
