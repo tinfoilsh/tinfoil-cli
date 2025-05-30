@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -17,9 +18,19 @@ type EmbedRequest struct {
 	Input interface{} `json:"input"`
 }
 
-// EmbedResponse contains just the embeddings list from the API.
+// EmbedResponse contains the embeddings response in OpenAI format.
 type EmbedResponse struct {
-	Embeddings [][]float64 `json:"embeddings"`
+	Object string `json:"object"`
+	Data   []struct {
+		Object    string    `json:"object"`
+		Embedding []float64 `json:"embedding"`
+		Index     int       `json:"index"`
+	} `json:"data"`
+	Model string `json:"model"`
+	Usage struct {
+		PromptTokens int `json:"prompt_tokens"`
+		TotalTokens  int `json:"total_tokens"`
+	} `json:"usage"`
 }
 
 var embedModel string
@@ -73,8 +84,8 @@ var embedCmd = &cobra.Command{
 			log.Fatalf("Error marshaling JSON: %v", err)
 		}
 
-		// Construct the URL for the /api/embed endpoint.
-		url := fmt.Sprintf("https://%s/api/embed", enclaveHost)
+		// Construct the URL for the /v1/embeddings endpoint.
+		url := fmt.Sprintf("https://%s/v1/embeddings", enclaveHost)
 		sc := secureClient()
 
 		req, err := http.NewRequest("POST", url, bytes.NewBuffer(payloadBytes))
@@ -97,13 +108,24 @@ var embedCmd = &cobra.Command{
 		}
 		defer resp.Body.Close()
 
+		if resp.StatusCode != 200 {
+			bodyText, _ := io.ReadAll(resp.Body)
+			log.Fatalf("Enclave returned status code %d: %s", resp.StatusCode, string(bodyText))
+		}
+
 		var embedResp EmbedResponse
 		if err := json.NewDecoder(resp.Body).Decode(&embedResp); err != nil {
 			log.Fatalf("Error decoding response: %v", err)
 		}
 
+		// Extract just the embeddings from the response
+		var embeddings [][]float64
+		for _, item := range embedResp.Data {
+			embeddings = append(embeddings, item.Embedding)
+		}
+
 		// Print only the embeddings list as JSON.
-		output, err := json.MarshalIndent(embedResp.Embeddings, "", "  ")
+		output, err := json.MarshalIndent(embeddings, "", "  ")
 		if err != nil {
 			log.Fatalf("Error formatting output: %v", err)
 		}
