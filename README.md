@@ -52,6 +52,7 @@ Available Commands:
   chat         Chat with a language model
   audio        Transcribe audio files using Whisper
   embed        Generate text embeddings
+  proxy        Run a local HTTP proxy
   completion   Generate the autocompletion script for the specified shell
   help         Help about any command
   http         Make verified HTTP requests
@@ -108,7 +109,7 @@ The `embed` command allows you to generate embeddings for text inputs. By defaul
 #### With Default Model
 
 ```bash
-tinfoil embed "This is a text I want to get embeddings for."
+tinfoil embed -k "YOUR_API_KEY" "This is a text I want to get embeddings for."
 ```
 
 This command uses the default model `nomic-embed-text` and loads the enclave host and repo values from `config.json`.
@@ -118,7 +119,7 @@ This command uses the default model `nomic-embed-text` and loads the enclave hos
 You can provide multiple text inputs to get embeddings for all of them:
 
 ```bash
-tinfoil embed "First text" "Second text" "Third text"
+tinfoil embed -k "YOUR_API_KEY" "First text" "Second text" "Third text"
 ```
 
 #### Specifying a Custom Model
@@ -132,36 +133,38 @@ tinfoil embed -m custom-embed-model -k "YOUR_API_KEY" "Text to embed" \
 ### Command Options
 
 - `-m, --model`: The model name to use for embeddings. Defaults to `nomic-embed-text`.
+- `-k, --api-key`: The API key for authentication.
 - `-e, --host`: The hostname of the enclave. Optional if defined in the config file.
 - `-r, --repo`: The GitHub repository containing code measurements. Optional if defined in the config file.
 
 
 ## Audio
 
-The `audio` command allows you to transcribe audio files using Whisper. By default, it uses the `whisper-large-v3` model.
+The `audio` command allows you to transcribe audio files using Whisper. By default, it uses the `whisper-large-v3-turbo` model.
 
 ### Using the Audio Command
 
 #### Basic Usage
 
 ```bash
-tinfoil audio -k "YOUR_API_KEY" path/to/audio/file.mp3
+tinfoil audio -k "YOUR_API_KEY" -f path/to/audio/file.mp3
 ```
 
-This command uses the default model `whisper-large-v3` and loads the enclave host and repo values from `config.json`.
+This command uses the default model `whisper-large-v3-turbo` and loads the enclave host and repo values from `config.json`.
 
 #### Specifying a Custom Model
 
 ```bash
-tinfoil audio -m custom-whisper-model -k "YOUR_API_KEY" path/to/audio/file.mp3 \
+tinfoil audio -m custom-whisper-model -k "YOUR_API_KEY" -f path/to/audio/file.mp3 \
   -e custom.enclave.example.com \
   -r cool-user/custom-model-repo
 ```
 
 ### Command Options
 
-- `-m, --model`: The model name to use for transcription. Defaults to `whisper-large-v3`.
+- `-m, --model`: The model name to use for transcription. Defaults to `whisper-large-v3-turbo`.
 - `-k, --api-key`: The API key for authentication.
+- `-f, --file`: The audio file to transcribe.
 - `-e, --host`: The hostname of the enclave. Optional if defined in the config file.
 - `-r, --repo`: The GitHub repository containing code measurements. Optional if defined in the config file.
 
@@ -176,13 +179,13 @@ Sample successful output:
 
 ```bash
 $ tinfoil attestation verify \
-  -e llama3-3-70b.model.tinfoil.sh \
-  -r tinfoilsh/confidential-llama3-3-70b
-INFO[0000] Fetching latest release for tinfoilsh/confidential-llama3-3-70b 
-INFO[0000] Fetching sigstore bundle from tinfoilsh/confidential-llama3-3-70b for digest f2f48557c8b0c1b268f8d8673f380242ad8c4983fe9004c02a8688a89f94f333 
+  -e llama3-3-70b-p.model.tinfoil.sh \
+  -r tinfoilsh/confidential-llama3-3-70b-prod
+INFO[0000] Fetching latest release for tinfoilsh/confidential-llama3-3-70b-prod 
+INFO[0000] Fetching sigstore bundle from tinfoilsh/confidential-llama3-3-70b-prod for digest f2f48557c8b0c1b268f8d8673f380242ad8c4983fe9004c02a8688a89f94f333 
 INFO[0001] Fetching trust root                          
 INFO[0001] Verifying code measurements                  
-INFO[0001] Fetching attestation doc from llama3-3-70b.model.tinfoil.sh 
+INFO[0001] Fetching attestation doc from llama3-3-70b-p.model.tinfoil.sh 
 INFO[0001] Verifying enclave measurements               
 INFO[0001] Public key fingerprint: 5f6c24f54ed862c404a558aa3fa85b686b77263ceeda86131e7acd90e8af5db2 
 INFO[0001] Remote public key fingerprint: 5f6c24f54ed862c404a558aa3fa85b686b77263ceeda86131e7acd90e8af5db2 
@@ -197,14 +200,14 @@ By default the audit record is printed to stdout as JSON. To write it to a file,
 
 ```bash
 tinfoil attestation audit \
-  -e llama3-3-70b.model.tinfoil.sh \
-  -r tinfoilsh/confidential-llama3-3-70b \
+  -e llama3-3-70b-p.model.tinfoil.sh \
+  -r tinfoilsh/confidential-llama3-3-70b-prod \
   -l /var/log/tinfoil_audit.log
 ```
 
 The audit log record includes the timestamp, enclave host, code and enclave measurement fingerprints, and the verification status.
 
-### Proxy
+## Proxy
 
 Use `tinfoil proxy` to start a local HTTP proxy that verifies connections and forwards them to the specified enclave.
 
@@ -215,7 +218,7 @@ tinfoil proxy \
   -p 8080
 ```
 
-### Docker
+## Docker
 
 A docker image is available at `ghcr.io/tinfoilsh/tinfoil-cli`.
 

@@ -26,8 +26,9 @@ var embedModel string
 
 func init() {
 	rootCmd.AddCommand(embedCmd)
-	// Only support the model flag (enclave host and repo are global)
+	// Support both model and API key flags (enclave host and repo are global)
 	embedCmd.Flags().StringVarP(&embedModel, "model", "m", "nomic-embed-text", "Model name for embeddings (default: nomic-embed-text)")
+	embedCmd.Flags().StringVarP(&apiKey, "api-key", "k", "", "API key")
 }
 
 var embedCmd = &cobra.Command{
@@ -81,6 +82,9 @@ var embedCmd = &cobra.Command{
 			log.Fatalf("Error creating request: %v", err)
 		}
 		req.Header.Set("Content-Type", "application/json")
+		if apiKey != "" {
+			req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", apiKey))
+		}
 
 		client, err := sc.HTTPClient()
 		if err != nil {
