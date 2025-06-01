@@ -4,3 +4,4 @@ tinfoil-cli
 *.log
 dist/
 tinfoil
+output.mp3

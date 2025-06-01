@@ -72,6 +72,9 @@ var (
 	modelName, apiKey string
 	listModels        bool
 	audioFile         string
+	ttsText           string
+	ttsVoice          string
+	outputFile        string
 )
 
 // loadDefaultConfig unmarshals the embedded config.json.
@@ -90,71 +93,24 @@ func init() {
 		log.Fatalf("Error reading config.json: %v", err)
 	}
 
-	// Inference command (chat completion or audio transcription)
-	rootCmd.AddCommand(inferenceCmd)
-	inferenceCmd.Flags().StringVarP(&modelName, "model", "m", "", "Model name")
-	inferenceCmd.Flags().StringVarP(&apiKey, "api-key", "k", "", "API key")
-	inferenceCmd.Flags().BoolVarP(&listModels, "list", "l", false, "List available models")
-	inferenceCmd.Flags().StringVarP(&audioFile, "audio-file", "a", "", "Audio file for transcription (required for whisper models)")
-
 	// Chat command
 	rootCmd.AddCommand(chatCmd)
 	chatCmd.Flags().StringVarP(&modelName, "model", "m", "", "Model name")
 	chatCmd.Flags().StringVarP(&apiKey, "api-key", "k", "", "API key")
 	chatCmd.Flags().BoolVarP(&listModels, "list", "l", false, "List available chat models")
 
-	// Audio command
+	// Audio command (for transcription)
 	rootCmd.AddCommand(audioCmd)
 	audioCmd.Flags().StringVarP(&modelName, "model", "m", "whisper-large-v3-turbo", "Model name (default: whisper-large-v3-turbo)")
 	audioCmd.Flags().StringVarP(&apiKey, "api-key", "k", "", "API key")
 	audioCmd.Flags().StringVarP(&audioFile, "file", "f", "", "Audio file to transcribe")
-}
 
-var inferenceCmd = &cobra.Command{
-	Use:   "infer [prompt]",
-	Short: "Run inference with a model (chat completion or audio transcription)",
-	Run: func(cmd *cobra.Command, args []string) {
-		models, err := loadDefaultConfig()
-		if err != nil {
-			log.Fatalf("Error loading default config: %v", err)
-		}
-
-		if listModels {
-			for mn := range models {
-				fmt.Println(mn)
-			}
-			return
-		}
-
-		if len(args) == 0 && audioFile == "" {
-			log.Fatalf("Please provide either a prompt or an audio file")
-		}
-
-		if modelName == "" {
-			log.Fatalf("Please specify a model using the -m flag")
-		}
-
-		// Fill in enclaveHost and repo from config if not provided via flags.
-		if enclaveHost == "" || repo == "" {
-			selectedModel, ok := models[modelName]
-			if !ok {
-				log.Printf("Error: Configuration not found for model '%s'", modelName)
-				log.Printf("The model '%s' is not in the default configuration. To use this model, please provide:", modelName)
-				log.Printf("  1. The enclave host with the -e flag (e.g., -e %s.model.tinfoil.sh)", modelName)
-				log.Printf("  2. The source repository with the -r flag (e.g., -r tinfoilsh/confidential-%s)", modelName)
-				log.Printf("Example: tinfoil infer -m %s -e <enclave-host> -r <repo> -k <api-key> \"Your prompt\"", modelName)
-				log.Fatalf("Aborting due to missing configuration")
-			}
-			enclaveHost = selectedModel.Enclave
-			repo = selectedModel.Repo
-		}
-
-		if strings.HasPrefix(modelName, "whisper") {
-			handleWhisperInference()
-		} else {
-			handleChatInference(strings.Join(args, " "))
-		}
-	},
+	// TTS command (for text-to-speech synthesis)
+	rootCmd.AddCommand(ttsCmd)
+	ttsCmd.Flags().StringVarP(&modelName, "model", "m", "kokoro", "Model name (default: kokoro)")
+	ttsCmd.Flags().StringVarP(&apiKey, "api-key", "k", "", "API key")
+	ttsCmd.Flags().StringVarP(&ttsVoice, "voice", "v", "af_sky+af_bella", "Voice to use for synthesis (default: af_sky+af_bella)")
+	ttsCmd.Flags().StringVarP(&outputFile, "output", "o", "output.mp3", "Output file path (default: output.mp3)")
 }
 
 var chatCmd = &cobra.Command{
@@ -168,8 +124,8 @@ var chatCmd = &cobra.Command{
 
 		if listModels {
 			for mn := range models {
-				if strings.HasPrefix(mn, "whisper") {
-					// Exclude whisper models from chat listing.
+				if strings.HasPrefix(mn, "whisper") || mn == "kokoro" {
+					// Exclude audio models from chat listing.
 					continue
 				}
 				fmt.Println(mn)
@@ -235,6 +191,39 @@ var audioCmd = &cobra.Command{
 		}
 
 		handleWhisperInference()
+	},
+}
+
+var ttsCmd = &cobra.Command{
+	Use:   "tts [text]",
+	Short: "Convert text to speech using TTS models",
+	Run: func(cmd *cobra.Command, args []string) {
+		models, err := loadDefaultConfig()
+		if err != nil {
+			log.Fatalf("Error loading default config: %v", err)
+		}
+
+		if len(args) == 0 {
+			log.Fatalf("Please provide text to convert to speech")
+		}
+
+		ttsText = strings.Join(args, " ")
+
+		if enclaveHost == "" || repo == "" {
+			selectedModel, ok := models[modelName]
+			if !ok {
+				log.Printf("Error: Configuration not found for model '%s'", modelName)
+				log.Printf("The model '%s' is not in the default configuration. To use this model, please provide:", modelName)
+				log.Printf("  1. The enclave host with the -e flag (e.g., -e %s.model.tinfoil.sh)", modelName)
+				log.Printf("  2. The source repository with the -r flag (e.g., -r tinfoilsh/confidential-%s)", modelName)
+				log.Printf("Example: tinfoil tts -m %s -e <enclave-host> -r <repo> -k <api-key> \"Your text\"", modelName)
+				log.Fatalf("Aborting due to missing configuration")
+			}
+			enclaveHost = selectedModel.Enclave
+			repo = selectedModel.Repo
+		}
+
+		handleTTSInference()
 	},
 }
 
@@ -340,4 +329,42 @@ func handleWhisperInference() {
 	}
 
 	fmt.Println(resp.Text)
+}
+
+// handleTTSInference converts text to speech and saves the audio file.
+func handleTTSInference() {
+	client, err := tinfoil.NewClientWithParams(
+		enclaveHost,
+		repo,
+		option.WithAPIKey(apiKey),
+	)
+	if err != nil {
+		log.Fatalf("Error creating client: %v", err)
+	}
+
+	response, err := client.Audio.Speech.New(
+		context.Background(),
+		openai.AudioSpeechNewParams{
+			Model: openai.AudioModel(modelName),
+			Voice: openai.AudioSpeechNewParamsVoice(ttsVoice),
+			Input: ttsText,
+		},
+	)
+	if err != nil {
+		log.Fatalf("Error creating speech: %v", err)
+	}
+	defer response.Body.Close()
+
+	out, err := os.Create(outputFile)
+	if err != nil {
+		log.Fatalf("Error creating output file: %v", err)
+	}
+	defer out.Close()
+
+	_, err = io.Copy(out, response.Body)
+	if err != nil {
+		log.Fatalf("Error writing audio file: %v", err)
+	}
+
+	fmt.Printf("Speech saved to %s\n", outputFile)
 }

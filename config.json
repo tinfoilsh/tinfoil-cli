@@ -15,6 +15,10 @@
     "enclave": "qwen2-5-72b.model.tinfoil.sh",
     "repo": "tinfoilsh/confidential-qwen2-5-72b"
   },
+  "kokoro": {
+    "enclave": "audio-processing.model.tinfoil.sh",
+    "repo": "tinfoilsh/confidential-audio-processing"
+  },
   "whisper-large-v3-turbo": {
     "enclave": "audio-processing.model.tinfoil.sh",
     "repo": "tinfoilsh/confidential-audio-processing"
