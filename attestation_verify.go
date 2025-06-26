@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 
 	"github.com/spf13/cobra"
 )
@@ -10,10 +11,12 @@ import (
 func init() {
 	attestationCmd.AddCommand(attestationVerifyCmd)
 	attestationVerifyCmd.Flags().BoolVarP(&jsonOutput, "json", "j", false, "Output in JSON format")
+	attestationVerifyCmd.Flags().StringVarP(&jsonFile, "log-file", "l", "", "Path to write the JSON log")
 }
 
 var (
 	jsonOutput bool
+	jsonFile   string
 )
 
 var attestationVerifyCmd = &cobra.Command{
@@ -25,13 +28,20 @@ var attestationVerifyCmd = &cobra.Command{
 			return err
 		}
 
+		output, err := json.MarshalIndent(record, "", "  ")
+		if err != nil {
+			return fmt.Errorf("error marshaling JSON: %v", err)
+		}
+
 		if jsonOutput {
-			output, err := json.MarshalIndent(record, "", "  ")
-			if err != nil {
-				return fmt.Errorf("error marshaling JSON: %v", err)
-			}
 			fmt.Println(string(output))
 			return nil
+		}
+
+		if jsonFile != "" {
+			if err := os.WriteFile(jsonFile, output, 0644); err != nil {
+				return fmt.Errorf("error writing JSON to file: %v", err)
+			}
 		}
 
 		return nil
