@@ -26,8 +26,15 @@ var attestationVerifyCmd = &cobra.Command{
 	Short: "Verify enclave attestation",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		logger := log.New()
-		if (jsonFile != "" || jsonOutput) && (!verbose && !trace) {
+		if jsonFile != "" || jsonOutput {
 			logger.SetOutput(io.Discard)
+		}
+
+		// Override and enable logging if verbose or trace is set
+		if verbose {
+			logger.SetLevel(log.DebugLevel)
+		} else if trace {
+			logger.SetLevel(log.TraceLevel)
 		}
 
 		record, err := verifyAttestation(logger)
