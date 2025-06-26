@@ -192,17 +192,15 @@ INFO[0001] Remote public key fingerprint: 5f6c24f54ed862c404a558aa3fa85b686b7726
 INFO[0001] Measurements match  
 ```
 
-### Audit Attestation
+### JSON Output
 
-You can also verify attestations at random and record a machine-readable audit log. Use the `attestation audit` command for this purpose.
-
-By default the audit record is printed to stdout as JSON. To write it to a file, use the `-l/--log-file` flag:
+You can also record the verification to a machine-readable audit log. Use the `attestation verify --json` command for this purpose.
 
 ```bash
-tinfoil attestation audit \
+tinfoil attestation verify \
   -e llama3-3-70b-p.model.tinfoil.sh \
   -r tinfoilsh/confidential-llama3-3-70b-prod \
-  -l /var/log/tinfoil_audit.log
+  -j > file.json
 ```
 
 The audit log record includes the timestamp, enclave host, code and enclave measurement fingerprints, and the verification status.
