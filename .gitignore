@@ -5,3 +5,4 @@ tinfoil-cli
 dist/
 tinfoil
 output.mp3
+*.pem
