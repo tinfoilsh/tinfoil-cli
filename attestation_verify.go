@@ -3,8 +3,10 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 
+	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 )
 
@@ -23,7 +25,12 @@ var attestationVerifyCmd = &cobra.Command{
 	Use:   "verify",
 	Short: "Verify enclave attestation",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		record, err := verifyAttestation()
+		logger := log.New()
+		if (jsonFile != "" || jsonOutput) && (!verbose && !trace) {
+			logger.SetOutput(io.Discard)
+		}
+
+		record, err := verifyAttestation(logger)
 		if err != nil {
 			return err
 		}
