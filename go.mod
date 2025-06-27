@@ -11,7 +11,7 @@ require (
 	github.com/stretchr/testify v1.10.0
 	github.com/tinfoilsh/tfshim v0.1.1
 	github.com/tinfoilsh/tinfoil-go v0.0.4
-	github.com/tinfoilsh/verifier v0.1.4
+	github.com/tinfoilsh/verifier v0.1.9
 )
 
 require (
