@@ -337,8 +337,8 @@ github.com/tinfoilsh/tfshim v0.1.1 h1:aZS1hhp3R4M2pl6x0DdQGsCpjbSWau5Ff3g+EvCMxc
 github.com/tinfoilsh/tfshim v0.1.1/go.mod h1:eA8Bfatx1IiZCYW1g2V7R45AjnfncoPdVJRfjaPeIUQ=
 github.com/tinfoilsh/tinfoil-go v0.0.4 h1:Qzek3dLG/uwqhxQ9+IVfR/7B18OtfuIRoiPc8G/6rDg=
 github.com/tinfoilsh/tinfoil-go v0.0.4/go.mod h1:SGuESVub3VX2UXbUHXTv9ov2N27qr6CtaDbMlEOwI14=
-github.com/tinfoilsh/verifier v0.1.4 h1:kr9oxMc4ec08eOeKHU6NCtd2ABZAD0S++NAu8dmJzFs=
-github.com/tinfoilsh/verifier v0.1.4/go.mod h1:38Ytq/lSZGgG9mA2JrTcYW4mPSj7bnoYiP81wfkIL0k=
+github.com/tinfoilsh/verifier v0.1.9 h1:2Ugku/LbA8ga2Kj+9rsXEgnIVXkNF1rmgQjoJ76+3No=
+github.com/tinfoilsh/verifier v0.1.9/go.mod h1:38Ytq/lSZGgG9mA2JrTcYW4mPSj7bnoYiP81wfkIL0k=
 github.com/tink-crypto/tink-go-awskms/v2 v2.1.0 h1:N9UxlsOzu5mttdjhxkDLbzwtEecuXmlxZVo/ds7JKJI=
 github.com/tink-crypto/tink-go-awskms/v2 v2.1.0/go.mod h1:PxSp9GlOkKL9rlybW804uspnHuO9nbD98V/fDX4uSis=
 github.com/tink-crypto/tink-go-gcpkms/v2 v2.2.0 h1:3B9i6XBXNTRspfkTC0asN5W0K6GhOSgcujNiECNRNb0=
