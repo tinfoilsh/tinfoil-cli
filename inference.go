@@ -19,16 +19,15 @@ import (
 	"github.com/tinfoilsh/tinfoil-go"
 )
 
+// Proxy constants - all inference requests go through this proxy
+const (
+	PROXY_ENCLAVE = "inference.tinfoil.sh"
+	PROXY_REPO    = "tinfoilsh/confidential-inference-proxy"
+)
+
 //go:embed config.json
 var configFS embed.FS
 var configData []byte
-
-// model represents the enclave host and source repo for a model
-// listed in the embedded configuration file.
-type model struct {
-	Enclave string `json:"enclave"`
-	Repo    string `json:"repo"`
-}
 
 // ChatMessage represents a single message in a chat conversation.
 type ChatMessage struct {
@@ -77,9 +76,9 @@ var (
 	outputFile        string
 )
 
-// loadDefaultConfig unmarshals the embedded config.json.
-func loadDefaultConfig() (map[string]model, error) {
-	cfg := make(map[string]model)
+// loadDefaultConfig unmarshals the embedded config.json for model name mapping.
+func loadDefaultConfig() (map[string]string, error) {
+	cfg := make(map[string]string)
 	if err := json.Unmarshal(configData, &cfg); err != nil {
 		return nil, err
 	}
@@ -142,17 +141,13 @@ var chatCmd = &cobra.Command{
 		}
 
 		if enclaveHost == "" || repo == "" {
-			selectedModel, ok := models[modelName]
-			if !ok {
-				log.Printf("Error: Configuration not found for model '%s'", modelName)
-				log.Printf("The model '%s' is not in the default configuration. To use this model, please provide:", modelName)
-				log.Printf("  1. The enclave host with the -e flag (e.g., -e %s.model.tinfoil.sh)", modelName)
-				log.Printf("  2. The source repository with the -r flag (e.g., -r tinfoilsh/confidential-%s)", modelName)
-				log.Printf("Example: tinfoil chat -m %s -e <enclave-host> -r <repo> -k <api-key> \"Your prompt\"", modelName)
-				log.Fatalf("Aborting due to missing configuration")
+			// Resolve model name alias if it exists
+			if resolvedModel, ok := models[modelName]; ok {
+				modelName = resolvedModel
 			}
-			enclaveHost = selectedModel.Enclave
-			repo = selectedModel.Repo
+			// Always use proxy constants
+			enclaveHost = PROXY_ENCLAVE
+			repo = PROXY_REPO
 		}
 
 		handleChatInference(strings.Join(args, " "))
@@ -177,17 +172,13 @@ var audioCmd = &cobra.Command{
 		}
 
 		if enclaveHost == "" || repo == "" {
-			selectedModel, ok := models[modelName]
-			if !ok {
-				log.Printf("Error: Configuration not found for model '%s'", modelName)
-				log.Printf("The model '%s' is not in the default configuration. To use this model, please provide:", modelName)
-				log.Printf("  1. The enclave host with the -e flag (e.g., -e %s.model.tinfoil.sh)", modelName)
-				log.Printf("  2. The source repository with the -r flag (e.g., -r tinfoilsh/confidential-%s)", modelName)
-				log.Printf("Example: tinfoil audio -f audio.mp3 -m %s -e <enclave-host> -r <repo> -k <api-key>", modelName)
-				log.Fatalf("Aborting due to missing configuration")
+			// Resolve model name alias if it exists
+			if resolvedModel, ok := models[modelName]; ok {
+				modelName = resolvedModel
 			}
-			enclaveHost = selectedModel.Enclave
-			repo = selectedModel.Repo
+			// Always use proxy constants
+			enclaveHost = PROXY_ENCLAVE
+			repo = PROXY_REPO
 		}
 
 		handleWhisperInference()
@@ -210,17 +201,13 @@ var ttsCmd = &cobra.Command{
 		ttsText = strings.Join(args, " ")
 
 		if enclaveHost == "" || repo == "" {
-			selectedModel, ok := models[modelName]
-			if !ok {
-				log.Printf("Error: Configuration not found for model '%s'", modelName)
-				log.Printf("The model '%s' is not in the default configuration. To use this model, please provide:", modelName)
-				log.Printf("  1. The enclave host with the -e flag (e.g., -e %s.model.tinfoil.sh)", modelName)
-				log.Printf("  2. The source repository with the -r flag (e.g., -r tinfoilsh/confidential-%s)", modelName)
-				log.Printf("Example: tinfoil tts -m %s -e <enclave-host> -r <repo> -k <api-key> \"Your text\"", modelName)
-				log.Fatalf("Aborting due to missing configuration")
+			// Resolve model name alias if it exists
+			if resolvedModel, ok := models[modelName]; ok {
+				modelName = resolvedModel
 			}
-			enclaveHost = selectedModel.Enclave
-			repo = selectedModel.Repo
+			// Always use proxy constants
+			enclaveHost = PROXY_ENCLAVE
+			repo = PROXY_REPO
 		}
 
 		handleTTSInference()

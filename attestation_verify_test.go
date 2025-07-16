@@ -21,8 +21,8 @@ func TestAttestationVerifySEV(t *testing.T) {
 	args := []string{
 		"attestation",
 		"verify",
-		"-e", "deepseek-r1-70b-p.model.tinfoil.sh",
-		"-r", "tinfoilsh/confidential-deepseek-r1-70b-prod",
+		"-e", "inference.tinfoil.sh",
+		"-r", "tinfoilsh/confidential-inference-proxy",
 	}
 	rootCmd.SetArgs(args)
 	assert.Nil(t, rootCmd.Execute())
