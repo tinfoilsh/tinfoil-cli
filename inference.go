@@ -108,7 +108,7 @@ func init() {
 	rootCmd.AddCommand(ttsCmd)
 	ttsCmd.Flags().StringVarP(&modelName, "model", "m", "kokoro", "Model name (default: kokoro)")
 	ttsCmd.Flags().StringVarP(&apiKey, "api-key", "k", "", "API key")
-	ttsCmd.Flags().StringVarP(&ttsVoice, "voice", "v", "af_sky+af_bella", "Voice to use for synthesis (default: af_sky+af_bella)")
+	ttsCmd.Flags().StringVar(&ttsVoice, "voice", "af_sky+af_bella", "Voice to use for synthesis (default: af_sky+af_bella)")
 	ttsCmd.Flags().StringVarP(&outputFile, "output", "o", "output.mp3", "Output file path (default: output.mp3)")
 }
 

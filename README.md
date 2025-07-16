@@ -211,14 +211,14 @@ tinfoil tts -m tts -k "YOUR_API_KEY" "Hello world"
 #### Specifying Voice and Output File
 
 ```bash
-tinfoil tts -m kokoro -k "YOUR_API_KEY" -v "af_sky+af_bella" -o "my_speech.mp3" "Custom text to speak"
+tinfoil tts -m kokoro -k "YOUR_API_KEY" --voice "af_sky+af_bella" -o "my_speech.mp3" "Custom text to speak"
 ```
 
 ### Command Options
 
 - `-m, --model`: The model name to use for TTS. Defaults to `kokoro`.
 - `-k, --api-key`: The API key for authentication.
-- `-v, --voice`: Voice to use for synthesis. Defaults to `af_sky+af_bella`.
+- `--voice`: Voice to use for synthesis. Defaults to `af_sky+af_bella`.
 - `-o, --output`: Output file path. Defaults to `output.mp3`.
 - `-e, --host`: The hostname of the enclave. Optional if defined in the config file.
 - `-r, --repo`: The GitHub repository containing code measurements. Optional if defined in the config file.
