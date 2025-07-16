@@ -47,8 +47,7 @@ var embedCmd = &cobra.Command{
 	Short: "Generate embeddings for the provided text input(s)",
 	Args:  cobra.MinimumNArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
-		// If enclaveHost or repo are not provided via flags,
-		// try to load them from the embedded config for the given model.
+		// If enclaveHost or repo are not provided via flags, use proxy constants
 		if enclaveHost == "" || repo == "" {
 			models, err := loadDefaultConfig()
 			if err != nil {
@@ -56,14 +55,13 @@ var embedCmd = &cobra.Command{
 				os.Exit(1)
 			}
 
-			selectedModel, ok := models[embedModel]
-			if !ok {
-				log.Printf("No config found for model %s: %v", embedModel, err)
-				log.Printf("Please specify -e and -r flags for custom models")
-				os.Exit(1)
+			// Resolve model name alias if it exists
+			if resolvedModel, ok := models[embedModel]; ok {
+				embedModel = resolvedModel
 			}
-			enclaveHost = selectedModel.Enclave
-			repo = selectedModel.Repo
+			// Always use proxy constants
+			enclaveHost = PROXY_ENCLAVE
+			repo = PROXY_REPO
 		}
 
 		// Support both a single input (string) and multiple inputs (slice of strings)

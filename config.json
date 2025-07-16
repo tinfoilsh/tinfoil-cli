@@ -1,30 +1,16 @@
 {
-  "llama3-3-70b": {
-    "enclave": "llama3-3-70b-p.model.tinfoil.sh",
-    "repo": "tinfoilsh/confidential-llama3-3-70b-prod"
-  },
-  "deepseek-r1-70b": {
-    "enclave": "deepseek-r1-70b-p.model.tinfoil.sh",
-    "repo": "tinfoilsh/confidential-deepseek-r1-70b-prod"
-  },
-  "mistral-small-3-1-24b": {
-    "enclave": "mistral-s-3-1-24b-p.model.tinfoil.sh",
-    "repo": "tinfoilsh/confidential-mistral-small-3-1"
-  },
-  "qwen2-5-72b": {
-    "enclave": "qwen2-5-72b.model.tinfoil.sh",
-    "repo": "tinfoilsh/confidential-qwen2-5-72b"
-  },
-  "kokoro": {
-    "enclave": "audio-processing.model.tinfoil.sh",
-    "repo": "tinfoilsh/confidential-audio-processing"
-  },
-  "whisper-large-v3-turbo": {
-    "enclave": "audio-processing.model.tinfoil.sh",
-    "repo": "tinfoilsh/confidential-audio-processing"
-  },
-  "nomic-embed-text": {
-    "enclave": "nomic-embed-text.model.tinfoil.sh",
-    "repo": "tinfoilsh/confidential-nomic-embed-text"
-  }
+  "llama3-3-70b": "llama3-3-70b",
+  "llama": "llama3-3-70b",
+  "deepseek-r1-70b": "deepseek-r1-70b",
+  "deepseek": "deepseek-r1-70b",
+  "mistral-small-3-1-24b": "mistral-small-3-1-24b",
+  "mistral": "mistral-small-3-1-24b",
+  "qwen2-5-72b": "qwen2-5-72b",
+  "qwen": "qwen2-5-72b",
+  "kokoro": "kokoro",
+  "tts": "kokoro",
+  "whisper-large-v3-turbo": "whisper-large-v3-turbo",
+  "whisper": "whisper-large-v3-turbo",
+  "nomic-embed-text": "nomic-embed-text",
+  "embed": "nomic-embed-text"
 }
