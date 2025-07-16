@@ -47,20 +47,23 @@ Usage:
   tinfoil [command]
 
 Available Commands:
-  attestation  Attestation commands (verify or audit)
-  infer        Run inference with a model (chat completion or audio transcription)
-  chat         Chat with a language model
-  audio        Transcribe audio files using Whisper
-  embed        Generate text embeddings
-  proxy        Run a local HTTP proxy
-  completion   Generate the autocompletion script for the specified shell
-  help         Help about any command
-  http         Make verified HTTP requests
+  attestation Attestation commands
+  audio       Transcribe audio files using Whisper
+  certificate Audit enclave certificate
+  chat        Chat with a language model
+  completion  Generate the autocompletion script for the specified shell
+  embed       Generate embeddings for the provided text input(s)
+  help        Help about any command
+  http        Make verified HTTP requests
+  proxy       Run a local HTTP proxy
+  tts         Convert text to speech using TTS models
 
 Flags:
-  -e, --host string           Enclave hostname
-  -h, --help                  Help for tinfoil
-  -r, --repo string           Source repo
+  -h, --help          Help for tinfoil
+  -e, --host string   Enclave hostname
+  -r, --repo string   Source repo
+  -t, --trace         Trace output
+  -v, --verbose       Verbose output
 
 Use "tinfoil [command] --help" for more information about a command.
 ```
@@ -187,6 +190,40 @@ tinfoil audio -m custom-whisper-model -k "YOUR_API_KEY" -f path/to/audio/file.mp
 - `-r, --repo`: The GitHub repository containing code measurements. Optional if defined in the config file.
 
 
+## TTS (Text-to-Speech)
+
+The `tts` command allows you to convert text to speech using TTS models. By default, it uses the `kokoro` model.
+
+### Using the TTS Command
+
+#### Basic Usage
+
+```bash
+tinfoil tts -k "YOUR_API_KEY" "Hello, this is a test of text-to-speech synthesis"
+```
+
+This command uses the default model `kokoro` and saves the generated audio to `output.mp3`. You can also use the friendly name `tts`:
+
+```bash
+tinfoil tts -m tts -k "YOUR_API_KEY" "Hello world"
+```
+
+#### Specifying Voice and Output File
+
+```bash
+tinfoil tts -m kokoro -k "YOUR_API_KEY" -v "af_sky+af_bella" -o "my_speech.mp3" "Custom text to speak"
+```
+
+### Command Options
+
+- `-m, --model`: The model name to use for TTS. Defaults to `kokoro`.
+- `-k, --api-key`: The API key for authentication.
+- `-v, --voice`: Voice to use for synthesis. Defaults to `af_sky+af_bella`.
+- `-o, --output`: Output file path. Defaults to `output.mp3`.
+- `-e, --host`: The hostname of the enclave. Optional if defined in the config file.
+- `-r, --repo`: The GitHub repository containing code measurements. Optional if defined in the config file.
+
+
 ## Attestation
 
 ### Verify Attestation
@@ -218,7 +255,16 @@ You can also record the verification to a machine-readable audit log. Use the `a
 tinfoil attestation verify \
   -e inference.tinfoil.sh \
   -r tinfoilsh/confidential-inference-proxy \
-  -j > file.json
+  -j > verification.json
+```
+
+Or use the `-l` flag to specify the output file directly:
+
+```bash
+tinfoil attestation verify \
+  -e inference.tinfoil.sh \
+  -r tinfoilsh/confidential-inference-proxy \
+  -j -l verification.json
 ```
 
 The audit log record includes the timestamp, enclave host, code and enclave measurement fingerprints, and the verification status.
