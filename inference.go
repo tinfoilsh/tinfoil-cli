@@ -48,7 +48,7 @@ type WhisperRequest struct {
 	File  string `json:"file"`
 }
 
-// ChatResponse represents one JSON chunk in the streaming response.
+// ChatResponse represents the response from the chat completions API (both streaming and non-streaming).
 type ChatResponse struct {
 	ID      string   `json:"id"`
 	Object  string   `json:"object"`
@@ -58,9 +58,10 @@ type ChatResponse struct {
 }
 
 type Choice struct {
-	Index        int    `json:"index"`
-	Delta        Delta  `json:"delta"`
-	FinishReason string `json:"finish_reason"`
+	Index        int          `json:"index"`
+	Delta        *Delta       `json:"delta,omitempty"`   // Used in streaming
+	Message      *ChatMessage `json:"message,omitempty"` // Used in non-streaming
+	FinishReason string       `json:"finish_reason"`
 }
 
 type Delta struct {
@@ -70,6 +71,7 @@ type Delta struct {
 var (
 	modelName, apiKey string
 	listModels        bool
+	streamChat        bool
 	audioFile         string
 	ttsText           string
 	ttsVoice          string
@@ -97,6 +99,7 @@ func init() {
 	chatCmd.Flags().StringVarP(&modelName, "model", "m", "", "Model name")
 	chatCmd.Flags().StringVarP(&apiKey, "api-key", "k", "", "API key")
 	chatCmd.Flags().BoolVarP(&listModels, "list", "l", false, "List available chat models")
+	chatCmd.Flags().BoolVarP(&streamChat, "stream", "s", false, "Stream response output")
 
 	// Audio command (for transcription)
 	rootCmd.AddCommand(audioCmd)
@@ -150,7 +153,7 @@ var chatCmd = &cobra.Command{
 			repo = PROXY_REPO
 		}
 
-		handleChatInference(strings.Join(args, " "))
+		handleChatInference(strings.Join(args, " "), streamChat)
 	},
 }
 
@@ -214,12 +217,12 @@ var ttsCmd = &cobra.Command{
 	},
 }
 
-// handleChatInference streams chat completion responses from the enclave.
-func handleChatInference(prompt string) {
+// handleChatInference handles chat completion responses from the enclave, with optional streaming.
+func handleChatInference(prompt string, stream bool) {
 	reqPayload := ChatRequest{
 		Model:    modelName,
 		Messages: []ChatMessage{{Role: "system", Content: "You are a helpful assistant."}, {Role: "user", Content: prompt}},
-		Stream:   true,
+		Stream:   stream,
 	}
 
 	payloadBytes, err := json.Marshal(reqPayload)
@@ -255,32 +258,51 @@ func handleChatInference(prompt string) {
 		log.Fatalf("Enclave returned status code %d: %s", resp.StatusCode, string(bodyText))
 	}
 
-	scanner := bufio.NewScanner(resp.Body)
-	for scanner.Scan() {
-		line := scanner.Text()
+	if stream {
+		// Handle streaming response
+		scanner := bufio.NewScanner(resp.Body)
+		for scanner.Scan() {
+			line := scanner.Text()
 
-		if len(line) == 0 {
-			continue
+			if len(line) == 0 {
+				continue
+			}
+
+			line = strings.TrimPrefix(line, "data: ")
+			if line == "[DONE]" || line == "" {
+				continue
+			}
+
+			var response ChatResponse
+			if err := json.Unmarshal([]byte(line), &response); err != nil {
+				// If the chunk cannot be parsed just print raw line for debugging.
+				fmt.Println(line)
+				continue
+			}
+
+			if len(response.Choices) > 0 && response.Choices[0].Delta != nil && response.Choices[0].Delta.Content != "" {
+				fmt.Print(response.Choices[0].Delta.Content)
+			}
 		}
-
-		line = strings.TrimPrefix(line, "data: ")
-		if line == "[DONE]" || line == "" {
-			continue
+		if err := scanner.Err(); err != nil {
+			log.Fatalf("Error reading stream: %v", err)
+		}
+		fmt.Println() // Add newline at the end of streaming
+	} else {
+		// Handle non-streaming response
+		bodyBytes, err := io.ReadAll(resp.Body)
+		if err != nil {
+			log.Fatalf("Error reading response body: %v", err)
 		}
 
 		var response ChatResponse
-		if err := json.Unmarshal([]byte(line), &response); err != nil {
-			// If the chunk cannot be parsed just print raw line for debugging.
-			fmt.Println(line)
-			continue
+		if err := json.Unmarshal(bodyBytes, &response); err != nil {
+			log.Fatalf("Error parsing JSON response: %v", err)
 		}
 
-		if len(response.Choices) > 0 && response.Choices[0].Delta.Content != "" {
-			fmt.Print(response.Choices[0].Delta.Content)
+		if len(response.Choices) > 0 && response.Choices[0].Message != nil {
+			fmt.Println(response.Choices[0].Message.Content)
 		}
-	}
-	if err := scanner.Err(); err != nil {
-		log.Fatalf("Error reading stream: %v", err)
 	}
 }
 

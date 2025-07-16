@@ -70,7 +70,7 @@ Use "tinfoil [command] --help" for more information about a command.
 
 ## Chat
 
-The `chat` command lets you interact with a model by simply specifying a model name and your prompt. You need to specify the model with the `-m` flag.
+The `chat` command lets you interact with a model by simply specifying a model name and your prompt. You need to specify the model with the `-m` flag. By default, responses are returned all at once (non-streaming), but you can enable streaming with the `-s` flag.
 
 ### Using the Chat Command
 
@@ -81,6 +81,19 @@ tinfoil chat -m deepseek -k "YOUR_API_KEY" "Why is tinfoil now called aluminum f
 ```
 
 You can use either the friendly name (`deepseek`) or the full name (`deepseek-r1-70b`).
+
+#### Streaming Response
+
+For real-time streaming of the response (tokens appear as they're generated):
+
+```bash
+tinfoil chat -m deepseek -k "YOUR_API_KEY" -s "Explain quantum computing"
+```
+
+#### Response Modes
+
+- **Non-streaming (default)**: The complete response is returned all at once after generation is finished
+- **Streaming (`-s` flag)**: Tokens are displayed in real-time as they're generated, providing a more interactive experience
 
 All models are now accessed through the Tinfoil inference proxy. The `config.json` provides user-friendly aliases for all models:
 
@@ -109,6 +122,8 @@ If you omit `-e` or `-r` for a model that isn't in the configuration, a warning 
 
 - `-m, --model`: The model name to use for chat. Must be specified.
 - `-k, --api-key`: The API key for authentication.
+- `-s, --stream`: Stream response output (real-time token generation). Optional, defaults to false.
+- `-l, --list`: List available chat models.
 - `-e, --host`: The hostname of the enclave. Optional if defined in the config file.
 - `-r, --repo`: The GitHub repository containing code measurements. Optional if defined in the config file.
 
