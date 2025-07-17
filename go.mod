@@ -24,6 +24,7 @@ require (
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/digitorus/pkcs7 v0.0.0-20230818184609-3a137a874352 // indirect
 	github.com/digitorus/timestamp v0.0.0-20231217203849-220c5c2851b7 // indirect
+	github.com/fatih/color v1.18.0 // indirect
 	github.com/fsnotify/fsnotify v1.9.0 // indirect
 	github.com/fxamacker/cbor/v2 v2.8.0 // indirect
 	github.com/go-acme/lego/v4 v4.23.1 // indirect
@@ -56,6 +57,8 @@ require (
 	github.com/josharian/intern v1.0.0 // indirect
 	github.com/letsencrypt/boulder v0.0.0-20250508185030-e625ff3534f1 // indirect
 	github.com/mailru/easyjson v0.9.0 // indirect
+	github.com/mattn/go-colorable v0.1.13 // indirect
+	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/miekg/dns v1.1.64 // indirect
 	github.com/mitchellh/mapstructure v1.5.0 // indirect
 	github.com/oklog/ulid v1.3.1 // indirect

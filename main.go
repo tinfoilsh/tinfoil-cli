@@ -15,6 +15,11 @@ var (
 
 var rootCmd = &cobra.Command{
 	Use: "tinfoil",
+	Run: func(cmd *cobra.Command, args []string) {
+		// If no subcommand is provided, launch interactive mode
+		session := NewChatSession()
+		session.run()
+	},
 }
 
 func init() {

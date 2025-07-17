@@ -377,3 +377,75 @@ func handleTTSInference() {
 
 	fmt.Printf("Speech saved to %s\n", outputFile)
 }
+
+// handleChatInferenceWithPayload handles chat completion with a custom payload (for interactive mode)
+func handleChatInferenceWithPayload(reqPayload ChatRequest) string {
+	payloadBytes, err := json.Marshal(reqPayload)
+	if err != nil {
+		log.Fatalf("Error marshaling JSON: %v", err)
+	}
+
+	url := fmt.Sprintf("https://%s/v1/chat/completions", enclaveHost)
+	sc := secureClient()
+
+	req, err := http.NewRequest("POST", url, bytes.NewBuffer(payloadBytes))
+	if err != nil {
+		log.Fatalf("Error creating request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if apiKey != "" {
+		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", apiKey))
+	}
+
+	client, err := sc.HTTPClient()
+	if err != nil {
+		log.Fatalf("Error getting HTTP client: %v", err)
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Fatalf("Error performing request: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		bodyText, _ := io.ReadAll(resp.Body)
+		log.Fatalf("Enclave returned status code %d: %s", resp.StatusCode, string(bodyText))
+	}
+
+	// Handle streaming response
+	scanner := bufio.NewScanner(resp.Body)
+	var responseContent strings.Builder
+	
+	for scanner.Scan() {
+		line := scanner.Text()
+
+		if len(line) == 0 {
+			continue
+		}
+
+		line = strings.TrimPrefix(line, "data: ")
+		if line == "[DONE]" || line == "" {
+			continue
+		}
+
+		var response ChatResponse
+		if err := json.Unmarshal([]byte(line), &response); err != nil {
+			// If the chunk cannot be parsed just print raw line for debugging.
+			fmt.Print(line)
+			continue
+		}
+
+		if len(response.Choices) > 0 && response.Choices[0].Delta != nil && response.Choices[0].Delta.Content != "" {
+			content := response.Choices[0].Delta.Content
+			fmt.Print(content)
+			responseContent.WriteString(content)
+		}
+	}
+	
+	if err := scanner.Err(); err != nil {
+		log.Fatalf("Error reading stream: %v", err)
+	}
+	
+	return responseContent.String()
+}
