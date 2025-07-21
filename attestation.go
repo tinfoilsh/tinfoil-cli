@@ -41,9 +41,9 @@ type auditRecord struct {
 	Digest  string `json:"digest,omitempty"`
 
 	Measurements struct {
-		Sigstore string `json:"sigstore,omitempty"` // Measurement from sigstore bundle
-		Enclave  string `json:"enclave,omitempty"`  // Measurement from enclave attestation over HTTP
-		Cert     string `json:"cert,omitempty"`     // Measurement from enclave attestation in certificate
+		Sigstore attestation.Measurement  `json:"sigstore,omitempty"` // Measurement from sigstore bundle
+		Enclave  *attestation.Measurement `json:"enclave,omitempty"`  // Measurement from enclave attestation over HTTP
+		Cert     string                   `json:"cert,omitempty"`     // Measurement from enclave attestation in certificate
 	} `json:"measurements"`
 
 	Keys struct {
@@ -92,7 +92,7 @@ func verifyAttestation(l *log.Logger) (*auditRecord, error) {
 		if err != nil {
 			return nil, fmt.Errorf("sigstore verify: %v", err)
 		}
-		auditRec.Measurements.Sigstore = codeMeasurements.Fingerprint()
+		auditRec.Measurements.Sigstore = *codeMeasurements
 	} else {
 		l.Warn("No repo specified, skipping code measurements")
 		auditRec.Status = "enclave_only"
@@ -109,7 +109,7 @@ func verifyAttestation(l *log.Logger) (*auditRecord, error) {
 	if err != nil {
 		return nil, fmt.Errorf("verifying attestation document: %v", err)
 	}
-	auditRec.Measurements.Enclave = verification.Measurement.Fingerprint()
+	auditRec.Measurements.Enclave = verification.Measurement
 	auditRec.Keys.Enclave = verification.PublicKeyFP
 	l.Printf("Public key fingerprint: %s", verification.PublicKeyFP)
 
@@ -134,7 +134,7 @@ func verifyAttestation(l *log.Logger) (*auditRecord, error) {
 			return nil, fmt.Errorf("verifying attestation: %v", err)
 		}
 		auditRec.Keys.Cert = dcodeAttestationMaterial.PublicKeyFP
-		auditRec.Measurements.Cert = dcodeAttestationMaterial.Measurement.Fingerprint()
+		auditRec.Measurements.Cert = dcodeAttestationMaterial.PublicKeyFP
 	} else {
 		log.Warnf("Failed to decode dcode attestation: %v", err)
 	}
@@ -151,13 +151,13 @@ func verifyAttestation(l *log.Logger) (*auditRecord, error) {
 			auditRec.Status = "fail"
 			auditRec.Error = fmt.Sprintf("PCR register mismatch: %v", err)
 			log.Printf("PCR register mismatch. Verification failed: %v", err)
-			log.Printf("Code: %s", codeMeasurements.Fingerprint())
-			log.Printf("Enclave: %s", verification.Measurement.Fingerprint())
+			log.Printf("Code: %+v", codeMeasurements)
+			log.Printf("Enclave: %+v", verification.Measurement)
 		} else {
 			l.Println("Measurements match")
 		}
 	} else {
-		l.Printf("Enclave measurement: %s", verification.Measurement.Fingerprint())
+		l.Printf("Enclave measurement: %+v", verification.Measurement)
 	}
 
 	if auditRec.Status == "" {
