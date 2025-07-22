@@ -5,6 +5,7 @@ go 1.24.0
 toolchain go1.24.2
 
 require (
+	github.com/fatih/color v1.18.0
 	github.com/openai/openai-go v1.11.0
 	github.com/sirupsen/logrus v1.9.3
 	github.com/spf13/cobra v1.9.1
@@ -12,6 +13,7 @@ require (
 	github.com/tinfoilsh/tfshim v0.1.1
 	github.com/tinfoilsh/tinfoil-go v0.1.2
 	github.com/tinfoilsh/verifier v0.1.16
+	golang.org/x/term v0.33.0
 )
 
 require (
@@ -86,6 +88,8 @@ require (
 	github.com/josharian/intern v1.0.0 // indirect
 	github.com/letsencrypt/boulder v0.20250714.0 // indirect
 	github.com/mailru/easyjson v0.9.0 // indirect
+	github.com/mattn/go-colorable v0.1.14 // indirect
+	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/miekg/dns v1.1.64 // indirect
 	github.com/mitchellh/mapstructure v1.5.0 // indirect
 	github.com/oklog/ulid v1.3.1 // indirect
@@ -144,7 +148,6 @@ require (
 	golang.org/x/oauth2 v0.30.0 // indirect
 	golang.org/x/sync v0.16.0 // indirect
 	golang.org/x/sys v0.34.0 // indirect
-	golang.org/x/term v0.33.0 // indirect
 	golang.org/x/text v0.27.0 // indirect
 	golang.org/x/time v0.12.0 // indirect
 	golang.org/x/tools v0.35.0 // indirect
