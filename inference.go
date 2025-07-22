@@ -379,10 +379,10 @@ func handleTTSInference() {
 }
 
 // handleChatInferenceWithPayload handles chat completion with a custom payload (for interactive mode)
-func handleChatInferenceWithPayload(reqPayload ChatRequest) string {
+func handleChatInferenceWithPayload(reqPayload ChatRequest) (string, error) {
 	payloadBytes, err := json.Marshal(reqPayload)
 	if err != nil {
-		log.Fatalf("Error marshaling JSON: %v", err)
+		return "", fmt.Errorf("error marshaling JSON: %w", err)
 	}
 
 	url := fmt.Sprintf("https://%s/v1/chat/completions", enclaveHost)
@@ -390,7 +390,7 @@ func handleChatInferenceWithPayload(reqPayload ChatRequest) string {
 
 	req, err := http.NewRequest("POST", url, bytes.NewBuffer(payloadBytes))
 	if err != nil {
-		log.Fatalf("Error creating request: %v", err)
+		return "", fmt.Errorf("error creating request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	if apiKey != "" {
@@ -399,53 +399,74 @@ func handleChatInferenceWithPayload(reqPayload ChatRequest) string {
 
 	client, err := sc.HTTPClient()
 	if err != nil {
-		log.Fatalf("Error getting HTTP client: %v", err)
+		return "", fmt.Errorf("error getting HTTP client: %w", err)
 	}
 
 	resp, err := client.Do(req)
 	if err != nil {
-		log.Fatalf("Error performing request: %v", err)
+		return "", fmt.Errorf("error performing request: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != 200 {
 		bodyText, _ := io.ReadAll(resp.Body)
-		log.Fatalf("Enclave returned status code %d: %s", resp.StatusCode, string(bodyText))
+		return "", fmt.Errorf("enclave returned status code %d: %s", resp.StatusCode, string(bodyText))
 	}
 
-	// Handle streaming response
-	scanner := bufio.NewScanner(resp.Body)
-	var responseContent strings.Builder
-	
-	for scanner.Scan() {
-		line := scanner.Text()
+	if reqPayload.Stream {
+		// Handle streaming response
+		scanner := bufio.NewScanner(resp.Body)
+		var responseContent strings.Builder
+		
+		for scanner.Scan() {
+			line := scanner.Text()
 
-		if len(line) == 0 {
-			continue
+			if len(line) == 0 {
+				continue
+			}
+
+			line = strings.TrimPrefix(line, "data: ")
+			if line == "[DONE]" || line == "" {
+				continue
+			}
+
+			var response ChatResponse
+			if err := json.Unmarshal([]byte(line), &response); err != nil {
+				// If the chunk cannot be parsed just print raw line for debugging.
+				fmt.Print(line)
+				continue
+			}
+
+			if len(response.Choices) > 0 && response.Choices[0].Delta != nil && response.Choices[0].Delta.Content != "" {
+				content := response.Choices[0].Delta.Content
+				fmt.Print(content)
+				responseContent.WriteString(content)
+			}
 		}
-
-		line = strings.TrimPrefix(line, "data: ")
-		if line == "[DONE]" || line == "" {
-			continue
+		
+		if err := scanner.Err(); err != nil {
+			return "", fmt.Errorf("error reading stream: %w", err)
+		}
+		
+		return responseContent.String(), nil
+	} else {
+		// Handle non-streaming response
+		bodyBytes, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return "", fmt.Errorf("error reading response body: %w", err)
 		}
 
 		var response ChatResponse
-		if err := json.Unmarshal([]byte(line), &response); err != nil {
-			// If the chunk cannot be parsed just print raw line for debugging.
-			fmt.Print(line)
-			continue
+		if err := json.Unmarshal(bodyBytes, &response); err != nil {
+			return "", fmt.Errorf("error parsing JSON response: %w", err)
 		}
 
-		if len(response.Choices) > 0 && response.Choices[0].Delta != nil && response.Choices[0].Delta.Content != "" {
-			content := response.Choices[0].Delta.Content
+		if len(response.Choices) > 0 && response.Choices[0].Message != nil {
+			content := response.Choices[0].Message.Content
 			fmt.Print(content)
-			responseContent.WriteString(content)
+			return content, nil
 		}
+		
+		return "", nil
 	}
-	
-	if err := scanner.Err(); err != nil {
-		log.Fatalf("Error reading stream: %v", err)
-	}
-	
-	return responseContent.String()
 }

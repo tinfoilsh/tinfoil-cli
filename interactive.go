@@ -304,7 +304,11 @@ func (cs *ChatSession) sendMessage(content string) {
 
 	cs.displayMessage("assistant", "", timestamp)
 
-	response := handleChatInferenceWithPayload(reqPayload)
+	response, err := handleChatInferenceWithPayload(reqPayload)
+	if err != nil {
+		fmt.Printf("\n\033[31mError: %v\033[0m\n", err)
+		return
+	}
 	if response != "" {
 		cs.addMessage("assistant", response)
 	}
@@ -312,47 +316,58 @@ func (cs *ChatSession) sendMessage(content string) {
 	fmt.Println()
 }
 
-func (cs *ChatSession) getAPIKeyCacheFile() string {
-	homeDir, err := os.UserHomeDir()
+
+func (cs *ChatSession) loadEnvFile() {
+	// Try to load .env file from current directory
+	envFile := ".env"
+	data, err := os.ReadFile(envFile)
 	if err != nil {
-		return ""
-	}
-	return filepath.Join(homeDir, ".tinfoil-api-key")
-}
-
-func (cs *ChatSession) loadCachedAPIKey() bool {
-	cacheFile := cs.getAPIKeyCacheFile()
-	if cacheFile == "" {
-		return false
-	}
-
-	data, err := os.ReadFile(cacheFile)
-	if err != nil {
-		return false
+		// Try home directory
+		homeDir, _ := os.UserHomeDir()
+		if homeDir != "" {
+			envFile = filepath.Join(homeDir, ".tinfoil.env")
+			data, err = os.ReadFile(envFile)
+			if err != nil {
+				return
+			}
+		} else {
+			return
+		}
 	}
 
-	cs.apiKey = strings.TrimSpace(string(data))
-	return cs.apiKey != ""
-}
+	// Parse .env file
+	lines := strings.Split(string(data), "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
 
-func (cs *ChatSession) saveAPIKey() {
-	cacheFile := cs.getAPIKeyCacheFile()
-	if cacheFile == "" || cs.apiKey == "" {
-		return
+		parts := strings.SplitN(line, "=", 2)
+		if len(parts) == 2 && strings.TrimSpace(parts[0]) == "TINFOIL_API_KEY" {
+			value := strings.TrimSpace(parts[1])
+			// Remove quotes if present
+			value = strings.Trim(value, `"'`)
+			if value != "" {
+				cs.apiKey = value
+				fmt.Printf("%s Using API key from .env file...\n", green("✓"))
+				return
+			}
+		}
 	}
-
-	file, err := os.OpenFile(cacheFile, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
-	if err != nil {
-		return
-	}
-	defer file.Close()
-
-	file.WriteString(cs.apiKey)
 }
 
 func (cs *ChatSession) promptForAPIKey() {
-	if cs.loadCachedAPIKey() {
-		fmt.Printf("%s Using cached API key...\n", green("✓"))
+	// First check environment variable
+	if envKey := os.Getenv("TINFOIL_API_KEY"); envKey != "" {
+		cs.apiKey = envKey
+		fmt.Printf("%s Using API key from environment variable...\n", green("✓"))
+		return
+	}
+
+	// Then check .env file
+	cs.loadEnvFile()
+	if cs.apiKey != "" {
 		return
 	}
 
@@ -377,8 +392,7 @@ func (cs *ChatSession) promptForAPIKey() {
 		}
 	}
 
-	cs.saveAPIKey()
-	fmt.Printf("%s API key saved!\n", green("✓"))
+	fmt.Printf("%s API key loaded successfully!\n", green("✓"))
 }
 
 func (cs *ChatSession) readInput(prompt string) (string, error) {
