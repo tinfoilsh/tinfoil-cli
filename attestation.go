@@ -110,8 +110,11 @@ func verifyAttestation(l *log.Logger) (*auditRecord, error) {
 		return nil, fmt.Errorf("verifying attestation document: %v", err)
 	}
 	auditRec.Measurements.Enclave = verification.Measurement
-	auditRec.Keys.Enclave = verification.PublicKeyFP
-	l.Printf("Public key fingerprint: %s", verification.PublicKeyFP)
+	auditRec.Keys.Enclave = verification.TLSPublicKeyFP
+	l.Printf("Public key fingerprint: %s", verification.TLSPublicKeyFP)
+	if verification.HPKEPublicKey != "" {
+		l.Printf("HPKE public key: %s", verification.HPKEPublicKey)
+	}
 
 	// Get remote pubkey fingerprint
 	cs, err := tlsConnection(enclaveHost + ":443")
@@ -133,14 +136,14 @@ func verifyAttestation(l *log.Logger) (*auditRecord, error) {
 		if err != nil {
 			return nil, fmt.Errorf("verifying attestation: %v", err)
 		}
-		auditRec.Keys.Cert = dcodeAttestationMaterial.PublicKeyFP
-		auditRec.Measurements.Cert = dcodeAttestationMaterial.PublicKeyFP
+		auditRec.Keys.Cert = dcodeAttestationMaterial.TLSPublicKeyFP
+		auditRec.Measurements.Cert = dcodeAttestationMaterial.TLSPublicKeyFP
 	} else {
 		log.Warnf("Failed to decode dcode attestation: %v", err)
 	}
 
 	// Compare remote public key fingerprint with attestation public key
-	if pubkeyFP != verification.PublicKeyFP {
+	if pubkeyFP != verification.TLSPublicKeyFP {
 		auditRec.Status = "FAILED"
 		auditRec.Error = "Remote public key fingerprint does not match attestation public key"
 		log.Printf("Remote public key fingerprint does not match attestation public key")
