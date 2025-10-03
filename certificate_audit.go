@@ -112,7 +112,7 @@ var certificateAuditCmd = &cobra.Command{
 			log.Fatalf("Failed to verify attestation: %v", err)
 		}
 
-		if certKeyFP != measurement.PublicKeyFP {
+		if certKeyFP != measurement.TLSPublicKeyFP {
 			log.Fatalf("Certificate key fingerprint does not match attestation key fingerprint")
 		} else {
 			log.Infof("Certificate-attestation key match: %s", certKeyFP)
