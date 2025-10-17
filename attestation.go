@@ -10,6 +10,7 @@ import (
 
 	"github.com/tinfoilsh/tfshim/dcode"
 	"github.com/tinfoilsh/verifier/attestation"
+	"github.com/tinfoilsh/verifier/client"
 	"github.com/tinfoilsh/verifier/github"
 	"github.com/tinfoilsh/verifier/sigstore"
 )
@@ -58,7 +59,13 @@ type auditRecord struct {
 
 func verifyAttestation(l *log.Logger) (*auditRecord, error) {
 	if enclaveHost == "" {
-		return nil, fmt.Errorf("enclave host is required")
+		router := client.NewRouter()
+		host, err := router.GetRouter()
+		if err != nil {
+			return nil, fmt.Errorf("getting router: %v", err)
+		}
+		l.Printf("Using auto selected router: %s", host)
+		enclaveHost = host
 	}
 
 	var auditRec auditRecord

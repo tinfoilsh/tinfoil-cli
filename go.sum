@@ -1247,6 +1247,8 @@ github.com/tinfoilsh/tinfoil-go v0.1.2 h1:OgOjkx1E2ZlV3/vylC5on34nAMJ6gTfCiBut8P
 github.com/tinfoilsh/tinfoil-go v0.1.2/go.mod h1:lSAFoTzRCBzOi1eXTkvmAi/eOhpI3zjBZiRGIFneHw8=
 github.com/tinfoilsh/verifier v0.2.5 h1:LklaMHt8KmaJ218c6WXXvPNi69SY3QoSQQWQh47Erlk=
 github.com/tinfoilsh/verifier v0.2.5/go.mod h1:+PZ/SrEnw2rwNogEblUpyxQahEYKo+zVS7dN198waU4=
+github.com/tinfoilsh/verifier v0.10.1 h1:lXiYqQMcJzKleDc1eKdA2SGfsB/FT0G0QuP12m/g+OM=
+github.com/tinfoilsh/verifier v0.10.1/go.mod h1:+PZ/SrEnw2rwNogEblUpyxQahEYKo+zVS7dN198waU4=
 github.com/tink-crypto/tink-go-awskms/v2 v2.1.0 h1:N9UxlsOzu5mttdjhxkDLbzwtEecuXmlxZVo/ds7JKJI=
 github.com/tink-crypto/tink-go-awskms/v2 v2.1.0/go.mod h1:PxSp9GlOkKL9rlybW804uspnHuO9nbD98V/fDX4uSis=
 github.com/tink-crypto/tink-go-gcpkms/v2 v2.2.0 h1:3B9i6XBXNTRspfkTC0asN5W0K6GhOSgcujNiECNRNb0=
