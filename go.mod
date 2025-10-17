@@ -10,7 +10,7 @@ require (
 	github.com/stretchr/testify v1.11.1
 	github.com/tinfoilsh/tfshim v0.1.1
 	github.com/tinfoilsh/tinfoil-go v0.1.2
-	github.com/tinfoilsh/verifier v0.2.5
+	github.com/tinfoilsh/verifier v0.10.1
 	golang.org/x/term v0.34.0
 )
 
