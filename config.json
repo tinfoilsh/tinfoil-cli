@@ -14,5 +14,7 @@
   "whisper-large-v3-turbo": "whisper-large-v3-turbo",
   "whisper": "whisper-large-v3-turbo",
   "nomic-embed-text": "nomic-embed-text",
-  "embed": "nomic-embed-text"
+  "embed": "nomic-embed-text",
+  "gpt-oss-120b": "gpt-oss-120b",
+  "gpt-oss": "gpt-oss-120b"
 }
