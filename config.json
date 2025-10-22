@@ -1,8 +1,10 @@
 {
   "llama3-3-70b": "llama3-3-70b",
   "llama": "llama3-3-70b",
-  "deepseek-r1-70b": "deepseek-r1-70b",
-  "deepseek": "deepseek-r1-70b",
+  "deepseek-r1-0528": "deepseek-r1-0528",
+  "deepseek": "deepseek-r1-0528",
+  "deepseek-v31-terminus": "deepseek-v31-terminus",
+  "terminus": "deepseek-v31-terminus",
   "mistral-small-3-1-24b": "mistral-small-3-1-24b",
   "mistral": "mistral-small-3-1-24b",
   "qwen2-5-72b": "qwen2-5-72b",
@@ -12,5 +14,7 @@
   "whisper-large-v3-turbo": "whisper-large-v3-turbo",
   "whisper": "whisper-large-v3-turbo",
   "nomic-embed-text": "nomic-embed-text",
-  "embed": "nomic-embed-text"
+  "embed": "nomic-embed-text",
+  "gpt-oss-120b": "gpt-oss-120b",
+  "gpt-oss": "gpt-oss-120b"
 }
