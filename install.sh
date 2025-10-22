@@ -21,6 +21,9 @@ main() {
     darwin)
       OS="darwin"
       ;;
+    mingw*|cygwin*|msys*|windows_nt)
+      OS="windows"
+      ;;
     *)
       echo "Error: Unsupported operating system: $OS"
       exit 1
@@ -81,7 +84,7 @@ main() {
   echo "Downloading tinfoil-cli from: $URL"
 
   # -------------------------------
-  # 6. Download and extract the binary
+  # 7. Download and extract the binary
   # -------------------------------
   TMPDIR="$(mktemp -d)"
   # Ensure cleanup on exit
@@ -107,22 +110,36 @@ main() {
   chmod +x tinfoil
 
   # -------------------------------
-  # 7. Install the binary to /usr/local/bin
+  # 8. Install the binary
   # -------------------------------
-  echo "Installing tinfoil to /usr/local/bin..."
-  if [ "$(id -u)" -ne 0 ]; then
-      if command -v sudo >/dev/null 2>&1; then
-          sudo mv tinfoil /usr/local/bin/tinfoil
+  
+  if [ "$OS" = "windows" ]; then
+      # On Windows, install to a location that's typically in PATH
+      INSTALL_DIR="/c/Program Files/tinfoil"
+      mkdir -p "$INSTALL_DIR" 2>/dev/null || mkdir -p "$HOME/bin"
+      if [ -d "$INSTALL_DIR" ]; then
+          mv tinfoil "$INSTALL_DIR/tinfoil.exe"
+          echo "tinfoil installed successfully to $INSTALL_DIR"
       else
-          echo "Error: Root privileges are required. Please run as root or install sudo."
-          exit 1
+          mv tinfoil "$HOME/bin/tinfoil.exe"
+          echo "tinfoil installed successfully to $HOME/bin"
+          echo "Note: Make sure $HOME/bin is in your PATH"
       fi
+      echo "You can now run it with: tinfoil"
   else
-      mv tinfoil /usr/local/bin/tinfoil
+      if [ "$(id -u)" -ne 0 ]; then
+          if command -v sudo >/dev/null 2>&1; then
+              sudo mv tinfoil /usr/local/bin/tinfoil
+          else
+              echo "Error: Root privileges are required. Please run as root or install sudo."
+              exit 1
+          fi
+      else
+          mv tinfoil /usr/local/bin/tinfoil
+      fi
+      echo "tinfoil installed successfully!"
+      echo "You can now run it with: tinfoil"
   fi
-
-  echo "tinfoil installed successfully!"
-  echo "You can now run it with: tinfoil"
 }
 
 main
