@@ -2,6 +2,8 @@
 
 A command-line interface for making verified HTTP requests to Tinfoil enclaves and validating attestation documents.
 
+[![Documentation](https://img.shields.io/badge/docs-tinfoil.sh-blue)](https://docs.tinfoil.sh/sdk/cli-sdk)
+
 ## Installation
 
 ### Pre-built binaries
@@ -18,10 +20,10 @@ Run the following command:
 curl -fsSL https://github.com/tinfoilsh/tinfoil-cli/raw/main/install.sh | sh
 ```
 
-Note: If you receive permission errors (for example, if you're not running as root), you may need to run the command with sudo:
+Note: If you receive permission errors, you may need to run the command with sudo:
 
 ```sh
-curl -fsSL https://github.com/tinfoilsh/tinfoil-cli/raw/main/install.sh | sh
+curl -fsSL https://github.com/tinfoilsh/tinfoil-cli/raw/main/install.sh | sudo sh
 ```
 
 ### Build from source
@@ -80,7 +82,7 @@ The `chat` command lets you interact with a model by simply specifying a model n
 tinfoil chat -m deepseek -k "YOUR_API_KEY" "Why is tinfoil now called aluminum foil?"
 ```
 
-You can use either the friendly name (`deepseek`) or the full name (`deepseek-r1-70b`).
+You can use either the friendly name (`deepseek`) or the full name (`deepseek-r1-0528`).
 
 #### Streaming Response
 
@@ -98,9 +100,11 @@ tinfoil chat -m deepseek -k "YOUR_API_KEY" -s "Explain quantum computing"
 All models are now accessed through the Tinfoil inference proxy. The `config.json` provides user-friendly aliases for all models:
 
 - `llama` → `llama3-3-70b`
-- `deepseek` → `deepseek-r1-70b`
+- `deepseek` → `deepseek-r1-0528`
+- `terminus` → `deepseek-v31-terminus`
 - `mistral` → `mistral-small-3-1-24b`
 - `qwen` → `qwen2-5-72b`
+- `gpt-oss` → `gpt-oss-120b`
 - `tts` → `kokoro`
 - `whisper` → `whisper-large-v3-turbo`
 - `embed` → `nomic-embed-text`
