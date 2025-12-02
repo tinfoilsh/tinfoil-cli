@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/tls"
 	"fmt"
+	"strings"
 	"time"
 
 	log "github.com/sirupsen/logrus"
@@ -136,17 +137,37 @@ func verifyAttestation(l *log.Logger) (*auditRecord, error) {
 	l.Debugf("Remote public key fingerprint: %s", pubkeyFP)
 
 	cert := cs.PeerCertificates[0]
-	// Removing last domain (real connection domain) from SANs. TODO: move this to dcode.Decode
-	dcodeAttestation, err := dcode.Decode(cert.DNSNames[:len(cert.DNSNames)-1])
-	if err == nil {
-		dcodeAttestationMaterial, err := dcodeAttestation.Verify()
-		if err != nil {
-			return nil, fmt.Errorf("verifying attestation: %v", err)
+
+	l.Debugf("DNSNames %v", cert.DNSNames)
+
+	var hpke_key_domains []string
+	var att_domains []string
+	var hash_att_domains []string
+
+	for _, name := range cert.DNSNames {
+		if strings.HasSuffix(name, ".hpke.tinfoil.sh") {
+			hpke_key_domains = append(hpke_key_domains, name)
+		} else if strings.HasSuffix(name, ".att.tinfoil.sh") {
+			att_domains = append(att_domains, name)
+		} else if strings.HasSuffix(name, ".hatt.tinfoil.sh") {
+			hash_att_domains = append(hash_att_domains, name)
 		}
-		auditRec.Keys.Cert = dcodeAttestationMaterial.TLSPublicKeyFP
-		auditRec.Measurements.Cert = dcodeAttestationMaterial.TLSPublicKeyFP
-	} else {
-		log.Warnf("Failed to decode dcode attestation: %v", err)
+	}
+
+	l.Debugf("hpke_key_domains %v, att_domains %v, hash_att_domains %v", hpke_key_domains, att_domains, hash_att_domains)
+
+	if len(att_domains) > 0 {
+		dcodeAttestation, err := dcode.Decode(att_domains)
+		if err == nil {
+			dcodeAttestationMaterial, err := dcodeAttestation.Verify()
+			if err != nil {
+				return nil, fmt.Errorf("verifying attestation: %v", err)
+			}
+			auditRec.Keys.Cert = dcodeAttestationMaterial.TLSPublicKeyFP
+			auditRec.Measurements.Cert = dcodeAttestationMaterial.TLSPublicKeyFP
+		} else {
+			log.Warnf("Failed to decode dcode attestation: %v", err)
+		}
 	}
 
 	// Compare remote public key fingerprint with attestation public key
