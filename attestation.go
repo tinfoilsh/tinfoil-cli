@@ -163,6 +163,7 @@ func verifyAttestation(l *log.Logger) (*auditRecord, error) {
 			if err != nil {
 				return nil, fmt.Errorf("verifying attestation: %v", err)
 			}
+			l.Debugf("Attestation sucessfully exctracted from certificate: %v", dcodeAttestationMaterial.Measurement.Type)
 			auditRec.Keys.Cert = dcodeAttestationMaterial.TLSPublicKeyFP
 			auditRec.Measurements.Cert = dcodeAttestationMaterial.TLSPublicKeyFP
 		} else {
