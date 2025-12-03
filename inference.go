@@ -13,8 +13,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/openai/openai-go"
-	"github.com/openai/openai-go/option"
+	"github.com/openai/openai-go/v2"
+	"github.com/openai/openai-go/v2/option"
 	"github.com/spf13/cobra"
 	"github.com/tinfoilsh/tinfoil-go"
 )
@@ -417,7 +417,7 @@ func handleChatInferenceWithPayload(reqPayload ChatRequest) (string, error) {
 		// Handle streaming response
 		scanner := bufio.NewScanner(resp.Body)
 		var responseContent strings.Builder
-		
+
 		for scanner.Scan() {
 			line := scanner.Text()
 
@@ -443,11 +443,11 @@ func handleChatInferenceWithPayload(reqPayload ChatRequest) (string, error) {
 				responseContent.WriteString(content)
 			}
 		}
-		
+
 		if err := scanner.Err(); err != nil {
 			return "", fmt.Errorf("error reading stream: %w", err)
 		}
-		
+
 		return responseContent.String(), nil
 	} else {
 		// Handle non-streaming response
@@ -466,7 +466,7 @@ func handleChatInferenceWithPayload(reqPayload ChatRequest) (string, error) {
 			fmt.Print(content)
 			return content, nil
 		}
-		
+
 		return "", nil
 	}
 }
