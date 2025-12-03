@@ -60,13 +60,12 @@ type auditRecord struct {
 
 func verifyAttestation(l *log.Logger) (*auditRecord, error) {
 	if enclaveHost == "" {
-		router := client.NewRouter()
-		host, err := router.GetRouter()
+		routerClient, err := client.NewDefaultClient()
 		if err != nil {
 			return nil, fmt.Errorf("getting router: %v", err)
 		}
-		l.Printf("Using auto selected router: %s", host)
-		enclaveHost = host
+		enclaveHost = routerClient.Enclave()
+		l.Printf("Using auto selected router: %s", enclaveHost)
 	}
 
 	var auditRec auditRecord
