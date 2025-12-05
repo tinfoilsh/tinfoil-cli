@@ -11,7 +11,7 @@ func TestAttestationVerifySEV(t *testing.T) {
 		"attestation",
 		"verify",
 		"-e", "inference.tinfoil.sh",
-		"-r", "tinfoilsh/confidential-inference-proxy",
+		"-r", "tinfoilsh/confidential-model-router",
 	}
 	rootCmd.SetArgs(args)
 	assert.Nil(t, rootCmd.Execute())
