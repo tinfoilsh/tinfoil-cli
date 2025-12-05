@@ -9,8 +9,8 @@ require (
 	github.com/spf13/cobra v1.10.1
 	github.com/stretchr/testify v1.11.1
 	github.com/tinfoilsh/tfshim v0.2.14
-	github.com/tinfoilsh/tinfoil-go v0.10.1
-	github.com/tinfoilsh/verifier v0.10.12
+	github.com/tinfoilsh/tinfoil-go v0.10.2
+	github.com/tinfoilsh/verifier v0.10.15
 	golang.org/x/term v0.37.0
 )
 
