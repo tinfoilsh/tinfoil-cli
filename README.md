@@ -102,10 +102,7 @@ All models are now accessed through the Tinfoil inference proxy. The `config.jso
 - `llama` → `llama3-3-70b`
 - `deepseek` → `deepseek-r1-0528`
 - `terminus` → `deepseek-v31-terminus`
-- `mistral` → `mistral-small-3-1-24b`
-- `qwen` → `qwen2-5-72b`
 - `gpt-oss` → `gpt-oss-120b`
-- `tts` → `kokoro`
 - `whisper` → `whisper-large-v3-turbo`
 - `embed` → `nomic-embed-text`
 
@@ -318,4 +315,4 @@ Please report security vulnerabilities by either:
 
 - Opening an issue on GitHub on this repository
 
-We aim to respond to security reports within 24 hours and will keep you updated on our progress.
+We aim to respond to (legitimate) security reports within 24 hours.
