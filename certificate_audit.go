@@ -34,30 +34,19 @@ func attestationFromCertificate(cert *x509.Certificate) (*attestation.Document, 
 	}
 	keyFP := tlsutil.KeyFP(pubKey)
 
-	domainSet := make(map[string]bool)
+	var attDomains []string
 	for _, name := range cert.DNSNames {
-		domainSet[name] = true
-	}
-
-	baseDomains := make(map[string]bool)
-	for domain := range domainSet {
-		for otherDomain := range domainSet {
-			if otherDomain != domain && strings.HasSuffix(otherDomain, "."+domain) {
-				baseDomains[domain] = true
-				break
-			}
+		if strings.HasSuffix(name, ".att.tinfoil.sh") {
+			attDomains = append(attDomains, name)
+			log.Debugf("Attestation domain: %s", name)
 		}
 	}
 
-	var domains []string
-	for domain := range domainSet {
-		if !baseDomains[domain] {
-			domains = append(domains, domain)
-			log.Debugf("Domain: %s", domain)
-		}
+	if len(attDomains) == 0 {
+		return nil, "", fmt.Errorf("no attestation domains found in certificate")
 	}
 
-	att, err := dcode.Decode(domains)
+	att, err := dcode.Decode(attDomains)
 	if err != nil {
 		return nil, "", fmt.Errorf("failed to decode attestation: %v", err)
 	}
