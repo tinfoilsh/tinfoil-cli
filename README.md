@@ -296,6 +296,15 @@ tinfoil proxy \
   -p 8080
 ```
 
+### Command Options
+
+- `-p, --port`: Port to listen on. Defaults to `8080`.
+- `-b, --bind`: Address to bind to. Defaults to `127.0.0.1`.
+- `-e, --host`: The hostname of the enclave.
+- `-r, --repo`: The GitHub repository containing code measurements.
+
+By default, the proxy binds to `127.0.0.1` (localhost only). To expose the proxy on all interfaces, use `-b 0.0.0.0`.
+
 ## Docker
 
 A docker image is available at `ghcr.io/tinfoilsh/tinfoil-cli`.
