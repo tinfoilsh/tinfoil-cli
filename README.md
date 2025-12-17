@@ -251,9 +251,9 @@ Sample successful output:
 ```bash
 $ tinfoil attestation verify \
   -e inference.tinfoil.sh \
-  -r tinfoilsh/confidential-inference-proxy
-INFO[0000] Fetching latest release for tinfoilsh/confidential-inference-proxy 
-INFO[0000] Fetching sigstore bundle from tinfoilsh/confidential-inference-proxy for digest f2f48557c8b0c1b268f8d8673f380242ad8c4983fe9004c02a8688a89f94f333 
+  -r tinfoilsh/confidential-model-router
+INFO[0000] Fetching latest release for tinfoilsh/confidential-model-router 
+INFO[0000] Fetching sigstore bundle from tinfoilsh/confidential-model-router for digest f2f48557c8b0c1b268f8d8673f380242ad8c4983fe9004c02a8688a89f94f333 
 INFO[0001] Fetching trust root                          
 INFO[0001] Verifying code measurements                  
 INFO[0001] Fetching attestation doc from inference.tinfoil.sh 
@@ -270,7 +270,7 @@ You can also record the verification to a machine-readable audit log. Use the `a
 ```bash
 tinfoil attestation verify \
   -e inference.tinfoil.sh \
-  -r tinfoilsh/confidential-inference-proxy \
+  -r tinfoilsh/confidential-model-router \
   -j > verification.json
 ```
 
@@ -279,7 +279,7 @@ Or use the `-l` flag to specify the output file directly:
 ```bash
 tinfoil attestation verify \
   -e inference.tinfoil.sh \
-  -r tinfoilsh/confidential-inference-proxy \
+  -r tinfoilsh/confidential-model-router \
   -j -l verification.json
 ```
 
@@ -291,7 +291,7 @@ Use `tinfoil proxy` to start a local HTTP proxy that verifies connections and fo
 
 ```bash
 tinfoil proxy \
-  -r tinfoilsh/confidential-inference-proxy \
+  -r tinfoilsh/confidential-model-router \
   -e inference.tinfoil.sh \
   -p 8080
 ```
