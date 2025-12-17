@@ -22,7 +22,7 @@ import (
 // Proxy constants - all inference requests go through this proxy
 const (
 	PROXY_ENCLAVE = "inference.tinfoil.sh"
-	PROXY_REPO    = "tinfoilsh/confidential-inference-proxy"
+	PROXY_REPO    = "tinfoilsh/confidential-model-router"
 )
 
 //go:embed config.json
