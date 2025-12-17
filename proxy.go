@@ -1,10 +1,11 @@
 package main
 
 import (
-	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
@@ -13,11 +14,13 @@ import (
 
 var (
 	listenPort uint
+	listenAddr string
 )
 
 func init() {
 	rootCmd.AddCommand(proxyCmd)
 	proxyCmd.Flags().UintVarP(&listenPort, "port", "p", 8080, "Port to listen on")
+	proxyCmd.Flags().StringVarP(&listenAddr, "bind", "b", "127.0.0.1", "Address to bind to")
 }
 
 var proxyCmd = &cobra.Command{
@@ -69,7 +72,8 @@ var proxyCmd = &cobra.Command{
 			}
 		})
 
-		log.Infof("Starting HTTP proxy on %d", listenPort)
-		return http.ListenAndServe(fmt.Sprintf(":%d", listenPort), nil)
+		addr := net.JoinHostPort(listenAddr, strconv.FormatUint(uint64(listenPort), 10))
+		log.Infof("Starting HTTP proxy on %s", addr)
+		return http.ListenAndServe(addr, nil)
 	},
 }
