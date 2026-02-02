@@ -170,8 +170,8 @@ var audioCmd = &cobra.Command{
 			log.Fatalf("Please specify an audio file using the -f flag")
 		}
 
-		if !strings.HasPrefix(modelName, "whisper") {
-			log.Fatalf("Invalid model. Must use a whisper model for audio transcription")
+		if !strings.HasPrefix(modelName, "whisper") && !strings.HasPrefix(modelName, "voxtral") {
+			log.Fatalf("Invalid model. Must use a whisper or voxtral model for audio transcription")
 		}
 
 		if enclaveHost == "" || repo == "" {
