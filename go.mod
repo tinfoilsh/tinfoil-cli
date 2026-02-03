@@ -4,13 +4,13 @@ go 1.25.5
 
 require (
 	github.com/fatih/color v1.18.0
-	github.com/openai/openai-go/v3 v3.16.0
+	github.com/openai/openai-go/v3 v3.17.0
 	github.com/sirupsen/logrus v1.9.4
 	github.com/spf13/cobra v1.10.2
 	github.com/stretchr/testify v1.11.1
 	github.com/tinfoilsh/tfshim v0.2.14
-	github.com/tinfoilsh/tinfoil-go v0.11.1
-	github.com/tinfoilsh/verifier v0.10.19
+	github.com/tinfoilsh/tinfoil-go v0.11.3
+	github.com/tinfoilsh/verifier v0.11.2
 	golang.org/x/term v0.39.0
 )
 
@@ -58,7 +58,7 @@ require (
 	github.com/google/logger v1.1.1 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/googleapis/enterprise-certificate-proxy v0.3.11 // indirect
-	github.com/grpc-ecosystem/grpc-gateway/v2 v2.27.5 // indirect
+	github.com/grpc-ecosystem/grpc-gateway/v2 v2.27.7 // indirect
 	github.com/in-toto/attestation v1.1.2 // indirect
 	github.com/in-toto/in-toto-golang v0.10.0 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
@@ -78,20 +78,20 @@ require (
 	github.com/sigstore/sigstore-go v1.1.4 // indirect
 	github.com/sigstore/timestamp-authority/v2 v2.0.4 // indirect
 	github.com/spf13/pflag v1.0.10 // indirect
-	github.com/theupdateframework/go-tuf/v2 v2.4.0 // indirect
+	github.com/theupdateframework/go-tuf/v2 v2.4.1 // indirect
 	github.com/tidwall/gjson v1.18.0 // indirect
 	github.com/tidwall/match v1.2.0 // indirect
 	github.com/tidwall/pretty v1.2.1 // indirect
 	github.com/tidwall/sjson v1.2.5 // indirect
-	github.com/transparency-dev/formats v0.0.0-20260119090622-e70c80e9488a // indirect
+	github.com/transparency-dev/formats v0.0.0-20260202103038-9975703229b3 // indirect
 	github.com/transparency-dev/merkle v0.0.2 // indirect
-	go.mongodb.org/mongo-driver v1.17.7 // indirect
+	go.mongodb.org/mongo-driver v1.17.8 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc v0.64.0 // indirect
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.64.0 // indirect
-	go.opentelemetry.io/otel v1.39.0 // indirect
-	go.opentelemetry.io/otel/metric v1.39.0 // indirect
-	go.opentelemetry.io/otel/trace v1.39.0 // indirect
+	go.opentelemetry.io/otel v1.40.0 // indirect
+	go.opentelemetry.io/otel/metric v1.40.0 // indirect
+	go.opentelemetry.io/otel/trace v1.40.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
 	go.yaml.in/yaml/v3 v3.0.4 // indirect
 	golang.org/x/crypto v0.47.0 // indirect
@@ -102,8 +102,8 @@ require (
 	golang.org/x/text v0.33.0 // indirect
 	golang.org/x/tools v0.41.0 // indirect
 	google.golang.org/genproto v0.0.0-20260120221211-b8f7ae30c516 // indirect
-	google.golang.org/genproto/googleapis/api v0.0.0-20260122232226-8e98ce8d340d // indirect
-	google.golang.org/genproto/googleapis/rpc v0.0.0-20260122232226-8e98ce8d340d // indirect
+	google.golang.org/genproto/googleapis/api v0.0.0-20260202165425-ce8ad4cf556b // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20260202165425-ce8ad4cf556b // indirect
 	google.golang.org/grpc v1.78.0 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
