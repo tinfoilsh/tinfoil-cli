@@ -95,7 +95,7 @@ func verifyAttestation(l *log.Logger) (*auditRecord, error) {
 		}
 
 		l.Println("Verifying code measurements")
-		codeMeasurements, err = sigstore.VerifyAttestation(trustRootJSON, bundleBytes, digest, repo)
+		codeMeasurements, err = sigstore.VerifyAttestation(trustRootJSON, bundleBytes, repo, digest)
 		if err != nil {
 			return nil, fmt.Errorf("sigstore verify: %v", err)
 		}
