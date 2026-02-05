@@ -110,6 +110,14 @@ var proxyCmd = &cobra.Command{
 				"content_length": resp.ContentLength,
 			}).Debug("received upstream response")
 
+			if resp.StatusCode >= 500 && resp.StatusCode < 600 {
+				log.WithFields(log.Fields{
+					"status_code": resp.StatusCode,
+					"method":      outReq.Method,
+					"url":         outReq.URL.Host + outReq.URL.Path,
+				}).Warn("upstream server returned error")
+			}
+
 			for name, values := range resp.Header {
 				for _, value := range values {
 					w.Header().Add(name, value)
