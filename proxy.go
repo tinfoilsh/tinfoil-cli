@@ -1,9 +1,9 @@
 package main
 
 import (
-	"io"
 	"net"
 	"net/http"
+	"net/http/httputil"
 	"net/url"
 	"strconv"
 
@@ -47,6 +47,12 @@ var proxyCmd = &cobra.Command{
 		trace, _ := cmd.Flags().GetBool("trace")
 		setupLogger(verbose, trace)
 
+		targetUrl, err := url.Parse("https://" + enclaveHost)
+		if err != nil {
+			log.WithError(err).Error("failed to parse upstream URL")
+			return err
+		}
+
 		log.WithFields(log.Fields{
 			"enclave_host": enclaveHost,
 			"repo":         repo,
@@ -61,81 +67,11 @@ var proxyCmd = &cobra.Command{
 
 		httpClient := tinfoilClient.HTTPClient()
 
+		proxy := httputil.NewSingleHostReverseProxy(targetUrl)
+		proxy.Transport = withLoggingTransport(log.StandardLogger(), httpClient.Transport)
+
 		http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-			log.WithFields(log.Fields{
-				"method":      r.Method,
-				"path":        r.URL.Path,
-				"remote_addr": r.RemoteAddr,
-			}).Debug("received request")
-
-			upstreamURL, err := url.Parse("https://" + enclaveHost)
-			if err != nil {
-				log.WithError(err).Error("failed to parse upstream URL")
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
-			}
-			upstreamURL.Path = r.URL.Path
-
-			outReq, err := http.NewRequest(r.Method, upstreamURL.String(), r.Body)
-			if err != nil {
-				log.WithFields(log.Fields{
-					"method": r.Method,
-					"url":    upstreamURL.Host + upstreamURL.Path,
-				}).WithError(err).Error("failed to create upstream request")
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
-			}
-			for name, values := range r.Header {
-				for _, value := range values {
-					outReq.Header.Add(name, value)
-				}
-			}
-
-			log.WithFields(log.Fields{
-				"method": outReq.Method,
-				"url":    outReq.URL.Host + outReq.URL.Path,
-			}).Debug("forwarding request to upstream")
-
-			resp, err := httpClient.Do(outReq)
-			if err != nil {
-				log.WithFields(log.Fields{
-					"method": outReq.Method,
-					"url":    outReq.URL.Host + outReq.URL.Path,
-				}).WithError(err).Error("upstream request failed")
-				http.Error(w, err.Error(), http.StatusBadGateway)
-				return
-			}
-			defer resp.Body.Close()
-
-			log.WithFields(log.Fields{
-				"status_code":    resp.StatusCode,
-				"content_length": resp.ContentLength,
-			}).Debug("received upstream response")
-
-			if resp.StatusCode >= 500 && resp.StatusCode < 600 {
-				log.WithFields(log.Fields{
-					"status_code": resp.StatusCode,
-					"method":      outReq.Method,
-					"url":         outReq.URL.Host + outReq.URL.Path,
-				}).Warn("upstream server returned error")
-			}
-
-			for name, values := range resp.Header {
-				for _, value := range values {
-					w.Header().Add(name, value)
-				}
-			}
-
-			w.WriteHeader(resp.StatusCode)
-			if _, err := io.Copy(w, resp.Body); err != nil {
-				log.WithError(err).Error("failed to copy response body to client")
-			}
-
-			log.WithFields(log.Fields{
-				"method":      r.Method,
-				"path":        r.URL.Path,
-				"status_code": resp.StatusCode,
-			}).Info("request completed")
+			proxy.ServeHTTP(w, r)
 		})
 
 		addr := net.JoinHostPort(listenAddr, strconv.FormatUint(uint64(listenPort), 10))
@@ -145,4 +81,60 @@ var proxyCmd = &cobra.Command{
 		}).Info("starting HTTP proxy server")
 		return http.ListenAndServe(addr, nil)
 	},
+}
+
+func withLoggingTransport(logger *log.Logger, base http.RoundTripper) http.RoundTripper {
+	if base == nil {
+		base = http.DefaultTransport
+	}
+
+	return &loggingTransport{
+		wrapped: base,
+		logger:  logger,
+	}
+}
+
+// loggingTransport implements http.RoundTripper and wraps an existing
+// transport with logging functions
+type loggingTransport struct {
+	wrapped http.RoundTripper
+	logger  *log.Logger
+}
+
+func (lt *loggingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	lt.logger.WithFields(log.Fields{
+		"method": req.Method,
+		"host":   req.URL.Host,
+		"path":   req.URL.Path,
+	}).Debug("Outgoing request to upstream")
+
+	// Send the request
+	resp, err := lt.wrapped.RoundTrip(req)
+	if err != nil {
+		lt.logger.WithFields(log.Fields{
+			"method": req.Method,
+			"host":   req.URL.Host,
+			"path":   req.URL.Path,
+		}).Error("Request to upstream failed")
+		return nil, err
+	}
+
+	logEntry := lt.logger.WithFields(log.Fields{
+		"method": req.Method,
+		"target": req.URL.Host,
+		"path":   req.URL.Path,
+		"status": resp.Status,
+		"size":   resp.ContentLength,
+	})
+
+	switch {
+	case resp.StatusCode >= 500:
+		logEntry.Warn("Upstream server error")
+	case resp.StatusCode >= 400:
+		logEntry.Warn("Upstream client error")
+	default:
+		logEntry.Info("Upstream request complete")
+	}
+
+	return resp, err
 }
