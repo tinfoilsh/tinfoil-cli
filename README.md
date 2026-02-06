@@ -302,6 +302,7 @@ tinfoil proxy \
 - `-b, --bind`: Address to bind to. Defaults to `127.0.0.1`.
 - `-e, --host`: The hostname of the enclave.
 - `-r, --repo`: The GitHub repository containing code measurements.
+- `--log-format`: Logger output format (`text` or `json`). Defaults to `text`.
 
 By default, the proxy binds to `127.0.0.1` (localhost only). To expose the proxy on all interfaces, use `-b 0.0.0.0`.
 
