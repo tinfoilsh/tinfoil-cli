@@ -9,7 +9,7 @@ import (
 
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
-	"github.com/tinfoilsh/verifier/client"
+	"github.com/tinfoilsh/tinfoil-go"
 )
 
 var (
@@ -51,13 +51,15 @@ var proxyCmd = &cobra.Command{
 			"enclave_host": enclaveHost,
 			"repo":         repo,
 		}).Info("initializing secure client")
-		secureClient := client.NewSecureClient(enclaveHost, repo)
-		httpClient, err := secureClient.HTTPClient()
+
+		tinfoilClient, err := tinfoil.NewClientWithParams(enclaveHost, repo)
 		if err != nil {
 			log.WithError(err).Error("failed to create HTTP client")
 			return err
 		}
 		log.Debug("secure HTTP client created successfully")
+
+		httpClient := tinfoilClient.HTTPClient()
 
 		http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 			log.WithFields(log.Fields{
