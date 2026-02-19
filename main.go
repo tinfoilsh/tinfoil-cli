@@ -15,16 +15,11 @@ var (
 
 var rootCmd = &cobra.Command{
 	Use: "tinfoil",
-	Run: func(cmd *cobra.Command, args []string) {
-		// If no subcommand is provided, launch interactive mode
-		session := NewChatSession()
-		session.run()
-	},
 }
 
 func init() {
 	rootCmd.PersistentFlags().StringVarP(&enclaveHost, "host", "e", "", "Enclave hostname")
-	rootCmd.PersistentFlags().StringVarP(&repo, "repo", "r", "", "Source repo")
+	rootCmd.PersistentFlags().StringVarP(&repo, "repo", "r", "", "Enclave config repo")
 	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "Verbose output")
 	rootCmd.PersistentFlags().BoolVarP(&trace, "trace", "t", false, "Trace output")
 }
