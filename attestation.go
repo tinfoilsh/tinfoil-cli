@@ -10,10 +10,10 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/tinfoilsh/tfshim/dcode"
-	"github.com/tinfoilsh/verifier/attestation"
-	"github.com/tinfoilsh/verifier/client"
-	"github.com/tinfoilsh/verifier/github"
-	"github.com/tinfoilsh/verifier/sigstore"
+	"github.com/tinfoilsh/tinfoil-go/verifier/attestation"
+	"github.com/tinfoilsh/tinfoil-go/verifier/client"
+	"github.com/tinfoilsh/tinfoil-go/verifier/github"
+	"github.com/tinfoilsh/tinfoil-go/verifier/sigstore"
 )
 
 func init() {

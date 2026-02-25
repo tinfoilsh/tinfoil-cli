@@ -28,7 +28,7 @@ jobs:
       # 3. Update go.mod
       - name: go get verifier@tag
         run: |
-          go get github.com/tinfoilsh/verifier@${{ github.event.client_payload.version }}
+          go get github.com/tinfoilsh/tinfoil-go/verifier@${{ github.event.client_payload.version }}
           go mod tidy
 
       # 4. Open (and auto‑merge) a PR

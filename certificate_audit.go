@@ -15,7 +15,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/tinfoilsh/tfshim/dcode"
 	tlsutil "github.com/tinfoilsh/tfshim/tls"
-	"github.com/tinfoilsh/verifier/attestation"
+	"github.com/tinfoilsh/tinfoil-go/verifier/attestation"
 )
 
 var (
