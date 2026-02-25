@@ -6,9 +6,9 @@ require (
 	github.com/sirupsen/logrus v1.9.4
 	github.com/spf13/cobra v1.10.2
 	github.com/stretchr/testify v1.11.1
-	github.com/tinfoilsh/tfshim v0.2.14
-	github.com/tinfoilsh/tinfoil-go v0.12.0
-	github.com/tinfoilsh/verifier v0.11.2
+	github.com/tinfoilsh/tfshim v0.4.1
+	github.com/tinfoilsh/tinfoil-go v0.12.1
+	github.com/tinfoilsh/tinfoil-go/verifier v0.12.0
 )
 
 require (
@@ -22,7 +22,7 @@ require (
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/digitorus/pkcs7 v0.0.0-20250730155240-ffadbf3f398c // indirect
 	github.com/digitorus/timestamp v0.0.0-20250524132541-c45532741eea // indirect
-	github.com/go-acme/lego/v4 v4.29.0 // indirect
+	github.com/go-acme/lego/v4 v4.30.1 // indirect
 	github.com/go-jose/go-jose/v4 v4.1.3 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
@@ -59,7 +59,7 @@ require (
 	github.com/in-toto/attestation v1.1.2 // indirect
 	github.com/in-toto/in-toto-golang v0.10.0 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
-	github.com/miekg/dns v1.1.68 // indirect
+	github.com/miekg/dns v1.1.69 // indirect
 	github.com/oklog/ulid v1.3.1 // indirect
 	github.com/openai/openai-go/v3 v3.16.0 // indirect
 	github.com/opencontainers/go-digest v1.0.0 // indirect
@@ -105,5 +105,3 @@ require (
 	google.golang.org/protobuf v1.36.11 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
-
-replace github.com/google/go-sev-guest => github.com/tinfoilsh/go-sev-guest v0.0.0-20250704193550-c725e6216008
