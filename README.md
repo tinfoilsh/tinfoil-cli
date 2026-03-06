@@ -159,13 +159,64 @@ tinfoil http post https://inference.tinfoil.sh/v1/chat/completions \
 
 ## Proxy
 
-Use `tinfoil proxy` to start a local HTTP proxy that verifies connections and forwards them to the specified enclave.
+The proxy runs a local HTTP server that handles attestation verification and forwards requests to a Tinfoil enclave. This lets you use Tinfoil's verified inference from any language or tool that can make HTTP requests — PHP, Ruby, Java, curl, or anything else — without needing a native Tinfoil SDK.
+
+On startup, the proxy verifies the enclave's attestation (hardware attestation, Sigstore bundle, measurement comparison) and pins the TLS certificate. If the enclave's certificate rotates, the proxy automatically re-verifies before continuing. If verification fails, requests are rejected.
+
+### Basic Usage
 
 ```bash
 tinfoil proxy \
-  -r tinfoilsh/confidential-model-router \
   -e inference.tinfoil.sh \
+  -r tinfoilsh/confidential-model-router \
   -p 8080
+```
+
+Once running, send requests to `http://localhost:8080` as if it were an OpenAI-compatible API:
+
+```bash
+curl http://localhost:8080/v1/chat/completions \
+  -H "Authorization: Bearer $TINFOIL_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "deepseek-r1-0528",
+    "messages": [{"role": "user", "content": "Hello"}]
+  }'
+```
+
+Your API key is passed through to the enclave via the `Authorization` header — the proxy does not inject or store credentials.
+
+### Docker
+
+The proxy is available as a Docker image, which is useful for running it alongside other services in Docker Compose:
+
+```bash
+docker run -p 8080:8080 ghcr.io/tinfoilsh/tinfoil-cli:<version> \
+  proxy \
+  -e inference.tinfoil.sh \
+  -r tinfoilsh/confidential-model-router \
+  -b 0.0.0.0
+```
+
+Example `docker-compose.yml`:
+
+```yaml
+services:
+  tinfoil-proxy:
+    image: ghcr.io/tinfoilsh/tinfoil-cli:<version>
+    command: >
+      proxy
+      -e inference.tinfoil.sh
+      -r tinfoilsh/confidential-model-router
+      -b 0.0.0.0
+      -p 8080
+    ports:
+      - "8080:8080"
+
+  your-app:
+    # Your application connects to http://tinfoil-proxy:8080
+    environment:
+      - INFERENCE_URL=http://tinfoil-proxy:8080
 ```
 
 ### Command Options
@@ -176,7 +227,7 @@ tinfoil proxy \
 - `-r, --repo`: The enclave config repo.
 - `--log-format`: Logger output format (`text` or `json`). Defaults to `text`.
 
-By default, the proxy binds to `127.0.0.1` (localhost only). To expose the proxy on all interfaces, use `-b 0.0.0.0`.
+By default, the proxy binds to `127.0.0.1` (localhost only). To expose the proxy on all interfaces (required in Docker), use `-b 0.0.0.0`.
 
 ## Docker
 
