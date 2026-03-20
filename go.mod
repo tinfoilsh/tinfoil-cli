@@ -6,8 +6,7 @@ require (
 	github.com/sirupsen/logrus v1.9.4
 	github.com/spf13/cobra v1.10.2
 	github.com/stretchr/testify v1.11.1
-	github.com/tinfoilsh/tinfoil-go v0.12.1
-	github.com/tinfoilsh/tinfoil-go/verifier v0.12.0
+	github.com/tinfoilsh/tinfoil-go v0.12.4
 )
 
 require (
