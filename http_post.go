@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"bytes"
 	"fmt"
-	"log"
 	"net/http"
 
 	"github.com/spf13/cobra"
@@ -25,26 +24,36 @@ var httpPostCmd = &cobra.Command{
 	Use:   "post [url]",
 	Short: "HTTP POST request",
 	Args:  cobra.MinimumNArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		url := args[0]
 		sc := secureClient()
+
+		headers, err := parseRequestHeaders(requestHeaders)
+		if err != nil {
+			return err
+		}
 
 		if stream {
 			// Build a raw HTTP POST request with the provided body.
 			req, err := http.NewRequest("POST", url, bytes.NewBuffer([]byte(body)))
 			if err != nil {
-				log.Fatalf("Error creating request: %v", err)
+				return fmt.Errorf("error creating request: %w", err)
 			}
-			req.Header.Set("Content-Type", "application/json")
+			for k, v := range headers {
+				req.Header.Set(k, v)
+			}
+			if !hasRequestHeader(headers, "Content-Type") {
+				req.Header.Set("Content-Type", "application/json")
+			}
 
 			// Use the verifier’s HTTP client.
 			client, err := sc.HTTPClient()
 			if err != nil {
-				log.Fatalf("Error getting HTTP client: %v", err)
+				return fmt.Errorf("error getting HTTP client: %w", err)
 			}
 			resp, err := client.Do(req)
 			if err != nil {
-				log.Fatalf("Error performing streaming request: %v", err)
+				return fmt.Errorf("error performing streaming request: %w", err)
 			}
 			defer resp.Body.Close()
 
@@ -53,14 +62,16 @@ var httpPostCmd = &cobra.Command{
 				fmt.Println(scanner.Text())
 			}
 			if err := scanner.Err(); err != nil {
-				log.Fatalf("Error reading stream: %v", err)
+				return fmt.Errorf("error reading stream: %w", err)
 			}
 		} else { // Not streaming
-			resp, err := sc.Post(url, nil, []byte(body))
+			resp, err := sc.Post(url, headers, []byte(body))
 			if err != nil {
-				log.Fatal(err)
+				return err
 			}
 			fmt.Println(string(resp.Body))
 		}
+
+		return nil
 	},
 }

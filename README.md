@@ -94,8 +94,12 @@ tinfoil http get https://inference.tinfoil.sh/health \
 tinfoil http post https://inference.tinfoil.sh/v1/chat/completions \
   -e inference.tinfoil.sh \
   -r tinfoilsh/confidential-model-router \
+  -H "Authorization: Bearer $TINFOIL_API_KEY" \
+  -H "Content-Type: application/json" \
   -b '{"model": "deepseek-r1-0528", "messages": [{"role": "user", "content": "Hello"}]}'
 ```
+
+Pass custom request headers with repeatable `-H, --header` flags. Headers are sent through the verified connection after enclave attestation succeeds.
 
 ## Attestation Verification
 
