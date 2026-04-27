@@ -156,4 +156,6 @@ go build -o tinfoil
 
 ## Reporting Vulnerabilities
 
-Email [security@tinfoil.sh](mailto:security@tinfoil.sh) or open an issue. We respond within 24 hours.
+Please report security vulnerabilities by emailing [security@tinfoil.sh](mailto:security@tinfoil.sh).
+
+We aim to respond to (legitimate) security reports within 24 hours.
