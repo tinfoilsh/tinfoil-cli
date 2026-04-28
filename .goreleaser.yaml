@@ -8,18 +8,20 @@ builds:
       - linux
       - darwin
 
-dockers:
-  - image_templates:
-      - "ghcr.io/tinfoilsh/tinfoil-cli:{{ .Version }}"
-      - "ghcr.io/tinfoilsh/tinfoil-cli:latest"
-    dockerfile: Dockerfile
-    use: buildx
-    build_flag_templates:
-      - "--pull"
-      - "--label=org.opencontainers.image.created={{ .Date }}"
-      - "--label=org.opencontainers.image.title={{ .ProjectName }}"
-      - "--label=org.opencontainers.image.revision={{ .FullCommit }}"
-      - "--label=org.opencontainers.image.version={{ .Version }}"
+dockers_v2:
+  - images:
+      - "ghcr.io/tinfoilsh/tinfoil-cli"
+    tags:
+      - "{{ .Version }}"
+      - "latest"
+    platforms:
+      - linux/amd64
+      - linux/arm64
+    labels:
+      "org.opencontainers.image.created": "{{ .Date }}"
+      "org.opencontainers.image.title": "{{ .ProjectName }}"
+      "org.opencontainers.image.revision": "{{ .FullCommit }}"
+      "org.opencontainers.image.version": "{{ .Version }}"
 
 changelog:
   sort: asc
