@@ -1,6 +1,6 @@
 # Tinfoil CLI
 
-A command-line interface for verifying Tinfoil enclave attestations and making verified HTTP requests.
+A command-line interface for verifying Tinfoil enclave attestations, making verified HTTP requests, and managing the lifecycle of Tinfoil Containers.
 
 [![Documentation](https://img.shields.io/badge/docs-tinfoil.sh-blue)](https://docs.tinfoil.sh/sdk/cli-sdk)
 
@@ -11,6 +11,89 @@ curl -fsSL https://github.com/tinfoilsh/tinfoil-cli/raw/main/install.sh | sh
 ```
 
 Or download a binary from the [Releases](https://github.com/tinfoilsh/tinfoil-cli/releases) page. A Docker image is also available at `ghcr.io/tinfoilsh/tinfoil-cli`.
+
+## Container management
+
+The `container`, `secret`, `ssh-key`, `registry`, and `domain` subcommands manage Tinfoil Containers through the same controlplane API the dashboard uses.
+
+### Logging in
+
+Create an admin API key from the Tinfoil dashboard (Settings → API Keys → Admin keys). Admin keys are scoped to a single organization, so the CLI inherits that organization automatically.
+
+```bash
+tinfoil login                        # prompts for the key
+tinfoil login --api-key admin_xxx    # non-interactive
+tinfoil whoami                       # confirm the credential and show org context
+tinfoil logout                       # delete saved credentials
+```
+
+Credentials are written to `~/.tinfoil/config.json` (mode 0600). Override on a per-command basis with `TINFOIL_API_KEY` and `TINFOIL_CONTROLPLANE_URL`.
+
+### Containers
+
+```bash
+# Inspect what's deployed
+tinfoil container list
+tinfoil container get my-container
+tinfoil container hosts             # which hosts your org may target
+
+# Deploy
+tinfoil container create my-container \
+  --repo screenpipe/my-repo-container \
+  --tag v1.2.3 \
+  --variable LOG_LEVEL=info \
+  --secret OPENAI_API_KEY \
+  --custom-domain api.example.com
+
+# Lifecycle
+tinfoil container stop my-container
+tinfoil container start my-container --tag v1.2.4
+tinfoil container relaunch my-container --variable LOG_LEVEL=debug
+tinfoil container delete my-container
+
+# Updates
+tinfoil container update status my-container
+tinfoil container update accept my-container
+tinfoil container update cancel my-container
+
+# Auto-update (GitHub-connected containers)
+tinfoil container auto-update my-container --on
+tinfoil container auto-update my-container --off
+
+# Open a verified proxy to a deployed container
+tinfoil container connect my-container -p 8080
+```
+
+`container connect <name>` resolves the container's enclave domain and source repo, then runs a verified proxy locally — equivalent to `tinfoil proxy -e <domain> -r <repo>` but without copy-pasting either value.
+
+### Secrets, SSH keys, registry credentials, custom domains
+
+```bash
+# Org secrets (used by containers via --secret)
+tinfoil secret list
+echo -n "$OPENAI_KEY" | tinfoil secret create OPENAI_API_KEY --value-file -
+tinfoil secret set OPENAI_API_KEY --value-file ./key.txt
+tinfoil secret delete OPENAI_API_KEY
+
+# SSH keys for debug containers
+tinfoil ssh-key create laptop --public-key-file ~/.ssh/id_ed25519.pub
+tinfoil ssh-key list
+tinfoil ssh-key delete laptop
+
+# Private registry credentials
+tinfoil registry list
+tinfoil registry set ghcr --username myuser --token ghp_xxx
+tinfoil registry set gcr --key-file ./gcp-sa.json
+tinfoil registry set dockerhub --username myuser --token dckr_xxx
+tinfoil registry delete ghcr
+
+# Custom domains (TXT/CNAME instructions are printed on add/verify)
+tinfoil domain add api.example.com
+tinfoil domain verify api.example.com
+tinfoil domain delete api.example.com
+```
+
+Pass `-o json` on any list/get to emit machine-readable JSON.
 
 ## Proxy
 
