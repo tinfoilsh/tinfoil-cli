@@ -19,6 +19,12 @@ Run a local proxy that verifies enclave attestation and forwards requests. This 
 The proxy verifies the enclave on startup (hardware attestation, Sigstore bundle, measurement comparison) and pins the TLS certificate. If the certificate rotates, the proxy re-verifies automatically. If verification fails, requests are rejected.
 
 ```bash
+tinfoil proxy -p 8080
+```
+
+By default this connects to the public Tinfoil router for inference. To proxy a specific enclave, pass `-e` and `-r`:
+
+```bash
 tinfoil proxy \
   -e inference.tinfoil.sh \
   -r tinfoilsh/confidential-model-router \
@@ -43,11 +49,10 @@ The proxy passes your `Authorization` header through to the enclave — it does 
 
 ```bash
 docker run -p 8080:8080 ghcr.io/tinfoilsh/tinfoil-cli:<version> \
-  proxy \
-  -e inference.tinfoil.sh \
-  -r tinfoilsh/confidential-model-router \
-  -b 0.0.0.0
+  proxy -b 0.0.0.0
 ```
+
+Add `-e <host> -r <owner/repo>` to target a specific enclave instead of the Tinfoil router.
 
 Example `docker-compose.yml`:
 
@@ -57,8 +62,6 @@ services:
     image: ghcr.io/tinfoilsh/tinfoil-cli:<version>
     command: >
       proxy
-      -e inference.tinfoil.sh
-      -r tinfoilsh/confidential-model-router
       -b 0.0.0.0
       -p 8080
     ports:
@@ -76,8 +79,8 @@ services:
 |------|---------|-------------|
 | `-p, --port` | `8080` | Port to listen on |
 | `-b, --bind` | `127.0.0.1` | Address to bind to (use `0.0.0.0` in Docker) |
-| `-e, --host` | | Enclave hostname |
-| `-r, --repo` | | Enclave config repo |
+| `-e, --host` | public router | Enclave hostname (override to target a specific enclave; must be set together with `-r`) |
+| `-r, --repo` | public router | Enclave config repo (override to target a specific enclave; must be set together with `-e`) |
 | `--log-format` | `text` | `text` or `json` |
 
 ## HTTP Requests

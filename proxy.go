@@ -47,23 +47,33 @@ var proxyCmd = &cobra.Command{
 		trace, _ := cmd.Flags().GetBool("trace")
 		setupLogger(verbose, trace)
 
-		targetUrl, err := url.Parse("https://" + enclaveHost)
-		if err != nil {
-			log.WithError(err).Error("failed to parse upstream URL")
-			return err
-		}
-
 		log.WithFields(log.Fields{
 			"enclave_host": enclaveHost,
 			"repo":         repo,
 		}).Info("initializing secure client")
 
-		tinfoilClient, err := tinfoil.NewClientWithParams(enclaveHost, repo)
+		var tinfoilClient *tinfoil.Client
+		var err error
+		if enclaveHost == "" && repo == "" {
+			tinfoilClient, err = tinfoil.NewClient()
+			if err == nil {
+				enclaveHost = tinfoilClient.Enclave()
+				repo = tinfoilClient.Repo()
+			}
+		} else {
+			tinfoilClient, err = tinfoil.NewClientWithParams(enclaveHost, repo)
+		}
 		if err != nil {
 			log.WithError(err).Error("failed to create HTTP client")
 			return err
 		}
 		log.Debug("secure HTTP client created successfully")
+
+		targetUrl, err := url.Parse("https://" + enclaveHost)
+		if err != nil {
+			log.WithError(err).Error("failed to parse upstream URL")
+			return err
+		}
 
 		httpClient := tinfoilClient.HTTPClient()
 
