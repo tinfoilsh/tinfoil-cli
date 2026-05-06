@@ -22,7 +22,7 @@ The proxy verifies the enclave on startup (hardware attestation, Sigstore bundle
 tinfoil proxy -p 8080
 ```
 
-By default this connects to the public Tinfoil router. To proxy a specific enclave, pass `-e` and `-r`:
+By default this connects to the public Tinfoil router for inference. To proxy a specific enclave, pass `-e` and `-r`:
 
 ```bash
 tinfoil proxy \
@@ -52,7 +52,7 @@ docker run -p 8080:8080 ghcr.io/tinfoilsh/tinfoil-cli:<version> \
   proxy -b 0.0.0.0
 ```
 
-Add `-e <host> -r <owner/repo>` to target a specific enclave instead of the public router.
+Add `-e <host> -r <owner/repo>` to target a specific enclave instead of the Tinfoil router.
 
 Example `docker-compose.yml`:
 
