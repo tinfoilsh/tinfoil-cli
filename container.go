@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 )
 
 // containerView mirrors the controlplane's containerResponse. We only model
@@ -34,6 +36,7 @@ type containerView struct {
 	SSHKeys            []string          `json:"ssh_keys"`
 	Debug              bool              `json:"debug"`
 	Staging            bool              `json:"staging"`
+	DisableCCMode      bool              `json:"disable_cc_mode"`
 	GithubAppConnected bool              `json:"github_app_connected"`
 	AutoUpdate         bool              `json:"auto_update"`
 	GroupName          *string           `json:"group_name"`
@@ -61,6 +64,8 @@ var (
 	createTag          string
 	createDebug        bool
 	createStaging      bool
+	createDisableCC    bool
+	createYes          bool
 	createCustomDomain string
 	createHost         string
 	createReplaceID    string
@@ -129,6 +134,8 @@ func init() {
 	containerCreateCmd.Flags().StringVar(&createTag, "tag", "", "Repository release tag to deploy [required]")
 	containerCreateCmd.Flags().BoolVar(&createDebug, "debug", false, "Enable debug mode (allows SSH into the enclave)")
 	containerCreateCmd.Flags().BoolVar(&createStaging, "staging", false, "Use staging mode (lower-trust environment)")
+	containerCreateCmd.Flags().BoolVar(&createDisableCC, "disable-cc-mode", false, "EXPERIMENTAL: disable confidential computing (benchmarks only; requires org entitlement)")
+	containerCreateCmd.Flags().BoolVar(&createYes, "yes", false, "Skip interactive confirmation for --disable-cc-mode")
 	containerCreateCmd.Flags().StringVar(&createCustomDomain, "custom-domain", "", "Verified custom domain to expose the container on")
 	containerCreateCmd.Flags().StringVar(&createHost, "host", "", "Target host name (see 'tinfoil container hosts')")
 	containerCreateCmd.Flags().StringVar(&createReplaceID, "replace", "", "ID of an existing container to atomically replace")
@@ -258,6 +265,12 @@ var containerCreateCmd = &cobra.Command{
 			return err
 		}
 
+		if createDisableCC {
+			if err := confirmNonCCMode(); err != nil {
+				return err
+			}
+		}
+
 		body := map[string]any{
 			"name": args[0],
 			"repo": createRepo,
@@ -277,6 +290,9 @@ var containerCreateCmd = &cobra.Command{
 		}
 		if createStaging {
 			body["staging"] = true
+		}
+		if createDisableCC {
+			body["disable_cc_mode"] = true
 		}
 		if createCustomDomain != "" {
 			body["custom_domain"] = createCustomDomain
@@ -783,6 +799,38 @@ func buildLifecycleBody(cmd *cobra.Command,
 	return body, nil
 }
 
+// confirmNonCCMode prints the same warning text the dashboard shows when a
+// user toggles "Disable Confidential Compute", then requires the user to type
+// "yes" before proceeding. --yes bypasses the prompt for scripted use. When
+// stdin is not a TTY and --yes was not passed, abort rather than block.
+func confirmNonCCMode() error {
+	fmt.Fprintln(os.Stderr, "EXPERIMENTAL: Disable Confidential Compute")
+	fmt.Fprintln(os.Stderr)
+	fmt.Fprintln(os.Stderr, "Disables memory encryption and hardware attestation for this container.")
+	fmt.Fprintln(os.Stderr, "It will not provide CC guarantees and is not suitable for production")
+	fmt.Fprintln(os.Stderr, "workloads. Intended for benchmarking against non-CC baselines.")
+	fmt.Fprintln(os.Stderr)
+	fmt.Fprintln(os.Stderr, "WARNING: This container will deploy without confidential computing")
+	fmt.Fprintln(os.Stderr, "protections. The host operator can read memory and observe execution.")
+	fmt.Fprintln(os.Stderr)
+	if createYes {
+		fmt.Fprintln(os.Stderr, "Proceeding (--yes).")
+		return nil
+	}
+	if !term.IsTerminal(int(os.Stdin.Fd())) {
+		return fmt.Errorf("--disable-cc-mode requires interactive confirmation; pass --yes to skip the prompt")
+	}
+	fmt.Fprint(os.Stderr, "Type \"yes\" to proceed: ")
+	scanner := bufio.NewScanner(os.Stdin)
+	if !scanner.Scan() {
+		return fmt.Errorf("aborted")
+	}
+	if strings.ToLower(strings.TrimSpace(scanner.Text())) != "yes" {
+		return fmt.Errorf("aborted")
+	}
+	return nil
+}
+
 func parseTriBool(s string) (bool, error) {
 	switch strings.ToLower(strings.TrimSpace(s)) {
 	case "true", "t", "yes", "y", "1", "on":
@@ -828,6 +876,9 @@ func renderContainer(c containerView) error {
 	}
 	if c.Staging {
 		fmt.Printf("Mode:         staging\n")
+	}
+	if c.DisableCCMode {
+		fmt.Printf("Mode:         non-cc (confidential computing disabled)\n")
 	}
 	if c.AutoUpdate {
 		fmt.Printf("Auto-update:  enabled\n")
