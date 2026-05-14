@@ -72,6 +72,9 @@ var (
 	createVariables    []string
 	createSecrets      []string
 	createSSHKeys      []string
+	createGroupName    string
+	createGroupOrder   int32
+	createDisplayOrder int32
 
 	relaunchTag          string
 	relaunchVariables    []string
@@ -142,6 +145,9 @@ func init() {
 	containerCreateCmd.Flags().StringArrayVar(&createVariables, "variable", nil, "Environment variable in KEY=VALUE form; may be repeated")
 	containerCreateCmd.Flags().StringArrayVar(&createSecrets, "secret", nil, "Org secret name to mount; may be repeated")
 	containerCreateCmd.Flags().StringArrayVar(&createSSHKeys, "ssh-key", nil, "Org SSH key name (debug only); may be repeated")
+	containerCreateCmd.Flags().StringVar(&createGroupName, "group-name", "", "Place the container into the named group on creation")
+	containerCreateCmd.Flags().Int32Var(&createGroupOrder, "group-order", 0, "Sort order of the group itself (requires --group-name)")
+	containerCreateCmd.Flags().Int32Var(&createDisplayOrder, "display-order", 0, "Sort order of this container within the group (requires --group-name)")
 	_ = containerCreateCmd.MarkFlagRequired("repo")
 	_ = containerCreateCmd.MarkFlagRequired("tag")
 
@@ -271,10 +277,19 @@ var containerCreateCmd = &cobra.Command{
 			}
 		}
 
+		if createGroupName == "" && (cmd.Flags().Changed("group-order") || cmd.Flags().Changed("display-order")) {
+			return fmt.Errorf("--group-order and --display-order require --group-name")
+		}
+
 		body := map[string]any{
 			"name": args[0],
 			"repo": createRepo,
 			"tag":  createTag,
+		}
+		if createGroupName != "" {
+			body["group_name"] = createGroupName
+			body["group_order"] = createGroupOrder
+			body["display_order"] = createDisplayOrder
 		}
 		if len(vars) > 0 {
 			body["variables"] = vars
