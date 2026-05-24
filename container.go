@@ -192,7 +192,7 @@ func init() {
 	containerGroupCmd.Flags().Int32Var(&groupOrder, "group-order", 0, "Order of the group itself")
 	containerGroupCmd.Flags().Int32Var(&groupDisplayOrder, "display-order", 0, "Display order within the group")
 
-	containerConnectCmd.Flags().UintVarP(&connectPort, "port", "p", 8080, "Local port for the verified proxy")
+	containerConnectCmd.Flags().UintVarP(&connectPort, "port", "p", 3301, "Local port for the verified proxy")
 	containerConnectCmd.Flags().StringVarP(&connectBindAddr, "bind", "b", "127.0.0.1", "Address to bind to")
 
 	silenceUsageRecursive(containerCmd)

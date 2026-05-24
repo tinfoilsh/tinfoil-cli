@@ -19,7 +19,7 @@ Run a local proxy that verifies enclave attestation and forwards requests. This 
 The proxy verifies the enclave on startup (hardware attestation, Sigstore bundle, measurement comparison) and pins the TLS certificate. If the certificate rotates, the proxy re-verifies automatically. If verification fails, requests are rejected.
 
 ```bash
-tinfoil proxy -p 8080
+tinfoil proxy -p 3301
 ```
 
 By default this connects to the public Tinfoil router for inference. To proxy a specific enclave, pass `-e` and `-r`:
@@ -28,13 +28,13 @@ By default this connects to the public Tinfoil router for inference. To proxy a 
 tinfoil proxy \
   -e inference.tinfoil.sh \
   -r tinfoilsh/confidential-model-router \
-  -p 8080
+  -p 3301
 ```
 
-Then send requests to `http://localhost:8080` using the OpenAI-compatible API:
+Then send requests to `http://localhost:3301` using the OpenAI-compatible API:
 
 ```bash
-curl http://localhost:8080/v1/chat/completions \
+curl http://localhost:3301/v1/chat/completions \
   -H "Authorization: Bearer $TINFOIL_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
@@ -48,7 +48,7 @@ The proxy passes your `Authorization` header through to the enclave — it does 
 ### Docker
 
 ```bash
-docker run -p 8080:8080 ghcr.io/tinfoilsh/tinfoil-cli:<version> \
+docker run -p 3301:3301 ghcr.io/tinfoilsh/tinfoil-cli:<version> \
   proxy -b 0.0.0.0
 ```
 
@@ -63,21 +63,21 @@ services:
     command: >
       proxy
       -b 0.0.0.0
-      -p 8080
+      -p 3301
     ports:
-      - "8080:8080"
+      - "3301:3301"
 
   your-app:
-    # Your application connects to http://tinfoil-proxy:8080
+    # Your application connects to http://tinfoil-proxy:3301
     environment:
-      - INFERENCE_URL=http://tinfoil-proxy:8080
+      - INFERENCE_URL=http://tinfoil-proxy:3301
 ```
 
 ### Proxy Options
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `-p, --port` | `8080` | Port to listen on |
+| `-p, --port` | `3301` | Port to listen on |
 | `-b, --bind` | `127.0.0.1` | Address to bind to (use `0.0.0.0` in Docker) |
 | `-e, --host` | public router | Enclave hostname (override to target a specific enclave; must be set together with `-r`) |
 | `-r, --repo` | public router | Enclave config repo (override to target a specific enclave; must be set together with `-e`) |
@@ -194,7 +194,7 @@ tinfoil container auto-update my-container --on
 tinfoil container auto-update my-container --off
 
 # Open a verified proxy to a deployed container
-tinfoil container connect my-container -p 8080
+tinfoil container connect my-container -p 3301
 ```
 
 `container connect <name>` resolves the container's enclave domain and source repo, then runs a verified proxy locally — equivalent to `tinfoil proxy -e <domain> -r <repo>` but without copy-pasting either value.

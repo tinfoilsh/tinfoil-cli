@@ -20,7 +20,7 @@ var (
 
 func init() {
 	rootCmd.AddCommand(proxyCmd)
-	proxyCmd.Flags().UintVarP(&listenPort, "port", "p", 8080, "Port to listen on")
+	proxyCmd.Flags().UintVarP(&listenPort, "port", "p", 3301, "Port to listen on")
 	proxyCmd.Flags().StringVarP(&listenAddr, "bind", "b", "127.0.0.1", "Address to bind to")
 	proxyCmd.Flags().StringVar(&logFormat, "log-format", "text", "Log format: text or json")
 }
