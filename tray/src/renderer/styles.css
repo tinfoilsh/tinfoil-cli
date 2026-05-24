@@ -306,11 +306,7 @@ body {
   color: var(--content-primary);
 }
 
-.refresh:disabled {
-  cursor: progress;
-}
-
-.refresh-busy svg {
+.refresh-spin {
   animation: refresh-spin 0.9s linear infinite;
 }
 
