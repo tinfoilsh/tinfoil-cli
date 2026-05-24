@@ -22,6 +22,7 @@ export interface TrayState {
   statusMessage: string
   routers: RouterState[]
   proxy: ProxyState
+  launchAtLogin: boolean
   lastError?: string
 }
 
@@ -58,5 +59,6 @@ export const stateStore = new StateStore({
     enabled: false,
     running: false,
     port: 0
-  }
+  },
+  launchAtLogin: true
 })

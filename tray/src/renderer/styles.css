@@ -168,6 +168,22 @@ body {
   border-color: var(--accent);
 }
 
+.launch-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--content-secondary);
+  cursor: pointer;
+  user-select: none;
+}
+
+.launch-row input[type='checkbox'] {
+  margin: 0;
+  accent-color: var(--accent);
+}
+
 .endpoint {
   margin-top: 12px;
   display: flex;
@@ -266,6 +282,41 @@ body {
 .tabs-empty {
   font-size: 11px;
   color: var(--content-muted);
+  flex: 1;
+}
+
+.refresh {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border-radius: 6px;
+  border: 1px solid var(--border-subtle);
+  background: var(--tab-bg);
+  color: var(--content-muted);
+  cursor: pointer;
+  margin-left: auto;
+  transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+}
+
+.refresh:hover {
+  background: var(--tab-bg-hover);
+  color: var(--content-primary);
+}
+
+.refresh:disabled {
+  cursor: progress;
+}
+
+.refresh-busy svg {
+  animation: refresh-spin 0.9s linear infinite;
+}
+
+@keyframes refresh-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
 }
 
 .tab {

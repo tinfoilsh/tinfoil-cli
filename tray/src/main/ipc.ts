@@ -2,8 +2,10 @@ import { clipboard, ipcMain } from 'electron'
 
 import { loadConfig, saveConfig } from './config.js'
 import { PROXY_DEFAULT_PORT } from './constants.js'
+import { applyLaunchAtLogin, isLaunchAtLoginSupported } from './login-item.js'
 import { notifyPopup, setPopupCompactHeight, setPopupExpanded } from './popup.js'
 import { proxyEndpoint, startProxy, stopProxy } from './proxy.js'
+import { refreshRouters } from './secure-client.js'
 import { stateStore, type TrayState } from './state.js'
 
 function snapshotForRenderer(state: TrayState) {
@@ -27,6 +29,8 @@ function snapshotForRenderer(state: TrayState) {
     routers: anonymized,
     endpoint,
     proxy: state.proxy,
+    launchAtLogin: state.launchAtLogin,
+    launchAtLoginSupported: isLaunchAtLoginSupported(),
     lastError: state.lastError
   }
 }
@@ -75,6 +79,20 @@ export function registerIpc(): void {
     } else {
       stateStore.set({ proxy: { ...proxy, port: clamped } })
     }
+    return snapshotForRenderer(stateStore.get())
+  })
+
+  ipcMain.handle('tray:refreshRouters', async () => {
+    await refreshRouters()
+    return snapshotForRenderer(stateStore.get())
+  })
+
+  ipcMain.handle('tray:setLaunchAtLogin', async (_event, enabled: boolean) => {
+    const next = !!enabled
+    const cfg = await loadConfig()
+    await saveConfig({ ...cfg, launchAtLogin: next })
+    applyLaunchAtLogin(next)
+    stateStore.set({ launchAtLogin: next })
     return snapshotForRenderer(stateStore.get())
   })
 

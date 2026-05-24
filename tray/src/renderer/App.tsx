@@ -175,6 +175,12 @@ export default function App() {
     setState(updated)
   }, [portInput, state])
 
+  const onToggleLaunchAtLogin = useCallback(async () => {
+    if (!state) return
+    const updated = await window.tinfoil.setLaunchAtLogin(!state.launchAtLogin)
+    setState(updated)
+  }, [state])
+
   const [copied, setCopied] = useState(false)
   const onCopyEndpoint = useCallback(async () => {
     const value = await window.tinfoil.copyEndpoint()
@@ -182,6 +188,18 @@ export default function App() {
     setCopied(true)
     setTimeout(() => setCopied(false), 1500)
   }, [])
+
+  const [refreshing, setRefreshing] = useState(false)
+  const onRefreshRouters = useCallback(async () => {
+    if (refreshing) return
+    setRefreshing(true)
+    try {
+      const updated = await window.tinfoil.refreshRouters()
+      setState(updated)
+    } finally {
+      setRefreshing(false)
+    }
+  }, [refreshing])
 
   if (!state) {
     return (
@@ -272,6 +290,18 @@ export default function App() {
               }
             }}
           />
+          {state.launchAtLoginSupported && (
+            <label className="launch-row" title="Start Tinfoil when you log in">
+              <input
+                type="checkbox"
+                checked={state.launchAtLogin}
+                onChange={() => {
+                  void onToggleLaunchAtLogin()
+                }}
+              />
+              <span>Open at Login</span>
+            </label>
+          )}
         </div>
 
         {state.endpoint && (
@@ -290,7 +320,9 @@ export default function App() {
 
         <div className="tabs" role="tablist">
           {state.routers.length === 0 ? (
-            <div className="tabs-empty">No routers reachable</div>
+            <div className="tabs-empty">
+              {refreshing ? 'Refreshing routers…' : 'No routers reachable'}
+            </div>
           ) : (
             state.routers.map((r) => {
               const isSelected = selectedRouter === r.router
@@ -309,6 +341,21 @@ export default function App() {
               )
             })
           )}
+          <button
+            type="button"
+            className={`refresh ${refreshing ? 'refresh-busy' : ''}`}
+            onClick={() => {
+              void onRefreshRouters()
+            }}
+            disabled={refreshing}
+            title="Refresh router list from atc.tinfoil.sh"
+            aria-label="Refresh routers"
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M21 12a9 9 0 1 1-3.2-6.9" />
+              <path d="M21 4v5h-5" />
+            </svg>
+          </button>
         </div>
       </div>
 

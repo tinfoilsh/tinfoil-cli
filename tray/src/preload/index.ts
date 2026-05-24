@@ -21,6 +21,8 @@ export interface TrayStateSnapshot {
   routers: RouterSnapshot[]
   endpoint?: string
   proxy: ProxySnapshot
+  launchAtLogin: boolean
+  launchAtLoginSupported: boolean
   lastError?: string
 }
 
@@ -31,6 +33,10 @@ const api = {
     ipcRenderer.invoke('tray:setProxyEnabled', enabled),
   setProxyPort: (port: number): Promise<TrayStateSnapshot> =>
     ipcRenderer.invoke('tray:setProxyPort', port),
+  refreshRouters: (): Promise<TrayStateSnapshot> =>
+    ipcRenderer.invoke('tray:refreshRouters'),
+  setLaunchAtLogin: (enabled: boolean): Promise<TrayStateSnapshot> =>
+    ipcRenderer.invoke('tray:setLaunchAtLogin', enabled),
   setExpanded: (expanded: boolean): Promise<void> =>
     ipcRenderer.invoke('tray:setExpanded', expanded),
   setCompactHeight: (height: number): Promise<void> =>

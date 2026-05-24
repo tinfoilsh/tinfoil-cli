@@ -1,6 +1,7 @@
 import { SecureClient, type VerificationDocument } from 'tinfoil'
 
 import { REVERIFY_INTERVAL_MS } from './constants.js'
+import { fetchRouters } from './routers.js'
 import { stateStore, type RouterState, type VerificationStatus } from './state.js'
 
 interface ClientEntry {
@@ -185,4 +186,14 @@ export function disposeSecureClients(): void {
     reverifyTimer = undefined
   }
   clients.clear()
+}
+
+export async function refreshRouters(): Promise<void> {
+  try {
+    const routers = await fetchRouters()
+    stateStore.set({ lastError: undefined })
+    await activateRouters(routers)
+  } catch (err) {
+    stateStore.set({ lastError: `Could not fetch routers: ${describeError(err)}` })
+  }
 }

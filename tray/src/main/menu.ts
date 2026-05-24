@@ -2,8 +2,10 @@ import { app, clipboard, Menu, type MenuItemConstructorOptions, Tray, type Recta
 
 import { loadConfig, saveConfig } from './config.js'
 import { trayIcon, trayIconState } from './icons.js'
+import { applyLaunchAtLogin, isLaunchAtLoginSupported } from './login-item.js'
 import { hidePopup, togglePopup } from './popup.js'
 import { proxyEndpoint, startProxy, stopProxy } from './proxy.js'
+import { refreshRouters } from './secure-client.js'
 import { stateStore, type TrayState, type RouterState } from './state.js'
 
 let tray: Tray | undefined
@@ -71,12 +73,32 @@ function buildMenu(state: TrayState, openDetails: () => void): Menu {
     ...sortedRouters(state).map<MenuItemConstructorOptions>((r, idx) => ({
       label: routerLine(r, idx),
       enabled: false
-    }))
+    })),
+    {
+      label: 'Refresh routers',
+      click: () => {
+        void refreshRouters()
+      }
+    }
   )
 
   const note = state.proxy.lastError ?? state.lastError
   if (note && !(state.proxy.enabled && state.proxy.running)) {
     items.push({ type: 'separator' }, { label: `Note: ${note}`, enabled: false })
+  }
+
+  if (isLaunchAtLoginSupported()) {
+    items.push(
+      { type: 'separator' },
+      {
+        label: 'Open at Login',
+        type: 'checkbox',
+        checked: state.launchAtLogin,
+        click: () => {
+          void toggleLaunchAtLogin(!state.launchAtLogin)
+        }
+      }
+    )
   }
 
   items.push(
@@ -90,6 +112,13 @@ function buildMenu(state: TrayState, openDetails: () => void): Menu {
   )
 
   return Menu.buildFromTemplate(items)
+}
+
+async function toggleLaunchAtLogin(enable: boolean): Promise<void> {
+  const cfg = await loadConfig()
+  await saveConfig({ ...cfg, launchAtLogin: enable })
+  applyLaunchAtLogin(enable)
+  stateStore.set({ launchAtLogin: enable })
 }
 
 async function toggle(enable: boolean): Promise<void> {

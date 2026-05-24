@@ -3,10 +3,10 @@ import { app } from 'electron'
 import { loadConfig } from './config.js'
 import { ROUTERS_REFRESH_INTERVAL_MS } from './constants.js'
 import { registerIpc } from './ipc.js'
+import { applyLaunchAtLogin } from './login-item.js'
 import { createTray } from './menu.js'
 import { startProxy, stopProxy } from './proxy.js'
-import { fetchRouters } from './routers.js'
-import { activateRouters, disposeSecureClients } from './secure-client.js'
+import { disposeSecureClients, refreshRouters } from './secure-client.js'
 import { stateStore } from './state.js'
 import { startAutoUpdater, stopAutoUpdater } from './updater.js'
 
@@ -21,15 +21,6 @@ if (!singleInstance) {
   app.quit()
 }
 
-async function refreshRouters(): Promise<void> {
-  try {
-    const routers = await fetchRouters()
-    await activateRouters(routers)
-  } catch (err) {
-    stateStore.set({ lastError: `Could not fetch routers: ${(err as Error).message}` })
-  }
-}
-
 async function bootstrap(): Promise<void> {
   registerIpc()
   createTray()
@@ -41,8 +32,11 @@ async function bootstrap(): Promise<void> {
       running: false,
       port: cfg.port,
       lastError: undefined
-    }
+    },
+    launchAtLogin: cfg.launchAtLogin
   })
+
+  applyLaunchAtLogin(cfg.launchAtLogin)
 
   if (cfg.proxyEnabled) {
     await startProxy(cfg.port)

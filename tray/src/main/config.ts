@@ -7,6 +7,7 @@ import { PROXY_DEFAULT_PORT } from './constants.js'
 export interface PersistedConfig {
   port: number
   proxyEnabled: boolean
+  launchAtLogin: boolean
 }
 
 const FILE_NAME = 'config.json'
@@ -22,9 +23,10 @@ export async function loadConfig(): Promise<PersistedConfig> {
     const port = typeof parsed.port === 'number' && parsed.port > 0 ? parsed.port : PROXY_DEFAULT_PORT
     const proxyEnabled =
       typeof parsed.proxyEnabled === 'boolean' ? parsed.proxyEnabled : !!parsed.systemProxyEnabled
-    return { port, proxyEnabled }
+    const launchAtLogin = typeof parsed.launchAtLogin === 'boolean' ? parsed.launchAtLogin : true
+    return { port, proxyEnabled, launchAtLogin }
   } catch {
-    return { port: PROXY_DEFAULT_PORT, proxyEnabled: true }
+    return { port: PROXY_DEFAULT_PORT, proxyEnabled: true, launchAtLogin: true }
   }
 }
 
