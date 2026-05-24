@@ -24,6 +24,7 @@ mac:
       arch:
         - x64
         - arm64
+  artifactName: ${productName}-${arch}.${ext}
   icon: assets/icon.png
   extendInfo:
     LSUIElement: true
@@ -46,11 +47,21 @@ pkg:
   scripts: build/pkg-scripts
 linux:
   target:
-    - AppImage
-    - deb
+    - target: AppImage
+      arch:
+        - x64
+    - target: deb
+      arch:
+        - x64
   category: Network
   icon: assets/icon.png
+appImage:
+  artifactName: ${productName}.${ext}
+deb:
+  artifactName: tinfoil_${arch}.${ext}
 win:
   target:
     - nsis
   icon: assets/icon.png
+nsis:
+  artifactName: ${productName}-Setup.${ext}
