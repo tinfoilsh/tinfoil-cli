@@ -1,0 +1,329 @@
+:root {
+  color-scheme: light dark;
+  font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+
+  --tinfoil-light: #EEF3F3;
+  --tinfoil-dark: #061820;
+  --tinfoil-accent-dark: #004444;
+  --tinfoil-accent-dark-darker: #003333;
+  --tinfoil-accent-light: #68C7AC;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  background: transparent;
+}
+
+body {
+  overflow: hidden;
+}
+
+.shell {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  border-radius: 11px;
+  overflow: hidden;
+}
+
+.shell.light {
+  /* surface-sidebar in webapp light mode is white, but use Tinfoil light so the
+     brand colour reads as the dominant tone */
+  --surface-sidebar: var(--tinfoil-light);
+  --surface-card: #ffffff;
+  --border-subtle: rgba(0, 51, 51, 0.12);
+  --content-primary: var(--tinfoil-dark);
+  --content-secondary: rgba(6, 24, 32, 0.7);
+  --content-muted: rgba(6, 24, 32, 0.55);
+  --accent: var(--tinfoil-accent-dark-darker);
+  --accent-soft: rgba(0, 51, 51, 0.1);
+  --accent-strong: var(--tinfoil-accent-dark);
+  --danger: #c63838;
+  --danger-soft: rgba(198, 56, 56, 0.12);
+  --warning: #b86b00;
+  --iframe-bg: var(--tinfoil-light);
+  --tab-bg: rgba(0, 51, 51, 0.06);
+  --tab-bg-hover: rgba(0, 51, 51, 0.12);
+
+  color: var(--content-primary);
+  background: var(--surface-sidebar);
+}
+
+.shell.dark {
+  /* mirrors tinfoil-webapp tailwind.css dark tokens */
+  --surface-sidebar: hsl(0, 0%, 7.1%);
+  --surface-card: hsl(240, 3.4%, 11.4%);
+  --border-subtle: hsl(240, 3.7%, 26%);
+  --content-primary: hsl(0, 0%, 98%);
+  --content-secondary: hsl(218, 10.6%, 85%);
+  --content-muted: hsl(218, 10.6%, 72%);
+  --accent: var(--tinfoil-accent-light);
+  --accent-soft: rgba(104, 199, 172, 0.16);
+  --accent-strong: var(--tinfoil-accent-light);
+  --danger: #ff6b6b;
+  --danger-soft: rgba(255, 107, 107, 0.16);
+  --warning: #f0a500;
+  --iframe-bg: hsl(0, 0%, 4%);
+  --tab-bg: hsl(240, 2.2%, 17.6%);
+  --tab-bg-hover: hsl(240, 2.2%, 22%);
+
+  color: var(--content-primary);
+  background: var(--surface-sidebar);
+}
+
+.card {
+  padding: 16px 18px 14px;
+  flex-shrink: 0;
+  background: var(--surface-card);
+}
+
+.shell.expanded .card {
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.status-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.lock {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  flex-shrink: 0;
+  color: var(--accent-strong);
+  background: var(--accent-soft);
+}
+
+.lock-failed,
+.lock-off {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.lock-initializing {
+  color: var(--content-muted);
+  background: var(--tab-bg);
+}
+
+.status-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.status-title {
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.25;
+  color: var(--content-primary);
+}
+
+.status-sub {
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--content-muted);
+  word-break: break-word;
+}
+
+.warning {
+  margin-top: 10px;
+  font-size: 11px;
+  color: var(--warning);
+  word-break: break-word;
+}
+
+.endpoint {
+  margin-top: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border-subtle);
+  background: var(--tab-bg);
+  color: var(--content-primary);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+
+.endpoint:hover {
+  background: var(--tab-bg-hover);
+}
+
+.endpoint.endpoint-copied {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.endpoint-host {
+  font-family: 'SF Mono', SFMono-Regular, ui-monospace, Menlo, monospace;
+  font-size: 12px;
+  color: var(--content-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+}
+
+.endpoint-action {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--content-muted);
+  flex-shrink: 0;
+}
+
+.endpoint.endpoint-copied .endpoint-action {
+  color: var(--accent-strong);
+}
+
+.toggle {
+  width: 42px;
+  height: 24px;
+  border-radius: 12px;
+  border: none;
+  background: var(--danger);
+  position: relative;
+  cursor: pointer;
+  flex-shrink: 0;
+  padding: 0;
+  transition: background 0.15s ease;
+}
+
+.toggle.on {
+  background: var(--accent);
+}
+
+.toggle:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+
+.knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #fff;
+  transition: transform 0.15s ease;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+}
+
+.toggle.on .knob {
+  transform: translateX(18px);
+}
+
+.tabs {
+  margin-top: 14px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.tabs-empty {
+  font-size: 11px;
+  color: var(--content-muted);
+}
+
+.tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  font: inherit;
+  font-size: 11px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  background: var(--tab-bg);
+  color: var(--content-primary);
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+  font-family: 'SF Mono', SFMono-Regular, ui-monospace, Menlo, monospace;
+}
+
+.tab:hover {
+  background: var(--tab-bg-hover);
+}
+
+.tab.selected {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent-strong);
+}
+
+.tab.status-failed.selected {
+  background: var(--danger-soft);
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.router-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--content-muted);
+  flex-shrink: 0;
+}
+
+.router-dot.router-verified {
+  background: var(--accent);
+}
+
+.router-dot.router-failed {
+  background: var(--danger);
+}
+
+.iframe-wrap {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  background: var(--iframe-bg);
+  overflow: hidden;
+}
+
+.shell.compact .iframe-wrap {
+  flex: 0 0 0;
+  height: 0;
+}
+
+iframe {
+  border: none;
+  display: block;
+}
+
+.shell.compact .iframe-wrap iframe {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 520px;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.shell.expanded .iframe-wrap iframe {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  visibility: visible;
+  pointer-events: auto;
+}

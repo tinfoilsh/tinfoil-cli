@@ -1,0 +1,56 @@
+appId: sh.tinfoil.tray
+productName: Tinfoil
+directories:
+  buildResources: assets
+  output: dist
+files:
+  - out/**
+  - package.json
+  - "!**/{.eslintrc,.eslintignore,.prettierrc,tsconfig*.json}"
+extraMetadata:
+  main: out/main/index.js
+mac:
+  category: public.app-category.developer-tools
+  target:
+    - target: pkg
+      arch:
+        - x64
+        - arm64
+    - target: dmg
+      arch:
+        - x64
+        - arm64
+    - target: zip
+      arch:
+        - x64
+        - arm64
+  icon: assets/icon.png
+  extendInfo:
+    LSUIElement: true
+  extraResources:
+    - from: native/build/tinfoil-trust
+      to: bin/tinfoil-trust
+publish:
+  - provider: github
+    owner: tinfoilsh
+    repo: tinfoil-cli
+pkg:
+  installLocation: /Applications
+  allowAnywhere: false
+  allowCurrentUserHome: false
+  allowRootDirectory: true
+  isRelocatable: false
+  isVersionChecked: true
+  hasStrictIdentifier: true
+  overwriteAction: upgrade
+  scripts: build/pkg-scripts
+linux:
+  target:
+    - AppImage
+    - deb
+  category: Network
+  icon: assets/icon.png
+win:
+  target:
+    - nsis
+  icon: assets/icon.png
