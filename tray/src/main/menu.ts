@@ -6,7 +6,7 @@ import { applyLaunchAtLogin, isLaunchAtLoginSupported } from './login-item.js'
 import { hidePopup, togglePopup } from './popup.js'
 import { proxyEndpoint, startProxy, stopProxy } from './proxy.js'
 import { refreshRouters } from './secure-client.js'
-import { stateStore, type TrayState, type RouterState } from './state.js'
+import { stateStore, type TrayState } from './state.js'
 
 let tray: Tray | undefined
 let contextMenu: Menu | undefined
@@ -29,15 +29,6 @@ function headerLabel(state: TrayState): string {
     default:
       return '○ Tinfoil — Verifying enclaves…'
   }
-}
-
-function routerLine(r: RouterState, index: number): string {
-  const symbol = r.status === 'verified' ? '✓' : r.status === 'failed' ? '✗' : '…'
-  return `  ${symbol}  Router ${index + 1}`
-}
-
-function sortedRouters(state: TrayState): RouterState[] {
-  return [...state.routers].sort((a, b) => a.router.localeCompare(b.router))
 }
 
 function buildMenu(state: TrayState, openDetails: () => void): Menu {
@@ -69,11 +60,6 @@ function buildMenu(state: TrayState, openDetails: () => void): Menu {
 
   items.push(
     { type: 'separator' },
-    { label: 'Routers', enabled: false },
-    ...sortedRouters(state).map<MenuItemConstructorOptions>((r, idx) => ({
-      label: routerLine(r, idx),
-      enabled: false
-    })),
     {
       label: 'Refresh routers',
       click: () => {
