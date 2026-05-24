@@ -1,255 +1,137 @@
-import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
-import { createServer as createHttpsServer } from 'node:https'
-import { Readable } from 'node:stream'
-import type { Socket } from 'node:net'
+import { spawn, type ChildProcessByStdio } from 'node:child_process'
+import type { Readable } from 'node:stream'
+import { existsSync } from 'node:fs'
+import { join } from 'node:path'
+import { app } from 'electron'
 
-import { leafContextFor } from './ca.js'
-import {
-  HOP_BY_HOP_HEADERS,
-  LOCAL_ENDPOINT_URL,
-  PROXY_LISTEN_HOST,
-  PROXY_PORT_MAX_ATTEMPTS
-} from './constants.js'
-import { getClient, knownRouters, pickRoundRobinRouter } from './secure-client.js'
+import { PROXY_LISTEN_HOST } from './constants.js'
 import { stateStore } from './state.js'
 
-let server: Server | undefined
-let httpsHandler: ReturnType<typeof createHttpsServer> | undefined
+const PROXY_STOP_GRACE_MS = 3000
 
-function buildHeaders(req: IncomingMessage): Headers {
-  const headers = new Headers()
-  for (const [key, value] of Object.entries(req.headers)) {
-    if (value === undefined) continue
-    if (HOP_BY_HOP_HEADERS.has(key.toLowerCase())) continue
-    if (Array.isArray(value)) {
-      for (const v of value) headers.append(key, v)
-    } else {
-      headers.set(key, value)
-    }
-  }
-  return headers
+type CliProcess = ChildProcessByStdio<null, Readable, Readable>
+
+let child: CliProcess | undefined
+let intentionalShutdown = false
+let stopWaiter: Promise<void> | undefined
+
+function binaryFileName(): string {
+  return process.platform === 'win32' ? 'tinfoil.exe' : 'tinfoil'
 }
 
-function requestHasBody(method: string): boolean {
-  return method !== 'GET' && method !== 'HEAD'
-}
-
-function resolveRouter(req: IncomingMessage, forceHost?: string): string | undefined {
-  if (forceHost) return forceHost
-  const hostHeader = req.headers.host
-  if (hostHeader) {
-    const bare = hostHeader.split(':')[0]
-    if (bare && knownRouters().includes(bare)) return bare
-  }
-  return pickRoundRobinRouter()
-}
-
-function pacFile(): string {
-  const hosts = knownRouters()
-  const listEntries = hosts.map((h) => `    "${h}": 1`).join(',\n')
-  const port = stateStore.get().port
-  return `function FindProxyForURL(url, host) {
-  var routers = {
-${listEntries}
-  };
-  if (routers[host]) {
-    return "PROXY ${PROXY_LISTEN_HOST}:${port}";
-  }
-  return "DIRECT";
-}
-`
-}
-
-async function handle(req: IncomingMessage, res: ServerResponse, forceHost?: string): Promise<void> {
-  if (req.url === '/proxy.pac' && !forceHost) {
-    res.statusCode = 200
-    res.setHeader('Content-Type', 'application/x-ns-proxy-autoconfig')
-    res.setHeader('Cache-Control', 'no-store')
-    res.end(pacFile())
-    return
-  }
-
-  const router = resolveRouter(req, forceHost)
-  if (!router) {
-    res.statusCode = 503
-    res.setHeader('Content-Type', 'application/json')
-    res.end(JSON.stringify({ error: 'Tinfoil tray is still verifying the enclave' }))
-    return
-  }
-  const client = getClient(router)
-  if (!client) {
-    res.statusCode = 502
-    res.setHeader('Content-Type', 'application/json')
-    res.end(JSON.stringify({ error: `Unknown router ${router}` }))
-    return
-  }
-
-  const url = req.url ?? '/'
-  const method = (req.method ?? 'GET').toUpperCase()
-  const init: RequestInit = {
-    method,
-    headers: buildHeaders(req)
-  }
-  if (requestHasBody(method)) {
-    ;(init as unknown as { body: unknown }).body = Readable.toWeb(req)
-    ;(init as unknown as { duplex: string }).duplex = 'half'
-  }
-
-  let upstream: Response
-  try {
-    upstream = await client.fetch(url, init)
-  } catch (err) {
-    res.statusCode = 502
-    res.setHeader('Content-Type', 'application/json')
-    res.end(JSON.stringify({ error: 'Upstream request failed', detail: String(err) }))
-    return
-  }
-
-  res.statusCode = upstream.status
-  upstream.headers.forEach((value, key) => {
-    if (HOP_BY_HOP_HEADERS.has(key.toLowerCase())) return
-    res.setHeader(key, value)
-  })
-
-  if (upstream.body) {
-    const nodeStream = Readable.fromWeb(upstream.body as never)
-    nodeStream.on('error', () => res.end())
-    nodeStream.pipe(res)
+function locateBinary(): string {
+  const name = binaryFileName()
+  const candidates: string[] = []
+  if (app.isPackaged) {
+    candidates.push(join(process.resourcesPath, 'bin', name))
   } else {
-    res.end()
+    candidates.push(join(app.getAppPath(), 'resources', 'bin', name))
+    candidates.push(join(app.getAppPath(), '..', name))
   }
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) return candidate
+  }
+  return candidates[0] ?? name
 }
 
-function attachConnectHandler(httpServer: Server): void {
-  httpServer.on('connect', (req, socket: Socket, head) => {
-    const target = req.url ?? ''
-    const [hostRaw] = target.split(':')
-    const host = hostRaw ?? ''
-    if (!host || !knownRouters().includes(host)) {
-      socket.end(
-        `HTTP/1.1 502 Bad Gateway\r\nContent-Type: text/plain\r\n\r\nTinfoil tray does not proxy ${host}\r\n`
-      )
+export function proxyEndpoint(port: number): string {
+  return `http://${PROXY_LISTEN_HOST}:${port}/v1`
+}
+
+function setProxyState(partial: Partial<ReturnType<typeof stateStore.get>['proxy']>): void {
+  const current = stateStore.get().proxy
+  stateStore.set({ proxy: { ...current, ...partial } })
+}
+
+function attachLogging(proc: CliProcess): void {
+  proc.stdout.setEncoding('utf8')
+  proc.stderr.setEncoding('utf8')
+  proc.stdout.on('data', (chunk: string) => {
+    for (const line of chunk.split('\n')) {
+      if (line.trim().length > 0) console.log('[tinfoil]', line)
+    }
+  })
+  proc.stderr.on('data', (chunk: string) => {
+    for (const line of chunk.split('\n')) {
+      if (line.trim().length > 0) console.warn('[tinfoil]', line)
+    }
+  })
+}
+
+async function waitForExit(proc: CliProcess): Promise<void> {
+  return new Promise<void>((resolve) => {
+    if (proc.exitCode !== null) {
+      resolve()
       return
     }
-
-    void leafContextFor(host)
-      .then((ctx) => {
-        if (!httpsHandler) {
-          socket.end('HTTP/1.1 500 Internal Server Error\r\n\r\n')
-          return
-        }
-        socket.write('HTTP/1.1 200 Connection Established\r\n\r\n', (err) => {
-          if (err) {
-            socket.destroy(err)
-            return
-          }
-          if (head && head.length) socket.unshift(head)
-          ;(socket as unknown as { _tinfoilHost?: string })._tinfoilHost = host
-          ;(socket as unknown as { _tinfoilCtx?: unknown })._tinfoilCtx = ctx
-          httpsHandler!.emit('connection', socket)
-        })
-      })
-      .catch((err) => {
-        socket.end(`HTTP/1.1 500 Internal Server Error\r\n\r\n${String(err)}`)
-      })
+    proc.once('exit', () => resolve())
   })
 }
 
-function createHttpsForwarder(): ReturnType<typeof createHttpsServer> {
-  return createHttpsServer(
-    {
-      SNICallback: (servername, cb) => {
-        leafContextFor(servername)
-          .then((ctx) => cb(null, ctx))
-          .catch((err) => cb(err as Error))
-      }
-    },
-    (req, res) => {
-      const sock = req.socket as unknown as { _tinfoilHost?: string }
-      handle(req, res, sock?._tinfoilHost).catch((err) => {
-        res.statusCode = 500
-        res.end(String(err))
-      })
-    }
-  )
-}
-
-async function tryListenOnPort(port: number): Promise<{ port: number; endpoint: string } | null> {
-  const forwarder = createHttpsForwarder()
-  const instance = createServer((req, res) => {
-    handle(req, res).catch((err) => {
-      res.statusCode = 500
-      res.end(String(err))
-    })
-  })
-  attachConnectHandler(instance)
-
-  try {
-    await new Promise<void>((resolve, reject) => {
-      const onError = (err: NodeJS.ErrnoException) => {
-        instance.off('error', onError)
-        reject(err)
-      }
-      instance.once('error', onError)
-      instance.listen(port, PROXY_LISTEN_HOST, () => {
-        instance.off('error', onError)
-        resolve()
-      })
-    })
-  } catch (err) {
-    forwarder.close()
-    await new Promise<void>((resolve) => instance.close(() => resolve()))
-    if ((err as NodeJS.ErrnoException).code === 'EADDRINUSE') {
-      return null
-    }
-    throw err
+export async function startProxy(port: number): Promise<{ port: number; endpoint: string } | null> {
+  if (child) {
+    await stopProxy()
   }
 
-  server = instance
-  httpsHandler = forwarder
-  const address = instance.address()
-  const boundPort = typeof address === 'object' && address ? address.port : port
-  return { port: boundPort, endpoint: LOCAL_ENDPOINT_URL }
-}
-
-export async function startProxy(
-  preferredPort: number
-): Promise<{ port: number; endpoint: string } | null> {
-  if (server) await stopProxy()
-
-  const tried: number[] = []
-  for (let offset = 0; offset < PROXY_PORT_MAX_ATTEMPTS; offset++) {
-    const candidate = preferredPort + offset
-    tried.push(candidate)
-    const result = await tryListenOnPort(candidate)
-    if (result) {
-      stateStore.set({ port: result.port, endpoint: result.endpoint })
-      return result
-    }
+  const binary = locateBinary()
+  if (!existsSync(binary)) {
+    const message = `Tinfoil CLI not found at ${binary}`
+    setProxyState({ enabled: true, running: false, port, lastError: message })
+    return null
   }
 
-  const firstTried = tried[0] ?? preferredPort
-  const lastTried = tried[tried.length - 1] ?? preferredPort
-  stateStore.set({
-    port: 0,
-    endpoint: undefined,
-    lastError: `Could not start local proxy: ports ${firstTried}-${lastTried} are all in use`
+  intentionalShutdown = false
+  const args = ['proxy', '-p', String(port), '-b', PROXY_LISTEN_HOST]
+  const proc = spawn(binary, args, {
+    stdio: ['ignore', 'pipe', 'pipe'],
+    env: { ...process.env }
   })
-  return null
+  attachLogging(proc)
+
+  proc.on('exit', (code, signal) => {
+    const wasIntentional = intentionalShutdown
+    child = undefined
+    if (wasIntentional) {
+      setProxyState({ running: false, lastError: undefined })
+    } else {
+      const message = `Tinfoil proxy exited unexpectedly (${signal ?? `code ${code ?? 0}`})`
+      setProxyState({ running: false, lastError: message })
+    }
+  })
+
+  proc.on('error', (err) => {
+    child = undefined
+    setProxyState({ running: false, lastError: err.message })
+  })
+
+  child = proc
+  setProxyState({ enabled: true, running: true, port, lastError: undefined })
+  return { port, endpoint: proxyEndpoint(port) }
 }
 
 export async function stopProxy(): Promise<void> {
-  if (!server) return
-  await new Promise<void>((resolve) => server!.close(() => resolve()))
-  server = undefined
-  if (httpsHandler) {
-    httpsHandler.close()
-    httpsHandler = undefined
-  }
+  const proc = child
+  if (!proc) return
+  if (stopWaiter) return stopWaiter
+  intentionalShutdown = true
+  stopWaiter = (async () => {
+    try {
+      proc.kill('SIGTERM')
+      const settled = await Promise.race([
+        waitForExit(proc),
+        new Promise<'timeout'>((resolve) => setTimeout(() => resolve('timeout'), PROXY_STOP_GRACE_MS))
+      ])
+      if (settled === 'timeout' && proc.exitCode === null) {
+        proc.kill('SIGKILL')
+        await waitForExit(proc)
+      }
+    } finally {
+      stopWaiter = undefined
+    }
+  })()
+  return stopWaiter
 }
 
-export function pacUrl(): string | undefined {
-  const port = stateStore.get().port
-  if (!port) return undefined
-  return `http://${PROXY_LISTEN_HOST}:${port}/proxy.pac`
+export function isProxyRunning(): boolean {
+  return child !== undefined && child.exitCode === null
 }

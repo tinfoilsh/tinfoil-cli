@@ -1,29 +1,31 @@
 import { app, clipboard, Menu, type MenuItemConstructorOptions, Tray, type Rectangle } from 'electron'
 
 import { loadConfig, saveConfig } from './config.js'
-import { LOCAL_ENDPOINT_URL } from './constants.js'
 import { trayIcon, trayIconState } from './icons.js'
-import { disableMagicMode, enableMagicMode } from './magic.js'
 import { hidePopup, togglePopup } from './popup.js'
+import { proxyEndpoint, startProxy, stopProxy } from './proxy.js'
 import { stateStore, type TrayState, type RouterState } from './state.js'
 
 let tray: Tray | undefined
 let contextMenu: Menu | undefined
 
 function isActive(state: TrayState): boolean {
-  return state.systemProxy.enabled
+  return state.proxy.enabled && state.proxy.running
 }
 
 function headerLabel(state: TrayState): string {
-  if (!isActive(state)) return '● Tinfoil — Not active'
+  if (!state.proxy.enabled) return '● Tinfoil — Off'
+  if (!state.proxy.running) {
+    return state.proxy.lastError ? '● Tinfoil — Proxy stopped' : '○ Tinfoil — Starting…'
+  }
   switch (state.status) {
     case 'verified':
-      return '● Tinfoil — Active'
+      return '● Tinfoil — Proxy on'
     case 'failed':
-      return '● Tinfoil — Active (attestation failed)'
+      return '● Tinfoil — Proxy on (attestation failed)'
     case 'initializing':
     default:
-      return '○ Tinfoil — Activating…'
+      return '○ Tinfoil — Verifying enclaves…'
   }
 }
 
@@ -37,14 +39,14 @@ function sortedRouters(state: TrayState): RouterState[] {
 }
 
 function buildMenu(state: TrayState, openDetails: () => void): Menu {
-  const active = isActive(state)
+  const enabled = state.proxy.enabled
   const items: MenuItemConstructorOptions[] = [
     { label: headerLabel(state), enabled: false },
     { type: 'separator' },
     {
-      label: active ? 'Deactivate Tinfoil' : 'Activate Tinfoil',
+      label: enabled ? 'Stop proxy' : 'Start proxy',
       click: () => {
-        void toggle(!active)
+        void toggle(!enabled)
       }
     },
     {
@@ -53,11 +55,12 @@ function buildMenu(state: TrayState, openDetails: () => void): Menu {
     }
   ]
 
-  if (state.endpoint) {
+  if (state.proxy.running && state.proxy.port > 0) {
+    const endpoint = proxyEndpoint(state.proxy.port)
     items.push({
-      label: `Copy ${LOCAL_ENDPOINT_URL}`,
+      label: `Copy ${endpoint}`,
       click: () => {
-        clipboard.writeText(LOCAL_ENDPOINT_URL)
+        clipboard.writeText(endpoint)
       }
     })
   }
@@ -71,10 +74,9 @@ function buildMenu(state: TrayState, openDetails: () => void): Menu {
     }))
   )
 
-  if (state.systemProxy.message) {
-    items.push({ type: 'separator' }, { label: `Note: ${state.systemProxy.message}`, enabled: false })
-  } else if (state.lastError && !active) {
-    items.push({ type: 'separator' }, { label: `Note: ${state.lastError}`, enabled: false })
+  const note = state.proxy.lastError ?? state.lastError
+  if (note && !(state.proxy.enabled && state.proxy.running)) {
+    items.push({ type: 'separator' }, { label: `Note: ${note}`, enabled: false })
   }
 
   items.push(
@@ -91,9 +93,15 @@ function buildMenu(state: TrayState, openDetails: () => void): Menu {
 }
 
 async function toggle(enable: boolean): Promise<void> {
-  const result = enable ? await enableMagicMode() : await disableMagicMode()
   const cfg = await loadConfig()
-  await saveConfig({ ...cfg, systemProxyEnabled: result.ok && enable })
+  if (enable) {
+    await startProxy(cfg.port)
+  } else {
+    await stopProxy()
+    const current = stateStore.get().proxy
+    stateStore.set({ proxy: { ...current, enabled: false, running: false, lastError: undefined } })
+  }
+  await saveConfig({ ...cfg, proxyEnabled: enable })
 }
 
 export function createTray(): Tray {
@@ -107,7 +115,7 @@ export function createTray(): Tray {
     const state = stateStore.get()
     const active = isActive(state)
     tray.setImage(trayIcon(trayIconState(active, state.status)))
-    tray.setToolTip(active ? `Tinfoil — ${state.statusMessage}` : 'Tinfoil — Not active')
+    tray.setToolTip(active ? `Tinfoil — ${state.statusMessage}` : 'Tinfoil — Off')
     contextMenu = buildMenu(state, () => {
       if (!tray) return
       togglePopup(tray.getBounds())

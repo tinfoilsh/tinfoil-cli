@@ -5,9 +5,8 @@ import { app } from 'electron'
 import { PROXY_DEFAULT_PORT } from './constants.js'
 
 export interface PersistedConfig {
-  lastRouter?: string
   port: number
-  systemProxyEnabled?: boolean
+  proxyEnabled: boolean
 }
 
 const FILE_NAME = 'config.json'
@@ -19,14 +18,13 @@ function configPath(): string {
 export async function loadConfig(): Promise<PersistedConfig> {
   try {
     const raw = await fs.readFile(configPath(), 'utf8')
-    const parsed = JSON.parse(raw) as Partial<PersistedConfig>
-    return {
-      lastRouter: typeof parsed.lastRouter === 'string' ? parsed.lastRouter : undefined,
-      port: typeof parsed.port === 'number' && parsed.port > 0 ? parsed.port : PROXY_DEFAULT_PORT,
-      systemProxyEnabled: !!parsed.systemProxyEnabled
-    }
+    const parsed = JSON.parse(raw) as Partial<PersistedConfig> & { systemProxyEnabled?: boolean }
+    const port = typeof parsed.port === 'number' && parsed.port > 0 ? parsed.port : PROXY_DEFAULT_PORT
+    const proxyEnabled =
+      typeof parsed.proxyEnabled === 'boolean' ? parsed.proxyEnabled : !!parsed.systemProxyEnabled
+    return { port, proxyEnabled }
   } catch {
-    return { port: PROXY_DEFAULT_PORT }
+    return { port: PROXY_DEFAULT_PORT, proxyEnabled: true }
   }
 }
 

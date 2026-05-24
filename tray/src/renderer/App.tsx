@@ -59,6 +59,7 @@ export default function App() {
   const [iframeReady, setIframeReady] = useState(false)
   const [busy, setBusy] = useState(false)
   const [selectedRouter, setSelectedRouter] = useState<string | null>(null)
+  const [portInput, setPortInput] = useState<string>('')
   const iframeRef = useRef<HTMLIFrameElement | null>(null)
   const cardRef = useRef<HTMLDivElement | null>(null)
   const isDark = useDarkMode()
@@ -79,6 +80,11 @@ export default function App() {
     void window.tinfoil.getState().then(setState)
     return window.tinfoil.onStateChanged(setState)
   }, [])
+
+  useEffect(() => {
+    if (!state) return
+    setPortInput((prev) => (prev === '' ? String(state.proxy.port) : prev))
+  }, [state])
 
   const selectedDocument = useMemo(() => {
     if (!selectedRouter || !state) return null
@@ -144,8 +150,8 @@ export default function App() {
     if (!state) return
     setBusy(true)
     try {
-      const next = !state.systemProxy.enabled
-      const updated = await window.tinfoil.setSystemProxy(next)
+      const next = !state.proxy.enabled
+      const updated = await window.tinfoil.setProxyEnabled(next)
       setState(updated)
       if (!next) setSelectedRouter(null)
     } finally {
@@ -156,6 +162,18 @@ export default function App() {
   const onSelectRouter = useCallback((router: string) => {
     setSelectedRouter((prev) => (prev === router ? null : router))
   }, [])
+
+  const onCommitPort = useCallback(async () => {
+    if (!state) return
+    const next = Number(portInput)
+    if (!Number.isFinite(next) || !Number.isInteger(next) || next < 1 || next > 65535) {
+      setPortInput(String(state.proxy.port))
+      return
+    }
+    if (next === state.proxy.port) return
+    const updated = await window.tinfoil.setProxyPort(next)
+    setState(updated)
+  }, [portInput, state])
 
   const [copied, setCopied] = useState(false)
   const onCopyEndpoint = useCallback(async () => {
@@ -178,21 +196,29 @@ export default function App() {
     )
   }
 
-  const active = state.systemProxy.enabled
-  const statusTitle = active
-    ? state.status === 'failed'
-      ? "We couldn't confirm your connection is private"
-      : state.status === 'initializing'
-        ? 'Setting up your private connection…'
-        : "You're protected by Tinfoil"
-    : 'Tinfoil is off'
-  const statusSub = active
-    ? state.routers.length > 0
-      ? 'Every API request is routed through an attested enclave whose code and hardware are verified end-to-end.'
-      : 'Verifying enclave attestations…'
-    : 'Turn this on to route your API requests through attested, verified Tinfoil enclaves.'
+  const enabled = state.proxy.enabled
+  const running = state.proxy.running
+  const active = enabled && running
 
-  const showWarning = active && state.systemProxy.message
+  const statusTitle = enabled
+    ? !running
+      ? state.proxy.lastError
+        ? "Couldn't start the proxy"
+        : 'Starting Tinfoil proxy…'
+      : state.status === 'failed'
+        ? "We couldn't confirm your connection is private"
+        : state.status === 'initializing'
+          ? 'Verifying Tinfoil enclaves…'
+          : "You're protected by Tinfoil"
+    : 'Tinfoil is off'
+
+  const statusSub = enabled
+    ? !running
+      ? state.proxy.lastError ?? 'The Tinfoil CLI is starting on the configured port.'
+      : state.routers.length > 0
+        ? 'Every API request is routed through an attested enclave whose code and hardware are verified end-to-end.'
+        : 'Verifying enclave attestations…'
+    : 'Turn this on to start the local Tinfoil proxy and route API requests through attested enclaves.'
 
   return (
     <div className={`shell ${isExpanded ? 'expanded' : 'compact'} ${active ? 'active' : 'inactive'} ${isDark ? 'dark' : 'light'}`}>
@@ -215,16 +241,38 @@ export default function App() {
           </div>
           <button
             type="button"
-            className={`toggle ${active ? 'on' : 'off'}`}
+            className={`toggle ${enabled ? 'on' : 'off'}`}
             onClick={onToggleActive}
             disabled={busy}
-            aria-pressed={active}
-            title={active ? 'Deactivate Tinfoil' : 'Activate Tinfoil'}
+            aria-pressed={enabled}
+            title={enabled ? 'Stop proxy' : 'Start proxy'}
           >
             <span className="knob" />
           </button>
         </div>
-        {showWarning && <div className="warning">{state.systemProxy.message}</div>}
+
+        <div className="port-row">
+          <label className="port-label" htmlFor="proxy-port">
+            Port
+          </label>
+          <input
+            id="proxy-port"
+            className="port-input"
+            type="number"
+            min={1}
+            max={65535}
+            value={portInput}
+            onChange={(e) => setPortInput(e.target.value)}
+            onBlur={() => {
+              void onCommitPort()
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.currentTarget.blur()
+              }
+            }}
+          />
+        </div>
 
         {state.endpoint && (
           <button

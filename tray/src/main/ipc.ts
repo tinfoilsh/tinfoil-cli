@@ -1,9 +1,9 @@
 import { clipboard, ipcMain } from 'electron'
 
 import { loadConfig, saveConfig } from './config.js'
-import { LOCAL_ENDPOINT_URL } from './constants.js'
-import { disableMagicMode, enableMagicMode } from './magic.js'
+import { PROXY_DEFAULT_PORT } from './constants.js'
 import { notifyPopup, setPopupCompactHeight, setPopupExpanded } from './popup.js'
+import { proxyEndpoint, startProxy, stopProxy } from './proxy.js'
 import { stateStore, type TrayState } from './state.js'
 
 function snapshotForRenderer(state: TrayState) {
@@ -16,30 +16,65 @@ function snapshotForRenderer(state: TrayState) {
     document: r.document ?? null
   }))
 
+  const endpoint =
+    state.proxy.enabled && state.proxy.running && state.proxy.port > 0
+      ? proxyEndpoint(state.proxy.port)
+      : undefined
+
   return {
     status: state.status,
     statusMessage: state.statusMessage,
     routers: anonymized,
-    endpoint: state.endpoint,
-    port: state.port,
-    systemProxy: state.systemProxy,
+    endpoint,
+    proxy: state.proxy,
     lastError: state.lastError
   }
+}
+
+function clampPort(value: unknown): number | null {
+  const port = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(port) || !Number.isInteger(port)) return null
+  if (port < 1 || port > 65535) return null
+  return port
 }
 
 export function registerIpc(): void {
   ipcMain.handle('tray:getState', () => snapshotForRenderer(stateStore.get()))
 
   ipcMain.handle('tray:copyEndpoint', () => {
-    if (!stateStore.get().endpoint) return null
-    clipboard.writeText(LOCAL_ENDPOINT_URL)
-    return LOCAL_ENDPOINT_URL
+    const snap = snapshotForRenderer(stateStore.get())
+    if (!snap.endpoint) return null
+    clipboard.writeText(snap.endpoint)
+    return snap.endpoint
   })
 
-  ipcMain.handle('tray:setSystemProxy', async (_event, enable: boolean) => {
-    const result = enable ? await enableMagicMode() : await disableMagicMode()
+  ipcMain.handle('tray:setProxyEnabled', async (_event, enabled: boolean) => {
     const cfg = await loadConfig()
-    await saveConfig({ ...cfg, systemProxyEnabled: result.ok && enable })
+    const nextEnabled = !!enabled
+    if (nextEnabled) {
+      await startProxy(cfg.port || PROXY_DEFAULT_PORT)
+    } else {
+      await stopProxy()
+      const current = stateStore.get().proxy
+      stateStore.set({
+        proxy: { ...current, enabled: false, running: false, lastError: undefined }
+      })
+    }
+    await saveConfig({ ...cfg, proxyEnabled: nextEnabled })
+    return snapshotForRenderer(stateStore.get())
+  })
+
+  ipcMain.handle('tray:setProxyPort', async (_event, port: unknown) => {
+    const clamped = clampPort(port)
+    if (clamped === null) return snapshotForRenderer(stateStore.get())
+    const cfg = await loadConfig()
+    await saveConfig({ ...cfg, port: clamped })
+    const proxy = stateStore.get().proxy
+    if (proxy.enabled) {
+      await startProxy(clamped)
+    } else {
+      stateStore.set({ proxy: { ...proxy, port: clamped } })
+    }
     return snapshotForRenderer(stateStore.get())
   })
 

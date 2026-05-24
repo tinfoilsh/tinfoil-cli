@@ -1,16 +1,15 @@
 #!/bin/bash
 # Post-install hook for the Tinfoil tray app.
-# - Ensures the bundled trust helper is executable.
-# - Launches the app once so the user lands in the tray immediately
-#   instead of having to find the app in /Applications first.
+# Launches the app once so the user lands in the tray immediately
+# instead of having to find the app in /Applications first.
 
 set -e
 
 APP_PATH="/Applications/Tinfoil.app"
-HELPER="$APP_PATH/Contents/Resources/bin/tinfoil-trust"
+BIN="$APP_PATH/Contents/Resources/bin/tinfoil"
 
-if [ -x "/usr/bin/chmod" ] && [ -f "$HELPER" ]; then
-  /usr/bin/chmod +x "$HELPER" || true
+if [ -x "/usr/bin/chmod" ] && [ -f "$BIN" ]; then
+  /usr/bin/chmod +x "$BIN" || true
 fi
 
 if [ -d "$APP_PATH" ]; then

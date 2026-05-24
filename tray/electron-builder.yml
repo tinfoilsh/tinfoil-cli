@@ -28,8 +28,8 @@ mac:
   extendInfo:
     LSUIElement: true
   extraResources:
-    - from: native/build/tinfoil-trust
-      to: bin/tinfoil-trust
+    - from: resources/bin/tinfoil
+      to: bin/tinfoil
 publish:
   - provider: github
     owner: tinfoilsh

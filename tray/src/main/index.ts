@@ -1,9 +1,8 @@
 import { app } from 'electron'
 
-import { loadConfig, saveConfig } from './config.js'
+import { loadConfig } from './config.js'
 import { ROUTERS_REFRESH_INTERVAL_MS } from './constants.js'
 import { registerIpc } from './ipc.js'
-import { disableMagicMode, enableMagicMode } from './magic.js'
 import { createTray } from './menu.js'
 import { startProxy, stopProxy } from './proxy.js'
 import { fetchRouters } from './routers.js'
@@ -22,14 +21,12 @@ if (!singleInstance) {
   app.quit()
 }
 
-async function refreshRouters(): Promise<string[]> {
+async function refreshRouters(): Promise<void> {
   try {
     const routers = await fetchRouters()
     await activateRouters(routers)
-    return routers
   } catch (err) {
     stateStore.set({ lastError: `Could not fetch routers: ${(err as Error).message}` })
-    return []
   }
 }
 
@@ -38,13 +35,20 @@ async function bootstrap(): Promise<void> {
   createTray()
 
   const cfg = await loadConfig()
-  const proxyResult = await startProxy(cfg.port)
+  stateStore.set({
+    proxy: {
+      enabled: cfg.proxyEnabled,
+      running: false,
+      port: cfg.port,
+      lastError: undefined
+    }
+  })
 
-  await refreshRouters()
-
-  if (cfg.systemProxyEnabled && proxyResult) {
-    await enableMagicMode()
+  if (cfg.proxyEnabled) {
+    await startProxy(cfg.port)
   }
+
+  void refreshRouters()
 
   routersTimer = setInterval(() => {
     void refreshRouters()
@@ -65,11 +69,6 @@ app.on('before-quit', async (event) => {
   event.preventDefault()
   if (routersTimer) clearInterval(routersTimer)
   stopAutoUpdater()
-  if (stateStore.get().systemProxy.enabled) {
-    await disableMagicMode()
-    const cfg = await loadConfig()
-    await saveConfig({ ...cfg, systemProxyEnabled: true })
-  }
   disposeSecureClients()
   await stopProxy()
   app.exit(0)

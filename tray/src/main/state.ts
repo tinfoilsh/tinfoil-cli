@@ -10,21 +10,18 @@ export interface RouterState {
   document?: VerificationDocument
 }
 
-export interface SystemProxyState {
+export interface ProxyState {
   enabled: boolean
-  trusted: boolean
-  pacUrl?: string
-  caCertPath?: string
-  message?: string
+  running: boolean
+  port: number
+  lastError?: string
 }
 
 export interface TrayState {
   status: VerificationStatus
   statusMessage: string
-  port: number
-  endpoint?: string
   routers: RouterState[]
-  systemProxy: SystemProxyState
+  proxy: ProxyState
   lastError?: string
 }
 
@@ -56,7 +53,10 @@ class StateStore extends EventEmitter {
 export const stateStore = new StateStore({
   status: 'initializing',
   statusMessage: 'Starting…',
-  port: 0,
   routers: [],
-  systemProxy: { enabled: false, trusted: false }
+  proxy: {
+    enabled: false,
+    running: false,
+    port: 0
+  }
 })

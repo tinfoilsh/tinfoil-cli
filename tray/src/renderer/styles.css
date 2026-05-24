@@ -137,11 +137,35 @@ body {
   word-break: break-word;
 }
 
-.warning {
-  margin-top: 10px;
+.port-row {
+  margin-top: 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.port-label {
   font-size: 11px;
-  color: var(--warning);
-  word-break: break-word;
+  color: var(--content-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.port-input {
+  flex: 0 0 90px;
+  padding: 5px 8px;
+  font: inherit;
+  font-size: 12px;
+  font-family: 'SF Mono', SFMono-Regular, ui-monospace, Menlo, monospace;
+  border-radius: 6px;
+  border: 1px solid var(--border-subtle);
+  background: var(--surface-card);
+  color: var(--content-primary);
+}
+
+.port-input:focus {
+  outline: none;
+  border-color: var(--accent);
 }
 
 .endpoint {

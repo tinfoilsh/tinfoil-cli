@@ -8,12 +8,11 @@ export interface RouterSnapshot {
   document: unknown | null
 }
 
-export interface SystemProxySnapshot {
+export interface ProxySnapshot {
   enabled: boolean
-  trusted: boolean
-  pacUrl?: string
-  caCertPath?: string
-  message?: string
+  running: boolean
+  port: number
+  lastError?: string
 }
 
 export interface TrayStateSnapshot {
@@ -21,16 +20,17 @@ export interface TrayStateSnapshot {
   statusMessage: string
   routers: RouterSnapshot[]
   endpoint?: string
-  port: number
-  systemProxy: SystemProxySnapshot
+  proxy: ProxySnapshot
   lastError?: string
 }
 
 const api = {
   getState: (): Promise<TrayStateSnapshot> => ipcRenderer.invoke('tray:getState'),
   copyEndpoint: (): Promise<string | null> => ipcRenderer.invoke('tray:copyEndpoint'),
-  setSystemProxy: (enable: boolean): Promise<TrayStateSnapshot> =>
-    ipcRenderer.invoke('tray:setSystemProxy', enable),
+  setProxyEnabled: (enabled: boolean): Promise<TrayStateSnapshot> =>
+    ipcRenderer.invoke('tray:setProxyEnabled', enabled),
+  setProxyPort: (port: number): Promise<TrayStateSnapshot> =>
+    ipcRenderer.invoke('tray:setProxyPort', port),
   setExpanded: (expanded: boolean): Promise<void> =>
     ipcRenderer.invoke('tray:setExpanded', expanded),
   setCompactHeight: (height: number): Promise<void> =>
