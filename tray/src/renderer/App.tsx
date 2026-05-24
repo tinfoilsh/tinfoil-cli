@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 const VERIFICATION_CENTER_BASE_URL = 'https://verification-center.tinfoil.sh'
 const VERIFICATION_CENTER_ORIGIN = new URL(VERIFICATION_CENTER_BASE_URL).origin
 const SEND_RETRY_DELAYS_MS = [100, 300, 800, 2000]
+const REFRESH_MIN_SPIN_MS = 1000
 
 type TrayState = Awaited<ReturnType<typeof window.tinfoil.getState>>
 type Router = TrayState['routers'][number]
@@ -193,8 +194,9 @@ export default function App() {
   const onRefreshRouters = useCallback(async () => {
     if (refreshing) return
     setRefreshing(true)
+    const minDuration = new Promise((resolve) => setTimeout(resolve, REFRESH_MIN_SPIN_MS))
     try {
-      const updated = await window.tinfoil.refreshRouters()
+      const [updated] = await Promise.all([window.tinfoil.refreshRouters(), minDuration])
       setState(updated)
     } finally {
       setRefreshing(false)
