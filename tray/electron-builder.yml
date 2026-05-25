@@ -41,6 +41,7 @@ publish:
   - provider: github
     owner: tinfoilsh
     repo: tinfoil-cli
+    releaseType: release
 pkg:
   installLocation: /Applications
   allowAnywhere: false
