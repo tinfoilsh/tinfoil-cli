@@ -6,10 +6,16 @@ export async function fetchRouters(): Promise<string[]> {
     throw new Error(`atc.tinfoil.sh/routers responded ${response.status}`)
   }
   const list = (await response.json()) as unknown
-  if (!Array.isArray(list) || list.length === 0) {
-    throw new Error('atc.tinfoil.sh/routers returned an empty list')
+  if (!Array.isArray(list)) {
+    throw new Error('atc.tinfoil.sh/routers returned a non-array response')
   }
-  return list.filter((entry): entry is string => typeof entry === 'string' && entry.length > 0)
+  const routers = list.filter(
+    (entry): entry is string => typeof entry === 'string' && entry.length > 0
+  )
+  if (routers.length === 0) {
+    throw new Error('atc.tinfoil.sh/routers returned no usable router entries')
+  }
+  return routers
 }
 
 export function pickRandomRouter(routers: string[]): string {

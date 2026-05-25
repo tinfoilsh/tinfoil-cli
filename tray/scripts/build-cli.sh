@@ -35,7 +35,7 @@ case "$TARGET_OS" in
     build_one windows amd64 "$OUT"
     ;;
   linux)
-    build_one linux amd64 "$OUT"
+    build_one linux "$(go env GOARCH)" "$OUT"
     ;;
   *)
     build_one "$TARGET_OS" "$(go env GOARCH)" "$OUT"

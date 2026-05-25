@@ -52,7 +52,14 @@ async function bootstrap(): Promise<void> {
 }
 
 app.whenReady().then(() => {
-  void bootstrap()
+  bootstrap().catch((err) => {
+    console.error('Tray bootstrap failed:', err)
+    stateStore.set({
+      status: 'failed',
+      statusMessage: 'Startup failed',
+      lastError: err instanceof Error ? err.message : String(err)
+    })
+  })
 })
 
 app.on('window-all-closed', () => {

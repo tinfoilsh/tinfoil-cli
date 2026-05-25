@@ -14,6 +14,7 @@ interface ClientEntry {
 
 const clients = new Map<string, ClientEntry>()
 let reverifyTimer: NodeJS.Timeout | undefined
+let reverifyInFlight = false
 let roundRobinCursor = 0
 
 function describeError(err: unknown): string {
@@ -131,7 +132,11 @@ export async function activateRouters(routers: string[]): Promise<void> {
 function scheduleReverify(): void {
   if (reverifyTimer) return
   reverifyTimer = setInterval(() => {
-    void reverifyAll()
+    if (reverifyInFlight) return
+    reverifyInFlight = true
+    reverifyAll().finally(() => {
+      reverifyInFlight = false
+    })
   }, REVERIFY_INTERVAL_MS)
 }
 

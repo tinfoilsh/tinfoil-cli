@@ -37,7 +37,7 @@ class StateStore extends EventEmitter {
   }
 
   get(): TrayState {
-    return this.state
+    return { ...this.state }
   }
 
   set(partial: Partial<TrayState>): void {

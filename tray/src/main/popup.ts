@@ -68,25 +68,30 @@ function createPopup(): BrowserWindow {
   return window
 }
 
-function positionUnderTray(window: BrowserWindow, bounds: Rectangle): void {
+function computePopupPosition(
+  bounds: Rectangle,
+  width: number,
+  height: number
+): { x: number; y: number } {
   const display = screen.getDisplayMatching(bounds)
   const work = display.workArea
+  let x = Math.round(bounds.x + bounds.width / 2 - width / 2)
+  let y =
+    process.platform === 'win32' ? bounds.y - height - 4 : bounds.y + bounds.height + 4
+
+  if (x + width > work.x + work.width) x = work.x + work.width - width - 4
+  if (x < work.x) x = work.x + 4
+  if (y + height > work.y + work.height) y = work.y + work.height - height - 4
+  if (y < work.y) y = work.y + 4
+
+  return { x, y }
+}
+
+function positionUnderTray(window: BrowserWindow, bounds: Rectangle): void {
   const size = window.getSize()
   const w = size[0] ?? POPUP_WIDTH
   const h = size[1] ?? compactHeight
-  let x = Math.round(bounds.x + bounds.width / 2 - w / 2)
-  let y = bounds.y + bounds.height + 4
-
-  if (process.platform === 'win32') {
-    x = Math.round(bounds.x + bounds.width / 2 - w / 2)
-    y = bounds.y - h - 4
-  }
-
-  if (x + w > work.x + work.width) x = work.x + work.width - w - 4
-  if (x < work.x) x = work.x + 4
-  if (y + h > work.y + work.height) y = work.y + work.height - h - 4
-  if (y < work.y) y = work.y + 4
-
+  const { x, y } = computePopupPosition(bounds, w, h)
   window.setBounds({ x, y, width: w, height: h })
 }
 
@@ -112,19 +117,8 @@ export function setPopupExpanded(next: boolean): void {
   expanded = next
   const targetH = next ? POPUP_HEIGHT_EXPANDED : compactHeight
   if (lastTrayBounds) {
-    const display = screen.getDisplayMatching(lastTrayBounds)
-    const work = display.workArea
-    const w = POPUP_WIDTH
-    let x = Math.round(lastTrayBounds.x + lastTrayBounds.width / 2 - w / 2)
-    let y = lastTrayBounds.y + lastTrayBounds.height + 4
-    if (process.platform === 'win32') {
-      y = lastTrayBounds.y - targetH - 4
-    }
-    if (x + w > work.x + work.width) x = work.x + work.width - w - 4
-    if (x < work.x) x = work.x + 4
-    if (y + targetH > work.y + work.height) y = work.y + work.height - targetH - 4
-    if (y < work.y) y = work.y + 4
-    popup.setBounds({ x, y, width: w, height: targetH }, true)
+    const { x, y } = computePopupPosition(lastTrayBounds, POPUP_WIDTH, targetH)
+    popup.setBounds({ x, y, width: POPUP_WIDTH, height: targetH }, true)
   } else {
     popup.setSize(POPUP_WIDTH, targetH, true)
   }
