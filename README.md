@@ -228,6 +228,15 @@ tinfoil domain delete api.example.com
 
 Pass `-o json` on any list/get to emit machine-readable JSON.
 
+## Tinfoil Tray (menu-bar app)
+
+A small macOS / Linux / Windows menu-bar app that wraps this CLI is in [`tray/`](tray). It
+runs the verified `tinfoil proxy` on `localhost`, exposes its status from the system tray,
+and shows live enclave attestation details. Installers for each platform are published on
+the GitHub Releases page alongside the CLI binaries.
+
+See [`tray/README.md`](tray/README.md) for development, packaging, and release details.
+
 ## Building from Source
 
 ```bash
