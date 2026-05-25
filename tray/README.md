@@ -48,9 +48,17 @@ the Electron app with hot-reload for the renderer.
 | `npm run lint` | ESLint with `--max-warnings 0` |
 | `npm run typecheck` | TypeScript projects for both Node and Web |
 | `npm run build:cli` | Just rebuild the embedded `tinfoil` binary |
-| `npm run package:mac` | Build signed + notarized macOS installers (`.pkg`, `.dmg`, `.zip`) |
+| `npm run package:mac` | Build signed + notarized macOS installers for both archs (`.pkg`, `.dmg`, `.zip`) |
+| `npm run package:mac:x64` | Build macOS installers for Intel only |
+| `npm run package:mac:arm64` | Build macOS installers for Apple silicon only |
 | `npm run package:linux` | Build Linux installers (`.AppImage`, `.deb`) |
 | `npm run package:win` | Build Windows installer (`.exe`, NSIS) |
+
+The macOS builds run per-architecture sequentially to avoid an
+[electron-builder race](https://github.com/electron-userland/electron-builder/issues) where
+the `.pkg` builder removes a shared `distribution.xml` file. CI splits the same step across
+two parallel macOS runners (one per arch) using the `package:mac:x64` / `package:mac:arm64`
+scripts.
 
 ## Packaging for distribution
 

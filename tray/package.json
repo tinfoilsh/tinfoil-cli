@@ -25,7 +25,9 @@
     "typecheck:web": "tsc -p tsconfig.web.json --noEmit",
     "typecheck": "npm run typecheck:node && npm run typecheck:web",
     "lint": "eslint --max-warnings 0 \"src/**/*.{ts,tsx}\"",
-    "package:mac": "npm run build && electron-builder --mac",
+    "package:mac": "npm run build && electron-builder --mac pkg dmg zip --x64 && electron-builder --mac pkg dmg zip --arm64",
+    "package:mac:x64": "npm run build && electron-builder --mac pkg dmg zip --x64",
+    "package:mac:arm64": "npm run build && electron-builder --mac pkg dmg zip --arm64",
     "package:linux": "npm run build && electron-builder --linux",
     "package:win": "npm run build && electron-builder --win"
   },

@@ -18,7 +18,9 @@ jobs:
       matrix:
         include:
           - os: macos-latest
-            package_script: package:mac
+            package_script: package:mac:x64
+          - os: macos-latest
+            package_script: package:mac:arm64
           - os: ubuntu-latest
             package_script: package:linux
           - os: windows-latest
