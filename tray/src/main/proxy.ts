@@ -8,6 +8,8 @@ import { PROXY_LISTEN_HOST } from './constants.js'
 import { stateStore } from './state.js'
 
 const PROXY_STOP_GRACE_MS = 3000
+const STDERR_TAIL_LIMIT = 4096
+const PORT_IN_USE_PATTERN = /address already in use|EADDRINUSE/i
 
 type CliProcess = ChildProcessByStdio<null, Readable, Readable>
 
@@ -43,7 +45,7 @@ function setProxyState(partial: Partial<ReturnType<typeof stateStore.get>['proxy
   stateStore.set({ proxy: { ...current, ...partial } })
 }
 
-function attachLogging(proc: CliProcess): void {
+function attachLogging(proc: CliProcess, sink: { stderrTail: string }): void {
   proc.stdout.setEncoding('utf8')
   proc.stderr.setEncoding('utf8')
   proc.stdout.on('data', (chunk: string) => {
@@ -52,6 +54,7 @@ function attachLogging(proc: CliProcess): void {
     }
   })
   proc.stderr.on('data', (chunk: string) => {
+    sink.stderrTail = (sink.stderrTail + chunk).slice(-STDERR_TAIL_LIMIT)
     for (const line of chunk.split('\n')) {
       if (line.trim().length > 0) console.warn('[tinfoil]', line)
     }
@@ -86,17 +89,21 @@ export async function startProxy(port: number): Promise<{ port: number; endpoint
     stdio: ['ignore', 'pipe', 'pipe'],
     env: { ...process.env }
   })
-  attachLogging(proc)
+  const logSink = { stderrTail: '' }
+  attachLogging(proc, logSink)
 
   proc.on('exit', (code, signal) => {
     const wasIntentional = intentionalShutdown
     child = undefined
     if (wasIntentional) {
       setProxyState({ running: false, lastError: undefined })
-    } else {
-      const message = `Tinfoil proxy exited unexpectedly (${signal ?? `code ${code ?? 0}`})`
-      setProxyState({ running: false, lastError: message })
+      return
     }
+    const portInUse = PORT_IN_USE_PATTERN.test(logSink.stderrTail)
+    const message = portInUse
+      ? `Port ${port} is already in use. Stop the other process or choose a different port.`
+      : `Tinfoil proxy exited unexpectedly (${signal ?? `code ${code ?? 0}`})`
+    setProxyState({ running: false, lastError: message })
   })
 
   proc.on('error', (err) => {
