@@ -3,6 +3,18 @@
   "version": "0.1.0",
   "private": true,
   "description": "Status-bar app that runs the verified Tinfoil CLI proxy on localhost",
+  "author": {
+    "name": "Tinfoil",
+    "email": "support@tinfoil.sh",
+    "url": "https://tinfoil.sh"
+  },
+  "homepage": "https://tinfoil.sh",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/tinfoilsh/tinfoil-cli.git",
+    "directory": "tray"
+  },
   "main": "out/main/index.js",
   "type": "module",
   "scripts": {

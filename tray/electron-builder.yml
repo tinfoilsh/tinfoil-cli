@@ -26,8 +26,14 @@ mac:
         - arm64
   artifactName: ${productName}-${arch}.${ext}
   icon: assets/icon.icns
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.inherit.plist
+  notarize: true
   extendInfo:
     LSUIElement: true
+    NSHumanReadableCopyright: Copyright © Tinfoil Systems
   extraResources:
     - from: resources/bin/tinfoil
       to: bin/tinfoil
