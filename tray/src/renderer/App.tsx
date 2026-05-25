@@ -368,6 +368,8 @@ export default function App() {
           ref={iframeRef}
           src={iframeUrl}
           title="Tinfoil Verification Center"
+          sandbox="allow-scripts allow-same-origin"
+          referrerPolicy="no-referrer"
           onLoad={() => setIframeReady(true)}
         />
       </div>
