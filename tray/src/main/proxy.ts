@@ -92,9 +92,12 @@ export async function startProxy(port: number): Promise<{ port: number; endpoint
   const logSink = { stderrTail: '' }
   attachLogging(proc, logSink)
 
-  proc.on('exit', (code, signal) => {
+  proc.on('exit', () => {
+    if (child === proc) child = undefined
+  })
+
+  proc.on('close', (code, signal) => {
     const wasIntentional = intentionalShutdown
-    child = undefined
     if (wasIntentional) {
       setProxyState({ running: false, lastError: undefined })
       return
