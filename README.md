@@ -228,6 +228,31 @@ tinfoil domain delete api.example.com
 
 Pass `-o json` on any list/get to emit machine-readable JSON.
 
+## Named buckets (`nbucket`)
+
+`tinfoil nbucket` gives verified access to a personal **named-bucket** account — an encrypted key-value store keyed by human-readable names. Every call attests the running enclave (measurement check, Sigstore bundle, TLS pinning) before any data crosses the wire.
+
+The account is bound to a **master key** that the server never sees. Anything stored in your account is unreadable without it.
+
+### Logging in
+
+```bash
+tinfoil nbucket login                  # prompts for API key + master key
+tinfoil nbucket login --api-key tk_... # supply API key non-interactively
+tinfoil nbucket whoami                 # confirm credentials and re-verify the enclave
+tinfoil nbucket logout                 # forget API key and master key
+```
+
+The API key is written to `~/.tinfoil/config.json` (mode 0600). The **master key is stored in your OS keyring** (macOS Keychain, Linux Secret Service, Windows Credential Manager) — never in the config file. Override per-command with `TINFOIL_NBUCKET_API_KEY`, `TINFOIL_NBUCKET_MASTER`, `TINFOIL_NBUCKET_HOST`, `TINFOIL_NBUCKET_REPO`.
+
+### Listing names
+
+```bash
+tinfoil nbucket list
+```
+
+One name per line. An empty output means your account has no items (or hasn't been initialized).
+
 ## Building from Source
 
 ```bash
