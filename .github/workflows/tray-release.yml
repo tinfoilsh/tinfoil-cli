@@ -55,7 +55,8 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
-      - name: Package & publish
+      - name: Package & publish (macOS)
+        if: startsWith(matrix.os, 'macos')
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CSC_LINK: ${{ secrets.APPLE_CERTIFICATE_P12_BASE64 }}
@@ -65,4 +66,10 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: npm run ${{ matrix.package_script }} -- --publish always
+
+      - name: Package & publish (Linux/Windows)
+        if: ${{ !startsWith(matrix.os, 'macos') }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npm run ${{ matrix.package_script }} -- --publish always
