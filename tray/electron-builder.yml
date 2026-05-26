@@ -30,7 +30,7 @@ mac:
   gatekeeperAssess: false
   entitlements: build/entitlements.mac.plist
   entitlementsInherit: build/entitlements.mac.inherit.plist
-  notarize: false
+  notarize: true
   extendInfo:
     LSUIElement: true
     NSHumanReadableCopyright: Copyright © Tinfoil Systems
