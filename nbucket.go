@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"strings"
@@ -34,16 +35,15 @@ func init() {
 var nbucketCmd = &cobra.Command{
 	Use:   "nbucket",
 	Short: "Manage named buckets in your personal Tinfoil account",
-	Long: `Verified access to your personal named-bucket account.
+	Long: `Access your personal named-bucket account.
 
-Each call performs the same enclave attestation that ` + "`tinfoil http get`" + ` does
-(measurement check + Sigstore bundle + TLS pinning) against the named-bucket
-enclave before any data leaves your machine.
-
-The master key is stored in the OS keyring (macOS Keychain / Linux Secret
+Your master key is stored in the OS keyring (macOS Keychain / Linux Secret
 Service / Windows Credential Manager). The API key is stored in
 ~/.tinfoil/config.json. Both can be overridden per-command via the env vars
-TINFOIL_NBUCKET_API_KEY and TINFOIL_NBUCKET_MASTER.`,
+TINFOIL_NBUCKET_API_KEY and TINFOIL_NBUCKET_MASTER.
+
+Read the docs [todo] for more
+`,
 }
 
 var nbucketLoginCmd = &cobra.Command{
@@ -200,14 +200,11 @@ func nbucketVerify(nb *nbucketConfig, apiKey, master string) error {
 }
 
 func nbucketList(nb *nbucketConfig, apiKey, master string) ([]string, error) {
-	sc := client.NewSecureClient(nb.Host, nb.Repo)
-	resp, err := sc.Get("https://"+nb.Host+"/list", map[string]string{
-		"Authorization": "Bearer " + apiKey,
-		"X-Master-Key":  master,
-	})
+	resp, err := nbucketDo(nb, apiKey, master, "GET", "/list", nil, nil)
 	if err != nil {
 		return nil, err
 	}
+	defer resp.Body.Close()
 	switch resp.StatusCode {
 	case http.StatusOK:
 	case http.StatusUnauthorized:
@@ -215,15 +212,42 @@ func nbucketList(nb *nbucketConfig, apiKey, master string) ([]string, error) {
 	case http.StatusNotFound:
 		return nil, nil
 	default:
-		return nil, fmt.Errorf("server returned %d: %s", resp.StatusCode, string(resp.Body))
+		return nil, nbucketStatusError(resp)
 	}
 	var body struct {
 		Names []string `json:"names"`
 	}
-	if err := json.Unmarshal(resp.Body, &body); err != nil {
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 		return nil, fmt.Errorf("decoding /list response: %w", err)
 	}
 	return body.Names, nil
+}
+
+func nbucketDo(nb *nbucketConfig, apiKey, master, method, path string, extra map[string]string, body io.Reader) (*http.Response, error) {
+	sc := client.NewSecureClient(nb.Host, nb.Repo)
+	httpClient, err := sc.HTTPClient()
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequest(method, "https://"+nb.Host+path, body)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	req.Header.Set("X-Master-Key", master)
+	for k, v := range extra {
+		req.Header.Set(k, v)
+	}
+	return httpClient.Do(req)
+}
+
+func nbucketStatusError(resp *http.Response) error {
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	msg := strings.TrimSpace(string(body))
+	if msg == "" {
+		return fmt.Errorf("server returned %d", resp.StatusCode)
+	}
+	return fmt.Errorf("server returned %d: %s", resp.StatusCode, msg)
 }
 
 func requireNBucketAuth() (*nbucketConfig, string, string, error) {

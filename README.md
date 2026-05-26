@@ -75,13 +75,13 @@ services:
 
 ### Proxy Options
 
-| Flag | Default | Description |
-|------|---------|-------------|
-| `-p, --port` | `8080` | Port to listen on |
-| `-b, --bind` | `127.0.0.1` | Address to bind to (use `0.0.0.0` in Docker) |
-| `-e, --host` | public router | Enclave hostname (override to target a specific enclave; must be set together with `-r`) |
-| `-r, --repo` | public router | Enclave config repo (override to target a specific enclave; must be set together with `-e`) |
-| `--log-format` | `text` | `text` or `json` |
+| Flag           | Default       | Description                                                                                 |
+| -------------- | ------------- | ------------------------------------------------------------------------------------------- |
+| `-p, --port`   | `8080`        | Port to listen on                                                                           |
+| `-b, --bind`   | `127.0.0.1`   | Address to bind to (use `0.0.0.0` in Docker)                                                |
+| `-e, --host`   | public router | Enclave hostname (override to target a specific enclave; must be set together with `-r`)    |
+| `-r, --repo`   | public router | Enclave config repo (override to target a specific enclave; must be set together with `-e`) |
+| `--log-format` | `text`        | `text` or `json`                                                                            |
 
 ## HTTP Requests
 
@@ -245,13 +245,59 @@ tinfoil nbucket logout                 # forget API key and master key
 
 The API key is written to `~/.tinfoil/config.json` (mode 0600). The **master key is stored in your OS keyring** (macOS Keychain, Linux Secret Service, Windows Credential Manager) — never in the config file. Override per-command with `TINFOIL_NBUCKET_API_KEY`, `TINFOIL_NBUCKET_MASTER`, `TINFOIL_NBUCKET_HOST`, `TINFOIL_NBUCKET_REPO`.
 
-### Listing names
+### Account
 
 ```bash
-tinfoil nbucket list
+tinfoil nbucket account          # does an account exist for this API key?
+tinfoil nbucket account delete   # tear it down (refuses if any items remain)
 ```
 
-One name per line. An empty output means your account has no items (or hasn't been initialized).
+### Items
+
+```bash
+# List names
+tinfoil nbucket list
+
+# Store a file. Named-bucket generates and stores an encryption key by default.
+tinfoil nbucket put my/photo.jpg -f ./photo.jpg
+
+# Bring your own encryption key (BYOK) — named-bucket never sees this key after
+# the upload. Required again on read. --key may be repeated for multi-slot items.
+KEY=$(openssl rand -base64 32)
+tinfoil nbucket put my/secret.txt -f ./secret.txt --key "$KEY"
+
+# Fetch — to stdout, a file, or a partial range
+tinfoil nbucket get my/photo.jpg -o ./photo.jpg
+tinfoil nbucket get my/secret.txt --key "$KEY" -o ./secret.txt
+tinfoil nbucket get my/photo.jpg --range bytes=0-1023 -o head.bin
+
+# Inspect without fetching the body
+tinfoil nbucket metadata my/photo.jpg   # bucket-level metadata (version, size, key fingerprints)
+tinfoil nbucket reveal   my/photo.jpg   # access token + managed key(s) stored in the name map
+
+# Delete
+tinfoil nbucket delete my/photo.jpg
+```
+
+### Encryption key slots
+
+Items can have multiple encryption keys; any one of them decrypts the item.
+
+```bash
+# Add another key slot. --proof-key is required only for BYOK items (no
+# managed key on the item).
+NEW=$(openssl rand -base64 32)
+tinfoil nbucket keys add my/secret.txt --new-key "$NEW" --proof-key "$KEY"
+
+# Remove a key slot. --proof-key is required for BYOK items or when removing
+# the managed key.
+tinfoil nbucket keys remove my/secret.txt --remove-key "$KEY" --proof-key "$NEW"
+
+# Removing the server-managed key requires --unmanage as an explicit
+# acknowledgement: after this, named-bucket cannot read the item without
+# one of your user-managed keys.
+tinfoil nbucket keys remove my/photo.jpg --remove-key "$MANAGED_KEY" --unmanage --proof-key "$NEW"
+```
 
 ## Building from Source
 
