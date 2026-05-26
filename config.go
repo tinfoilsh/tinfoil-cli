@@ -13,14 +13,29 @@ import (
 const (
 	defaultControlplaneURL = "https://api.tinfoil.sh"
 
+	defaultNBucketHost = "named-bucket.tinfoil.sh"
+	defaultNBucketRepo = "tinfoilsh/named-bucket"
+
 	envAPIKey      = "TINFOIL_API_KEY"
 	envCPURL       = "TINFOIL_CONTROLPLANE_URL"
 	envConfigPath  = "TINFOIL_CONFIG"
+
+	envNBucketHost   = "TINFOIL_NBUCKET_HOST"
+	envNBucketRepo   = "TINFOIL_NBUCKET_REPO"
+	envNBucketAPIKey = "TINFOIL_NBUCKET_API_KEY"
+	envNBucketMaster = "TINFOIL_NBUCKET_MASTER"
 )
 
 type cliConfig struct {
-	ControlplaneURL string `json:"controlplane_url"`
-	APIKey          string `json:"api_key"`
+	ControlplaneURL string         `json:"controlplane_url"`
+	APIKey          string         `json:"api_key"`
+	NBucket         *nbucketConfig `json:"nbucket,omitempty"`
+}
+
+type nbucketConfig struct {
+	Host   string `json:"host"`
+	Repo   string `json:"repo"`
+	APIKey string `json:"api_key"`
 }
 
 func configPath() (string, error) {
