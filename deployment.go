@@ -8,9 +8,6 @@ import (
 )
 
 const (
-	deploymentAutoUpdateOff    = "off"
-	deploymentAutoUpdateLatest = "latest"
-
 	deploymentInstanceStatusSkipped = "skipped"
 	deploymentInstanceStatusFailed  = "failed"
 )
@@ -21,7 +18,6 @@ type deploymentView struct {
 	GroupName      *string `json:"group_name"`
 	GroupOrder     int32   `json:"group_order"`
 	DisplayOrder   int32   `json:"display_order"`
-	AutoUpdate     string  `json:"auto_update"`
 	DefaultStaging bool    `json:"default_staging"`
 	CreatedAt      string  `json:"created_at"`
 	UpdatedAt      string  `json:"updated_at"`
@@ -45,7 +41,6 @@ type deploymentUpdateResponse struct {
 }
 
 var (
-	deploymentSettingsAutoUpdate     string
 	deploymentSettingsDefaultStaging string
 
 	deploymentGroupName         string
@@ -67,12 +62,6 @@ func init() {
 	deploymentCmd.AddCommand(deploymentGroupCmd)
 	deploymentCmd.AddCommand(deploymentUpdateCmd)
 
-	deploymentSettingsCmd.Flags().StringVar(
-		&deploymentSettingsAutoUpdate,
-		"auto-update",
-		"",
-		"Auto-update policy: off or latest",
-	)
 	deploymentSettingsCmd.Flags().StringVar(
 		&deploymentSettingsDefaultStaging,
 		"default-staging",
@@ -146,13 +135,6 @@ var deploymentSettingsCmd = &cobra.Command{
 	Args:    cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		body := map[string]any{}
-		if deploymentSettingsAutoUpdate != "" {
-			policy := strings.ToLower(strings.TrimSpace(deploymentSettingsAutoUpdate))
-			if policy != deploymentAutoUpdateOff && policy != deploymentAutoUpdateLatest {
-				return fmt.Errorf("--auto-update must be %q or %q", deploymentAutoUpdateOff, deploymentAutoUpdateLatest)
-			}
-			body["auto_update"] = policy
-		}
 		if deploymentSettingsDefaultStaging != "" {
 			staging, err := parseTriBool(deploymentSettingsDefaultStaging)
 			if err != nil {
@@ -161,7 +143,7 @@ var deploymentSettingsCmd = &cobra.Command{
 			body["default_staging"] = staging
 		}
 		if len(body) == 0 {
-			return fmt.Errorf("specify --auto-update or --default-staging")
+			return fmt.Errorf("specify --default-staging")
 		}
 
 		client, err := authedClient()
@@ -301,14 +283,6 @@ func patchDeployment(client *cpClient, deploymentID string, body map[string]any)
 	return updated, nil
 }
 
-func setDeploymentAutoUpdate(client *cpClient, deployment deploymentView, enabled bool) (deploymentView, error) {
-	policy := deploymentAutoUpdateOff
-	if enabled {
-		policy = deploymentAutoUpdateLatest
-	}
-	return patchDeployment(client, deployment.ID, map[string]any{"auto_update": policy})
-}
-
 func moveDeploymentToGroup(
 	client *cpClient,
 	deploymentID string,
@@ -355,7 +329,6 @@ func renderDeployment(deployment deploymentView) error {
 	fmt.Printf("Deploying:       %d\n", deployment.DeployingCount)
 	fmt.Printf("Failed:          %d\n", deployment.FailedCount)
 	fmt.Printf("Stopped:         %d\n", deployment.StoppedCount)
-	fmt.Printf("Auto-update:     %s\n", deployment.AutoUpdate)
 	fmt.Printf("Default staging: %v\n", deployment.DefaultStaging)
 	if deployment.GroupName != nil {
 		fmt.Printf("Group:           %s\n", *deployment.GroupName)
@@ -371,21 +344,20 @@ func renderDeployments(deployments []deploymentView) error {
 		fmt.Println("No deployments.")
 		return nil
 	}
-	fmt.Printf("%-36s  %-9s  %-7s  %-9s  %-6s  %-12s  %s\n",
-		"REPOSITORY", "INSTANCES", "READY", "DEPLOYING", "FAILED", "AUTO-UPDATE", "GROUP",
+	fmt.Printf("%-36s  %-9s  %-7s  %-9s  %-6s  %s\n",
+		"REPOSITORY", "INSTANCES", "READY", "DEPLOYING", "FAILED", "GROUP",
 	)
 	for _, deployment := range deployments {
 		group := "-"
 		if deployment.GroupName != nil {
 			group = *deployment.GroupName
 		}
-		fmt.Printf("%-36s  %-9d  %-7d  %-9d  %-6d  %-12s  %s\n",
+		fmt.Printf("%-36s  %-9d  %-7d  %-9d  %-6d  %s\n",
 			truncate(deployment.Repo, 36),
 			deployment.InstanceCount,
 			deployment.ReadyCount,
 			deployment.DeployingCount,
 			deployment.FailedCount,
-			deployment.AutoUpdate,
 			group,
 		)
 	}

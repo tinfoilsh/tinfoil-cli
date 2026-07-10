@@ -15,7 +15,7 @@ func TestResolveDeploymentMatchesIDAndRepository(t *testing.T) {
 			t.Fatalf("request = %s %s, want GET /api/deployments", r.Method, r.URL.Path)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(w, `[{"id":"deployment-1","repo":"acme/app","auto_update":"off"}]`)
+		_, _ = io.WriteString(w, `[{"id":"deployment-1","repo":"acme/app"}]`)
 	}))
 	defer server.Close()
 
@@ -31,24 +31,22 @@ func TestResolveDeploymentMatchesIDAndRepository(t *testing.T) {
 	}
 }
 
-func TestContainerAutoUpdateUsesDeploymentSettings(t *testing.T) {
+func TestDeploymentSettingsUpdatesDefaultStaging(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case r.Method == http.MethodGet && r.URL.Path == "/api/containers":
-			_, _ = io.WriteString(w, `[{"id":"container-1","name":"app-1","repo":"acme/app","deployment_id":"deployment-1"}]`)
 		case r.Method == http.MethodGet && r.URL.Path == "/api/deployments":
-			_, _ = io.WriteString(w, `[{"id":"deployment-1","repo":"acme/app","auto_update":"off"}]`)
+			_, _ = io.WriteString(w, `[{"id":"deployment-1","repo":"acme/app"}]`)
 		case r.Method == http.MethodPatch && r.URL.Path == "/api/deployments/deployment-1":
 			var body struct {
-				AutoUpdate string `json:"auto_update"`
+				DefaultStaging bool `json:"default_staging"`
 			}
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 				t.Fatalf("decode body: %v", err)
 			}
-			if body.AutoUpdate != deploymentAutoUpdateLatest {
-				t.Fatalf("auto_update = %q, want %q", body.AutoUpdate, deploymentAutoUpdateLatest)
+			if !body.DefaultStaging {
+				t.Fatal("default_staging = false, want true")
 			}
-			_, _ = io.WriteString(w, `{"id":"deployment-1","repo":"acme/app","auto_update":"latest"}`)
+			_, _ = io.WriteString(w, `{"id":"deployment-1","repo":"acme/app","default_staging":true}`)
 		default:
 			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
 		}
@@ -56,10 +54,10 @@ func TestContainerAutoUpdateUsesDeploymentSettings(t *testing.T) {
 	defer server.Close()
 
 	configureDeploymentCommandTest(t, server.URL)
-	autoUpdateOn = true
+	deploymentSettingsDefaultStaging = "true"
 
-	if err := containerAutoUpdateCmd.RunE(containerAutoUpdateCmd, []string{"app-1"}); err != nil {
-		t.Fatalf("run auto-update: %v", err)
+	if err := deploymentSettingsCmd.RunE(deploymentSettingsCmd, []string{"acme/app"}); err != nil {
+		t.Fatalf("run deployment settings: %v", err)
 	}
 }
 
@@ -69,7 +67,7 @@ func TestContainerGroupMovesRepositoryDeployment(t *testing.T) {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/containers":
 			_, _ = io.WriteString(w, `[{"id":"container-1","name":"app-1","repo":"acme/app","deployment_id":"deployment-1"}]`)
 		case r.Method == http.MethodGet && r.URL.Path == "/api/deployments":
-			_, _ = io.WriteString(w, `[{"id":"deployment-1","repo":"acme/app","group_order":4,"display_order":7,"auto_update":"off"}]`)
+			_, _ = io.WriteString(w, `[{"id":"deployment-1","repo":"acme/app","group_order":4,"display_order":7}]`)
 		case r.Method == http.MethodPut && r.URL.Path == "/api/deployments/deployment-1/group":
 			var body struct {
 				GroupName    *string `json:"group_name"`
@@ -85,7 +83,7 @@ func TestContainerGroupMovesRepositoryDeployment(t *testing.T) {
 			if body.GroupOrder != 4 || body.DisplayOrder != 7 {
 				t.Fatalf("orders = (%d, %d), want (4, 7)", body.GroupOrder, body.DisplayOrder)
 			}
-			_, _ = io.WriteString(w, `{"id":"deployment-1","repo":"acme/app","group_name":"production","group_order":4,"display_order":7,"auto_update":"off"}`)
+			_, _ = io.WriteString(w, `{"id":"deployment-1","repo":"acme/app","group_name":"production","group_order":4,"display_order":7}`)
 		default:
 			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
 		}
@@ -121,7 +119,7 @@ func TestContainerCreateSetsDeploymentGroup(t *testing.T) {
 			}
 			_, _ = io.WriteString(w, `{"id":"container-1","name":"app-1","repo":"acme/app","deployment_id":"deployment-1"}`)
 		case r.Method == http.MethodGet && r.URL.Path == "/api/deployments":
-			_, _ = io.WriteString(w, `[{"id":"deployment-1","repo":"acme/app","display_order":7,"auto_update":"off"}]`)
+			_, _ = io.WriteString(w, `[{"id":"deployment-1","repo":"acme/app","display_order":7}]`)
 		case r.Method == http.MethodPut && r.URL.Path == "/api/deployments/deployment-1/group":
 			var body struct {
 				GroupName    *string `json:"group_name"`
@@ -137,7 +135,7 @@ func TestContainerCreateSetsDeploymentGroup(t *testing.T) {
 			if body.GroupOrder != 4 || body.DisplayOrder != 7 {
 				t.Fatalf("orders = (%d, %d), want (4, 7)", body.GroupOrder, body.DisplayOrder)
 			}
-			_, _ = io.WriteString(w, `{"id":"deployment-1","repo":"acme/app","group_name":"production","group_order":4,"display_order":7,"auto_update":"off"}`)
+			_, _ = io.WriteString(w, `{"id":"deployment-1","repo":"acme/app","group_name":"production","group_order":4,"display_order":7}`)
 		default:
 			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
 		}
@@ -160,7 +158,7 @@ func TestDeploymentUpdateUsesDeploymentEndpoint(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/deployments":
-			_, _ = io.WriteString(w, `[{"id":"deployment-1","repo":"acme/app","auto_update":"off"}]`)
+			_, _ = io.WriteString(w, `[{"id":"deployment-1","repo":"acme/app"}]`)
 		case r.Method == http.MethodPost && r.URL.Path == "/api/deployments/deployment-1/update":
 			var body struct {
 				Tag         string   `json:"tag"`
@@ -218,8 +216,7 @@ func configureDeploymentCommandTest(t *testing.T, serverURL string) {
 	t.Setenv(envConfigPath, filepath.Join(t.TempDir(), "missing-config.json"))
 
 	previousOutput := outputFormat
-	previousAutoUpdateOn := autoUpdateOn
-	previousAutoUpdateOff := autoUpdateOff
+	previousSettingsDefaultStaging := deploymentSettingsDefaultStaging
 	previousGroupName := groupName
 	previousGroupUngroup := groupUngroup
 	previousGroupOrder := groupOrder
@@ -235,8 +232,7 @@ func configureDeploymentCommandTest(t *testing.T, serverURL string) {
 	previousUseDebugFilter := useDebugFilter
 
 	outputFormat = "json"
-	autoUpdateOn = false
-	autoUpdateOff = false
+	deploymentSettingsDefaultStaging = ""
 	groupName = ""
 	groupUngroup = false
 	groupOrder = 0
@@ -253,8 +249,7 @@ func configureDeploymentCommandTest(t *testing.T, serverURL string) {
 
 	t.Cleanup(func() {
 		outputFormat = previousOutput
-		autoUpdateOn = previousAutoUpdateOn
-		autoUpdateOff = previousAutoUpdateOff
+		deploymentSettingsDefaultStaging = previousSettingsDefaultStaging
 		groupName = previousGroupName
 		groupUngroup = previousGroupUngroup
 		groupOrder = previousGroupOrder

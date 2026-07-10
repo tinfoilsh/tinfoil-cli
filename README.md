@@ -189,10 +189,6 @@ tinfoil container update status my-container
 tinfoil container update accept my-container
 tinfoil container update cancel my-container
 
-# Auto-update (GitHub-connected containers)
-tinfoil container auto-update my-container --on
-tinfoil container auto-update my-container --off
-
 # Open a verified proxy to a deployed container
 tinfoil container connect my-container -p 8080
 ```

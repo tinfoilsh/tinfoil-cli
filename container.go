@@ -96,9 +96,6 @@ var (
 	groupDisplayOrder int32
 	groupUngroup      bool
 
-	autoUpdateOn  bool
-	autoUpdateOff bool
-
 	metricsTime string
 
 	connectPort     uint
@@ -119,7 +116,6 @@ func init() {
 	containerCmd.AddCommand(containerStartCmd)
 	containerCmd.AddCommand(containerStopCmd)
 	containerCmd.AddCommand(containerRelaunchCmd)
-	containerCmd.AddCommand(containerAutoUpdateCmd)
 	containerCmd.AddCommand(containerMetricsCmd)
 	containerCmd.AddCommand(containerHostsCmd)
 	containerCmd.AddCommand(containerGroupCmd)
@@ -153,7 +149,6 @@ func init() {
 	addDebugSelector(containerStartCmd)
 	addDebugSelector(containerStopCmd)
 	addDebugSelector(containerRelaunchCmd)
-	addDebugSelector(containerAutoUpdateCmd)
 	addDebugSelector(containerMetricsCmd)
 	addDebugSelector(containerGroupCmd)
 	addDebugSelector(containerUpdateStatusCmd)
@@ -178,9 +173,6 @@ func init() {
 	containerRelaunchCmd.Flags().StringVar(&relaunchStaging, "staging", "", "Override staging mode (true/false)")
 	containerRelaunchCmd.Flags().StringVar(&relaunchCustomDomain, "custom-domain", "", "Override custom domain (empty string clears it)")
 	containerRelaunchCmd.Flags().StringVar(&relaunchHost, "host", "", "Move failed container to a different host")
-
-	containerAutoUpdateCmd.Flags().BoolVar(&autoUpdateOn, "on", false, "Enable auto-update")
-	containerAutoUpdateCmd.Flags().BoolVar(&autoUpdateOff, "off", false, "Disable auto-update")
 
 	containerMetricsCmd.Flags().StringVar(&metricsTime, "time", "24h", "Time window (e.g. 1h, 24h, 7d)")
 
@@ -443,35 +435,6 @@ var containerRelaunchCmd = &cobra.Command{
 			return err
 		}
 		return renderContainer(updated)
-	},
-}
-
-var containerAutoUpdateCmd = &cobra.Command{
-	Use:   "auto-update [id|name]",
-	Short: "Toggle auto-update for the container's repository deployment",
-	Args:  cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		if autoUpdateOn == autoUpdateOff {
-			return fmt.Errorf("specify exactly one of --on or --off")
-		}
-		client, err := authedClient()
-		if err != nil {
-			return err
-		}
-		c, err := resolveContainer(client, args[0])
-		if err != nil {
-			return err
-		}
-		deployment, err := resolveDeploymentForContainer(client, *c)
-		if err != nil {
-			return err
-		}
-		updated, err := setDeploymentAutoUpdate(client, *deployment, autoUpdateOn)
-		if err != nil {
-			return err
-		}
-		fmt.Printf("auto_update=%s on %s\n", updated.AutoUpdate, updated.Repo)
-		return nil
 	},
 }
 
