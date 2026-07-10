@@ -18,37 +18,35 @@ import (
 // the fields the CLI actually displays or forwards; everything else stays in
 // RawMessage form so updates to the API don't break decoding here.
 type containerView struct {
-	ID                 string            `json:"id"`
-	Name               string            `json:"name"`
-	Repo               string            `json:"repo"`
-	Status             string            `json:"status"`
-	CurrentTag         string            `json:"current_tag"`
-	Domain             string            `json:"domain"`
-	InternalDomain     string            `json:"internal_domain"`
-	HostName           string            `json:"host_name"`
-	HostGpuType        string            `json:"host_gpu_type"`
-	HostCpuType        string            `json:"host_cpu_type"`
-	CPUs               int               `json:"cpus"`
-	GPUs               int               `json:"gpus"`
-	MemoryMB           int               `json:"memory_mb"`
-	Variables          json.RawMessage   `json:"variables"`
-	Secrets            []string          `json:"secrets"`
-	SSHKeys            []string          `json:"ssh_keys"`
-	Debug              bool              `json:"debug"`
-	Staging            bool              `json:"staging"`
-	DisableCCMode      bool              `json:"disable_cc_mode"`
-	GithubAppConnected bool              `json:"github_app_connected"`
-	AutoUpdate         bool              `json:"auto_update"`
-	GroupName          *string           `json:"group_name"`
-	GroupOrder         int               `json:"group_order"`
-	DisplayOrder       int               `json:"display_order"`
-	UpdateTag          string            `json:"update_tag"`
-	UpdateStatus       string            `json:"update_status"`
-	UpdateType         string            `json:"update_type"`
-	ErrorMessage       string            `json:"error_message"`
-	CreatedAt          string            `json:"created_at"`
-	UpdatedAt          string            `json:"updated_at"`
-	SSHPort            int               `json:"ssh_port"`
+	ID                 string          `json:"id"`
+	Name               string          `json:"name"`
+	Repo               string          `json:"repo"`
+	DeploymentID       string          `json:"deployment_id"`
+	Status             string          `json:"status"`
+	CurrentTag         string          `json:"current_tag"`
+	Domain             string          `json:"domain"`
+	InternalDomain     string          `json:"internal_domain"`
+	HostName           string          `json:"host_name"`
+	HostGpuType        string          `json:"host_gpu_type"`
+	HostCpuType        string          `json:"host_cpu_type"`
+	CPUs               int             `json:"cpus"`
+	GPUs               int             `json:"gpus"`
+	MemoryMB           int             `json:"memory_mb"`
+	Variables          json.RawMessage `json:"variables"`
+	Secrets            []string        `json:"secrets"`
+	SSHKeys            []string        `json:"ssh_keys"`
+	Debug              bool            `json:"debug"`
+	Staging            bool            `json:"staging"`
+	DisableCCMode      bool            `json:"disable_cc_mode"`
+	GithubAppConnected bool            `json:"github_app_connected"`
+	DisplayOrder       int32           `json:"display_order"`
+	UpdateTag          string          `json:"update_tag"`
+	UpdateStatus       string          `json:"update_status"`
+	UpdateType         string          `json:"update_type"`
+	ErrorMessage       string          `json:"error_message"`
+	CreatedAt          string          `json:"created_at"`
+	UpdatedAt          string          `json:"updated_at"`
+	SSHPort            int             `json:"ssh_port"`
 }
 
 type hostInfo struct {
@@ -99,9 +97,6 @@ var (
 	groupDisplayOrder int32
 	groupUngroup      bool
 
-	autoUpdateOn  bool
-	autoUpdateOff bool
-
 	metricsTime string
 
 	connectPort     uint
@@ -122,7 +117,6 @@ func init() {
 	containerCmd.AddCommand(containerStartCmd)
 	containerCmd.AddCommand(containerStopCmd)
 	containerCmd.AddCommand(containerRelaunchCmd)
-	containerCmd.AddCommand(containerAutoUpdateCmd)
 	containerCmd.AddCommand(containerMetricsCmd)
 	containerCmd.AddCommand(containerHostsCmd)
 	containerCmd.AddCommand(containerGroupCmd)
@@ -147,7 +141,7 @@ func init() {
 	containerCreateCmd.Flags().StringArrayVar(&createSSHKeys, "ssh-key", nil, "Org SSH key name (debug only); may be repeated")
 	containerCreateCmd.Flags().StringVar(&createGroupName, "group-name", "", "Place the container into the named group on creation")
 	containerCreateCmd.Flags().Int32Var(&createGroupOrder, "group-order", 0, "Sort order of the group itself (requires --group-name)")
-	containerCreateCmd.Flags().Int32Var(&createDisplayOrder, "display-order", 0, "Sort order of this container within the group (requires --group-name)")
+	containerCreateCmd.Flags().Int32Var(&createDisplayOrder, "display-order", 0, "Sort order of this container within its repository deployment")
 	_ = containerCreateCmd.MarkFlagRequired("repo")
 	_ = containerCreateCmd.MarkFlagRequired("tag")
 
@@ -156,7 +150,6 @@ func init() {
 	addDebugSelector(containerStartCmd)
 	addDebugSelector(containerStopCmd)
 	addDebugSelector(containerRelaunchCmd)
-	addDebugSelector(containerAutoUpdateCmd)
 	addDebugSelector(containerMetricsCmd)
 	addDebugSelector(containerGroupCmd)
 	addDebugSelector(containerUpdateStatusCmd)
@@ -182,15 +175,12 @@ func init() {
 	containerRelaunchCmd.Flags().StringVar(&relaunchCustomDomain, "custom-domain", "", "Override custom domain (empty string clears it)")
 	containerRelaunchCmd.Flags().StringVar(&relaunchHost, "host", "", "Move failed container to a different host")
 
-	containerAutoUpdateCmd.Flags().BoolVar(&autoUpdateOn, "on", false, "Enable auto-update")
-	containerAutoUpdateCmd.Flags().BoolVar(&autoUpdateOff, "off", false, "Disable auto-update")
-
 	containerMetricsCmd.Flags().StringVar(&metricsTime, "time", "24h", "Time window (e.g. 1h, 24h, 7d)")
 
-	containerGroupCmd.Flags().StringVar(&groupName, "name", "", "Group name to assign")
-	containerGroupCmd.Flags().BoolVar(&groupUngroup, "ungroup", false, "Remove the container from any group")
+	containerGroupCmd.Flags().StringVar(&groupName, "name", "", "Group name to assign to the repository deployment")
+	containerGroupCmd.Flags().BoolVar(&groupUngroup, "ungroup", false, "Remove the repository deployment from any group")
 	containerGroupCmd.Flags().Int32Var(&groupOrder, "group-order", 0, "Order of the group itself")
-	containerGroupCmd.Flags().Int32Var(&groupDisplayOrder, "display-order", 0, "Display order within the group")
+	containerGroupCmd.Flags().Int32Var(&groupDisplayOrder, "display-order", 0, "Display order of the repository deployment")
 
 	containerConnectCmd.Flags().UintVarP(&connectPort, "port", "p", 8080, "Local port for the verified proxy")
 	containerConnectCmd.Flags().StringVarP(&connectBindAddr, "bind", "b", "127.0.0.1", "Address to bind to")
@@ -277,8 +267,8 @@ var containerCreateCmd = &cobra.Command{
 			}
 		}
 
-		if createGroupName == "" && (cmd.Flags().Changed("group-order") || cmd.Flags().Changed("display-order")) {
-			return fmt.Errorf("--group-order and --display-order require --group-name")
+		if createGroupName == "" && cmd.Flags().Changed("group-order") {
+			return fmt.Errorf("--group-order requires --group-name")
 		}
 
 		body := map[string]any{
@@ -286,9 +276,7 @@ var containerCreateCmd = &cobra.Command{
 			"repo": createRepo,
 			"tag":  createTag,
 		}
-		if createGroupName != "" {
-			body["group_name"] = createGroupName
-			body["group_order"] = createGroupOrder
+		if cmd.Flags().Changed("display-order") {
 			body["display_order"] = createDisplayOrder
 		}
 		if len(vars) > 0 {
@@ -322,6 +310,22 @@ var containerCreateCmd = &cobra.Command{
 		var created containerView
 		if _, err := client.do("POST", "/api/containers", nil, body, &created); err != nil {
 			return err
+		}
+		if createGroupName != "" {
+			deployment, err := resolveDeploymentForContainer(client, created)
+			if err != nil {
+				return fmt.Errorf("container created, but deployment group could not be set: %w", err)
+			}
+			groupName := createGroupName
+			if _, err := moveDeploymentToGroup(
+				client,
+				deployment.ID,
+				&groupName,
+				createGroupOrder,
+				deployment.DisplayOrder,
+			); err != nil {
+				return fmt.Errorf("container created, but deployment group could not be set: %w", err)
+			}
 		}
 		return renderContainer(created)
 	},
@@ -431,32 +435,6 @@ var containerRelaunchCmd = &cobra.Command{
 	},
 }
 
-var containerAutoUpdateCmd = &cobra.Command{
-	Use:   "auto-update [id|name]",
-	Short: "Toggle auto-update for a GitHub-connected container",
-	Args:  cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		if autoUpdateOn == autoUpdateOff {
-			return fmt.Errorf("specify exactly one of --on or --off")
-		}
-		client, err := authedClient()
-		if err != nil {
-			return err
-		}
-		c, err := resolveContainer(client, args[0])
-		if err != nil {
-			return err
-		}
-		body := map[string]any{"auto_update": autoUpdateOn}
-		var updated containerView
-		if _, err := client.do("POST", pathf("/api/containers/%s/auto-update", c.ID), nil, body, &updated); err != nil {
-			return err
-		}
-		fmt.Printf("auto_update=%v on %s\n", updated.AutoUpdate, updated.Name)
-		return nil
-	},
-}
-
 var containerMetricsCmd = &cobra.Command{
 	Use:   "metrics [id|name]",
 	Short: "Show container resource metrics",
@@ -512,7 +490,7 @@ var containerHostsCmd = &cobra.Command{
 
 var containerGroupCmd = &cobra.Command{
 	Use:   "group [id|name]",
-	Short: "Move a container into (or out of) a group",
+	Short: "Move the container's repository deployment into or out of a group",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if !groupUngroup && groupName == "" {
@@ -529,33 +507,36 @@ var containerGroupCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		// The controlplane has no partial-update semantics for these fields;
-		// any value sent (including 0) is written verbatim. Preserve the
-		// container's current order when the user didn't pass the flag, so
-		// `container group my-app --name foo` doesn't silently reset
-		// existing positions.
-		groupOrderToSend := int32(c.GroupOrder)
+		deployment, err := resolveDeploymentForContainer(client, *c)
+		if err != nil {
+			return err
+		}
+		groupOrderToSend := deployment.GroupOrder
 		if cmd.Flags().Changed("group-order") {
 			groupOrderToSend = groupOrder
 		}
-		displayOrderToSend := int32(c.DisplayOrder)
+		displayOrderToSend := deployment.DisplayOrder
 		if cmd.Flags().Changed("display-order") {
 			displayOrderToSend = groupDisplayOrder
 		}
-		body := map[string]any{
-			"group_order":   groupOrderToSend,
-			"display_order": displayOrderToSend,
-		}
+		var groupNameToSend *string
 		if groupUngroup {
-			body["group_name"] = nil
+			groupNameToSend = nil
 		} else {
-			body["group_name"] = groupName
+			groupNameToSend = &groupName
 		}
-		var updated containerView
-		if _, err := client.do("PUT", pathf("/api/containers/%s/group", c.ID), nil, body, &updated); err != nil {
+		updated, err := moveDeploymentToGroup(
+			client,
+			deployment.ID,
+			groupNameToSend,
+			groupOrderToSend,
+			displayOrderToSend,
+		)
+		if err != nil {
 			return err
 		}
-		return renderContainer(updated)
+		updated = preserveDeploymentCounts(updated, *deployment)
+		return renderDeployment(updated)
 	},
 }
 
@@ -876,6 +857,9 @@ func renderContainer(c containerView) error {
 	fmt.Printf("Name:         %s\n", c.Name)
 	fmt.Printf("Status:       %s\n", c.Status)
 	fmt.Printf("Repo:         %s@%s\n", c.Repo, c.CurrentTag)
+	if c.DeploymentID != "" {
+		fmt.Printf("Deployment:   %s\n", c.DeploymentID)
+	}
 	if c.Domain != "" {
 		fmt.Printf("Domain:       %s\n", c.Domain)
 	}
@@ -894,9 +878,6 @@ func renderContainer(c containerView) error {
 	}
 	if c.DisableCCMode {
 		fmt.Printf("Mode:         non-cc (confidential computing disabled)\n")
-	}
-	if c.AutoUpdate {
-		fmt.Printf("Auto-update:  enabled\n")
 	}
 	if c.SSHPort > 0 {
 		fmt.Printf("SSH port:     %d\n", c.SSHPort)
@@ -1005,4 +986,3 @@ func prettyJSON(raw json.RawMessage) []byte {
 	}
 	return out
 }
-
