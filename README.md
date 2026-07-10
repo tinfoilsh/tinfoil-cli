@@ -147,7 +147,7 @@ tinfoil certificate audit -c /path/to/certificate.pem
 
 ## Container management
 
-The `container`, `secret`, `ssh-key`, `registry`, and `domain` subcommands manage Tinfoil Containers through the same controlplane API the dashboard uses. See the [Tinfoil Containers docs](https://docs.tinfoil.sh/containers/overview) for the underlying concepts and the [CLI reference](https://docs.tinfoil.sh/containers/cli) for the full command surface.
+The `container`, `repo`, `secret`, `ssh-key`, `registry`, and `domain` subcommands manage Tinfoil Containers through the same controlplane API the dashboard uses. See the [Tinfoil Containers docs](https://docs.tinfoil.sh/containers/overview) for the underlying concepts and the [CLI reference](https://docs.tinfoil.sh/containers/cli) for the full command surface.
 
 ### Logging in
 
@@ -203,6 +203,12 @@ tinfoil secret list
 echo -n "$OPENAI_KEY" | tinfoil secret create OPENAI_API_KEY --value-file -
 tinfoil secret set OPENAI_API_KEY --value-file ./key.txt
 tinfoil secret delete OPENAI_API_KEY
+
+# Repository secrets
+tinfoil repo secret list screenpipe/my-repo-container
+tinfoil repo secret create screenpipe/my-repo-container OPENAI_API_KEY --value-file ./key.txt
+tinfoil repo secret set screenpipe/my-repo-container OPENAI_API_KEY --value-file ./key.txt
+tinfoil repo secret delete screenpipe/my-repo-container OPENAI_API_KEY
 
 # SSH keys for debug containers
 tinfoil ssh-key create laptop --public-key-file ~/.ssh/id_ed25519.pub
