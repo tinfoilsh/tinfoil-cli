@@ -39,8 +39,6 @@ type containerView struct {
 	Staging            bool            `json:"staging"`
 	DisableCCMode      bool            `json:"disable_cc_mode"`
 	GithubAppConnected bool            `json:"github_app_connected"`
-	GroupName          *string         `json:"group_name"`
-	GroupOrder         int32           `json:"group_order"`
 	DisplayOrder       int32           `json:"display_order"`
 	UpdateTag          string          `json:"update_tag"`
 	UpdateStatus       string          `json:"update_status"`
@@ -278,11 +276,7 @@ var containerCreateCmd = &cobra.Command{
 			"repo": createRepo,
 			"tag":  createTag,
 		}
-		if createGroupName != "" {
-			body["group_name"] = createGroupName
-			body["group_order"] = createGroupOrder
-			body["display_order"] = createDisplayOrder
-		} else if cmd.Flags().Changed("display-order") {
+		if cmd.Flags().Changed("display-order") {
 			body["display_order"] = createDisplayOrder
 		}
 		if len(vars) > 0 {
@@ -317,7 +311,7 @@ var containerCreateCmd = &cobra.Command{
 		if _, err := client.do("POST", "/api/containers", nil, body, &created); err != nil {
 			return err
 		}
-		if createGroupName != "" && created.DeploymentID != "" {
+		if createGroupName != "" {
 			deployment, err := resolveDeploymentForContainer(client, created)
 			if err != nil {
 				return fmt.Errorf("container created, but deployment group could not be set: %w", err)
@@ -513,11 +507,15 @@ var containerGroupCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		groupOrderToSend := c.GroupOrder
+		deployment, err := resolveDeploymentForContainer(client, *c)
+		if err != nil {
+			return err
+		}
+		groupOrderToSend := deployment.GroupOrder
 		if cmd.Flags().Changed("group-order") {
 			groupOrderToSend = groupOrder
 		}
-		displayOrderToSend := c.DisplayOrder
+		displayOrderToSend := deployment.DisplayOrder
 		if cmd.Flags().Changed("display-order") {
 			displayOrderToSend = groupDisplayOrder
 		}
@@ -527,40 +525,18 @@ var containerGroupCmd = &cobra.Command{
 		} else {
 			groupNameToSend = &groupName
 		}
-		if c.DeploymentID != "" {
-			deployment, err := resolveDeploymentForContainer(client, *c)
-			if err != nil {
-				return err
-			}
-			if !cmd.Flags().Changed("group-order") {
-				groupOrderToSend = deployment.GroupOrder
-			}
-			if !cmd.Flags().Changed("display-order") {
-				displayOrderToSend = deployment.DisplayOrder
-			}
-			updated, err := moveDeploymentToGroup(
-				client,
-				deployment.ID,
-				groupNameToSend,
-				groupOrderToSend,
-				displayOrderToSend,
-			)
-			if err != nil {
-				return err
-			}
-			updated = preserveDeploymentCounts(updated, *deployment)
-			return renderDeployment(updated)
-		}
-		body := map[string]any{
-			"group_name":    groupNameToSend,
-			"group_order":   groupOrderToSend,
-			"display_order": displayOrderToSend,
-		}
-		var updated containerView
-		if _, err := client.do("PUT", pathf("/api/containers/%s/group", c.ID), nil, body, &updated); err != nil {
+		updated, err := moveDeploymentToGroup(
+			client,
+			deployment.ID,
+			groupNameToSend,
+			groupOrderToSend,
+			displayOrderToSend,
+		)
+		if err != nil {
 			return err
 		}
-		return renderContainer(updated)
+		updated = preserveDeploymentCounts(updated, *deployment)
+		return renderDeployment(updated)
 	},
 }
 

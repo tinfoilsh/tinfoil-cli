@@ -114,59 +114,27 @@ func TestContainerGroupMovesRepositoryDeployment(t *testing.T) {
 	}
 }
 
-func TestContainerGroupFallsBackToLegacyEndpoint(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.Method == http.MethodGet && r.URL.Path == "/api/containers":
-			_, _ = io.WriteString(w, `[{"id":"container-1","name":"app-1","repo":"acme/app","group_order":4,"display_order":7}]`)
-		case r.Method == http.MethodPut && r.URL.Path == "/api/containers/container-1/group":
-			var body struct {
-				GroupName    *string `json:"group_name"`
-				GroupOrder   int32   `json:"group_order"`
-				DisplayOrder int32   `json:"display_order"`
-			}
-			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-				t.Fatalf("decode body: %v", err)
-			}
-			if body.GroupName == nil || *body.GroupName != "production" {
-				t.Fatalf("group_name = %v", body.GroupName)
-			}
-			if body.GroupOrder != 4 || body.DisplayOrder != 7 {
-				t.Fatalf("orders = (%d, %d), want (4, 7)", body.GroupOrder, body.DisplayOrder)
-			}
-			_, _ = io.WriteString(w, `{"id":"container-1","name":"app-1","repo":"acme/app","group_name":"production","group_order":4,"display_order":7}`)
-		default:
-			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
-		}
-	}))
-	defer server.Close()
-
-	configureDeploymentCommandTest(t, server.URL)
-	groupName = "production"
-
-	if err := containerGroupCmd.RunE(containerGroupCmd, []string{"app-1"}); err != nil {
-		t.Fatalf("run legacy group: %v", err)
-	}
-}
-
 func TestContainerCreateSetsDeploymentGroup(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodPost && r.URL.Path == "/api/containers":
 			var body struct {
-				Repo         string `json:"repo"`
-				GroupName    string `json:"group_name"`
-				GroupOrder   int32  `json:"group_order"`
-				DisplayOrder int32  `json:"display_order"`
+				Repo         string  `json:"repo"`
+				GroupName    *string `json:"group_name"`
+				GroupOrder   *int32  `json:"group_order"`
+				DisplayOrder *int32  `json:"display_order"`
 			}
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 				t.Fatalf("decode body: %v", err)
 			}
-			if body.Repo != "acme/app" || body.GroupName != "production" {
+			if body.Repo != "acme/app" {
 				t.Fatalf("create body = %+v", body)
 			}
-			if body.GroupOrder != 4 || body.DisplayOrder != 2 {
-				t.Fatalf("orders = (%d, %d), want (4, 2)", body.GroupOrder, body.DisplayOrder)
+			if body.GroupName != nil || body.GroupOrder != nil {
+				t.Fatalf("legacy group fields were sent: %+v", body)
+			}
+			if body.DisplayOrder == nil || *body.DisplayOrder != 2 {
+				t.Fatalf("display_order = %v, want 2", body.DisplayOrder)
 			}
 			_, _ = io.WriteString(w, `{"id":"container-1","name":"app-1","repo":"acme/app","deployment_id":"deployment-1"}`)
 		case r.Method == http.MethodGet && r.URL.Path == "/api/deployments":
@@ -199,39 +167,15 @@ func TestContainerCreateSetsDeploymentGroup(t *testing.T) {
 	createGroupName = "production"
 	createGroupOrder = 4
 	createDisplayOrder = 2
+	displayOrderFlag := containerCreateCmd.Flags().Lookup("display-order")
+	previousDisplayOrderChanged := displayOrderFlag.Changed
+	displayOrderFlag.Changed = true
+	t.Cleanup(func() {
+		displayOrderFlag.Changed = previousDisplayOrderChanged
+	})
 
 	if err := containerCreateCmd.RunE(containerCreateCmd, []string{"app-1"}); err != nil {
 		t.Fatalf("run create: %v", err)
-	}
-}
-
-func TestContainerCreateKeepsLegacyGroupingWithoutDeploymentID(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost || r.URL.Path != "/api/containers" {
-			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
-		}
-		var body struct {
-			GroupName  string `json:"group_name"`
-			GroupOrder int32  `json:"group_order"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			t.Fatalf("decode body: %v", err)
-		}
-		if body.GroupName != "production" || body.GroupOrder != 4 {
-			t.Fatalf("create group = (%q, %d)", body.GroupName, body.GroupOrder)
-		}
-		_, _ = io.WriteString(w, `{"id":"container-1","name":"app-1","repo":"acme/app","group_name":"production","group_order":4}`)
-	}))
-	defer server.Close()
-
-	configureDeploymentCommandTest(t, server.URL)
-	createRepo = "acme/app"
-	createTag = "v1.2.3"
-	createGroupName = "production"
-	createGroupOrder = 4
-
-	if err := containerCreateCmd.RunE(containerCreateCmd, []string{"app-1"}); err != nil {
-		t.Fatalf("run legacy create: %v", err)
 	}
 }
 
