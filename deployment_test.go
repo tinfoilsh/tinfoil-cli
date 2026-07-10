@@ -291,18 +291,42 @@ func configureDeploymentCommandTest(t *testing.T, serverURL string) {
 	})
 }
 
+func TestCaptureTestStdoutRestoresStdoutAfterPanic(t *testing.T) {
+	previous := os.Stdout
+	didPanic := false
+
+	func() {
+		defer func() {
+			didPanic = recover() != nil
+		}()
+		_, _ = captureTestStdout(func() error {
+			panic("test panic")
+		})
+	}()
+
+	if !didPanic {
+		t.Fatal("captureTestStdout did not propagate panic")
+	}
+	if os.Stdout != previous {
+		t.Fatal("captureTestStdout did not restore stdout after panic")
+	}
+}
+
 func captureTestStdout(run func() error) ([]byte, error) {
 	previous := os.Stdout
 	reader, writer, err := os.Pipe()
 	if err != nil {
 		return nil, err
 	}
+	defer reader.Close()
+	defer writer.Close()
 	os.Stdout = writer
+	defer func() {
+		os.Stdout = previous
+	}()
 	runErr := run()
 	closeErr := writer.Close()
-	os.Stdout = previous
 	output, readErr := io.ReadAll(reader)
-	_ = reader.Close()
 	if runErr != nil {
 		return output, runErr
 	}
