@@ -95,16 +95,12 @@ var repoConfigGetCmd = &cobra.Command{
 		if repoConfigRaw && outputFormat == "json" {
 			return fmt.Errorf("--raw and --output json cannot be used together")
 		}
-		owner, name, err := parseRepository(args[0])
-		if err != nil {
-			return err
-		}
-		client, err := authedClient()
+		repository, client, err := repositoryCommand(args[0])
 		if err != nil {
 			return err
 		}
 		var response repoConfigResponse
-		if _, err := client.do("GET", repoAPIPath(owner, name)+"/config", nil, nil, &response); err != nil {
+		if _, err := client.do("GET", repository.apiPath()+"/config", nil, nil, &response); err != nil {
 			return err
 		}
 		if outputFormat == "json" {
@@ -114,7 +110,7 @@ var repoConfigGetCmd = &cobra.Command{
 			fmt.Print(response.Raw)
 			return nil
 		}
-		fmt.Printf("Repository:       %s/%s\n", owner, name)
+		fmt.Printf("Repository:       %s/%s\n", repository.owner, repository.name)
 		fmt.Printf("Default branch:   %s\n", response.DefaultBranch)
 		fmt.Printf("Config exists:    %v\n", response.Exists)
 		fmt.Printf("Release workflow: %v\n", response.HasBuildWorkflow)
@@ -131,15 +127,11 @@ var repoConfigPRCmd = &cobra.Command{
 	Long:  "Open a pull request through the installed GitHub App. Do not put secret values in the config because the repository must be public.",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		owner, name, err := parseRepository(args[0])
+		repository, client, err := repositoryCommand(args[0])
 		if err != nil {
 			return err
 		}
 		raw, err := readConfigInput(repoConfigFile)
-		if err != nil {
-			return err
-		}
-		client, err := authedClient()
 		if err != nil {
 			return err
 		}
@@ -148,7 +140,7 @@ var repoConfigPRCmd = &cobra.Command{
 			body["pr_body"] = repoPRBody
 		}
 		var response repoConfigPRResponse
-		if _, err := client.do("POST", repoAPIPath(owner, name)+"/config/pr", nil, body, &response); err != nil {
+		if _, err := client.do("POST", repository.apiPath()+"/config/pr", nil, body, &response); err != nil {
 			return err
 		}
 		if outputFormat == "json" {
@@ -170,20 +162,16 @@ var repoPRStatusCmd = &cobra.Command{
 	Short: "Show the status of a config pull request",
 	Args:  cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		owner, name, err := parseRepository(args[0])
-		if err != nil {
-			return err
-		}
 		number, err := strconv.Atoi(args[1])
 		if err != nil || number <= 0 {
 			return fmt.Errorf("pull request number must be a positive integer")
 		}
-		client, err := authedClient()
+		repository, client, err := repositoryCommand(args[0])
 		if err != nil {
 			return err
 		}
 		var response repoPullResponse
-		path := repoAPIPath(owner, name) + "/pulls/" + strconv.Itoa(number)
+		path := repository.apiPath() + "/pulls/" + strconv.Itoa(number)
 		if _, err := client.do("GET", path, nil, nil, &response); err != nil {
 			return err
 		}
@@ -208,16 +196,12 @@ var repoBuildInfoCmd = &cobra.Command{
 	Short: "Show the latest tag and suggested next version",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		owner, name, err := parseRepository(args[0])
-		if err != nil {
-			return err
-		}
-		client, err := authedClient()
+		repository, client, err := repositoryCommand(args[0])
 		if err != nil {
 			return err
 		}
 		var response repoBuildInfoResponse
-		if _, err := client.do("GET", repoAPIPath(owner, name)+"/build/info", nil, nil, &response); err != nil {
+		if _, err := client.do("GET", repository.apiPath()+"/build/info", nil, nil, &response); err != nil {
 			return err
 		}
 		if outputFormat == "json" {
@@ -238,17 +222,13 @@ var repoBuildRunCmd = &cobra.Command{
 	Short: "Trigger the Tinfoil Release workflow",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		owner, name, err := parseRepository(args[0])
-		if err != nil {
-			return err
-		}
-		client, err := authedClient()
+		repository, client, err := repositoryCommand(args[0])
 		if err != nil {
 			return err
 		}
 		var response repoBuildResponse
 		body := map[string]string{"version": repoVersion}
-		if _, err := client.do("POST", repoAPIPath(owner, name)+"/build", nil, body, &response); err != nil {
+		if _, err := client.do("POST", repository.apiPath()+"/build", nil, body, &response); err != nil {
 			return err
 		}
 		if outputFormat == "json" {
@@ -260,16 +240,37 @@ var repoBuildRunCmd = &cobra.Command{
 	},
 }
 
-func parseRepository(value string) (string, string, error) {
-	owner, name, ok := strings.Cut(strings.TrimSpace(value), "/")
-	if !ok || owner == "" || name == "" || strings.Contains(name, "/") {
-		return "", "", fmt.Errorf("repository must be in owner/repo format")
-	}
-	return owner, name, nil
+type repositoryRef struct {
+	owner string
+	name  string
 }
 
-func repoAPIPath(owner, name string) string {
-	return pathf("/api/github/repos/%s/%s", owner, name)
+func parseRepository(value string) (repositoryRef, error) {
+	owner, name, ok := strings.Cut(strings.TrimSpace(value), "/")
+	if !ok || !validRepositorySegment(owner) || !validRepositorySegment(name) || strings.Contains(name, "/") {
+		return repositoryRef{}, fmt.Errorf("repository must be in owner/repo format")
+	}
+	return repositoryRef{owner: owner, name: name}, nil
+}
+
+func validRepositorySegment(value string) bool {
+	return value != "" && value != "." && value != ".."
+}
+
+func (r repositoryRef) apiPath() string {
+	return pathf("/api/github/repos/%s/%s", r.owner, r.name)
+}
+
+func repositoryCommand(value string) (repositoryRef, *cpClient, error) {
+	repository, err := parseRepository(value)
+	if err != nil {
+		return repositoryRef{}, nil, err
+	}
+	client, err := authedClient()
+	if err != nil {
+		return repositoryRef{}, nil, err
+	}
+	return repository, client, nil
 }
 
 func readConfigInput(path string) (string, error) {

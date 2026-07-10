@@ -23,11 +23,15 @@ func TestParseRepository(t *testing.T) {
 		{value: "/example", wantError: true},
 		{value: "tinfoilsh/", wantError: true},
 		{value: "tinfoilsh/example/extra", wantError: true},
+		{value: "../example", wantError: true},
+		{value: "./example", wantError: true},
+		{value: "tinfoilsh/..", wantError: true},
+		{value: "tinfoilsh/.", wantError: true},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.value, func(t *testing.T) {
-			owner, repo, err := parseRepository(tt.value)
+			repository, err := parseRepository(tt.value)
 			if tt.wantError {
 				if err == nil {
 					t.Fatal("expected an error")
@@ -37,8 +41,8 @@ func TestParseRepository(t *testing.T) {
 			if err != nil {
 				t.Fatalf("parseRepository: %v", err)
 			}
-			if owner != tt.wantOwner || repo != tt.wantRepo {
-				t.Fatalf("got %q/%q, want %q/%q", owner, repo, tt.wantOwner, tt.wantRepo)
+			if repository.owner != tt.wantOwner || repository.name != tt.wantRepo {
+				t.Fatalf("got %q/%q, want %q/%q", repository.owner, repository.name, tt.wantOwner, tt.wantRepo)
 			}
 		})
 	}

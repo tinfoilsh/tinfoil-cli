@@ -105,9 +105,8 @@ func (c *cpClient) do(method, path string, query url.Values, body any, out any) 
 
 // pathf builds a controlplane URL path by url.PathEscape-ing each segment
 // before substituting it into the printf-style format. Use this anywhere a
-// path component comes from user input or unverified server data — string
-// concatenation would let `..` or `/` in a name traverse to a different
-// endpoint than the one the command names.
+// path component comes from user input or unverified server data. Callers must
+// still reject exact `.` and `..` segments, which PathEscape leaves unchanged.
 func pathf(format string, segments ...string) string {
 	args := make([]any, len(segments))
 	for i, s := range segments {
