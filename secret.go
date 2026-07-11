@@ -12,6 +12,7 @@ import (
 type secretView struct {
 	ID        string   `json:"id"`
 	Name      string   `json:"name"`
+	Scope     string   `json:"scope"`
 	CreatedAt string   `json:"created_at"`
 	UpdatedAt string   `json:"updated_at"`
 	UsedBy    []string `json:"used_by"`
@@ -51,26 +52,11 @@ var secretListCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		var list []secretView
-		if _, err := client.do("GET", "/api/secrets", nil, nil, &list); err != nil {
+		list, err := listSecrets(client, "/api/secrets")
+		if err != nil {
 			return err
 		}
-		if outputFormat == "json" {
-			return printJSON(list)
-		}
-		if len(list) == 0 {
-			fmt.Println("No secrets.")
-			return nil
-		}
-		fmt.Printf("%-32s  %-30s  %s\n", "NAME", "UPDATED", "USED BY")
-		for _, s := range list {
-			used := strings.Join(s.UsedBy, ", ")
-			if used == "" {
-				used = "-"
-			}
-			fmt.Printf("%-32s  %-30s  %s\n", truncate(s.Name, 32), truncate(s.UpdatedAt, 30), used)
-		}
-		return nil
+		return printSecretList(list)
 	},
 }
 
@@ -83,23 +69,11 @@ var secretGetCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		var s secretView
-		if _, err := client.do("GET", pathf("/api/secrets/%s", args[0]), nil, nil, &s); err != nil {
+		s, err := getSecret(client, pathf("/api/secrets/%s", args[0]))
+		if err != nil {
 			return err
 		}
-		if outputFormat == "json" {
-			return printJSON(s)
-		}
-		fmt.Printf("Name:      %s\n", s.Name)
-		fmt.Printf("ID:        %s\n", s.ID)
-		fmt.Printf("Created:   %s\n", s.CreatedAt)
-		fmt.Printf("Updated:   %s\n", s.UpdatedAt)
-		used := strings.Join(s.UsedBy, ", ")
-		if used == "" {
-			used = "-"
-		}
-		fmt.Printf("Used by:   %s\n", used)
-		return nil
+		return printSecret(s)
 	},
 }
 
@@ -116,9 +90,8 @@ var secretCreateCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		body := map[string]any{"name": args[0], "value": value}
-		var s secretView
-		if _, err := client.do("POST", "/api/secrets", nil, body, &s); err != nil {
+		s, err := createSecret(client, "/api/secrets", args[0], value)
+		if err != nil {
 			return err
 		}
 		fmt.Printf("Created secret %s\n", s.Name)
@@ -139,9 +112,8 @@ var secretSetCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		body := map[string]any{"value": value}
-		var s secretView
-		if _, err := client.do("PUT", pathf("/api/secrets/%s", args[0]), nil, body, &s); err != nil {
+		s, err := setSecret(client, pathf("/api/secrets/%s", args[0]), value)
+		if err != nil {
 			return err
 		}
 		fmt.Printf("Updated secret %s (containers using it will be marked stale)\n", s.Name)
@@ -159,12 +131,86 @@ var secretDeleteCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		if _, err := client.do("DELETE", pathf("/api/secrets/%s", args[0]), nil, nil, nil); err != nil {
+		if err := deleteSecret(client, pathf("/api/secrets/%s", args[0])); err != nil {
 			return err
 		}
 		fmt.Printf("Deleted secret %s\n", args[0])
 		return nil
 	},
+}
+
+func listSecrets(client *cpClient, path string) ([]secretView, error) {
+	var list []secretView
+	if _, err := client.do("GET", path, nil, nil, &list); err != nil {
+		return nil, err
+	}
+	return list, nil
+}
+
+func getSecret(client *cpClient, path string) (secretView, error) {
+	var secret secretView
+	if _, err := client.do("GET", path, nil, nil, &secret); err != nil {
+		return secretView{}, err
+	}
+	return secret, nil
+}
+
+func createSecret(client *cpClient, path, name, value string) (secretView, error) {
+	var secret secretView
+	body := map[string]any{"name": name, "value": value}
+	if _, err := client.do("POST", path, nil, body, &secret); err != nil {
+		return secretView{}, err
+	}
+	return secret, nil
+}
+
+func setSecret(client *cpClient, path, value string) (secretView, error) {
+	var secret secretView
+	body := map[string]any{"value": value}
+	if _, err := client.do("PUT", path, nil, body, &secret); err != nil {
+		return secretView{}, err
+	}
+	return secret, nil
+}
+
+func deleteSecret(client *cpClient, path string) error {
+	_, err := client.do("DELETE", path, nil, nil, nil)
+	return err
+}
+
+func printSecretList(list []secretView) error {
+	if outputFormat == "json" {
+		return printJSON(list)
+	}
+	if len(list) == 0 {
+		fmt.Println("No secrets.")
+		return nil
+	}
+	fmt.Printf("%-32s  %-30s  %s\n", "NAME", "UPDATED", "USED BY")
+	for _, secret := range list {
+		used := strings.Join(secret.UsedBy, ", ")
+		if used == "" {
+			used = "-"
+		}
+		fmt.Printf("%-32s  %-30s  %s\n", truncate(secret.Name, 32), truncate(secret.UpdatedAt, 30), used)
+	}
+	return nil
+}
+
+func printSecret(secret secretView) error {
+	if outputFormat == "json" {
+		return printJSON(secret)
+	}
+	fmt.Printf("Name:      %s\n", secret.Name)
+	fmt.Printf("ID:        %s\n", secret.ID)
+	fmt.Printf("Created:   %s\n", secret.CreatedAt)
+	fmt.Printf("Updated:   %s\n", secret.UpdatedAt)
+	used := strings.Join(secret.UsedBy, ", ")
+	if used == "" {
+		used = "-"
+	}
+	fmt.Printf("Used by:   %s\n", used)
+	return nil
 }
 
 // readSecretValue resolves the secret value from --value, --value-file, or
