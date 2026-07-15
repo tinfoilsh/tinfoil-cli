@@ -195,6 +195,18 @@ tinfoil container connect my-container -p 8080
 
 `container connect <name>` resolves the container's enclave domain and source repo, then runs a verified proxy locally — equivalent to `tinfoil proxy -e <domain> -r <repo>` but without copy-pasting either value.
 
+### Prepared models
+
+List modelwrap jobs and delete a terminal job together with its unshared model artifact and download cache:
+
+```bash
+tinfoil model list
+tinfoil model delete <job-id>
+tinfoil model delete owner/model@revision --host <host-name>
+```
+
+Deletion is rejected while a wrap is running or while its artifact is referenced by a container deployment.
+
 ### Secrets, SSH keys, registry credentials, custom domains
 
 ```bash
