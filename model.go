@@ -162,10 +162,10 @@ func renderModelwraps(models []modelwrapView) error {
 		fmt.Println("No prepared models.")
 		return nil
 	}
-	fmt.Printf("%-12s  %-20s  %-10s  %-48s  %s\n", "JOB ID", "HOST", "STATUS", "MODEL", "STARTED")
+	fmt.Printf("%-16s  %-20s  %-10s  %-48s  %s\n", "JOB ID", "HOST", "STATUS", "MODEL", "STARTED")
 	for _, model := range models {
-		fmt.Printf("%-12s  %-20s  %-10s  %-48s  %s\n",
-			truncate(model.ID, 12), truncate(model.Host, 20), model.Status,
+		fmt.Printf("%-16s  %-20s  %-10s  %-48s  %s\n",
+			truncate(model.ID, 16), truncate(model.Host, 20), model.Status,
 			truncate(modelwrapTarget(model), 48), model.StartedAt,
 		)
 	}
