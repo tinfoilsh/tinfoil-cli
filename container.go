@@ -58,39 +58,42 @@ type hostInfo struct {
 var (
 	outputFormat string
 
-	createRepo         string
-	createTag          string
-	createDebug        bool
-	createStaging      bool
-	createDisableCC    bool
-	createYes          bool
-	createCustomDomain string
-	createHost         string
-	createReplaceID    string
-	createVariables    []string
-	createSecrets      []string
-	createSSHKeys      []string
-	createGroupName    string
-	createGroupOrder   int32
-	createDisplayOrder int32
+	createRepo           string
+	createTag            string
+	createDebug          bool
+	createStaging        bool
+	createPromoteRelease bool
+	createDisableCC      bool
+	createYes            bool
+	createCustomDomain   string
+	createHost           string
+	createReplaceID      string
+	createVariables      []string
+	createSecrets        []string
+	createSSHKeys        []string
+	createGroupName      string
+	createGroupOrder     int32
+	createDisplayOrder   int32
 
-	relaunchTag          string
-	relaunchVariables    []string
-	relaunchSecrets      []string
-	relaunchSSHKeys      []string
-	relaunchDebug        string
-	relaunchStaging      string
-	relaunchCustomDomain string
-	relaunchHost         string
+	relaunchTag            string
+	relaunchVariables      []string
+	relaunchSecrets        []string
+	relaunchSSHKeys        []string
+	relaunchDebug          string
+	relaunchStaging        string
+	relaunchPromoteRelease string
+	relaunchCustomDomain   string
+	relaunchHost           string
 
-	startTag          string
-	startVariables    []string
-	startSecrets      []string
-	startSSHKeys      []string
-	startDebug        string
-	startStaging      string
-	startCustomDomain string
-	startHost         string
+	startTag            string
+	startVariables      []string
+	startSecrets        []string
+	startSSHKeys        []string
+	startDebug          string
+	startStaging        string
+	startPromoteRelease string
+	startCustomDomain   string
+	startHost           string
 
 	groupName         string
 	groupOrder        int32
@@ -131,6 +134,7 @@ func init() {
 	containerCreateCmd.Flags().StringVar(&createTag, "tag", "", "Repository release tag to deploy [required]")
 	containerCreateCmd.Flags().BoolVar(&createDebug, "debug", false, "Enable debug mode (allows SSH into the enclave)")
 	containerCreateCmd.Flags().BoolVar(&createStaging, "staging", false, "Use staging mode (lower-trust environment)")
+	containerCreateCmd.Flags().BoolVar(&createPromoteRelease, "promote-release", true, "Mark the deployed tag as the repository's latest release when the deploy goes live; pass --promote-release=false to deploy without promoting")
 	containerCreateCmd.Flags().BoolVar(&createDisableCC, "disable-cc-mode", false, "EXPERIMENTAL: disable confidential computing (benchmarks only; requires org entitlement)")
 	containerCreateCmd.Flags().BoolVar(&createYes, "yes", false, "Skip interactive confirmation for --disable-cc-mode")
 	containerCreateCmd.Flags().StringVar(&createCustomDomain, "custom-domain", "", "Verified custom domain to expose the container on")
@@ -163,6 +167,7 @@ func init() {
 	containerStartCmd.Flags().StringArrayVar(&startSSHKeys, "ssh-key", nil, "Override SSH keys list")
 	containerStartCmd.Flags().StringVar(&startDebug, "debug", "", "Override debug mode (true/false)")
 	containerStartCmd.Flags().StringVar(&startStaging, "staging", "", "Override staging mode (true/false)")
+	containerStartCmd.Flags().StringVar(&startPromoteRelease, "promote-release", "", "Override latest-release promotion (true/false)")
 	containerStartCmd.Flags().StringVar(&startCustomDomain, "custom-domain", "", "Override custom domain (empty string clears it)")
 	containerStartCmd.Flags().StringVar(&startHost, "host", "", "Move stopped container to a different host")
 
@@ -172,6 +177,7 @@ func init() {
 	containerRelaunchCmd.Flags().StringArrayVar(&relaunchSSHKeys, "ssh-key", nil, "Override SSH keys list")
 	containerRelaunchCmd.Flags().StringVar(&relaunchDebug, "debug", "", "Override debug mode (true/false)")
 	containerRelaunchCmd.Flags().StringVar(&relaunchStaging, "staging", "", "Override staging mode (true/false)")
+	containerRelaunchCmd.Flags().StringVar(&relaunchPromoteRelease, "promote-release", "", "Override latest-release promotion (true/false)")
 	containerRelaunchCmd.Flags().StringVar(&relaunchCustomDomain, "custom-domain", "", "Override custom domain (empty string clears it)")
 	containerRelaunchCmd.Flags().StringVar(&relaunchHost, "host", "", "Move failed container to a different host")
 
@@ -294,6 +300,9 @@ var containerCreateCmd = &cobra.Command{
 		if createStaging {
 			body["staging"] = true
 		}
+		if cmd.Flags().Changed("promote-release") {
+			body["promote_release"] = createPromoteRelease
+		}
 		if createDisableCC {
 			body["disable_cc_mode"] = true
 		}
@@ -368,7 +377,7 @@ var containerStartCmd = &cobra.Command{
 		}
 		body, err := buildLifecycleBody(cmd,
 			startTag, startVariables, startSecrets, startSSHKeys,
-			startDebug, startStaging, startCustomDomain, startHost,
+			startDebug, startStaging, startPromoteRelease, startCustomDomain, startHost,
 		)
 		if err != nil {
 			return err
@@ -417,7 +426,7 @@ var containerRelaunchCmd = &cobra.Command{
 		}
 		body, err := buildLifecycleBody(cmd,
 			relaunchTag, relaunchVariables, relaunchSecrets, relaunchSSHKeys,
-			relaunchDebug, relaunchStaging, relaunchCustomDomain, relaunchHost,
+			relaunchDebug, relaunchStaging, relaunchPromoteRelease, relaunchCustomDomain, relaunchHost,
 		)
 		if err != nil {
 			return err
@@ -741,7 +750,7 @@ func parseKeyValues(in []string) (map[string]string, error) {
 func buildLifecycleBody(cmd *cobra.Command,
 	tag string,
 	variables, secrets, sshKeys []string,
-	debug, staging, customDomain, host string,
+	debug, staging, promoteRelease, customDomain, host string,
 ) (map[string]any, error) {
 	body := map[string]any{}
 	if cmd.Flags().Changed("tag") && tag != "" {
@@ -782,6 +791,13 @@ func buildLifecycleBody(cmd *cobra.Command,
 			return nil, fmt.Errorf("--staging: %w", err)
 		}
 		body["staging"] = v
+	}
+	if cmd.Flags().Changed("promote-release") {
+		v, err := parseTriBool(promoteRelease)
+		if err != nil {
+			return nil, fmt.Errorf("--promote-release: %w", err)
+		}
+		body["promote_release"] = v
 	}
 	if cmd.Flags().Changed("custom-domain") {
 		body["custom_domain"] = customDomain
