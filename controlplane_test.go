@@ -81,16 +81,11 @@ func TestPathfEscapesSegments(t *testing.T) {
 }
 
 func TestControlplaneRequestsSendVersionedUserAgent(t *testing.T) {
-	previousVersion := version
-	version = "0.16.0"
-	t.Cleanup(func() {
-		version = previousVersion
-	})
+	setVersionForTest(t, "0.16.0")
 
+	userAgent := make(chan string, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if got := r.Header.Get("User-Agent"); got != "tinfoil-cli/0.16.0" {
-			t.Fatalf("User-Agent = %q, want %q", got, "tinfoil-cli/0.16.0")
-		}
+		userAgent <- r.Header.Get("User-Agent")
 		_, _ = io.WriteString(w, `{}`)
 	}))
 	defer server.Close()
@@ -99,14 +94,13 @@ func TestControlplaneRequestsSendVersionedUserAgent(t *testing.T) {
 	if _, err := client.do(http.MethodGet, "/test", nil, nil, nil); err != nil {
 		t.Fatalf("request: %v", err)
 	}
+	if got := <-userAgent; got != "tinfoil-cli/0.16.0" {
+		t.Fatalf("User-Agent = %q, want %q", got, "tinfoil-cli/0.16.0")
+	}
 }
 
 func TestVersionFlagUsesInjectedVersion(t *testing.T) {
-	previousVersion := version
-	version = "0.16.0"
-	t.Cleanup(func() {
-		version = previousVersion
-	})
+	setVersionForTest(t, "0.16.0")
 
 	cmd := newRootCommand()
 	output := new(bytes.Buffer)
@@ -118,4 +112,13 @@ func TestVersionFlagUsesInjectedVersion(t *testing.T) {
 	if got := output.String(); got != "tinfoil version 0.16.0\n" {
 		t.Fatalf("output = %q, want %q", got, "tinfoil version 0.16.0\n")
 	}
+}
+
+func setVersionForTest(t *testing.T, value string) {
+	t.Helper()
+	previousVersion := version
+	version = value
+	t.Cleanup(func() {
+		version = previousVersion
+	})
 }
