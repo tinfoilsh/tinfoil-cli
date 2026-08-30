@@ -147,7 +147,7 @@ tinfoil certificate audit -c /path/to/certificate.pem
 
 ## Container management
 
-The `container`, `repo`, `secret`, `ssh-key`, `registry`, and `domain` subcommands manage Tinfoil Containers through the same controlplane API the dashboard uses. See the [Tinfoil Containers docs](https://docs.tinfoil.sh/containers/overview) for the underlying concepts and the [CLI reference](https://docs.tinfoil.sh/containers/cli) for the full command surface.
+The `container`, `deployment`, `repo`, `secret`, `ssh-key`, `registry`, and `domain` subcommands manage Tinfoil Containers through the same controlplane API the dashboard uses. See the [Tinfoil Containers docs](https://docs.tinfoil.sh/containers/overview) for the underlying concepts and the [CLI reference](https://docs.tinfoil.sh/containers/cli) for the full command surface.
 
 ### Logging in
 
@@ -181,8 +181,12 @@ tinfoil container create my-container \
 # Lifecycle
 tinfoil container stop my-container
 tinfoil container start my-container --tag v1.2.4
-tinfoil container relaunch my-container --variable LOG_LEVEL=debug
+tinfoil container relaunch my-container --tag v1.2.4 --staging=true
 tinfoil container delete my-container
+
+# Repository-wide updates (optionally select eligible instances with --instance)
+tinfoil deployment update screenpipe/my-repo-container --tag v1.2.4 --staging=true
+tinfoil deployment settings screenpipe/my-repo-container --default-staging=true
 
 # Updates
 tinfoil container update status my-container

@@ -8,14 +8,22 @@ import (
 	"github.com/spf13/cobra"
 )
 
+const defaultVersion = "dev"
+
 var (
 	enclaveHost, repo string
 	verbose, trace    bool
+	version           = defaultVersion
 )
 
-var rootCmd = &cobra.Command{
-	Use: "tinfoil",
+func newRootCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:     "tinfoil",
+		Version: version,
+	}
 }
+
+var rootCmd = newRootCommand()
 
 func init() {
 	rootCmd.PersistentFlags().StringVarP(&enclaveHost, "host", "e", "", "Enclave hostname")

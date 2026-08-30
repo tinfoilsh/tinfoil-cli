@@ -13,19 +13,16 @@ const (
 )
 
 type deploymentView struct {
-	ID             string  `json:"id"`
-	Repo           string  `json:"repo"`
-	GroupName      *string `json:"group_name"`
-	GroupOrder     int32   `json:"group_order"`
-	DisplayOrder   int32   `json:"display_order"`
-	DefaultStaging bool    `json:"default_staging"`
-	CreatedAt      string  `json:"created_at"`
-	UpdatedAt      string  `json:"updated_at"`
-	InstanceCount  int32   `json:"instance_count"`
-	ReadyCount     int32   `json:"ready_count"`
-	FailedCount    int32   `json:"failed_count"`
-	StoppedCount   int32   `json:"stopped_count"`
-	DeployingCount int32   `json:"deploying_count"`
+	ID             string `json:"id"`
+	Repo           string `json:"repo"`
+	DefaultStaging bool   `json:"default_staging"`
+	CreatedAt      string `json:"created_at"`
+	UpdatedAt      string `json:"updated_at"`
+	InstanceCount  int32  `json:"instance_count"`
+	ReadyCount     int32  `json:"ready_count"`
+	FailedCount    int32  `json:"failed_count"`
+	StoppedCount   int32  `json:"stopped_count"`
+	DeployingCount int32  `json:"deploying_count"`
 }
 
 type deploymentInstanceResult struct {
@@ -43,14 +40,10 @@ type deploymentUpdateResponse struct {
 var (
 	deploymentSettingsDefaultStaging string
 
-	deploymentGroupName         string
-	deploymentGroupOrder        int32
-	deploymentGroupDisplayOrder int32
-	deploymentGroupUngroup      bool
-
-	deploymentUpdateTag         string
-	deploymentUpdateStaging     string
-	deploymentUpdateInstanceIDs []string
+	deploymentUpdateTag            string
+	deploymentUpdateStaging        string
+	deploymentUpdatePromoteRelease string
+	deploymentUpdateInstanceIDs    []string
 )
 
 func init() {
@@ -59,28 +52,23 @@ func init() {
 	deploymentCmd.AddCommand(deploymentListCmd)
 	deploymentCmd.AddCommand(deploymentGetCmd)
 	deploymentCmd.AddCommand(deploymentSettingsCmd)
-	deploymentCmd.AddCommand(deploymentGroupCmd)
 	deploymentCmd.AddCommand(deploymentUpdateCmd)
 
 	deploymentSettingsCmd.Flags().StringVar(
 		&deploymentSettingsDefaultStaging,
 		"default-staging",
 		"",
-		"Default staging mode for deployment updates (true/false)",
+		"By default, hold eligible ready update candidates for manual acceptance (true/false)",
 	)
 
-	deploymentGroupCmd.Flags().StringVar(&deploymentGroupName, "name", "", "Group name to assign")
-	deploymentGroupCmd.Flags().BoolVar(&deploymentGroupUngroup, "ungroup", false, "Remove the deployment from any group")
-	deploymentGroupCmd.Flags().Int32Var(&deploymentGroupOrder, "group-order", 0, "Order of the group itself")
-	deploymentGroupCmd.Flags().Int32Var(&deploymentGroupDisplayOrder, "display-order", 0, "Display order of the deployment")
-
 	deploymentUpdateCmd.Flags().StringVar(&deploymentUpdateTag, "tag", "", "Repository release tag to deploy")
-	deploymentUpdateCmd.Flags().StringVar(&deploymentUpdateStaging, "staging", "", "Override staging mode (true/false)")
+	deploymentUpdateCmd.Flags().StringVar(&deploymentUpdateStaging, "staging", "", "Hold eligible ready update candidates for manual acceptance (true/false)")
+	deploymentUpdateCmd.Flags().StringVar(&deploymentUpdatePromoteRelease, "promote-release", "", "Override latest-release promotion (true/false; server default: true)")
 	deploymentUpdateCmd.Flags().StringArrayVar(
 		&deploymentUpdateInstanceIDs,
 		"instance",
 		nil,
-		"Container instance ID to update; may be repeated (default: all instances)",
+		"Eligible container instance ID to update; may be repeated (default: all eligible instances)",
 	)
 	_ = deploymentUpdateCmd.MarkFlagRequired("tag")
 
@@ -163,51 +151,9 @@ var deploymentSettingsCmd = &cobra.Command{
 	},
 }
 
-var deploymentGroupCmd = &cobra.Command{
-	Use:   "group [id|owner/repo]",
-	Short: "Move a repository deployment into or out of a group",
-	Args:  cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		if !deploymentGroupUngroup && deploymentGroupName == "" {
-			return fmt.Errorf("specify --name <group> or --ungroup")
-		}
-		if deploymentGroupUngroup && deploymentGroupName != "" {
-			return fmt.Errorf("--name and --ungroup are mutually exclusive")
-		}
-
-		client, err := authedClient()
-		if err != nil {
-			return err
-		}
-		deployment, err := resolveDeployment(client, args[0])
-		if err != nil {
-			return err
-		}
-
-		groupOrder := deployment.GroupOrder
-		if cmd.Flags().Changed("group-order") {
-			groupOrder = deploymentGroupOrder
-		}
-		displayOrder := deployment.DisplayOrder
-		if cmd.Flags().Changed("display-order") {
-			displayOrder = deploymentGroupDisplayOrder
-		}
-		var groupName *string
-		if !deploymentGroupUngroup {
-			groupName = &deploymentGroupName
-		}
-		updated, err := moveDeploymentToGroup(client, deployment.ID, groupName, groupOrder, displayOrder)
-		if err != nil {
-			return err
-		}
-		updated = preserveDeploymentCounts(updated, *deployment)
-		return renderDeployment(updated)
-	},
-}
-
 var deploymentUpdateCmd = &cobra.Command{
 	Use:   "update [id|owner/repo]",
-	Short: "Update all or selected instances of a repository deployment",
+	Short: "Create update candidates for all or selected eligible instances",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client, err := authedClient()
@@ -226,6 +172,13 @@ var deploymentUpdateCmd = &cobra.Command{
 				return fmt.Errorf("--staging: %w", err)
 			}
 			body["staging"] = staging
+		}
+		if cmd.Flags().Changed("promote-release") {
+			promoteRelease, err := parseTriBool(deploymentUpdatePromoteRelease)
+			if err != nil {
+				return fmt.Errorf("--promote-release: %w", err)
+			}
+			body["promote_release"] = promoteRelease
 		}
 		if len(deploymentUpdateInstanceIDs) > 0 {
 			body["instance_ids"] = deploymentUpdateInstanceIDs
@@ -265,37 +218,9 @@ func resolveDeployment(client *cpClient, identifier string) (*deploymentView, er
 	return nil, fmt.Errorf("no deployment matching %q (use the deployment ID, owner/repo, or `tinfoil deployment list`)", identifier)
 }
 
-func resolveDeploymentForContainer(client *cpClient, container containerView) (*deploymentView, error) {
-	if container.DeploymentID != "" {
-		return resolveDeployment(client, container.DeploymentID)
-	}
-	if container.Repo != "" {
-		return resolveDeployment(client, container.Repo)
-	}
-	return nil, fmt.Errorf("container %s is not linked to a repository deployment", container.Name)
-}
-
 func patchDeployment(client *cpClient, deploymentID string, body map[string]any) (deploymentView, error) {
 	var updated deploymentView
 	if _, err := client.do("PATCH", pathf("/api/deployments/%s", deploymentID), nil, body, &updated); err != nil {
-		return deploymentView{}, err
-	}
-	return updated, nil
-}
-
-func moveDeploymentToGroup(
-	client *cpClient,
-	deploymentID string,
-	groupName *string,
-	groupOrder, displayOrder int32,
-) (deploymentView, error) {
-	body := map[string]any{
-		"group_name":    groupName,
-		"group_order":   groupOrder,
-		"display_order": displayOrder,
-	}
-	var updated deploymentView
-	if _, err := client.do("PUT", pathf("/api/deployments/%s/group", deploymentID), nil, body, &updated); err != nil {
 		return deploymentView{}, err
 	}
 	return updated, nil
@@ -330,9 +255,6 @@ func renderDeployment(deployment deploymentView) error {
 	fmt.Printf("Failed:          %d\n", deployment.FailedCount)
 	fmt.Printf("Stopped:         %d\n", deployment.StoppedCount)
 	fmt.Printf("Default staging: %v\n", deployment.DefaultStaging)
-	if deployment.GroupName != nil {
-		fmt.Printf("Group:           %s\n", *deployment.GroupName)
-	}
 	return nil
 }
 
@@ -344,21 +266,16 @@ func renderDeployments(deployments []deploymentView) error {
 		fmt.Println("No deployments.")
 		return nil
 	}
-	fmt.Printf("%-36s  %-9s  %-7s  %-9s  %-6s  %s\n",
-		"REPOSITORY", "INSTANCES", "READY", "DEPLOYING", "FAILED", "GROUP",
+	fmt.Printf("%-36s  %-9s  %-7s  %-9s  %s\n",
+		"REPOSITORY", "INSTANCES", "READY", "DEPLOYING", "FAILED",
 	)
 	for _, deployment := range deployments {
-		group := "-"
-		if deployment.GroupName != nil {
-			group = *deployment.GroupName
-		}
-		fmt.Printf("%-36s  %-9d  %-7d  %-9d  %-6d  %s\n",
+		fmt.Printf("%-36s  %-9d  %-7d  %-9d  %d\n",
 			truncate(deployment.Repo, 36),
 			deployment.InstanceCount,
 			deployment.ReadyCount,
 			deployment.DeployingCount,
 			deployment.FailedCount,
-			group,
 		)
 	}
 	return nil
