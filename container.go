@@ -61,7 +61,6 @@ var (
 	createRepo           string
 	createTag            string
 	createDebug          bool
-	createStaging        bool
 	createPromoteRelease bool
 	createDisableCC      bool
 	createYes            bool
@@ -71,8 +70,6 @@ var (
 	createVariables      []string
 	createSecrets        []string
 	createSSHKeys        []string
-	createGroupName      string
-	createGroupOrder     int32
 	createDisplayOrder   int32
 
 	relaunchTag            string
@@ -90,15 +87,9 @@ var (
 	startSecrets        []string
 	startSSHKeys        []string
 	startDebug          string
-	startStaging        string
 	startPromoteRelease string
 	startCustomDomain   string
 	startHost           string
-
-	groupName         string
-	groupOrder        int32
-	groupDisplayOrder int32
-	groupUngroup      bool
 
 	metricsTime string
 
@@ -122,7 +113,6 @@ func init() {
 	containerCmd.AddCommand(containerRelaunchCmd)
 	containerCmd.AddCommand(containerMetricsCmd)
 	containerCmd.AddCommand(containerHostsCmd)
-	containerCmd.AddCommand(containerGroupCmd)
 	containerCmd.AddCommand(containerUpdateCmd)
 	containerCmd.AddCommand(containerConnectCmd)
 
@@ -133,7 +123,6 @@ func init() {
 	containerCreateCmd.Flags().StringVar(&createRepo, "repo", "", "GitHub repo (owner/repo) holding tinfoil-config.yml [required]")
 	containerCreateCmd.Flags().StringVar(&createTag, "tag", "", "Repository release tag to deploy [required]")
 	containerCreateCmd.Flags().BoolVar(&createDebug, "debug", false, "Enable debug mode (allows SSH into the enclave)")
-	containerCreateCmd.Flags().BoolVar(&createStaging, "staging", false, "Use staging mode (lower-trust environment)")
 	containerCreateCmd.Flags().BoolVar(&createPromoteRelease, "promote-release", true, "Mark the deployed tag as the repository's latest release when the deploy goes live; pass --promote-release=false to deploy without promoting")
 	containerCreateCmd.Flags().BoolVar(&createDisableCC, "disable-cc-mode", false, "EXPERIMENTAL: disable confidential computing (benchmarks only; requires org entitlement)")
 	containerCreateCmd.Flags().BoolVar(&createYes, "yes", false, "Skip interactive confirmation for --disable-cc-mode")
@@ -143,8 +132,6 @@ func init() {
 	containerCreateCmd.Flags().StringArrayVar(&createVariables, "variable", nil, "Environment variable in KEY=VALUE form; may be repeated")
 	containerCreateCmd.Flags().StringArrayVar(&createSecrets, "secret", nil, "Org secret name to mount; may be repeated")
 	containerCreateCmd.Flags().StringArrayVar(&createSSHKeys, "ssh-key", nil, "Org SSH key name (debug only); may be repeated")
-	containerCreateCmd.Flags().StringVar(&createGroupName, "group-name", "", "Place the container into the named group on creation")
-	containerCreateCmd.Flags().Int32Var(&createGroupOrder, "group-order", 0, "Sort order of the group itself (requires --group-name)")
 	containerCreateCmd.Flags().Int32Var(&createDisplayOrder, "display-order", 0, "Sort order of this container within its repository deployment")
 	_ = containerCreateCmd.MarkFlagRequired("repo")
 	_ = containerCreateCmd.MarkFlagRequired("tag")
@@ -155,7 +142,6 @@ func init() {
 	addDebugSelector(containerStopCmd)
 	addDebugSelector(containerRelaunchCmd)
 	addDebugSelector(containerMetricsCmd)
-	addDebugSelector(containerGroupCmd)
 	addDebugSelector(containerUpdateStatusCmd)
 	addDebugSelector(containerUpdateAcceptCmd)
 	addDebugSelector(containerUpdateCancelCmd)
@@ -166,7 +152,6 @@ func init() {
 	containerStartCmd.Flags().StringArrayVar(&startSecrets, "secret", nil, "Override secrets list (specify all)")
 	containerStartCmd.Flags().StringArrayVar(&startSSHKeys, "ssh-key", nil, "Override SSH keys list")
 	containerStartCmd.Flags().StringVar(&startDebug, "debug", "", "Override debug mode (true/false)")
-	containerStartCmd.Flags().StringVar(&startStaging, "staging", "", "Override staging mode (true/false)")
 	containerStartCmd.Flags().StringVar(&startPromoteRelease, "promote-release", "", "Override latest-release promotion (true/false)")
 	containerStartCmd.Flags().StringVar(&startCustomDomain, "custom-domain", "", "Override custom domain (empty string clears it)")
 	containerStartCmd.Flags().StringVar(&startHost, "host", "", "Move stopped container to a different host")
@@ -176,17 +161,12 @@ func init() {
 	containerRelaunchCmd.Flags().StringArrayVar(&relaunchSecrets, "secret", nil, "Override secrets list (specify all)")
 	containerRelaunchCmd.Flags().StringArrayVar(&relaunchSSHKeys, "ssh-key", nil, "Override SSH keys list")
 	containerRelaunchCmd.Flags().StringVar(&relaunchDebug, "debug", "", "Override debug mode (true/false)")
-	containerRelaunchCmd.Flags().StringVar(&relaunchStaging, "staging", "", "Override staging mode (true/false)")
+	containerRelaunchCmd.Flags().StringVar(&relaunchStaging, "staging", "", "Hold an eligible ready update candidate for manual acceptance (true/false)")
 	containerRelaunchCmd.Flags().StringVar(&relaunchPromoteRelease, "promote-release", "", "Override latest-release promotion (true/false)")
 	containerRelaunchCmd.Flags().StringVar(&relaunchCustomDomain, "custom-domain", "", "Override custom domain (empty string clears it)")
 	containerRelaunchCmd.Flags().StringVar(&relaunchHost, "host", "", "Move failed container to a different host")
 
 	containerMetricsCmd.Flags().StringVar(&metricsTime, "time", "24h", "Time window (e.g. 1h, 24h, 7d)")
-
-	containerGroupCmd.Flags().StringVar(&groupName, "name", "", "Group name to assign to the repository deployment")
-	containerGroupCmd.Flags().BoolVar(&groupUngroup, "ungroup", false, "Remove the repository deployment from any group")
-	containerGroupCmd.Flags().Int32Var(&groupOrder, "group-order", 0, "Order of the group itself")
-	containerGroupCmd.Flags().Int32Var(&groupDisplayOrder, "display-order", 0, "Display order of the repository deployment")
 
 	containerConnectCmd.Flags().UintVarP(&connectPort, "port", "p", 8080, "Local port for the verified proxy")
 	containerConnectCmd.Flags().StringVarP(&connectBindAddr, "bind", "b", "127.0.0.1", "Address to bind to")
@@ -273,10 +253,6 @@ var containerCreateCmd = &cobra.Command{
 			}
 		}
 
-		if createGroupName == "" && cmd.Flags().Changed("group-order") {
-			return fmt.Errorf("--group-order requires --group-name")
-		}
-
 		body := map[string]any{
 			"name": args[0],
 			"repo": createRepo,
@@ -297,9 +273,6 @@ var containerCreateCmd = &cobra.Command{
 		if createDebug {
 			body["debug"] = true
 		}
-		if createStaging {
-			body["staging"] = true
-		}
 		if cmd.Flags().Changed("promote-release") {
 			body["promote_release"] = createPromoteRelease
 		}
@@ -319,22 +292,6 @@ var containerCreateCmd = &cobra.Command{
 		var created containerView
 		if _, err := client.do("POST", "/api/containers", nil, body, &created); err != nil {
 			return err
-		}
-		if createGroupName != "" {
-			deployment, err := resolveDeploymentForContainer(client, created)
-			if err != nil {
-				return fmt.Errorf("container created, but deployment group could not be set: %w", err)
-			}
-			groupName := createGroupName
-			if _, err := moveDeploymentToGroup(
-				client,
-				deployment.ID,
-				&groupName,
-				createGroupOrder,
-				deployment.DisplayOrder,
-			); err != nil {
-				return fmt.Errorf("container created, but deployment group could not be set: %w", err)
-			}
 		}
 		return renderContainer(created)
 	},
@@ -377,7 +334,7 @@ var containerStartCmd = &cobra.Command{
 		}
 		body, err := buildLifecycleBody(cmd,
 			startTag, startVariables, startSecrets, startSSHKeys,
-			startDebug, startStaging, startPromoteRelease, startCustomDomain, startHost,
+			startDebug, startPromoteRelease, startCustomDomain, startHost,
 		)
 		if err != nil {
 			return err
@@ -426,10 +383,20 @@ var containerRelaunchCmd = &cobra.Command{
 		}
 		body, err := buildLifecycleBody(cmd,
 			relaunchTag, relaunchVariables, relaunchSecrets, relaunchSSHKeys,
-			relaunchDebug, relaunchStaging, relaunchPromoteRelease, relaunchCustomDomain, relaunchHost,
+			relaunchDebug, relaunchPromoteRelease, relaunchCustomDomain, relaunchHost,
 		)
 		if err != nil {
 			return err
+		}
+		if cmd.Flags().Changed("staging") {
+			staging, err := parseTriBool(relaunchStaging)
+			if err != nil {
+				return fmt.Errorf("--staging: %w", err)
+			}
+			if body == nil {
+				body = map[string]any{}
+			}
+			body["staging"] = staging
 		}
 		// /relaunch requires a body even when empty so the controlplane decoder
 		// can read fields it doesn't necessarily set.
@@ -494,58 +461,6 @@ var containerHostsCmd = &cobra.Command{
 			fmt.Printf("%-24s  %-10v  %s\n", h.Name, h.IsDefault, formatInts(h.AvailableGpuValues))
 		}
 		return nil
-	},
-}
-
-var containerGroupCmd = &cobra.Command{
-	Use:   "group [id|name]",
-	Short: "Move the container's repository deployment into or out of a group",
-	Args:  cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		if !groupUngroup && groupName == "" {
-			return fmt.Errorf("specify --name <group> or --ungroup")
-		}
-		if groupUngroup && groupName != "" {
-			return fmt.Errorf("--name and --ungroup are mutually exclusive")
-		}
-		client, err := authedClient()
-		if err != nil {
-			return err
-		}
-		c, err := resolveContainer(client, args[0])
-		if err != nil {
-			return err
-		}
-		deployment, err := resolveDeploymentForContainer(client, *c)
-		if err != nil {
-			return err
-		}
-		groupOrderToSend := deployment.GroupOrder
-		if cmd.Flags().Changed("group-order") {
-			groupOrderToSend = groupOrder
-		}
-		displayOrderToSend := deployment.DisplayOrder
-		if cmd.Flags().Changed("display-order") {
-			displayOrderToSend = groupDisplayOrder
-		}
-		var groupNameToSend *string
-		if groupUngroup {
-			groupNameToSend = nil
-		} else {
-			groupNameToSend = &groupName
-		}
-		updated, err := moveDeploymentToGroup(
-			client,
-			deployment.ID,
-			groupNameToSend,
-			groupOrderToSend,
-			displayOrderToSend,
-		)
-		if err != nil {
-			return err
-		}
-		updated = preserveDeploymentCounts(updated, *deployment)
-		return renderDeployment(updated)
 	},
 }
 
@@ -750,7 +665,7 @@ func parseKeyValues(in []string) (map[string]string, error) {
 func buildLifecycleBody(cmd *cobra.Command,
 	tag string,
 	variables, secrets, sshKeys []string,
-	debug, staging, promoteRelease, customDomain, host string,
+	debug, promoteRelease, customDomain, host string,
 ) (map[string]any, error) {
 	body := map[string]any{}
 	if cmd.Flags().Changed("tag") && tag != "" {
@@ -784,13 +699,6 @@ func buildLifecycleBody(cmd *cobra.Command,
 			return nil, fmt.Errorf("--debug: %w", err)
 		}
 		body["debug"] = v
-	}
-	if cmd.Flags().Changed("staging") {
-		v, err := parseTriBool(staging)
-		if err != nil {
-			return nil, fmt.Errorf("--staging: %w", err)
-		}
-		body["staging"] = v
 	}
 	if cmd.Flags().Changed("promote-release") {
 		v, err := parseTriBool(promoteRelease)

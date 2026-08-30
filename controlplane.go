@@ -11,6 +11,8 @@ import (
 	"time"
 )
 
+const controlplaneUserAgentPrefix = "tinfoil-cli/"
+
 type cpClient struct {
 	baseURL string
 	apiKey  string
@@ -73,6 +75,7 @@ func (c *cpClient) do(method, path string, query url.Values, body any, out any) 
 		req.Header.Set("Content-Type", "application/json")
 	}
 	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", controlplaneUserAgentPrefix+version)
 
 	resp, err := c.http.Do(req)
 	if err != nil {

@@ -1,6 +1,12 @@
 package main
 
-import "testing"
+import (
+	"bytes"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+)
 
 func TestPathfEscapesSegments(t *testing.T) {
 	tests := []struct {
@@ -72,4 +78,47 @@ func TestPathfEscapesSegments(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestControlplaneRequestsSendVersionedUserAgent(t *testing.T) {
+	setVersionForTest(t, "0.16.0")
+
+	userAgent := make(chan string, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		userAgent <- r.Header.Get("User-Agent")
+		_, _ = io.WriteString(w, `{}`)
+	}))
+	defer server.Close()
+
+	client := &cpClient{baseURL: server.URL, http: server.Client()}
+	if _, err := client.do(http.MethodGet, "/test", nil, nil, nil); err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	if got := <-userAgent; got != "tinfoil-cli/0.16.0" {
+		t.Fatalf("User-Agent = %q, want %q", got, "tinfoil-cli/0.16.0")
+	}
+}
+
+func TestVersionFlagUsesInjectedVersion(t *testing.T) {
+	setVersionForTest(t, "0.16.0")
+
+	cmd := newRootCommand()
+	output := new(bytes.Buffer)
+	cmd.SetOut(output)
+	cmd.SetArgs([]string{"--version"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("execute --version: %v", err)
+	}
+	if got := output.String(); got != "tinfoil version 0.16.0\n" {
+		t.Fatalf("output = %q, want %q", got, "tinfoil version 0.16.0\n")
+	}
+}
+
+func setVersionForTest(t *testing.T, value string) {
+	t.Helper()
+	previousVersion := version
+	version = value
+	t.Cleanup(func() {
+		version = previousVersion
+	})
 }

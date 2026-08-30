@@ -62,155 +62,99 @@ func TestDeploymentSettingsUpdatesDefaultStaging(t *testing.T) {
 	}
 }
 
-func TestContainerGroupMovesRepositoryDeployment(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.Method == http.MethodGet && r.URL.Path == "/api/containers":
-			_, _ = io.WriteString(w, `[{"id":"container-1","name":"app-1","repo":"acme/app","deployment_id":"deployment-1"}]`)
-		case r.Method == http.MethodGet && r.URL.Path == "/api/deployments":
-			_, _ = io.WriteString(w, `[{"id":"deployment-1","repo":"acme/app","group_order":4,"display_order":7,"instance_count":3,"ready_count":2,"failed_count":1}]`)
-		case r.Method == http.MethodPut && r.URL.Path == "/api/deployments/deployment-1/group":
-			var body struct {
-				GroupName    *string `json:"group_name"`
-				GroupOrder   int32   `json:"group_order"`
-				DisplayOrder int32   `json:"display_order"`
-			}
-			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-				t.Fatalf("decode body: %v", err)
-			}
-			if body.GroupName == nil || *body.GroupName != "production" {
-				t.Fatalf("group_name = %v", body.GroupName)
-			}
-			if body.GroupOrder != 4 || body.DisplayOrder != 7 {
-				t.Fatalf("orders = (%d, %d), want (4, 7)", body.GroupOrder, body.DisplayOrder)
-			}
-			_, _ = io.WriteString(w, `{"id":"deployment-1","repo":"acme/app","group_name":"production","group_order":4,"display_order":7}`)
-		default:
-			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
-		}
-	}))
-	defer server.Close()
-
-	configureDeploymentCommandTest(t, server.URL)
-	groupName = "production"
-
-	output, err := captureTestStdout(func() error {
-		return containerGroupCmd.RunE(containerGroupCmd, []string{"app-1"})
-	})
-	if err != nil {
-		t.Fatalf("run group: %v", err)
+func TestDeploymentUpdatePromoteReleaseRequestBodies(t *testing.T) {
+	tests := []struct {
+		name           string
+		promoteRelease string
+		changed        bool
+		wantBody       string
+	}{
+		{
+			name:     "omitted",
+			wantBody: `{"instance_ids":["container-1"],"staging":true,"tag":"v1.2.3"}`,
+		},
+		{
+			name:           "true",
+			promoteRelease: "true",
+			changed:        true,
+			wantBody:       `{"instance_ids":["container-1"],"promote_release":true,"staging":true,"tag":"v1.2.3"}`,
+		},
+		{
+			name:           "false",
+			promoteRelease: "false",
+			changed:        true,
+			wantBody:       `{"instance_ids":["container-1"],"promote_release":false,"staging":true,"tag":"v1.2.3"}`,
+		},
 	}
-	var updated deploymentView
-	if err := json.Unmarshal(output, &updated); err != nil {
-		t.Fatalf("decode output: %v", err)
-	}
-	if updated.InstanceCount != 3 || updated.ReadyCount != 2 || updated.FailedCount != 1 {
-		t.Fatalf(
-			"counts = (%d, %d, %d), want (3, 2, 1)",
-			updated.InstanceCount,
-			updated.ReadyCount,
-			updated.FailedCount,
-		)
-	}
-}
 
-func TestContainerCreateSetsDeploymentGroup(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.Method == http.MethodPost && r.URL.Path == "/api/containers":
-			var body struct {
-				Repo         string  `json:"repo"`
-				GroupName    *string `json:"group_name"`
-				GroupOrder   *int32  `json:"group_order"`
-				DisplayOrder *int32  `json:"display_order"`
-			}
-			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-				t.Fatalf("decode body: %v", err)
-			}
-			if body.Repo != "acme/app" {
-				t.Fatalf("create body = %+v", body)
-			}
-			if body.GroupName != nil || body.GroupOrder != nil {
-				t.Fatalf("legacy group fields were sent: %+v", body)
-			}
-			if body.DisplayOrder == nil || *body.DisplayOrder != 2 {
-				t.Fatalf("display_order = %v, want 2", body.DisplayOrder)
-			}
-			_, _ = io.WriteString(w, `{"id":"container-1","name":"app-1","repo":"acme/app","deployment_id":"deployment-1"}`)
-		case r.Method == http.MethodGet && r.URL.Path == "/api/deployments":
-			_, _ = io.WriteString(w, `[{"id":"deployment-1","repo":"acme/app","display_order":7}]`)
-		case r.Method == http.MethodPut && r.URL.Path == "/api/deployments/deployment-1/group":
-			var body struct {
-				GroupName    *string `json:"group_name"`
-				GroupOrder   int32   `json:"group_order"`
-				DisplayOrder int32   `json:"display_order"`
-			}
-			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-				t.Fatalf("decode body: %v", err)
-			}
-			if body.GroupName == nil || *body.GroupName != "production" {
-				t.Fatalf("group_name = %v", body.GroupName)
-			}
-			if body.GroupOrder != 4 || body.DisplayOrder != 7 {
-				t.Fatalf("orders = (%d, %d), want (4, 7)", body.GroupOrder, body.DisplayOrder)
-			}
-			_, _ = io.WriteString(w, `{"id":"deployment-1","repo":"acme/app","group_name":"production","group_order":4,"display_order":7}`)
-		default:
-			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
-		}
-	}))
-	defer server.Close()
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch {
+				case r.Method == http.MethodGet && r.URL.Path == "/api/deployments":
+					_, _ = io.WriteString(w, `[{"id":"deployment-1","repo":"acme/app"}]`)
+				case r.Method == http.MethodPost && r.URL.Path == "/api/deployments/deployment-1/update":
+					body, err := io.ReadAll(r.Body)
+					if err != nil {
+						t.Fatalf("read body: %v", err)
+					}
+					if string(body) != tt.wantBody {
+						t.Fatalf("body = %s, want %s", body, tt.wantBody)
+					}
+					_, _ = io.WriteString(w, `{"results":[{"container_id":"container-1","name":"app-1","status":"updating"}]}`)
+				default:
+					t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+				}
+			}))
+			defer server.Close()
 
-	configureDeploymentCommandTest(t, server.URL)
-	createRepo = "acme/app"
-	createTag = "v1.2.3"
-	createGroupName = "production"
-	createGroupOrder = 4
-	createDisplayOrder = 2
-	displayOrderFlag := containerCreateCmd.Flags().Lookup("display-order")
-	previousDisplayOrderChanged := displayOrderFlag.Changed
-	displayOrderFlag.Changed = true
-	t.Cleanup(func() {
-		displayOrderFlag.Changed = previousDisplayOrderChanged
-	})
+			configureDeploymentCommandTest(t, server.URL)
+			deploymentUpdateTag = "v1.2.3"
+			deploymentUpdateStaging = "true"
+			deploymentUpdatePromoteRelease = tt.promoteRelease
+			deploymentUpdateInstanceIDs = []string{"container-1"}
+			deploymentUpdateCmd.Flags().Lookup("staging").Changed = true
+			deploymentUpdateCmd.Flags().Lookup("promote-release").Changed = tt.changed
 
-	if err := containerCreateCmd.RunE(containerCreateCmd, []string{"app-1"}); err != nil {
-		t.Fatalf("run create: %v", err)
+			if err := deploymentUpdateCmd.RunE(deploymentUpdateCmd, []string{"acme/app"}); err != nil {
+				t.Fatalf("run deployment update: %v", err)
+			}
+		})
 	}
 }
 
-func TestDeploymentUpdateUsesDeploymentEndpoint(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.Method == http.MethodGet && r.URL.Path == "/api/deployments":
-			_, _ = io.WriteString(w, `[{"id":"deployment-1","repo":"acme/app"}]`)
-		case r.Method == http.MethodPost && r.URL.Path == "/api/deployments/deployment-1/update":
-			var body struct {
-				Tag         string   `json:"tag"`
-				InstanceIDs []string `json:"instance_ids"`
-			}
-			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-				t.Fatalf("decode body: %v", err)
-			}
-			if body.Tag != "v1.2.3" {
-				t.Fatalf("tag = %q", body.Tag)
-			}
-			if len(body.InstanceIDs) != 1 || body.InstanceIDs[0] != "container-1" {
-				t.Fatalf("instance_ids = %v", body.InstanceIDs)
-			}
-			_, _ = io.WriteString(w, `{"results":[{"container_id":"container-1","name":"app-1","status":"updating"}]}`)
-		default:
-			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+func TestV016CommandSurface(t *testing.T) {
+	for _, command := range containerCmd.Commands() {
+		if command.Name() == "group" {
+			t.Fatal("container group command is registered")
 		}
-	}))
-	defer server.Close()
+	}
+	for _, command := range deploymentCmd.Commands() {
+		if command.Name() == "group" {
+			t.Fatal("deployment group command is registered")
+		}
+	}
 
-	configureDeploymentCommandTest(t, server.URL)
-	deploymentUpdateTag = "v1.2.3"
-	deploymentUpdateInstanceIDs = []string{"container-1"}
-
-	if err := deploymentUpdateCmd.RunE(deploymentUpdateCmd, []string{"acme/app"}); err != nil {
-		t.Fatalf("run deployment update: %v", err)
+	if containerCreateCmd.Flags().Lookup("staging") != nil {
+		t.Fatal("container create has --staging")
+	}
+	if containerStartCmd.Flags().Lookup("staging") != nil {
+		t.Fatal("container start has --staging")
+	}
+	if containerCreateCmd.Flags().Lookup("group-name") != nil || containerCreateCmd.Flags().Lookup("group-order") != nil {
+		t.Fatal("container create has grouping flags")
+	}
+	if containerCreateCmd.Flags().Lookup("display-order") == nil {
+		t.Fatal("container create does not have --display-order")
+	}
+	if containerRelaunchCmd.Flags().Lookup("staging") == nil {
+		t.Fatal("container relaunch does not have --staging")
+	}
+	if deploymentUpdateCmd.Flags().Lookup("staging") == nil || deploymentUpdateCmd.Flags().Lookup("promote-release") == nil {
+		t.Fatal("deployment update is missing staging or promotion flags")
+	}
+	if deploymentSettingsCmd.Flags().Lookup("default-staging") == nil {
+		t.Fatal("deployment settings does not have --default-staging")
 	}
 }
 
@@ -242,52 +186,36 @@ func configureDeploymentCommandTest(t *testing.T, serverURL string) {
 
 	previousOutput := outputFormat
 	previousSettingsDefaultStaging := deploymentSettingsDefaultStaging
-	previousGroupName := groupName
-	previousGroupUngroup := groupUngroup
-	previousGroupOrder := groupOrder
-	previousGroupDisplayOrder := groupDisplayOrder
-	previousCreateRepo := createRepo
-	previousCreateTag := createTag
-	previousCreateGroupName := createGroupName
-	previousCreateGroupOrder := createGroupOrder
-	previousCreateDisplayOrder := createDisplayOrder
 	previousUpdateTag := deploymentUpdateTag
 	previousUpdateStaging := deploymentUpdateStaging
+	previousUpdatePromoteRelease := deploymentUpdatePromoteRelease
 	previousUpdateInstanceIDs := deploymentUpdateInstanceIDs
 	previousUseDebugFilter := useDebugFilter
+	stagingFlag := deploymentUpdateCmd.Flags().Lookup("staging")
+	promoteReleaseFlag := deploymentUpdateCmd.Flags().Lookup("promote-release")
+	previousStagingChanged := stagingFlag.Changed
+	previousPromoteReleaseChanged := promoteReleaseFlag.Changed
 
 	outputFormat = "json"
 	deploymentSettingsDefaultStaging = ""
-	groupName = ""
-	groupUngroup = false
-	groupOrder = 0
-	groupDisplayOrder = 0
-	createRepo = ""
-	createTag = ""
-	createGroupName = ""
-	createGroupOrder = 0
-	createDisplayOrder = 0
 	deploymentUpdateTag = ""
 	deploymentUpdateStaging = ""
+	deploymentUpdatePromoteRelease = ""
 	deploymentUpdateInstanceIDs = nil
 	useDebugFilter = false
+	stagingFlag.Changed = false
+	promoteReleaseFlag.Changed = false
 
 	t.Cleanup(func() {
 		outputFormat = previousOutput
 		deploymentSettingsDefaultStaging = previousSettingsDefaultStaging
-		groupName = previousGroupName
-		groupUngroup = previousGroupUngroup
-		groupOrder = previousGroupOrder
-		groupDisplayOrder = previousGroupDisplayOrder
-		createRepo = previousCreateRepo
-		createTag = previousCreateTag
-		createGroupName = previousCreateGroupName
-		createGroupOrder = previousCreateGroupOrder
-		createDisplayOrder = previousCreateDisplayOrder
 		deploymentUpdateTag = previousUpdateTag
 		deploymentUpdateStaging = previousUpdateStaging
+		deploymentUpdatePromoteRelease = previousUpdatePromoteRelease
 		deploymentUpdateInstanceIDs = previousUpdateInstanceIDs
 		useDebugFilter = previousUseDebugFilter
+		stagingFlag.Changed = previousStagingChanged
+		promoteReleaseFlag.Changed = previousPromoteReleaseChanged
 	})
 }
 
