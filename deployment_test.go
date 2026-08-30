@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 )
 
@@ -67,29 +68,41 @@ func TestDeploymentUpdatePromoteReleaseRequestBodies(t *testing.T) {
 		name           string
 		promoteRelease string
 		changed        bool
+		wantErr        string
+		wantRequests   int32
 		wantBody       string
 	}{
 		{
-			name:     "omitted",
-			wantBody: `{"instance_ids":["container-1"],"staging":true,"tag":"v1.2.3"}`,
+			name:    "omitted",
+			wantErr: "--promote-release is required; pass --promote-release=true or --promote-release=false",
 		},
 		{
 			name:           "true",
 			promoteRelease: "true",
 			changed:        true,
+			wantRequests:   2,
 			wantBody:       `{"instance_ids":["container-1"],"promote_release":true,"staging":true,"tag":"v1.2.3"}`,
 		},
 		{
 			name:           "false",
 			promoteRelease: "false",
 			changed:        true,
+			wantRequests:   2,
 			wantBody:       `{"instance_ids":["container-1"],"promote_release":false,"staging":true,"tag":"v1.2.3"}`,
+		},
+		{
+			name:           "invalid",
+			promoteRelease: "yes",
+			changed:        true,
+			wantErr:        `--promote-release must be true or false, got "yes"`,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			var requests atomic.Int32
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requests.Add(1)
 				switch {
 				case r.Method == http.MethodGet && r.URL.Path == "/api/deployments":
 					_, _ = io.WriteString(w, `[{"id":"deployment-1","repo":"acme/app"}]`)
@@ -116,8 +129,18 @@ func TestDeploymentUpdatePromoteReleaseRequestBodies(t *testing.T) {
 			deploymentUpdateCmd.Flags().Lookup("staging").Changed = true
 			deploymentUpdateCmd.Flags().Lookup("promote-release").Changed = tt.changed
 
-			if err := deploymentUpdateCmd.RunE(deploymentUpdateCmd, []string{"acme/app"}); err != nil {
-				t.Fatalf("run deployment update: %v", err)
+			_, err := captureTestStdout(func() error {
+				return deploymentUpdateCmd.RunE(deploymentUpdateCmd, []string{"acme/app"})
+			})
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("run deployment update: %v", err)
+				}
+			} else if err == nil || err.Error() != tt.wantErr {
+				t.Fatalf("error = %v, want %q", err, tt.wantErr)
+			}
+			if got := requests.Load(); got != tt.wantRequests {
+				t.Fatalf("requests = %d, want %d", got, tt.wantRequests)
 			}
 		})
 	}

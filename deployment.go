@@ -63,7 +63,7 @@ func init() {
 
 	deploymentUpdateCmd.Flags().StringVar(&deploymentUpdateTag, "tag", "", "Repository release tag to deploy")
 	deploymentUpdateCmd.Flags().StringVar(&deploymentUpdateStaging, "staging", "", "Hold eligible ready update candidates for manual acceptance (true/false)")
-	deploymentUpdateCmd.Flags().StringVar(&deploymentUpdatePromoteRelease, "promote-release", "", "Override latest-release promotion (true/false; server default: true)")
+	deploymentUpdateCmd.Flags().StringVar(&deploymentUpdatePromoteRelease, "promote-release", "", "Promote the deployed tag to the repository's latest release when it goes live (required: true/false)")
 	deploymentUpdateCmd.Flags().StringArrayVar(
 		&deploymentUpdateInstanceIDs,
 		"instance",
@@ -156,16 +156,15 @@ var deploymentUpdateCmd = &cobra.Command{
 	Short: "Create update candidates for all or selected eligible instances",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		client, err := authedClient()
-		if err != nil {
-			return err
-		}
-		deployment, err := resolveDeployment(client, args[0])
+		promoteRelease, err := requireBoolFlag(cmd, "promote-release", deploymentUpdatePromoteRelease)
 		if err != nil {
 			return err
 		}
 
-		body := map[string]any{"tag": deploymentUpdateTag}
+		body := map[string]any{
+			"tag":             deploymentUpdateTag,
+			"promote_release": promoteRelease,
+		}
 		if cmd.Flags().Changed("staging") {
 			staging, err := parseTriBool(deploymentUpdateStaging)
 			if err != nil {
@@ -173,15 +172,17 @@ var deploymentUpdateCmd = &cobra.Command{
 			}
 			body["staging"] = staging
 		}
-		if cmd.Flags().Changed("promote-release") {
-			promoteRelease, err := parseTriBool(deploymentUpdatePromoteRelease)
-			if err != nil {
-				return fmt.Errorf("--promote-release: %w", err)
-			}
-			body["promote_release"] = promoteRelease
-		}
 		if len(deploymentUpdateInstanceIDs) > 0 {
 			body["instance_ids"] = deploymentUpdateInstanceIDs
+		}
+
+		client, err := authedClient()
+		if err != nil {
+			return err
+		}
+		deployment, err := resolveDeployment(client, args[0])
+		if err != nil {
+			return err
 		}
 
 		response, err := updateDeploymentInstances(client, deployment.ID, body)

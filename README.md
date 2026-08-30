@@ -174,18 +174,19 @@ tinfoil container hosts             # which hosts your org may target
 tinfoil container create my-container \
   --repo screenpipe/my-repo-container \
   --tag v1.2.3 \
+  --promote-release=true \
   --variable LOG_LEVEL=info \
   --secret OPENAI_API_KEY \
   --custom-domain api.example.com
 
 # Lifecycle
 tinfoil container stop my-container
-tinfoil container start my-container --tag v1.2.4
-tinfoil container relaunch my-container --tag v1.2.4 --staging=true
+tinfoil container start my-container --tag v1.2.4 --promote-release=true
+tinfoil container relaunch my-container --tag v1.2.4 --staging=true --promote-release=true
 tinfoil container delete my-container
 
 # Repository-wide updates (optionally select eligible instances with --instance)
-tinfoil deployment update screenpipe/my-repo-container --tag v1.2.4 --staging=true
+tinfoil deployment update screenpipe/my-repo-container --tag v1.2.4 --staging=true --promote-release=true
 tinfoil deployment settings screenpipe/my-repo-container --default-staging=true
 
 # Updates
@@ -198,6 +199,8 @@ tinfoil container connect my-container -p 8080
 ```
 
 `container connect <name>` resolves the container's enclave domain and source repo, then runs a verified proxy locally — equivalent to `tinfoil proxy -e <domain> -r <repo>` but without copy-pasting either value.
+
+Container create, start, relaunch, and deployment update require `--promote-release=true` to promote the deployed tag as the repository's latest release or `--promote-release=false` to leave the latest release unchanged.
 
 ### Secrets, SSH keys, registry credentials, custom domains
 
