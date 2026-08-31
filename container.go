@@ -37,7 +37,7 @@ type containerView struct {
 	SSHKeys            []string        `json:"ssh_keys"`
 	Debug              bool            `json:"debug"`
 	Staging            bool            `json:"staging"`
-	PromoteRelease     bool            `json:"promote_release"`
+	PromoteRelease     *bool           `json:"promote_release,omitempty"`
 	DisableCCMode      bool            `json:"disable_cc_mode"`
 	GithubAppConnected bool            `json:"github_app_connected"`
 	DisplayOrder       int32           `json:"display_order"`
@@ -801,7 +801,9 @@ func renderContainer(c containerView) error {
 		fmt.Printf("Host:         %s (cpu=%s gpu=%s)\n", c.HostName, c.HostCpuType, c.HostGpuType)
 	}
 	fmt.Printf("Resources:    cpus=%d gpus=%d mem=%dMB\n", c.CPUs, c.GPUs, c.MemoryMB)
-	fmt.Printf("Promote:      %t\n", c.PromoteRelease)
+	if c.PromoteRelease != nil {
+		fmt.Printf("Promote:      %t\n", *c.PromoteRelease)
+	}
 	if c.Debug {
 		fmt.Printf("Mode:         debug\n")
 	}

@@ -17,11 +17,18 @@ func TestContainerDetailIncludesPromoteRelease(t *testing.T) {
 	previousOutput := outputFormat
 	t.Cleanup(func() { outputFormat = previousOutput })
 
-	for _, promoteRelease := range []bool{false, true} {
-		t.Run(boolString(promoteRelease), func(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		response string
+		want     string
+	}{
+		{name: "true", response: `{"promote_release":true}`, want: "true"},
+		{name: "false", response: `{"promote_release":false}`, want: "false"},
+		{name: "omitted", response: `{}`},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
 			var container containerView
-			response := `{"promote_release":` + boolString(promoteRelease) + `}`
-			if err := json.Unmarshal([]byte(response), &container); err != nil {
+			if err := json.Unmarshal([]byte(tt.response), &container); err != nil {
 				t.Fatalf("decode container response: %v", err)
 			}
 
@@ -30,9 +37,12 @@ func TestContainerDetailIncludesPromoteRelease(t *testing.T) {
 			if err != nil {
 				t.Fatalf("render human output: %v", err)
 			}
-			want := "Promote:      " + boolString(promoteRelease)
-			if !strings.Contains(string(output), want) {
-				t.Fatalf("human output does not contain %q:\n%s", want, output)
+			promoteLine := "Promote:      " + tt.want
+			if tt.want != "" && !strings.Contains(string(output), promoteLine) {
+				t.Fatalf("human output does not contain %q:\n%s", promoteLine, output)
+			}
+			if tt.want == "" && strings.Contains(string(output), "Promote:") {
+				t.Fatalf("human output includes promotion value for omitted field:\n%s", output)
 			}
 
 			outputFormat = "json"
@@ -45,10 +55,13 @@ func TestContainerDetailIncludesPromoteRelease(t *testing.T) {
 				t.Fatalf("decode JSON output: %v", err)
 			}
 			value, ok := decoded["promote_release"]
-			if !ok {
+			if tt.want != "" && !ok {
 				t.Fatalf("JSON output is missing promote_release:\n%s", output)
 			}
-			if got, want := string(value), boolString(promoteRelease); got != want {
+			if tt.want == "" && ok {
+				t.Fatalf("JSON output includes promote_release for omitted field:\n%s", output)
+			}
+			if got, want := string(value), tt.want; got != want {
 				t.Fatalf("promote_release JSON value = %s, want boolean %s", got, want)
 			}
 		})
