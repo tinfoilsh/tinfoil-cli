@@ -49,7 +49,6 @@ var attestationVerifyCmd = &cobra.Command{
 
 		if jsonOutput {
 			fmt.Println(string(output))
-			return nil
 		}
 
 		if jsonFile != "" {
@@ -58,6 +57,6 @@ var attestationVerifyCmd = &cobra.Command{
 			}
 		}
 
-		return nil
+		return record.verificationError()
 	},
 }

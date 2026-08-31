@@ -56,6 +56,15 @@ type auditRecord struct {
 	Error  string `json:"error,omitempty"`
 }
 
+// verificationError returns an error when the audit record reports a
+// verification failure, so callers can exit non-zero.
+func (r *auditRecord) verificationError() error {
+	if r.Status == "ok" || r.Status == "enclave_only" {
+		return nil
+	}
+	return fmt.Errorf("verification failed: %s", r.Error)
+}
+
 func verifyAttestation(l *log.Logger) (*auditRecord, error) {
 	if enclaveHost == "" {
 		routerClient, err := client.NewDefaultClient()
