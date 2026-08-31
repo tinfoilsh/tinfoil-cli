@@ -61,7 +61,7 @@ var (
 	createRepo           string
 	createTag            string
 	createDebug          bool
-	createPromoteRelease bool
+	createPromoteRelease string
 	createDisableCC      bool
 	createYes            bool
 	createCustomDomain   string
@@ -123,7 +123,7 @@ func init() {
 	containerCreateCmd.Flags().StringVar(&createRepo, "repo", "", "GitHub repo (owner/repo) holding tinfoil-config.yml [required]")
 	containerCreateCmd.Flags().StringVar(&createTag, "tag", "", "Repository release tag to deploy [required]")
 	containerCreateCmd.Flags().BoolVar(&createDebug, "debug", false, "Enable debug mode (allows SSH into the enclave)")
-	containerCreateCmd.Flags().BoolVar(&createPromoteRelease, "promote-release", true, "Mark the deployed tag as the repository's latest release when the deploy goes live; pass --promote-release=false to deploy without promoting")
+	containerCreateCmd.Flags().StringVar(&createPromoteRelease, "promote-release", "", "Promote the deployed tag to the repository's latest release when it goes live (required: true/false)")
 	containerCreateCmd.Flags().BoolVar(&createDisableCC, "disable-cc-mode", false, "EXPERIMENTAL: disable confidential computing (benchmarks only; requires org entitlement)")
 	containerCreateCmd.Flags().BoolVar(&createYes, "yes", false, "Skip interactive confirmation for --disable-cc-mode")
 	containerCreateCmd.Flags().StringVar(&createCustomDomain, "custom-domain", "", "Verified custom domain to expose the container on")
@@ -152,7 +152,7 @@ func init() {
 	containerStartCmd.Flags().StringArrayVar(&startSecrets, "secret", nil, "Override secrets list (specify all)")
 	containerStartCmd.Flags().StringArrayVar(&startSSHKeys, "ssh-key", nil, "Override SSH keys list")
 	containerStartCmd.Flags().StringVar(&startDebug, "debug", "", "Override debug mode (true/false)")
-	containerStartCmd.Flags().StringVar(&startPromoteRelease, "promote-release", "", "Override latest-release promotion (true/false)")
+	containerStartCmd.Flags().StringVar(&startPromoteRelease, "promote-release", "", "Promote the deployed tag to the repository's latest release when it goes live (required: true/false)")
 	containerStartCmd.Flags().StringVar(&startCustomDomain, "custom-domain", "", "Override custom domain (empty string clears it)")
 	containerStartCmd.Flags().StringVar(&startHost, "host", "", "Move stopped container to a different host")
 
@@ -162,7 +162,7 @@ func init() {
 	containerRelaunchCmd.Flags().StringArrayVar(&relaunchSSHKeys, "ssh-key", nil, "Override SSH keys list")
 	containerRelaunchCmd.Flags().StringVar(&relaunchDebug, "debug", "", "Override debug mode (true/false)")
 	containerRelaunchCmd.Flags().StringVar(&relaunchStaging, "staging", "", "Hold an eligible ready update candidate for manual acceptance (true/false)")
-	containerRelaunchCmd.Flags().StringVar(&relaunchPromoteRelease, "promote-release", "", "Override latest-release promotion (true/false)")
+	containerRelaunchCmd.Flags().StringVar(&relaunchPromoteRelease, "promote-release", "", "Promote the deployed tag to the repository's latest release when it goes live (required: true/false)")
 	containerRelaunchCmd.Flags().StringVar(&relaunchCustomDomain, "custom-domain", "", "Override custom domain (empty string clears it)")
 	containerRelaunchCmd.Flags().StringVar(&relaunchHost, "host", "", "Move failed container to a different host")
 
@@ -237,6 +237,11 @@ var containerCreateCmd = &cobra.Command{
 	Short: "Create a new container",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
+		promoteRelease, err := requireBoolFlag(cmd, "promote-release", createPromoteRelease)
+		if err != nil {
+			return err
+		}
+
 		client, err := authedClient()
 		if err != nil {
 			return err
@@ -254,9 +259,10 @@ var containerCreateCmd = &cobra.Command{
 		}
 
 		body := map[string]any{
-			"name": args[0],
-			"repo": createRepo,
-			"tag":  createTag,
+			"name":            args[0],
+			"repo":            createRepo,
+			"tag":             createTag,
+			"promote_release": promoteRelease,
 		}
 		if cmd.Flags().Changed("display-order") {
 			body["display_order"] = createDisplayOrder
@@ -272,9 +278,6 @@ var containerCreateCmd = &cobra.Command{
 		}
 		if createDebug {
 			body["debug"] = true
-		}
-		if cmd.Flags().Changed("promote-release") {
-			body["promote_release"] = createPromoteRelease
 		}
 		if createDisableCC {
 			body["disable_cc_mode"] = true
@@ -324,18 +327,19 @@ var containerStartCmd = &cobra.Command{
 	Short: "Start a stopped container",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
+		body, err := buildLifecycleBody(cmd,
+			startTag, startVariables, startSecrets, startSSHKeys,
+			startDebug, startPromoteRelease, startCustomDomain, startHost,
+		)
+		if err != nil {
+			return err
+		}
+
 		client, err := authedClient()
 		if err != nil {
 			return err
 		}
 		c, err := resolveContainer(client, args[0])
-		if err != nil {
-			return err
-		}
-		body, err := buildLifecycleBody(cmd,
-			startTag, startVariables, startSecrets, startSSHKeys,
-			startDebug, startPromoteRelease, startCustomDomain, startHost,
-		)
 		if err != nil {
 			return err
 		}
@@ -373,14 +377,6 @@ var containerRelaunchCmd = &cobra.Command{
 	Short: "Redeploy a running or failed container",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		client, err := authedClient()
-		if err != nil {
-			return err
-		}
-		c, err := resolveContainer(client, args[0])
-		if err != nil {
-			return err
-		}
 		body, err := buildLifecycleBody(cmd,
 			relaunchTag, relaunchVariables, relaunchSecrets, relaunchSSHKeys,
 			relaunchDebug, relaunchPromoteRelease, relaunchCustomDomain, relaunchHost,
@@ -393,15 +389,16 @@ var containerRelaunchCmd = &cobra.Command{
 			if err != nil {
 				return fmt.Errorf("--staging: %w", err)
 			}
-			if body == nil {
-				body = map[string]any{}
-			}
 			body["staging"] = staging
 		}
-		// /relaunch requires a body even when empty so the controlplane decoder
-		// can read fields it doesn't necessarily set.
-		if body == nil {
-			body = map[string]any{}
+
+		client, err := authedClient()
+		if err != nil {
+			return err
+		}
+		c, err := resolveContainer(client, args[0])
+		if err != nil {
+			return err
 		}
 		var updated containerView
 		if _, err := client.do("POST", pathf("/api/containers/%s/relaunch", c.ID), nil, body, &updated); err != nil {
@@ -700,23 +697,32 @@ func buildLifecycleBody(cmd *cobra.Command,
 		}
 		body["debug"] = v
 	}
-	if cmd.Flags().Changed("promote-release") {
-		v, err := parseTriBool(promoteRelease)
-		if err != nil {
-			return nil, fmt.Errorf("--promote-release: %w", err)
-		}
-		body["promote_release"] = v
+	v, err := requireBoolFlag(cmd, "promote-release", promoteRelease)
+	if err != nil {
+		return nil, err
 	}
+	body["promote_release"] = v
 	if cmd.Flags().Changed("custom-domain") {
 		body["custom_domain"] = customDomain
 	}
 	if cmd.Flags().Changed("host") {
 		body["host_name"] = host
 	}
-	if len(body) == 0 {
-		return nil, nil
-	}
 	return body, nil
+}
+
+func requireBoolFlag(cmd *cobra.Command, name, value string) (bool, error) {
+	if !cmd.Flags().Changed(name) {
+		return false, fmt.Errorf("--%s is required; pass --%s=true or --%s=false", name, name, name)
+	}
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "true":
+		return true, nil
+	case "false":
+		return false, nil
+	default:
+		return false, fmt.Errorf("--%s must be true or false, got %q", name, value)
+	}
 }
 
 // confirmNonCCMode prints the same warning text the dashboard shows when a
