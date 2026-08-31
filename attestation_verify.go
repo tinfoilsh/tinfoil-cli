@@ -57,10 +57,6 @@ var attestationVerifyCmd = &cobra.Command{
 			}
 		}
 
-		if record.Status != "ok" && record.Status != "enclave_only" {
-			return fmt.Errorf("verification failed: %s", record.Error)
-		}
-
-		return nil
+		return record.verificationError()
 	},
 }
