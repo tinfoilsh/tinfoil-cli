@@ -1,15 +1,72 @@
 package main
 
 import (
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 
 	"github.com/spf13/cobra"
 )
+
+func TestContainerDetailIncludesPromoteRelease(t *testing.T) {
+	previousOutput := outputFormat
+	t.Cleanup(func() { outputFormat = previousOutput })
+
+	for _, tt := range []struct {
+		name     string
+		response string
+		want     string
+	}{
+		{name: "true", response: `{"promote_release":true}`, want: "true"},
+		{name: "false", response: `{"promote_release":false}`, want: "false"},
+		{name: "omitted", response: `{}`},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var container containerView
+			if err := json.Unmarshal([]byte(tt.response), &container); err != nil {
+				t.Fatalf("decode container response: %v", err)
+			}
+
+			outputFormat = "table"
+			output, err := captureTestStdout(func() error { return renderContainer(container) })
+			if err != nil {
+				t.Fatalf("render human output: %v", err)
+			}
+			promoteLine := "Promote:      " + tt.want
+			if tt.want != "" && !strings.Contains(string(output), promoteLine) {
+				t.Fatalf("human output does not contain %q:\n%s", promoteLine, output)
+			}
+			if tt.want == "" && strings.Contains(string(output), "Promote:") {
+				t.Fatalf("human output includes promotion value for omitted field:\n%s", output)
+			}
+
+			outputFormat = "json"
+			output, err = captureTestStdout(func() error { return renderContainer(container) })
+			if err != nil {
+				t.Fatalf("render JSON output: %v", err)
+			}
+			var decoded map[string]json.RawMessage
+			if err := json.Unmarshal(output, &decoded); err != nil {
+				t.Fatalf("decode JSON output: %v", err)
+			}
+			value, ok := decoded["promote_release"]
+			if tt.want != "" && !ok {
+				t.Fatalf("JSON output is missing promote_release:\n%s", output)
+			}
+			if tt.want == "" && ok {
+				t.Fatalf("JSON output includes promote_release for omitted field:\n%s", output)
+			}
+			if got, want := string(value), tt.want; got != want {
+				t.Fatalf("promote_release JSON value = %s, want boolean %s", got, want)
+			}
+		})
+	}
+}
 
 func TestContainerCommandsRequirePromoteRelease(t *testing.T) {
 	const containerID = "61bd4a3e-5b48-4320-9215-0c7a7f974979"

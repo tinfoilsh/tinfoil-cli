@@ -7,9 +7,68 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 )
+
+func TestDeploymentOutputLabelsInProgressAndPreservesJSONField(t *testing.T) {
+	deployment := deploymentView{
+		ID:             "deployment-1",
+		Repo:           "acme/app",
+		InstanceCount:  4,
+		DeployingCount: 2,
+		FailedCount:    3,
+	}
+
+	previousOutput := outputFormat
+	t.Cleanup(func() { outputFormat = previousOutput })
+
+	for _, tt := range []struct {
+		name string
+		run  func() error
+	}{
+		{name: "get", run: func() error { return renderDeployment(deployment) }},
+		{name: "list", run: func() error { return renderDeployments([]deploymentView{deployment}) }},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			outputFormat = "table"
+			output, err := captureTestStdout(tt.run)
+			if err != nil {
+				t.Fatalf("render human output: %v", err)
+			}
+			if strings.Contains(string(output), "Deploying") || strings.Contains(string(output), "DEPLOYING") {
+				t.Fatalf("human output uses deploying label:\n%s", output)
+			}
+			wantLabel := "In progress:     2"
+			if tt.name == "list" {
+				wantLabel = "IN-PROGRESS"
+			}
+			if !strings.Contains(string(output), wantLabel) {
+				t.Fatalf("human output does not contain %q:\n%s", wantLabel, output)
+			}
+			if tt.name == "list" {
+				lines := strings.Split(strings.TrimSpace(string(output)), "\n")
+				failedColumn := strings.Index(lines[0], "FAILED")
+				if failedColumn < 0 || len(lines) != 2 || len(lines[1]) <= failedColumn || lines[1][failedColumn] != '3' {
+					t.Fatalf("deployment row does not align with widened header:\n%s", output)
+				}
+			}
+
+			outputFormat = "json"
+			output, err = captureTestStdout(tt.run)
+			if err != nil {
+				t.Fatalf("render JSON output: %v", err)
+			}
+			if !strings.Contains(string(output), `"deploying_count": 2`) {
+				t.Fatalf("JSON output does not preserve deploying_count:\n%s", output)
+			}
+			if strings.Contains(string(output), "in_progress_count") {
+				t.Fatalf("JSON output renamed deploying_count:\n%s", output)
+			}
+		})
+	}
+}
 
 func TestResolveDeploymentMatchesIDAndRepository(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -147,6 +206,10 @@ func TestDeploymentUpdatePromoteReleaseRequestBodies(t *testing.T) {
 }
 
 func TestV016CommandSurface(t *testing.T) {
+	if got, want := containerRelaunchCmd.Short, "Redeploy a ready or failed container"; got != want {
+		t.Fatalf("container relaunch help = %q, want %q", got, want)
+	}
+
 	for _, command := range containerCmd.Commands() {
 		if command.Name() == "group" {
 			t.Fatal("container group command is registered")

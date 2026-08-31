@@ -252,7 +252,7 @@ func renderDeployment(deployment deploymentView) error {
 	fmt.Printf("Repository:      %s\n", deployment.Repo)
 	fmt.Printf("Instances:       %d\n", deployment.InstanceCount)
 	fmt.Printf("Ready:           %d\n", deployment.ReadyCount)
-	fmt.Printf("Deploying:       %d\n", deployment.DeployingCount)
+	fmt.Printf("In progress:     %d\n", deployment.DeployingCount)
 	fmt.Printf("Failed:          %d\n", deployment.FailedCount)
 	fmt.Printf("Stopped:         %d\n", deployment.StoppedCount)
 	fmt.Printf("Default staging: %v\n", deployment.DefaultStaging)
@@ -267,11 +267,11 @@ func renderDeployments(deployments []deploymentView) error {
 		fmt.Println("No deployments.")
 		return nil
 	}
-	fmt.Printf("%-36s  %-9s  %-7s  %-9s  %s\n",
-		"REPOSITORY", "INSTANCES", "READY", "DEPLOYING", "FAILED",
+	fmt.Printf("%-36s  %-9s  %-7s  %-11s  %s\n",
+		"REPOSITORY", "INSTANCES", "READY", "IN-PROGRESS", "FAILED",
 	)
 	for _, deployment := range deployments {
-		fmt.Printf("%-36s  %-9d  %-7d  %-9d  %d\n",
+		fmt.Printf("%-36s  %-9d  %-7d  %-11d  %d\n",
 			truncate(deployment.Repo, 36),
 			deployment.InstanceCount,
 			deployment.ReadyCount,
