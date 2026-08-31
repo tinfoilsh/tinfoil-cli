@@ -49,13 +49,16 @@ var attestationVerifyCmd = &cobra.Command{
 
 		if jsonOutput {
 			fmt.Println(string(output))
-			return nil
 		}
 
 		if jsonFile != "" {
 			if err := os.WriteFile(jsonFile, output, 0644); err != nil {
 				return fmt.Errorf("error writing JSON to file: %v", err)
 			}
+		}
+
+		if record.Status != "ok" && record.Status != "enclave_only" {
+			return fmt.Errorf("verification failed: %s", record.Error)
 		}
 
 		return nil
