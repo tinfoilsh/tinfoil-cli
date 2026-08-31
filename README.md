@@ -147,7 +147,7 @@ tinfoil certificate audit -c /path/to/certificate.pem
 
 ## Container management
 
-The `container`, `deployment`, `repo`, `secret`, `ssh-key`, `registry`, and `domain` subcommands manage Tinfoil Containers through the same controlplane API the dashboard uses. See the [Tinfoil Containers docs](https://docs.tinfoil.sh/containers/overview) for the underlying concepts and the [CLI reference](https://docs.tinfoil.sh/containers/cli) for the full command surface.
+The `container`, `deployment`, `model`, `repo`, `secret`, `ssh-key`, `registry`, and `domain` subcommands manage Tinfoil Containers through the same controlplane API the dashboard uses. See the [Tinfoil Containers docs](https://docs.tinfoil.sh/containers/overview) for the underlying concepts and the [CLI reference](https://docs.tinfoil.sh/containers/cli) for the full command surface.
 
 ### Logging in
 
@@ -201,6 +201,25 @@ tinfoil container connect my-container -p 8080
 `container connect <name>` resolves the container's enclave domain and source repo, then runs a verified proxy locally — equivalent to `tinfoil proxy -e <domain> -r <repo>` but without copy-pasting either value.
 
 Container create, start, relaunch, and deployment update require `--promote-release=true` to promote the deployed tag as the repository's latest release or `--promote-release=false` to leave the latest release unchanged.
+
+### Model weights
+
+The `model` subcommand wraps Hugging Face model weights into verified artifacts that GPU containers load with integrity checking (see the [Models docs](https://docs.tinfoil.sh/containers/models)):
+
+```bash
+# Wrap a model on a host and wait for the tinfoil-config.yml block
+tinfoil model wrap google/gemma-4-31B-it --host gpu-host-1 --wait
+
+# Gated or private repos
+tinfoil model wrap meta-llama/Llama-4-8B --host gpu-host-1 --hf-token-file ./hf.token
+
+# Inspect wrap jobs
+tinfoil model list
+tinfoil model status gpu-host-1 <job-id>
+
+# Delete a wrap job (also removes the weights once nothing references them)
+tinfoil model delete gpu-host-1 <job-id>
+```
 
 ### Secrets, SSH keys, registry credentials, custom domains
 
