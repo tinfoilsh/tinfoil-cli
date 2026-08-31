@@ -1,15 +1,59 @@
 package main
 
 import (
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 
 	"github.com/spf13/cobra"
 )
+
+func TestContainerDetailIncludesPromoteRelease(t *testing.T) {
+	previousOutput := outputFormat
+	t.Cleanup(func() { outputFormat = previousOutput })
+
+	for _, promoteRelease := range []bool{false, true} {
+		t.Run(boolString(promoteRelease), func(t *testing.T) {
+			var container containerView
+			response := `{"promote_release":` + boolString(promoteRelease) + `}`
+			if err := json.Unmarshal([]byte(response), &container); err != nil {
+				t.Fatalf("decode container response: %v", err)
+			}
+
+			outputFormat = "table"
+			output, err := captureTestStdout(func() error { return renderContainer(container) })
+			if err != nil {
+				t.Fatalf("render human output: %v", err)
+			}
+			want := "Promote:      " + boolString(promoteRelease)
+			if !strings.Contains(string(output), want) {
+				t.Fatalf("human output does not contain %q:\n%s", want, output)
+			}
+
+			outputFormat = "json"
+			output, err = captureTestStdout(func() error { return renderContainer(container) })
+			if err != nil {
+				t.Fatalf("render JSON output: %v", err)
+			}
+			var decoded map[string]json.RawMessage
+			if err := json.Unmarshal(output, &decoded); err != nil {
+				t.Fatalf("decode JSON output: %v", err)
+			}
+			value, ok := decoded["promote_release"]
+			if !ok {
+				t.Fatalf("JSON output is missing promote_release:\n%s", output)
+			}
+			if got, want := string(value), boolString(promoteRelease); got != want {
+				t.Fatalf("promote_release JSON value = %s, want boolean %s", got, want)
+			}
+		})
+	}
+}
 
 func TestContainerCommandsRequirePromoteRelease(t *testing.T) {
 	const containerID = "61bd4a3e-5b48-4320-9215-0c7a7f974979"
