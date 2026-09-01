@@ -172,7 +172,7 @@ tinfoil container hosts             # which hosts your org may target
 
 # Deploy
 tinfoil container create my-container \
-  --repo screenpipe/my-repo-container \
+  --repo myorg/my-repo-container \
   --tag v1.2.3 \
   --promote-release=true \
   --variable LOG_LEVEL=info \
@@ -186,8 +186,8 @@ tinfoil container relaunch my-container --tag v1.2.4 --staging=true --promote-re
 tinfoil container delete my-container
 
 # Repository-wide updates (optionally select eligible instances with --instance)
-tinfoil deployment update screenpipe/my-repo-container --tag v1.2.4 --staging=true --promote-release=true
-tinfoil deployment settings screenpipe/my-repo-container --default-staging=true
+tinfoil deployment update myorg/my-repo-container --tag v1.2.4 --staging=true --promote-release=true
+tinfoil deployment settings myorg/my-repo-container --default-staging=true
 
 # Updates
 tinfoil container update status my-container
@@ -234,10 +234,10 @@ tinfoil secret set OPENAI_API_KEY --value-file ./key.txt
 tinfoil secret delete OPENAI_API_KEY
 
 # Repository secrets
-tinfoil repo secret list screenpipe/my-repo-container
-tinfoil repo secret create screenpipe/my-repo-container OPENAI_API_KEY --value-file ./key.txt
-tinfoil repo secret set screenpipe/my-repo-container OPENAI_API_KEY --value-file ./key.txt
-tinfoil repo secret delete screenpipe/my-repo-container OPENAI_API_KEY
+tinfoil repo secret list myorg/my-repo-container
+tinfoil repo secret create myorg/my-repo-container OPENAI_API_KEY --value-file ./key.txt
+tinfoil repo secret set myorg/my-repo-container OPENAI_API_KEY --value-file ./key.txt
+tinfoil repo secret delete myorg/my-repo-container OPENAI_API_KEY
 
 # SSH keys for debug containers
 tinfoil ssh-key create laptop --public-key-file ~/.ssh/id_ed25519.pub
