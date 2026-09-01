@@ -47,6 +47,12 @@ func (e *cpError) Error() string {
 // nil. out may be nil to discard the response body. Returns the parsed status
 // code on success, or a *cpError on non-2xx responses.
 func (c *cpClient) do(method, path string, query url.Values, body any, out any) (int, error) {
+	return c.doWithHeaders(method, path, query, nil, body, out)
+}
+
+// doWithHeaders is do with additional request headers, for endpoints that
+// take out-of-band values such as a forwarded Hugging Face token.
+func (c *cpClient) doWithHeaders(method, path string, query url.Values, headers map[string]string, body any, out any) (int, error) {
 	if err := validateControlplaneURL(c.baseURL); err != nil {
 		return 0, err
 	}
@@ -76,6 +82,9 @@ func (c *cpClient) do(method, path string, query url.Values, body any, out any) 
 	}
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("User-Agent", controlplaneUserAgentPrefix+version)
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
 
 	resp, err := c.http.Do(req)
 	if err != nil {

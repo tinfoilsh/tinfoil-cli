@@ -41,6 +41,12 @@ var (
 	modelStatusWait bool
 	modelStatusLogs bool
 
+	modelUpdateHost        string
+	modelUpdateCommit      string
+	modelUpdateHFToken     string
+	modelUpdateHFTokenFile string
+	modelUpdateWait        bool
+
 	// modelWrapPollInterval is shortened by tests.
 	modelWrapPollInterval = 10 * time.Second
 )
@@ -49,7 +55,7 @@ func init() {
 	rootCmd.AddCommand(modelCmd)
 	modelCmd.PersistentFlags().StringVarP(&outputFormat, "output", "o", "table", "Output format: table or json")
 
-	modelCmd.AddCommand(modelWrapCmd, modelListCmd, modelStatusCmd, modelDeleteCmd)
+	modelCmd.AddCommand(modelWrapCmd, modelUpdateCmd, modelListCmd, modelStatusCmd, modelDeleteCmd)
 
 	modelWrapCmd.Flags().StringVar(&modelWrapHost, "host", "", "Host to wrap the model on (see 'tinfoil container hosts') [required]")
 	modelWrapCmd.Flags().StringVar(&modelWrapCommit, "commit", "", "Hugging Face commit SHA to pin (defaults to the repo's latest commit)")
@@ -57,6 +63,13 @@ func init() {
 	modelWrapCmd.Flags().StringVar(&modelWrapHFTokenFile, "hf-token-file", "", "Read the Hugging Face token from this file (use - for stdin)")
 	modelWrapCmd.Flags().BoolVar(&modelWrapWait, "wait", false, "Poll until the wrap job finishes and print the config block")
 	_ = modelWrapCmd.MarkFlagRequired("host")
+
+	modelUpdateCmd.Flags().StringVar(&modelUpdateHost, "host", "", "Host the model was wrapped on (see 'tinfoil container hosts') [required]")
+	modelUpdateCmd.Flags().StringVar(&modelUpdateCommit, "commit", "", "Hugging Face commit SHA to update to (defaults to the repo's latest commit)")
+	modelUpdateCmd.Flags().StringVar(&modelUpdateHFToken, "hf-token", "", "Hugging Face token for gated or private repos (use --hf-token-file or stdin to avoid leaking via process listing)")
+	modelUpdateCmd.Flags().StringVar(&modelUpdateHFTokenFile, "hf-token-file", "", "Read the Hugging Face token from this file (use - for stdin)")
+	modelUpdateCmd.Flags().BoolVar(&modelUpdateWait, "wait", false, "Poll until the wrap job finishes and print the config block")
+	_ = modelUpdateCmd.MarkFlagRequired("host")
 
 	modelListCmd.Flags().IntVar(&modelListLimit, "limit", 0, "Maximum number of jobs to list (server default 20, max 200)")
 
@@ -111,6 +124,82 @@ var modelWrapCmd = &cobra.Command{
 			return err
 		}
 		if modelWrapWait && job.Status == "failed" {
+			return fmt.Errorf("model wrap failed")
+		}
+		return nil
+	},
+}
+
+var modelUpdateCmd = &cobra.Command{
+	Use:   "update [owner/model]",
+	Short: "Wrap a newer revision of a previously wrapped model",
+	Long: `Wrap a newer Hugging Face revision of a model that already has a completed
+wrap job on the host. The previous artifact is left in place: point your
+tinfoil-config.yml at the new repo/mpk values, release, then delete the old
+wrap job to reclaim its disk.`,
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		client, err := authedClient()
+		if err != nil {
+			return err
+		}
+		token, err := readHFToken(cmd)
+		if err != nil {
+			return err
+		}
+		repo := args[0]
+
+		previous, err := latestCompleteModelWrap(client, repo, modelUpdateHost)
+		if err != nil {
+			return err
+		}
+		if previous == nil {
+			return fmt.Errorf("no completed wrap job for %s on %s — start one with `tinfoil model wrap`", repo, modelUpdateHost)
+		}
+
+		target := modelUpdateCommit
+		if target == "" {
+			if target, err = resolveLatestHFCommit(client, repo, token); err != nil {
+				return err
+			}
+		}
+		if target == previous.Commit {
+			if outputFormat == "json" {
+				return printJSON(previous)
+			}
+			fmt.Printf("%s on %s is already at commit %s (job %s).\n", repo, previous.Host, target, previous.JobID)
+			return nil
+		}
+
+		body := map[string]any{
+			"repo":   repo,
+			"host":   modelUpdateHost,
+			"commit": target,
+		}
+		if token != "" {
+			body["hf_token"] = token
+		}
+		var job modelWrapJobView
+		if _, err := client.do("POST", "/api/models/wrap", nil, body, &job); err != nil {
+			return err
+		}
+		if modelUpdateWait {
+			finished, err := waitForModelWrap(client, job.Host, job.JobID)
+			if err != nil {
+				return err
+			}
+			job = *finished
+		}
+		if outputFormat != "json" {
+			fmt.Printf("Updating %s on %s: %s -> %s\n\n", repo, previous.Host, shortCommit(previous.Commit), shortCommit(target))
+		}
+		if err := renderModelWrapJob(job, false); err != nil {
+			return err
+		}
+		if outputFormat != "json" && job.Status == "complete" {
+			fmt.Printf("\nOnce the new config is released and deployed, reclaim the previous artifact with:\n  tinfoil model delete %s %s\n", previous.Host, previous.JobID)
+		}
+		if modelUpdateWait && job.Status == "failed" {
 			return fmt.Errorf("model wrap failed")
 		}
 		return nil
@@ -198,24 +287,78 @@ func readHFToken(cmd *cobra.Command) (string, error) {
 		return "", fmt.Errorf("--hf-token and --hf-token-file are mutually exclusive")
 	}
 	if hasFile {
-		if modelWrapHFTokenFile == "-" {
+		file, err := cmd.Flags().GetString("hf-token-file")
+		if err != nil {
+			return "", err
+		}
+		if file == "-" {
 			data, err := io.ReadAll(os.Stdin)
 			if err != nil {
 				return "", fmt.Errorf("reading stdin: %w", err)
 			}
 			return strings.TrimSpace(string(data)), nil
 		}
-		data, err := os.ReadFile(modelWrapHFTokenFile)
+		data, err := os.ReadFile(file)
 		if err != nil {
-			return "", fmt.Errorf("reading %s: %w", modelWrapHFTokenFile, err)
+			return "", fmt.Errorf("reading %s: %w", file, err)
 		}
 		return strings.TrimSpace(string(data)), nil
 	}
-	return modelWrapHFToken, nil
+	return cmd.Flags().GetString("hf-token")
 }
 
 func modelWrapFinished(status string) bool {
 	return status != "pending" && status != "running"
+}
+
+// latestCompleteModelWrap returns the most recent completed wrap job for
+// repo on host, or nil when none exists.
+func latestCompleteModelWrap(client *cpClient, repo, host string) (*modelWrapJobView, error) {
+	query := url.Values{"limit": []string{"200"}}
+	var list []modelWrapJobView
+	if _, err := client.do("GET", "/api/models/wrap", query, nil, &list); err != nil {
+		return nil, err
+	}
+	for i := range list {
+		job := list[i]
+		if job.Repo == repo && job.Host == host && job.Status == "complete" {
+			return &job, nil
+		}
+	}
+	return nil, nil
+}
+
+// resolveLatestHFCommit asks the controlplane's Hugging Face proxy for the
+// latest commit on the repo's default branch.
+func resolveLatestHFCommit(client *cpClient, repo, token string) (string, error) {
+	owner, model, ok := strings.Cut(repo, "/")
+	if !ok || owner == "" || model == "" || strings.Contains(model, "/") {
+		return "", fmt.Errorf("invalid repo %q: expected owner/model", repo)
+	}
+	var headers map[string]string
+	if token != "" {
+		headers = map[string]string{"X-HuggingFace-Token": token}
+	}
+	var info struct {
+		SHA string `json:"sha"`
+	}
+	if _, err := client.doWithHeaders("GET", pathf("/api/huggingface/models/%s/%s", owner, model), nil, headers, nil, &info); err != nil {
+		return "", err
+	}
+	if info.SHA == "" {
+		return "", fmt.Errorf("Hugging Face did not report a latest commit for %s", repo)
+	}
+	return info.SHA, nil
+}
+
+func shortCommit(commit string) string {
+	if len(commit) > 12 {
+		return commit[:12]
+	}
+	if commit == "" {
+		return "?"
+	}
+	return commit
 }
 
 // waitForModelWrap polls the job until it reaches a terminal status,
