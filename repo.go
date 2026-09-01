@@ -124,7 +124,7 @@ var repoConfigGetCmd = &cobra.Command{
 var repoConfigPRCmd = &cobra.Command{
 	Use:   "pr [owner/repo]",
 	Short: "Open a pull request with a local tinfoil-config.yml",
-	Long:  "Open a pull request through the installed GitHub App. Do not put secret values in the config because the repository must be public.",
+	Long:  "Open a pull request through the installed GitHub App. Do not put secret values in the config: verification metadata is exposed by the enclave endpoint even when the repository is private.",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		repository, client, err := repositoryCommand(args[0])
