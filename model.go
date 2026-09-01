@@ -109,24 +109,7 @@ var modelWrapCmd = &cobra.Command{
 		if token != "" {
 			body["hf_token"] = token
 		}
-		var job modelWrapJobView
-		if _, err := client.do("POST", "/api/models/wrap", nil, body, &job); err != nil {
-			return err
-		}
-		if modelWrapWait {
-			finished, err := waitForModelWrap(client, job.Host, job.JobID)
-			if err != nil {
-				return err
-			}
-			job = *finished
-		}
-		if err := renderModelWrapJob(job, false); err != nil {
-			return err
-		}
-		if modelWrapWait && job.Status == "failed" {
-			return fmt.Errorf("model wrap failed")
-		}
-		return nil
+		return runModelWrapJob(client, body, modelWrapWait, nil)
 	},
 }
 
@@ -154,7 +137,7 @@ wrap job to reclaim its disk.`,
 			return err
 		}
 		if previous == nil {
-			return fmt.Errorf("no completed wrap job for %s on %s — start one with `tinfoil model wrap`", repo, modelUpdateHost)
+			return fmt.Errorf("no completed wrap job for %s on %s among the %d most recent jobs — start one with `tinfoil model wrap`", repo, modelUpdateHost, modelWrapSearchWindow)
 		}
 
 		target := modelUpdateCommit
@@ -179,30 +162,14 @@ wrap job to reclaim its disk.`,
 		if token != "" {
 			body["hf_token"] = token
 		}
-		var job modelWrapJobView
-		if _, err := client.do("POST", "/api/models/wrap", nil, body, &job); err != nil {
-			return err
-		}
-		if modelUpdateWait {
-			finished, err := waitForModelWrap(client, job.Host, job.JobID)
-			if err != nil {
-				return err
-			}
-			job = *finished
-		}
 		if outputFormat != "json" {
 			fmt.Printf("Updating %s on %s: %s -> %s\n\n", repo, previous.Host, shortCommit(previous.Commit), shortCommit(target))
 		}
-		if err := renderModelWrapJob(job, false); err != nil {
-			return err
-		}
-		if outputFormat != "json" && job.Status == "complete" {
-			fmt.Printf("\nOnce the new config is released and deployed, reclaim the previous artifact with:\n  tinfoil model delete %s %s\n", previous.Host, previous.JobID)
-		}
-		if modelUpdateWait && job.Status == "failed" {
-			return fmt.Errorf("model wrap failed")
-		}
-		return nil
+		return runModelWrapJob(client, body, modelUpdateWait, func(job modelWrapJobView) {
+			if outputFormat != "json" && job.Status == "complete" {
+				fmt.Printf("\nOnce the new config is released and deployed, reclaim the previous artifact with:\n  tinfoil model delete %s %s\n", previous.Host, previous.JobID)
+			}
+		})
 	},
 }
 
@@ -311,21 +278,64 @@ func modelWrapFinished(status string) bool {
 	return status != "pending" && status != "running"
 }
 
-// latestCompleteModelWrap returns the most recent completed wrap job for
-// repo on host, or nil when none exists.
+// runModelWrapJob submits a wrap job, optionally polls it to a terminal
+// status, renders the result (running epilogue after it), and reports a
+// waited-on failure as an error.
+func runModelWrapJob(client *cpClient, body map[string]any, wait bool, epilogue func(modelWrapJobView)) error {
+	var job modelWrapJobView
+	if _, err := client.do("POST", "/api/models/wrap", nil, body, &job); err != nil {
+		return err
+	}
+	if wait {
+		finished, err := waitForModelWrap(client, job.Host, job.JobID)
+		if err != nil {
+			return err
+		}
+		job = *finished
+	}
+	if err := renderModelWrapJob(job, false); err != nil {
+		return err
+	}
+	if epilogue != nil {
+		epilogue(job)
+	}
+	if wait && job.Status == "failed" {
+		return fmt.Errorf("model wrap failed")
+	}
+	return nil
+}
+
+// modelWrapSearchWindow is the server's maximum list size; the API offers no
+// pagination or repo filter, so lookups see at most this many recent jobs.
+const modelWrapSearchWindow = 200
+
+// latestCompleteModelWrap returns the newest completed wrap job for repo on
+// host among the organization's most recent jobs, or nil when none exists.
+// Jobs are compared by start time rather than list position so the result
+// doesn't depend on the server's response ordering.
 func latestCompleteModelWrap(client *cpClient, repo, host string) (*modelWrapJobView, error) {
-	query := url.Values{"limit": []string{"200"}}
+	query := url.Values{"limit": []string{strconv.Itoa(modelWrapSearchWindow)}}
 	var list []modelWrapJobView
 	if _, err := client.do("GET", "/api/models/wrap", query, nil, &list); err != nil {
 		return nil, err
 	}
+	best := -1
+	var bestAt time.Time
 	for i := range list {
 		job := list[i]
-		if job.Repo == repo && job.Host == host && job.Status == "complete" {
-			return &job, nil
+		if job.Repo != repo || job.Host != host || job.Status != "complete" {
+			continue
+		}
+		startedAt, _ := time.Parse(time.RFC3339, job.StartedAt) // zero on failure
+		if best == -1 || startedAt.After(bestAt) {
+			best, bestAt = i, startedAt
 		}
 	}
-	return nil, nil
+	if best == -1 {
+		return nil, nil
+	}
+	job := list[best]
+	return &job, nil
 }
 
 // resolveLatestHFCommit asks the controlplane's Hugging Face proxy for the

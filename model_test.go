@@ -467,6 +467,39 @@ func TestModelUpdateWaitPrintsReclaimHint(t *testing.T) {
 	}
 }
 
+func TestLatestCompleteModelWrapPicksNewestRegardlessOfOrder(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.URL.Query().Get("limit"); got != "200" {
+			t.Fatalf("limit = %q, want 200", got)
+		}
+		// Oldest first, i.e. the opposite of the server's usual ordering.
+		_, _ = io.WriteString(w, `[
+			{"job_id":"older","host":"gpu-1","repo":"acme/model","status":"complete","started_at":"2026-08-01T00:00:00Z"},
+			{"job_id":"running","host":"gpu-1","repo":"acme/model","status":"running","started_at":"2026-08-31T00:00:00Z"},
+			{"job_id":"newer","host":"gpu-1","repo":"acme/model","status":"complete","started_at":"2026-08-20T00:00:00Z"},
+			{"job_id":"other-host","host":"gpu-2","repo":"acme/model","status":"complete","started_at":"2026-08-30T00:00:00Z"}
+		]`)
+	}))
+	defer server.Close()
+
+	client := &cpClient{baseURL: server.URL, http: server.Client()}
+	job, err := latestCompleteModelWrap(client, "acme/model", "gpu-1")
+	if err != nil {
+		t.Fatalf("latestCompleteModelWrap: %v", err)
+	}
+	if job == nil || job.JobID != "newer" {
+		t.Fatalf("job = %+v, want the newer completed job", job)
+	}
+
+	job, err = latestCompleteModelWrap(client, "acme/other", "gpu-1")
+	if err != nil {
+		t.Fatalf("latestCompleteModelWrap: %v", err)
+	}
+	if job != nil {
+		t.Fatalf("job = %+v, want nil for an unwrapped repo", job)
+	}
+}
+
 func TestReadHFTokenFlagsMutuallyExclusive(t *testing.T) {
 	configureModelCommandTest(t, "https://example.invalid")
 	modelWrapCmd.Flags().Lookup("hf-token").Changed = true
