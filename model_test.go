@@ -232,6 +232,30 @@ func TestModelListPassesLimit(t *testing.T) {
 	}
 }
 
+func TestModelStatusWaitFailsOnFailedJob(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/api/models/wrap/gpu-1/job-1" {
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		_, _ = io.WriteString(w, `{"job_id":"job-1","host":"gpu-1","repo":"acme/model","status":"failed","error":"download failed"}`)
+	}))
+	defer server.Close()
+
+	configureModelCommandTest(t, server.URL)
+	modelStatusWait = true
+	modelWrapPollInterval = time.Millisecond
+
+	output, err := captureTestStdout(func() error {
+		return modelStatusCmd.RunE(modelStatusCmd, []string{"gpu-1", "job-1"})
+	})
+	if err == nil {
+		t.Fatal("model status --wait succeeded for a failed job")
+	}
+	if !strings.Contains(string(output), "Error:    download failed") {
+		t.Fatalf("output does not include the job error:\n%s", output)
+	}
+}
+
 func TestModelStatusRendersConfigBlock(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet || r.URL.Path != "/api/models/wrap/gpu-1/job-1" {

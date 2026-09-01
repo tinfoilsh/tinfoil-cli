@@ -107,13 +107,7 @@ var modelWrapCmd = &cobra.Command{
 			}
 			job = *finished
 		}
-		if err := renderModelWrapJob(job, false); err != nil {
-			return err
-		}
-		if modelWrapWait && job.Status == "failed" {
-			return fmt.Errorf("model wrap failed")
-		}
-		return nil
+		return finishModelWrapJob(job, false, modelWrapWait)
 	},
 }
 
@@ -148,26 +142,11 @@ var modelStatusCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		host, jobID := args[0], args[1]
-		var job modelWrapJobView
-		if modelStatusWait {
-			finished, err := waitForModelWrap(client, host, jobID)
-			if err != nil {
-				return err
-			}
-			job = *finished
-		} else {
-			if _, err := client.do("GET", pathf("/api/models/wrap/%s/%s", host, jobID), nil, nil, &job); err != nil {
-				return err
-			}
-		}
-		if err := renderModelWrapJob(job, modelStatusLogs); err != nil {
+		job, err := fetchModelWrapJob(client, args[0], args[1], modelStatusWait)
+		if err != nil {
 			return err
 		}
-		if modelStatusWait && job.Status == "failed" {
-			return fmt.Errorf("model wrap failed")
-		}
-		return nil
+		return finishModelWrapJob(job, modelStatusLogs, modelStatusWait)
 	},
 }
 
@@ -216,6 +195,35 @@ func readHFToken(cmd *cobra.Command) (string, error) {
 
 func modelWrapFinished(status string) bool {
 	return status != "pending" && status != "running"
+}
+
+// fetchModelWrapJob reads the job's current state, polling to a terminal
+// status when wait is set.
+func fetchModelWrapJob(client *cpClient, host, jobID string, wait bool) (modelWrapJobView, error) {
+	if wait {
+		job, err := waitForModelWrap(client, host, jobID)
+		if err != nil {
+			return modelWrapJobView{}, err
+		}
+		return *job, nil
+	}
+	var job modelWrapJobView
+	if _, err := client.do("GET", pathf("/api/models/wrap/%s/%s", host, jobID), nil, nil, &job); err != nil {
+		return modelWrapJobView{}, err
+	}
+	return job, nil
+}
+
+// finishModelWrapJob renders the job and reports a waited-on failure as an
+// error so the command exits non-zero.
+func finishModelWrapJob(job modelWrapJobView, showLogs, waited bool) error {
+	if err := renderModelWrapJob(job, showLogs); err != nil {
+		return err
+	}
+	if waited && job.Status == "failed" {
+		return fmt.Errorf("model wrap failed")
+	}
+	return nil
 }
 
 // waitForModelWrap polls the job until it reaches a terminal status,
