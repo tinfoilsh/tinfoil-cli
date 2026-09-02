@@ -13,9 +13,9 @@ import (
 const (
 	defaultControlplaneURL = "https://api.tinfoil.sh"
 
-	envAPIKey      = "TINFOIL_API_KEY"
-	envCPURL       = "TINFOIL_CONTROLPLANE_URL"
-	envConfigPath  = "TINFOIL_CONFIG"
+	envAPIKey     = "TINFOIL_API_KEY"
+	envCPURL      = "TINFOIL_CONTROLPLANE_URL"
+	envConfigPath = "TINFOIL_CONFIG"
 )
 
 type cliConfig struct {
