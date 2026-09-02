@@ -104,6 +104,18 @@ tinfoil http post https://inference.tinfoil.sh/v1/chat/completions \
 
 Pass custom request headers with repeatable `-H, --header` flags. Headers are sent through the verified connection after enclave attestation succeeds.
 
+## TCP tunnels and SSH
+
+Set `TINFOIL_API_KEY`, then forward a published workload port or connect with SSH:
+
+```bash
+tinfoil forward my-server -L 5432:5432
+tinfoil ssh my-server
+tinfoil ssh my-server -- systemctl status
+```
+
+`-L` accepts `[bind:]<local-port>:<enclave-port>` and may be repeated. SSH arguments go after `--`. Use `tinctl ssh` to connect to the debug toolbox instead of the workload.
+
 ## Attestation Verification
 
 Manually verify that an enclave is running the expected code:
