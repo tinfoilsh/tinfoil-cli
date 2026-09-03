@@ -225,6 +225,9 @@ tinfoil model wrap google/gemma-4-31B-it --host gpu-host-1 --wait
 # Gated or private repos
 tinfoil model wrap meta-llama/Llama-4-8B --host gpu-host-1 --hf-token-file ./hf.token
 
+# Pack under a specific model pack schema (update keeps the previous artifact's schema by default)
+tinfoil model wrap google/gemma-4-31B-it --host gpu-host-1 --schema 2 --wait
+
 # Update to the latest (or a specific) revision — only changed files are re-downloaded
 tinfoil model update google/gemma-4-31B-it --host gpu-host-1 --wait
 
