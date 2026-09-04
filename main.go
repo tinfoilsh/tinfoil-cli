@@ -39,8 +39,18 @@ func main() {
 		log.SetLevel(log.InfoLevel)
 	}
 
-	if err := rootCmd.Execute(); err != nil {
+	waitForUpdateCheck := startUpdateCheck()
+
+	err := rootCmd.Execute()
+	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
+	}
+
+	if latest, ok := waitForUpdateCheck(); ok {
+		printUpdateNotice(latest)
+	}
+
+	if err != nil {
 		os.Exit(1)
 	}
 }

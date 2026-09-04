@@ -12,6 +12,10 @@ curl -fsSL https://github.com/tinfoilsh/tinfoil-cli/raw/main/install.sh | sh
 
 Or download a binary from the [Releases](https://github.com/tinfoilsh/tinfoil-cli/releases) page. A Docker image is also available at `ghcr.io/tinfoilsh/tinfoil-cli`.
 
+### Updating
+
+Re-run the install script to update to the latest release. The CLI checks for new releases at most once a day and prints a warning with the update command when one is available. Set `TINFOIL_NO_UPDATE_CHECK=1` to disable the check.
+
 ## Proxy
 
 Run a local proxy that verifies enclave attestation and forwards requests. This lets any language or tool (PHP, Ruby, Java, curl, etc.) use Tinfoil without a native SDK — just point your HTTP client at `localhost`.
