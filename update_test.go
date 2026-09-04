@@ -139,6 +139,26 @@ func TestNewerVersionRefetchesWhenCacheExpired(t *testing.T) {
 	}
 }
 
+func TestNewerVersionIgnoresCacheFromTheFuture(t *testing.T) {
+	checker, requests := newTestUpdateChecker(t, "0.16.3", releaseHandler("v0.17.0"))
+
+	future := updateCache{
+		CheckedAt:     checker.now().Add(time.Hour),
+		LatestVersion: "0.16.3",
+	}
+	data, _ := json.Marshal(future)
+	if err := os.WriteFile(checker.cachePath, data, 0o600); err != nil {
+		t.Fatalf("seeding cache: %v", err)
+	}
+
+	if latest, ok := checker.newerVersion(); !ok || latest != "0.17.0" {
+		t.Fatalf("newerVersion() = (%q, %v), want (%q, true)", latest, ok, "0.17.0")
+	}
+	if got := requests.Load(); got != 1 {
+		t.Fatalf("GitHub API requests = %d, want 1", got)
+	}
+}
+
 func TestNewerVersionIgnoresMalformedCache(t *testing.T) {
 	checker, requests := newTestUpdateChecker(t, "0.16.3", releaseHandler("v0.17.0"))
 

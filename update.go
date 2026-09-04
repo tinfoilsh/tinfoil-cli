@@ -138,7 +138,8 @@ func (c *updateChecker) readCache() (updateCache, bool) {
 	if err := json.Unmarshal(data, &cached); err != nil {
 		return updateCache{}, false
 	}
-	if cached.LatestVersion == "" || c.now().Sub(cached.CheckedAt) >= updateCheckInterval {
+	age := c.now().Sub(cached.CheckedAt)
+	if cached.LatestVersion == "" || age < 0 || age >= updateCheckInterval {
 		return updateCache{}, false
 	}
 	return cached, true
