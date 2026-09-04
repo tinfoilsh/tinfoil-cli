@@ -275,6 +275,25 @@ tinfoil domain delete api.example.com
 
 Pass `-o json` on any list/get to emit machine-readable JSON.
 
+## Sandboxes
+
+Sandboxes are user-owned confidential VMs with persistent encrypted disks.
+
+```bash
+tinfoil sandbox create my-sandbox
+tinfoil sandbox list
+tinfoil sandbox ssh my-sandbox
+tinfoil sandbox stop my-sandbox       # keep the disk
+tinfoil sandbox start my-sandbox
+tinfoil sandbox restart my-sandbox
+tinfoil sandbox accept my-sandbox     # enroll with an existing permit
+tinfoil sandbox destroy my-sandbox    # erase the disk
+```
+
+`create`, `start`, and `restart` wait for the VM, verify its attestation, and enroll local SSH and disk keys. The CLI stores them in `~/.tinfoil/sandboxes/<name>`. Back up `disk.key`; without it, the workspace cannot be opened.
+
+`accept` uses a permit issued elsewhere, such as the dashboard. Permits expire after five minutes and work once for one boot.
+
 ## Building from Source
 
 ```bash

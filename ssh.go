@@ -79,32 +79,36 @@ command:
 			log.Infof("No SSH port known for %s, trying %d", target.name, port)
 		}
 
-		proxy, err := proxyCommand(target, port)
-		if err != nil {
-			return err
-		}
-
-		argv := []string{
-			"-o", "ProxyCommand=" + proxy,
-			"-o", "UserKnownHostsFile=" + os.DevNull,
-			"-o", "StrictHostKeyChecking=no",
-			"-l", sshUser,
-		}
 		options, command := splitSSHArgs(sshArgs)
-		argv = append(argv, options...)
-		argv = append(argv, target.host)
-		argv = append(argv, command...)
-
-		ssh := exec.Command("ssh", argv...)
-		ssh.Stdin, ssh.Stdout, ssh.Stderr = os.Stdin, os.Stdout, os.Stderr
-		// The key travels in the environment rather than the ProxyCommand line
-		// so it stays out of the process table.
-		ssh.Env = os.Environ()
-		if key := enclaveAPIKey(); key != "" {
-			ssh.Env = append(ssh.Env, envAPIKey+"="+key)
-		}
-		return ssh.Run()
+		return runSSH(target, port, sshUser, options, command)
 	},
+}
+
+func runSSH(target *tunnelTarget, port int, user string, options, command []string) error {
+	proxy, err := proxyCommand(target, port)
+	if err != nil {
+		return err
+	}
+
+	// The attested proxy pins the peer, so SSH host keys add no extra check.
+	argv := []string{
+		"-o", "ProxyCommand=" + proxy,
+		"-o", "UserKnownHostsFile=" + os.DevNull,
+		"-o", "StrictHostKeyChecking=no",
+		"-l", user,
+	}
+	argv = append(argv, options...)
+	argv = append(argv, target.host)
+	argv = append(argv, command...)
+
+	ssh := exec.Command("ssh", argv...)
+	ssh.Stdin, ssh.Stdout, ssh.Stderr = os.Stdin, os.Stdout, os.Stderr
+	// Keep the API key out of the ProxyCommand shown in the process table.
+	ssh.Env = os.Environ()
+	if key := enclaveAPIKey(); key != "" {
+		ssh.Env = append(ssh.Env, envAPIKey+"="+key)
+	}
+	return ssh.Run()
 }
 
 // proxyCommand builds the "tinfoil forward --stdio" invocation ssh runs through

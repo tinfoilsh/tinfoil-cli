@@ -740,12 +740,16 @@ func confirmNonCCMode() error {
 	fmt.Fprintln(os.Stderr, "WARNING: This container will deploy without confidential computing")
 	fmt.Fprintln(os.Stderr, "protections. The host operator can read memory and observe execution.")
 	fmt.Fprintln(os.Stderr)
-	if createYes {
+	return confirmYes(createYes, "--disable-cc-mode")
+}
+
+func confirmYes(skip bool, what string) error {
+	if skip {
 		fmt.Fprintln(os.Stderr, "Proceeding (--yes).")
 		return nil
 	}
 	if !term.IsTerminal(int(os.Stdin.Fd())) {
-		return fmt.Errorf("--disable-cc-mode requires interactive confirmation; pass --yes to skip the prompt")
+		return fmt.Errorf("%s requires interactive confirmation; pass --yes to skip the prompt", what)
 	}
 	fmt.Fprint(os.Stderr, "Type \"yes\" to proceed: ")
 	scanner := bufio.NewScanner(os.Stdin)
