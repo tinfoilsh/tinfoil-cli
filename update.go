@@ -21,6 +21,9 @@ const (
 	updateCacheFileName = "update-check.json"
 	updateCheckInterval = 24 * time.Hour
 	updateCheckTimeout  = 2 * time.Second
+	// updateNoticeWait bounds how long a finished command waits for the
+	// background lookup so a slow GitHub never noticeably delays fast commands.
+	updateNoticeWait = 200 * time.Millisecond
 )
 
 // updateCache remembers the most recent release lookup so that the CLI only
@@ -53,8 +56,10 @@ func newUpdateChecker() (*updateChecker, error) {
 }
 
 // startUpdateCheck runs the release lookup in the background so it overlaps
-// with the command being executed. The returned function blocks until the
-// lookup finishes and reports the newer version, if there is one.
+// with the command being executed. The returned function waits at most
+// updateNoticeWait for the lookup and reports the newer version, if there is
+// one; a lookup that is still in flight is abandoned so the command exits
+// promptly.
 func startUpdateCheck() func() (string, bool) {
 	if !updateCheckEnabled() {
 		return func() (string, bool) { return "", false }
@@ -63,19 +68,26 @@ func startUpdateCheck() func() (string, bool) {
 	if err != nil {
 		return func() (string, bool) { return "", false }
 	}
+	return checker.start(updateNoticeWait)
+}
 
+func (c *updateChecker) start(maxWait time.Duration) func() (string, bool) {
 	type result struct {
 		latest string
 		ok     bool
 	}
 	done := make(chan result, 1)
 	go func() {
-		latest, ok := checker.newerVersion()
+		latest, ok := c.newerVersion()
 		done <- result{latest, ok}
 	}()
 	return func() (string, bool) {
-		r := <-done
-		return r.latest, r.ok
+		select {
+		case r := <-done:
+			return r.latest, r.ok
+		case <-time.After(maxWait):
+			return "", false
+		}
 	}
 }
 

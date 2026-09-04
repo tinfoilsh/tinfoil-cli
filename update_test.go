@@ -168,6 +168,37 @@ func TestUpdateCheckDisabledForDevBuildsAndOptOut(t *testing.T) {
 	}
 }
 
+func TestStartGivesUpOnSlowLookup(t *testing.T) {
+	handlerDone := make(chan struct{})
+	checker, _ := newTestUpdateChecker(t, "0.16.3", func(w http.ResponseWriter, r *http.Request) {
+		defer close(handlerDone)
+		// Park until the client gives up so the response never lands and the
+		// abandoned goroutine cannot write the cache into the temp dir after
+		// the test has torn it down.
+		<-r.Context().Done()
+	})
+	checker.http.Timeout = 100 * time.Millisecond
+	t.Cleanup(func() { <-handlerDone })
+
+	wait := checker.start(20 * time.Millisecond)
+	started := time.Now()
+	latest, ok := wait()
+	if ok {
+		t.Fatalf("wait() = (%q, true), want to give up on a slow lookup", latest)
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("wait() blocked for %v, want it bounded by maxWait", elapsed)
+	}
+}
+
+func TestStartReturnsPromptResult(t *testing.T) {
+	checker, _ := newTestUpdateChecker(t, "0.16.3", releaseHandler("v0.17.0"))
+
+	if latest, ok := checker.start(5 * time.Second)(); !ok || latest != "0.17.0" {
+		t.Fatalf("wait() = (%q, %v), want (%q, true)", latest, ok, "0.17.0")
+	}
+}
+
 func TestStartUpdateCheckReturnsNothingWhenDisabled(t *testing.T) {
 	setVersionForTest(t, defaultVersion)
 
