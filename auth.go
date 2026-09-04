@@ -50,7 +50,7 @@ TINFOIL_CONTROLPLANE_URL environment variables override the saved values.`,
 
 		key := strings.TrimSpace(keyFlag)
 		if key == "" {
-			key, err = promptForAPIKey(cfg.ControlplaneURL)
+			key, err = promptSecret("api key", fmt.Sprintf("Enter admin API key for %s: ", cfg.ControlplaneURL))
 			if err != nil {
 				return err
 			}
@@ -118,13 +118,13 @@ var whoamiCmd = &cobra.Command{
 	},
 }
 
-func promptForAPIKey(controlplaneURL string) (string, error) {
-	fmt.Fprintf(os.Stderr, "Enter admin API key for %s: ", controlplaneURL)
+func promptSecret(what, prompt string) (string, error) {
+	fmt.Fprint(os.Stderr, prompt)
 	if term.IsTerminal(int(os.Stdin.Fd())) {
 		raw, err := term.ReadPassword(int(os.Stdin.Fd()))
 		fmt.Fprintln(os.Stderr)
 		if err != nil {
-			return "", fmt.Errorf("reading api key: %w", err)
+			return "", fmt.Errorf("reading %s: %w", what, err)
 		}
 		return strings.TrimSpace(string(raw)), nil
 	}
@@ -133,9 +133,9 @@ func promptForAPIKey(controlplaneURL string) (string, error) {
 	scanner.Buffer(make([]byte, 0, 4096), 1<<20)
 	if !scanner.Scan() {
 		if err := scanner.Err(); err != nil {
-			return "", fmt.Errorf("reading api key: %w", err)
+			return "", fmt.Errorf("reading %s: %w", what, err)
 		}
-		return "", errors.New("no api key provided")
+		return "", fmt.Errorf("no %s provided", what)
 	}
 	return strings.TrimSpace(scanner.Text()), nil
 }
