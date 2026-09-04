@@ -41,12 +41,16 @@ func main() {
 
 	waitForUpdateCheck := startUpdateCheck()
 
-	if err := rootCmd.Execute(); err != nil {
+	err := rootCmd.Execute()
+	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
 	}
 
 	if latest, ok := waitForUpdateCheck(); ok {
 		printUpdateNotice(latest)
+	}
+
+	if err != nil {
+		os.Exit(1)
 	}
 }
