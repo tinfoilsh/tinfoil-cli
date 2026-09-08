@@ -149,18 +149,6 @@ tinfoil attestation verify \
   -j > verification.json
 ```
 
-## Certificate Audit
-
-Verify that a TLS certificate matches the enclave's attestation:
-
-```bash
-# From a live server
-tinfoil certificate audit -s inference.tinfoil.sh
-
-# From a PEM file
-tinfoil certificate audit -c /path/to/certificate.pem
-```
-
 ## Container management
 
 The `container`, `deployment`, `model`, `repo`, `secret`, `ssh-key`, `registry`, and `domain` subcommands manage Tinfoil Containers through the same controlplane API the dashboard uses. See the [Tinfoil Containers docs](https://docs.tinfoil.sh/containers/overview) for the underlying concepts and the [CLI reference](https://docs.tinfoil.sh/containers/cli) for the full command surface.
