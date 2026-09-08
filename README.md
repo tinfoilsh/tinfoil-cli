@@ -118,7 +118,7 @@ tinfoil ssh my-server
 tinfoil ssh my-server -- systemctl status
 ```
 
-`-L` accepts `[bind:]<local-port>:<enclave-port>` and may be repeated. SSH arguments go after `--`. Use `tinctl ssh` to connect to the debug toolbox instead of the workload.
+`-L` accepts `[bind:]<local-port>:<enclave-port>` and may be repeated. SSH arguments go after `--`; `-l` sets the remote user and `-p` the enclave-side port. The target is a container name or a bare enclave hostname. Both commands refuse a debug-mode enclave unless `--allow-debug` is passed. Use `tinctl ssh` to connect to the debug toolbox instead of the workload.
 
 ## Attestation Verification
 
@@ -164,7 +164,7 @@ tinfoil whoami                       # confirm the credential and show org conte
 tinfoil logout                       # delete saved credentials
 ```
 
-Credentials are written to `~/.tinfoil/config.json` (mode 0600). Override on a per-command basis with `TINFOIL_API_KEY` and `TINFOIL_CONTROLPLANE_URL`.
+Credentials are written to `~/.tinfoil/config.json` (mode 0600). Override on a per-command basis with `TINFOIL_API_KEY`, `TINFOIL_CONTROLPLANE_URL`, or `TINFOIL_CONFIG` for an alternate config path. `login --url` targets a different controlplane.
 
 ### Containers
 
@@ -172,25 +172,29 @@ Credentials are written to `~/.tinfoil/config.json` (mode 0600). Override on a p
 # Inspect what's deployed
 tinfoil container list
 tinfoil container get my-container
+tinfoil container metrics my-container --time 24h
 tinfoil container hosts             # which hosts your org may target
 
 # Deploy
 tinfoil container create my-container \
   --repo myorg/my-repo-container \
   --tag v1.2.3 \
-  --promote-release=true \
   --variable LOG_LEVEL=info \
   --secret OPENAI_API_KEY \
   --custom-domain api.example.com
 
 # Lifecycle
 tinfoil container stop my-container
-tinfoil container start my-container --tag v1.2.4 --promote-release=true
-tinfoil container relaunch my-container --tag v1.2.4 --staging=true --promote-release=true
+tinfoil container start my-container --tag v1.2.4
+tinfoil container relaunch my-container --tag v1.2.4 --staging=true
+tinfoil container relaunch my-container --tag v1.2.2 --promote-release=false   # roll back without changing the latest release
 tinfoil container delete my-container
 
-# Repository-wide updates (optionally select eligible instances with --instance)
-tinfoil deployment update myorg/my-repo-container --tag v1.2.4 --staging=true --promote-release=true
+# Repository deployments (all instances of one repo)
+tinfoil deployment list
+tinfoil deployment get myorg/my-repo-container
+tinfoil deployment update myorg/my-repo-container --tag v1.2.4 --staging=true
+tinfoil deployment update myorg/my-repo-container --tag v1.2.4 --instance <container-id>
 tinfoil deployment settings myorg/my-repo-container --default-staging=true
 
 # Updates
@@ -204,7 +208,7 @@ tinfoil container connect my-container -p 8080
 
 `container connect <name>` resolves the container's enclave domain and source repo, then runs a verified proxy locally — equivalent to `tinfoil proxy -e <domain> -r <repo>` but without copy-pasting either value.
 
-Container create, start, relaunch, and deployment update require `--promote-release=true` to promote the deployed tag as the repository's latest release or `--promote-release=false` to leave the latest release unchanged.
+Container create, start, relaunch, and deployment update promote the deployed tag as the repository's latest release by default. Pass `--promote-release=false` to leave the latest release unchanged.
 
 ### Model weights
 
@@ -222,10 +226,28 @@ tinfoil model update google/gemma-4-31B-it --host gpu-host-1 --wait
 
 # Inspect wrap jobs
 tinfoil model list
-tinfoil model status gpu-host-1 <job-id>
+tinfoil model status gpu-host-1 <job-id>          # add --logs for wrap logs
 
 # Delete a wrap job (also removes the weights once nothing references them)
 tinfoil model delete gpu-host-1 <job-id>
+```
+
+### Repository config and releases
+
+The `repo` subcommand acts through the Tinfoil GitHub App installed on the config repository:
+
+```bash
+# Read tinfoil-config.yml from the default branch
+tinfoil repo config get myorg/my-repo-container
+tinfoil repo config get myorg/my-repo-container --raw > tinfoil-config.yml
+
+# Open a pull request with a locally edited config, then track it
+tinfoil repo config pr myorg/my-repo-container --file ./tinfoil-config.yml --body "Bump memory"
+tinfoil repo pr status myorg/my-repo-container 42
+
+# Inspect tags and trigger the Tinfoil Release workflow
+tinfoil repo build info myorg/my-repo-container
+tinfoil repo build run myorg/my-repo-container --version v1.2.4
 ```
 
 ### Secrets, SSH keys, registry credentials, custom domains
@@ -233,12 +255,14 @@ tinfoil model delete gpu-host-1 <job-id>
 ```bash
 # Org secrets (used by containers via --secret)
 tinfoil secret list
+tinfoil secret get OPENAI_API_KEY               # metadata only; the value is never returned
 echo -n "$OPENAI_KEY" | tinfoil secret create OPENAI_API_KEY --value-file -
 tinfoil secret set OPENAI_API_KEY --value-file ./key.txt
 tinfoil secret delete OPENAI_API_KEY
 
 # Repository secrets
 tinfoil repo secret list myorg/my-repo-container
+tinfoil repo secret get myorg/my-repo-container OPENAI_API_KEY
 tinfoil repo secret create myorg/my-repo-container OPENAI_API_KEY --value-file ./key.txt
 tinfoil repo secret set myorg/my-repo-container OPENAI_API_KEY --value-file ./key.txt
 tinfoil repo secret delete myorg/my-repo-container OPENAI_API_KEY
