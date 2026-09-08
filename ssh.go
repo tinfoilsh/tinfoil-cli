@@ -106,7 +106,7 @@ func runSSH(target *tunnelTarget, port int, user string, options, command []stri
 	// Keep the API key out of the ProxyCommand shown in the process table.
 	ssh.Env = os.Environ()
 	if key := enclaveAPIKey(); key != "" {
-		ssh.Env = append(ssh.Env, envAPIKey+"="+key)
+		ssh.Env = append(ssh.Env, envTunnelAPIKey+"="+key)
 	}
 	return ssh.Run()
 }

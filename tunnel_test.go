@@ -323,3 +323,25 @@ func TestResolveTunnelTargetTakesHostnamesWithoutControlplane(t *testing.T) {
 		t.Error("resolveTunnelTarget with no target and no --host succeeded")
 	}
 }
+
+func TestEnclaveAPIKeyIgnoresAdminLoginEnv(t *testing.T) {
+	previous := tunnelAPIKey
+	t.Cleanup(func() { tunnelAPIKey = previous })
+	tunnelAPIKey = ""
+	t.Setenv(envAPIKey, "admin_should_not_be_used")
+	t.Setenv(envTunnelAPIKey, "")
+
+	if got := enclaveAPIKey(); got != "" {
+		t.Fatalf("enclaveAPIKey() = %q, want empty when only the admin key env is set", got)
+	}
+
+	t.Setenv(envTunnelAPIKey, "tk_from_env")
+	if got := enclaveAPIKey(); got != "tk_from_env" {
+		t.Fatalf("enclaveAPIKey() = %q, want tunnel env value", got)
+	}
+
+	tunnelAPIKey = "tk_from_flag"
+	if got := enclaveAPIKey(); got != "tk_from_flag" {
+		t.Fatalf("enclaveAPIKey() = %q, want flag to win over env", got)
+	}
+}

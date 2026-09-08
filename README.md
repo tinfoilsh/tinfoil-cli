@@ -110,7 +110,7 @@ Pass custom request headers with repeatable `-H, --header` flags. Headers are se
 
 ## TCP tunnels and SSH
 
-Set `TINFOIL_API_KEY`, then forward a published workload port or connect with SSH:
+Set `TINFOIL_TUNNEL_API_KEY` to an inference API key (`tk_...`), then forward a published workload port or connect with SSH:
 
 ```bash
 tinfoil forward my-server -L 5432:5432
@@ -118,7 +118,7 @@ tinfoil ssh my-server
 tinfoil ssh my-server -- systemctl status
 ```
 
-`-L` accepts `[bind:]<local-port>:<enclave-port>` and may be repeated. SSH arguments go after `--`; `-l` sets the remote user and `-p` the enclave-side port. The target is a container name or a bare enclave hostname. Both commands refuse a debug-mode enclave unless `--allow-debug` is passed. Use `tinctl ssh` to connect to the debug toolbox instead of the workload.
+`-L` accepts `[bind:]<local-port>:<enclave-port>` and may be repeated. SSH arguments go after `--`; `-l` sets the remote user and `-p` the enclave-side port. The target is a container name or a bare enclave hostname. The tunnel key is validated by the enclave and is separate from the admin key used to log in, which is why it has its own variable (or `--api-key`). Both commands refuse a debug-mode enclave unless `--allow-debug` is passed. Use `tinctl ssh` to connect to the debug toolbox instead of the workload.
 
 ## Attestation Verification
 
