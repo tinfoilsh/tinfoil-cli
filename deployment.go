@@ -63,7 +63,7 @@ func init() {
 
 	deploymentUpdateCmd.Flags().StringVar(&deploymentUpdateTag, "tag", "", "Repository release tag to deploy")
 	deploymentUpdateCmd.Flags().StringVar(&deploymentUpdateStaging, "staging", "", "Hold eligible ready update candidates for manual acceptance (true/false)")
-	deploymentUpdateCmd.Flags().StringVar(&deploymentUpdatePromoteRelease, "promote-release", "", "Promote the deployed tag to the repository's latest release when it goes live (required: true/false)")
+	deploymentUpdateCmd.Flags().StringVar(&deploymentUpdatePromoteRelease, "promote-release", "", "Promote the deployed tag to the repository's latest release when it goes live (default true; pass false to decline)")
 	deploymentUpdateCmd.Flags().StringArrayVar(
 		&deploymentUpdateInstanceIDs,
 		"instance",
@@ -156,14 +156,11 @@ var deploymentUpdateCmd = &cobra.Command{
 	Short: "Create update candidates for all or selected eligible instances",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		promoteRelease, err := requireBoolFlag(cmd, "promote-release", deploymentUpdatePromoteRelease)
-		if err != nil {
-			return err
-		}
-
 		body := map[string]any{
-			"tag":             deploymentUpdateTag,
-			"promote_release": promoteRelease,
+			"tag": deploymentUpdateTag,
+		}
+		if err := setPromoteRelease(cmd, body, deploymentUpdatePromoteRelease); err != nil {
+			return err
 		}
 		if cmd.Flags().Changed("staging") {
 			staging, err := parseTriBool(deploymentUpdateStaging)

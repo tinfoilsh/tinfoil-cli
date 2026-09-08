@@ -68,7 +68,7 @@ func TestContainerDetailIncludesPromoteRelease(t *testing.T) {
 	}
 }
 
-func TestContainerCommandsRequirePromoteRelease(t *testing.T) {
+func TestContainerCommandsPromoteReleaseRequestBodies(t *testing.T) {
 	const containerID = "61bd4a3e-5b48-4320-9215-0c7a7f974979"
 
 	commands := []struct {
@@ -76,7 +76,7 @@ func TestContainerCommandsRequirePromoteRelease(t *testing.T) {
 		command      *cobra.Command
 		path         string
 		wantRequests int32
-		wantBody     func(bool) string
+		wantBody     func(string) string
 		setValue     func(string)
 		run          func() error
 	}{
@@ -85,8 +85,8 @@ func TestContainerCommandsRequirePromoteRelease(t *testing.T) {
 			command:      containerCreateCmd,
 			path:         "/api/containers",
 			wantRequests: 1,
-			wantBody: func(value bool) string {
-				return `{"name":"app","promote_release":` + boolString(value) + `,"repo":"acme/app","tag":"v1.2.3"}`
+			wantBody: func(promote string) string {
+				return `{"name":"app",` + promote + `"repo":"acme/app","tag":"v1.2.3"}`
 			},
 			setValue: func(value string) { createPromoteRelease = value },
 			run:      func() error { return containerCreateCmd.RunE(containerCreateCmd, []string{"app"}) },
@@ -96,8 +96,8 @@ func TestContainerCommandsRequirePromoteRelease(t *testing.T) {
 			command:      containerStartCmd,
 			path:         "/api/containers/" + containerID + "/start",
 			wantRequests: 2,
-			wantBody: func(value bool) string {
-				return `{"promote_release":` + boolString(value) + `}`
+			wantBody: func(promote string) string {
+				return `{` + strings.TrimSuffix(promote, ",") + `}`
 			},
 			setValue: func(value string) { startPromoteRelease = value },
 			run:      func() error { return containerStartCmd.RunE(containerStartCmd, []string{containerID}) },
@@ -107,33 +107,32 @@ func TestContainerCommandsRequirePromoteRelease(t *testing.T) {
 			command:      containerRelaunchCmd,
 			path:         "/api/containers/" + containerID + "/relaunch",
 			wantRequests: 2,
-			wantBody: func(value bool) string {
-				return `{"promote_release":` + boolString(value) + `}`
+			wantBody: func(promote string) string {
+				return `{` + strings.TrimSuffix(promote, ",") + `}`
 			},
 			setValue: func(value string) { relaunchPromoteRelease = value },
 			run:      func() error { return containerRelaunchCmd.RunE(containerRelaunchCmd, []string{containerID}) },
 		},
 	}
+	// wantPromote is the JSON fragment expected in the body, including its
+	// trailing comma, or empty when the field must be omitted entirely.
 	values := []struct {
 		name         string
 		value        string
 		changed      bool
-		wantValue    bool
+		wantPromote  string
 		wantErr      string
 		localFailure bool
 	}{
-		{
-			name:         "omitted",
-			wantErr:      "--promote-release is required; pass --promote-release=true or --promote-release=false",
-			localFailure: true,
-		},
-		{name: "true", value: "true", changed: true, wantValue: true},
-		{name: "false", value: "false", changed: true},
+		{name: "omitted"},
+		{name: "true", value: "true", changed: true, wantPromote: `"promote_release":true,`},
+		{name: "false", value: "false", changed: true, wantPromote: `"promote_release":false,`},
+		{name: "relaxed", value: "no", changed: true, wantPromote: `"promote_release":false,`},
 		{
 			name:         "invalid",
-			value:        "yes",
+			value:        "maybe",
 			changed:      true,
-			wantErr:      `--promote-release must be true or false, got "yes"`,
+			wantErr:      `--promote-release: expected true/false, got "maybe"`,
 			localFailure: true,
 		},
 	}
@@ -153,7 +152,7 @@ func TestContainerCommandsRequirePromoteRelease(t *testing.T) {
 							t.Errorf("read body: %v", err)
 							return
 						}
-						if got, want := string(body), command.wantBody(value.wantValue); got != want {
+						if got, want := string(body), command.wantBody(value.wantPromote); got != want {
 							t.Errorf("body = %s, want %s", got, want)
 						}
 						_, _ = io.WriteString(w, `{}`)
@@ -201,13 +200,6 @@ func TestPromoteReleaseFlagsRequireValues(t *testing.T) {
 			}
 		})
 	}
-}
-
-func boolString(value bool) string {
-	if value {
-		return "true"
-	}
-	return "false"
 }
 
 func configureContainerPromotionTest(t *testing.T, serverURL string) {
