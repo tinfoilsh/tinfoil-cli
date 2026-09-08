@@ -41,17 +41,19 @@ func init() {
 }
 
 func addTunnelFlags(cmd *cobra.Command) {
-	cmd.Flags().StringVar(&tunnelAPIKey, "api-key", "", "API key the enclave validates for tunnels (default $"+envAPIKey+")")
+	cmd.Flags().StringVar(&tunnelAPIKey, "api-key", "", "Inference API key (tk_...) the enclave validates for tunnels (default $"+envTunnelAPIKey+")")
 	cmd.Flags().BoolVar(&allowDebug, "allow-debug", false, "Tunnel into an enclave running in debug mode, which has a shell inside it")
 }
 
 // enclaveAPIKey is the key the shim's tunnel handler validates. It goes to the
 // enclave rather than the controlplane, so it never comes from the saved login.
+// It has its own env var because TINFOIL_API_KEY overrides the admin login and
+// would break the controlplane lookup that resolves a container name.
 func enclaveAPIKey() string {
 	if key := strings.TrimSpace(tunnelAPIKey); key != "" {
 		return key
 	}
-	return strings.TrimSpace(os.Getenv(envAPIKey))
+	return strings.TrimSpace(os.Getenv(envTunnelAPIKey))
 }
 
 var forwardCmd = &cobra.Command{

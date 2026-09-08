@@ -132,8 +132,9 @@ func TestDeploymentUpdatePromoteReleaseRequestBodies(t *testing.T) {
 		wantBody       string
 	}{
 		{
-			name:    "omitted",
-			wantErr: "--promote-release is required; pass --promote-release=true or --promote-release=false",
+			name:         "omitted",
+			wantRequests: 2,
+			wantBody:     `{"instance_ids":["container-1"],"staging":true,"tag":"v1.2.3"}`,
 		},
 		{
 			name:           "true",
@@ -150,10 +151,17 @@ func TestDeploymentUpdatePromoteReleaseRequestBodies(t *testing.T) {
 			wantBody:       `{"instance_ids":["container-1"],"promote_release":false,"staging":true,"tag":"v1.2.3"}`,
 		},
 		{
-			name:           "invalid",
-			promoteRelease: "yes",
+			name:           "relaxed",
+			promoteRelease: "no",
 			changed:        true,
-			wantErr:        `--promote-release must be true or false, got "yes"`,
+			wantRequests:   2,
+			wantBody:       `{"instance_ids":["container-1"],"promote_release":false,"staging":true,"tag":"v1.2.3"}`,
+		},
+		{
+			name:           "invalid",
+			promoteRelease: "maybe",
+			changed:        true,
+			wantErr:        `--promote-release: expected true/false, got "maybe"`,
 		},
 	}
 

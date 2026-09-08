@@ -124,7 +124,7 @@ func init() {
 	containerCreateCmd.Flags().StringVar(&createRepo, "repo", "", "GitHub repo (owner/repo) holding tinfoil-config.yml [required]")
 	containerCreateCmd.Flags().StringVar(&createTag, "tag", "", "Repository release tag to deploy [required]")
 	containerCreateCmd.Flags().BoolVar(&createDebug, "debug", false, "Enable debug mode (allows SSH into the enclave)")
-	containerCreateCmd.Flags().StringVar(&createPromoteRelease, "promote-release", "", "Promote the deployed tag to the repository's latest release when it goes live (required: true/false)")
+	containerCreateCmd.Flags().StringVar(&createPromoteRelease, "promote-release", "", "Promote the deployed tag to the repository's latest release when it goes live (default true; pass false to decline)")
 	containerCreateCmd.Flags().BoolVar(&createDisableCC, "disable-cc-mode", false, "EXPERIMENTAL: disable confidential computing (benchmarks only; requires org entitlement)")
 	containerCreateCmd.Flags().BoolVar(&createYes, "yes", false, "Skip interactive confirmation for --disable-cc-mode")
 	containerCreateCmd.Flags().StringVar(&createCustomDomain, "custom-domain", "", "Verified custom domain to expose the container on")
@@ -153,7 +153,7 @@ func init() {
 	containerStartCmd.Flags().StringArrayVar(&startSecrets, "secret", nil, "Override secrets list (specify all)")
 	containerStartCmd.Flags().StringArrayVar(&startSSHKeys, "ssh-key", nil, "Override SSH keys list")
 	containerStartCmd.Flags().StringVar(&startDebug, "debug", "", "Override debug mode (true/false)")
-	containerStartCmd.Flags().StringVar(&startPromoteRelease, "promote-release", "", "Promote the deployed tag to the repository's latest release when it goes live (required: true/false)")
+	containerStartCmd.Flags().StringVar(&startPromoteRelease, "promote-release", "", "Promote the deployed tag to the repository's latest release when it goes live (default true; pass false to decline)")
 	containerStartCmd.Flags().StringVar(&startCustomDomain, "custom-domain", "", "Override custom domain (empty string clears it)")
 	containerStartCmd.Flags().StringVar(&startHost, "host", "", "Move stopped container to a different host")
 
@@ -163,7 +163,7 @@ func init() {
 	containerRelaunchCmd.Flags().StringArrayVar(&relaunchSSHKeys, "ssh-key", nil, "Override SSH keys list")
 	containerRelaunchCmd.Flags().StringVar(&relaunchDebug, "debug", "", "Override debug mode (true/false)")
 	containerRelaunchCmd.Flags().StringVar(&relaunchStaging, "staging", "", "Hold an eligible ready update candidate for manual acceptance (true/false)")
-	containerRelaunchCmd.Flags().StringVar(&relaunchPromoteRelease, "promote-release", "", "Promote the deployed tag to the repository's latest release when it goes live (required: true/false)")
+	containerRelaunchCmd.Flags().StringVar(&relaunchPromoteRelease, "promote-release", "", "Promote the deployed tag to the repository's latest release when it goes live (default true; pass false to decline)")
 	containerRelaunchCmd.Flags().StringVar(&relaunchCustomDomain, "custom-domain", "", "Override custom domain (empty string clears it)")
 	containerRelaunchCmd.Flags().StringVar(&relaunchHost, "host", "", "Move failed container to a different host")
 
@@ -238,8 +238,12 @@ var containerCreateCmd = &cobra.Command{
 	Short: "Create a new container",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		promoteRelease, err := requireBoolFlag(cmd, "promote-release", createPromoteRelease)
-		if err != nil {
+		body := map[string]any{
+			"name": args[0],
+			"repo": createRepo,
+			"tag":  createTag,
+		}
+		if err := setPromoteRelease(cmd, body, createPromoteRelease); err != nil {
 			return err
 		}
 
@@ -259,12 +263,6 @@ var containerCreateCmd = &cobra.Command{
 			}
 		}
 
-		body := map[string]any{
-			"name":            args[0],
-			"repo":            createRepo,
-			"tag":             createTag,
-			"promote_release": promoteRelease,
-		}
 		if cmd.Flags().Changed("display-order") {
 			body["display_order"] = createDisplayOrder
 		}
@@ -698,11 +696,9 @@ func buildLifecycleBody(cmd *cobra.Command,
 		}
 		body["debug"] = v
 	}
-	v, err := requireBoolFlag(cmd, "promote-release", promoteRelease)
-	if err != nil {
+	if err := setPromoteRelease(cmd, body, promoteRelease); err != nil {
 		return nil, err
 	}
-	body["promote_release"] = v
 	if cmd.Flags().Changed("custom-domain") {
 		body["custom_domain"] = customDomain
 	}
@@ -712,18 +708,18 @@ func buildLifecycleBody(cmd *cobra.Command,
 	return body, nil
 }
 
-func requireBoolFlag(cmd *cobra.Command, name, value string) (bool, error) {
-	if !cmd.Flags().Changed(name) {
-		return false, fmt.Errorf("--%s is required; pass --%s=true or --%s=false", name, name, name)
+// setPromoteRelease adds promote_release to body only when the flag was set,
+// so an omitted flag defers to the controlplane default.
+func setPromoteRelease(cmd *cobra.Command, body map[string]any, value string) error {
+	if !cmd.Flags().Changed("promote-release") {
+		return nil
 	}
-	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "true":
-		return true, nil
-	case "false":
-		return false, nil
-	default:
-		return false, fmt.Errorf("--%s must be true or false, got %q", name, value)
+	v, err := parseTriBool(value)
+	if err != nil {
+		return fmt.Errorf("--promote-release: %w", err)
 	}
+	body["promote_release"] = v
+	return nil
 }
 
 // confirmNonCCMode prints the same warning text the dashboard shows when a
