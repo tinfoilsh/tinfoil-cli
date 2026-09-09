@@ -56,6 +56,34 @@ func TestParseRequestHeadersRejectsMalformedHeaders(t *testing.T) {
 	}
 }
 
+func TestHTTPRequiresHostAndRepo(t *testing.T) {
+	tests := []struct {
+		name    string
+		host    string
+		repo    string
+		wantErr bool
+	}{
+		{name: "both missing", wantErr: true},
+		{name: "repo missing", host: "inference.tinfoil.sh", wantErr: true},
+		{name: "host missing", repo: "tinfoilsh/confidential-model-router", wantErr: true},
+		{name: "both set", host: "inference.tinfoil.sh", repo: "tinfoilsh/confidential-model-router"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			enclaveHost, repo = test.host, test.repo
+			t.Cleanup(func() { enclaveHost, repo = "", "" })
+
+			err := httpCmd.PersistentPreRunE(httpGetCmd, nil)
+			if test.wantErr {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
 func TestHasRequestHeaderIgnoresCase(t *testing.T) {
 	assert.True(t, hasRequestHeader(map[string]string{
 		"content-type": "application/json",
