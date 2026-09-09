@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/sha512"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
@@ -20,6 +22,7 @@ import (
 	"github.com/spf13/cobra"
 	"golang.org/x/crypto/ssh"
 
+	"github.com/tinfoilsh/tinfoil-go/verifier/attestation"
 	"github.com/tinfoilsh/tinfoil-go/verifier/client"
 )
 
@@ -33,6 +36,8 @@ const (
 	sandboxEnrollPath = "/enroll"
 
 	sandboxStateRunning = "running"
+	sandboxStateStopped = "stopped"
+	sandboxStatePending = "pending"
 
 	// The volume worker requires the same length as volumeKeyBytes in
 	// confidential-agent-sandbox.
@@ -68,7 +73,11 @@ type sandboxKeys struct {
 	sshKeyPath string
 }
 
-var sandboxYes bool
+var (
+	sandboxYes      bool
+	sandboxSSHStart bool
+	sandboxSSHStop  bool
+)
 
 func init() {
 	rootCmd.AddCommand(sandboxCmd)
@@ -85,6 +94,8 @@ func init() {
 		sandboxSSHCmd,
 	)
 	sandboxDestroyCmd.Flags().BoolVar(&sandboxYes, "yes", false, "Skip the confirmation prompt")
+	sandboxSSHCmd.Flags().BoolVar(&sandboxSSHStart, "start", false, "Start the sandbox first if it is stopped")
+	sandboxSSHCmd.Flags().BoolVar(&sandboxSSHStop, "stop", false, "Stop the sandbox once the session ends")
 
 	silenceUsageRecursive(sandboxCmd)
 }
@@ -127,7 +138,11 @@ workspace cannot be opened again.`,
 		if err != nil {
 			return err
 		}
-		return bootSandbox("POST", "/api/sandboxes", name, map[string]string{"id": name})
+		box, err := bootSandbox("POST", "/api/sandboxes", name, map[string]string{"id": name})
+		if err != nil {
+			return err
+		}
+		return renderSandbox(*box)
 	},
 }
 
@@ -140,7 +155,11 @@ var sandboxStartCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		return bootSandbox("POST", pathf("/api/sandboxes/%s/start", name), name, nil)
+		box, err := bootSandbox("POST", pathf("/api/sandboxes/%s/start", name), name, nil)
+		if err != nil {
+			return err
+		}
+		return renderSandbox(*box)
 	},
 }
 
@@ -155,7 +174,11 @@ enrolled: the new boot mints a new nonce and a permit to go with it.`,
 		if err != nil {
 			return err
 		}
-		return bootSandbox("POST", pathf("/api/sandboxes/%s/restart", name), name, nil)
+		box, err := bootSandbox("POST", pathf("/api/sandboxes/%s/restart", name), name, nil)
+		if err != nil {
+			return err
+		}
+		return renderSandbox(*box)
 	},
 }
 
@@ -168,16 +191,11 @@ var sandboxStopCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		client, err := authedClient()
+		box, err := stopSandbox(name)
 		if err != nil {
 			return err
 		}
-		var box sandboxView
-		if _, err := client.do("POST", pathf("/api/sandboxes/%s/stop", name), nil, nil, &box); err != nil {
-			return err
-		}
-		fmt.Fprintf(os.Stderr, "Stopped %s. It gave up its compute; its workspace and domain stay.\n", name)
-		return renderSandbox(box)
+		return renderSandbox(*box)
 	},
 }
 
@@ -255,7 +273,11 @@ var sandboxSSHCmd = &cobra.Command{
 
 This is ` + "`tinfoil ssh`" + ` pointed at the sandbox's domain with the key
 enrolled into it, so it works only after an enrollment on the current boot.
-Anything after -- is handed to ssh unchanged.`,
+Anything after -- is handed to ssh unchanged.
+
+--start boots a stopped sandbox and enrolls into it before connecting. --stop
+stops it once the session ends, which takes down everything running in it,
+including anything another session left behind.`,
 	Args: cobra.ArbitraryArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		sshArgs := []string{}
@@ -269,12 +291,9 @@ Anything after -- is handed to ssh unchanged.`,
 		if err != nil {
 			return err
 		}
-		box, err := getSandbox(name)
+		box, err := runningSandbox(name)
 		if err != nil {
 			return err
-		}
-		if box.State != sandboxStateRunning {
-			return fmt.Errorf("sandbox %s is %s; start it to get a shell", name, box.State)
 		}
 		dir, err := sandboxKeyDir(name)
 		if err != nil {
@@ -285,33 +304,86 @@ Anything after -- is handed to ssh unchanged.`,
 			return fmt.Errorf("no SSH key for %s in %s: enroll one with `tinfoil sandbox accept %s`", name, dir, name)
 		}
 
+		publicKey, err := ensureSSHKey(keyPath)
+		if err != nil {
+			return err
+		}
+
 		options, command := splitSSHArgs(sshArgs)
 		// Do not waste the sandbox's three authentication attempts on agent keys.
 		options = append([]string{"-i", keyPath, "-o", "IdentitiesOnly=yes"}, options...)
-		target := &tunnelTarget{name: name, host: box.Domain, repo: sandboxRepo()}
-		return runSSH(target, defaultSSHPort, sandboxLoginUser, options, command)
+		target := &tunnelTarget{
+			name: name, host: box.Domain, repo: sandboxRepo(),
+			// The enclave already verified, so this is the one thing the release
+			// cannot promise: that the workspace behind it was opened for this key
+			// and no other, on this boot.
+			sealedTo: sealFor(publicKey),
+		}
+		code, err := runSSH(target, defaultSSHPort, sandboxLoginUser, options, command)
+		if errors.Is(err, attestation.ErrRtmr3Mismatch) {
+			err = fmt.Errorf("sandbox %s is not sealed to the key in %s: this boot's workspace was opened for another key", name, dir)
+		}
+		if sandboxSSHStop {
+			if _, stopErr := stopSandbox(name); stopErr != nil {
+				err = errors.Join(err, stopErr)
+			}
+		}
+		return sshExit(code, err)
 	},
 }
 
-func bootSandbox(method, path, name string, body any) error {
+func bootSandbox(method, path, name string, body any) (*sandboxView, error) {
 	client, err := authedClient()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	client.http.Timeout = sandboxBootTimeout
 
 	fmt.Fprintf(os.Stderr, "Booting %s. A cold boot takes a few minutes.\n", name)
 	var box sandboxView
 	if _, err := client.do(method, path, nil, body, &box); err != nil {
-		return err
+		return nil, err
 	}
 	if box.Permit == "" {
-		return fmt.Errorf("%s reported no permit, so nothing can enroll into this boot; restart it with `tinfoil sandbox restart %s`", name, name)
+		return nil, fmt.Errorf("%s reported no permit, so nothing can enroll into this boot; restart it with `tinfoil sandbox restart %s`", name, name)
 	}
 	if err := enrollSandbox(box, box.Permit); err != nil {
-		return fmt.Errorf("%s booted but no key was enrolled into it: %w", name, err)
+		return nil, fmt.Errorf("%s booted but no key was enrolled into it: %w", name, err)
 	}
-	return renderSandbox(box)
+	return &box, nil
+}
+
+func stopSandbox(name string) (*sandboxView, error) {
+	client, err := authedClient()
+	if err != nil {
+		return nil, err
+	}
+	var box sandboxView
+	if _, err := client.do("POST", pathf("/api/sandboxes/%s/stop", name), nil, nil, &box); err != nil {
+		return nil, err
+	}
+	fmt.Fprintf(os.Stderr, "Stopped %s. It gave up its compute; its workspace and domain stay.\n", name)
+	return &box, nil
+}
+
+// runningSandbox resolves a sandbox to one with a shell to open, booting a
+// stopped one only when --start asked for it.
+func runningSandbox(name string) (*sandboxView, error) {
+	box, err := getSandbox(name)
+	if err != nil || box.State == sandboxStateRunning {
+		return box, err
+	}
+	switch box.State {
+	case sandboxStateStopped:
+		if !sandboxSSHStart {
+			return nil, fmt.Errorf("sandbox %s is stopped; start it with `tinfoil sandbox start %s`, or pass --start to start it here", name, name)
+		}
+		return bootSandbox("POST", pathf("/api/sandboxes/%s/start", name), name, nil)
+	case sandboxStatePending:
+		return nil, fmt.Errorf("sandbox %s is still booting; wait for the start that is booting it to finish, or restart it with `tinfoil sandbox restart %s` if none is", name, name)
+	default:
+		return nil, fmt.Errorf("sandbox %s is %s; recover it with `tinfoil sandbox restart %s`", name, box.State, name)
+	}
 }
 
 func enrollSandbox(box sandboxView, permit string) error {
@@ -329,8 +401,11 @@ func enrollSandbox(box sandboxView, permit string) error {
 		return err
 	}
 
-	fingerprint, err := verifiedTLSFingerprint(box.Domain, sandboxRepo())
+	fingerprint, err := verifiedTLSFingerprint(box.Domain, sandboxRepo(), "")
 	if err != nil {
+		if errors.Is(err, attestation.ErrRtmr3Mismatch) {
+			return fmt.Errorf("sandbox %s is already sealed to an owner on this boot, so there is nothing left to enroll; restart it with `tinfoil sandbox restart %s`", box.ID, box.ID)
+		}
 		return fmt.Errorf("refusing to send the workspace key to an unverified sandbox: %w", err)
 	}
 	httpClient := &http.Client{
@@ -347,6 +422,18 @@ func enrollSandbox(box sandboxView, permit string) error {
 	fmt.Fprintf(os.Stderr, "Enrolled %s with the keys in %s\n", box.ID, keys.dir)
 	fmt.Fprintf(os.Stderr, "Connect with: tinfoil sandbox ssh %s\n", box.ID)
 	return nil
+}
+
+// sealFor is RTMR3 after the one extend a sandbox does per boot. The register
+// starts at zero and an extend replaces it with the SHA-384 of its old value
+// followed by the written digest, which the sandbox takes over the
+// authorized_keys line it seals -- the key with no comment and a trailing
+// newline, which is what confidential-agent-sandbox normalizes an enrollment to.
+func sealFor(publicKey string) string {
+	owner := sha512.Sum384([]byte(publicKey + "\n"))
+	var zero [sha512.Size384]byte
+	sealed := sha512.Sum384(append(zero[:], owner[:]...))
+	return hex.EncodeToString(sealed[:])
 }
 
 func postEnrollment(httpClient *http.Client, url, permit string, keys *sandboxKeys) error {

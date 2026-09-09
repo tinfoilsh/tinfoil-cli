@@ -1,19 +1,33 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
 	"strconv"
 	"strings"
+	"time"
 
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 )
 
 // defaultSSHPort is the host side of the conventional "22:22" mapping, used
 // when no container record names a port.
 const defaultSSHPort = 22
+
+const (
+	sshExitConnectionFailed = 255
+
+	// Well inside the shim's tunnel idle timeout, and how a dead path gets noticed.
+	sshServerAliveInterval = 60 * time.Second
+
+	// What tmux emits on detach, for when the remote program never got to undo its own modes.
+	sshResetTerminalModes = "\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1004l\x1b[?2004l\x1b[?1049l\x1b[?25h\x1b[?1l\x1b>"
+)
 
 var (
 	sshUser string
@@ -80,14 +94,16 @@ command:
 		}
 
 		options, command := splitSSHArgs(sshArgs)
-		return runSSH(target, port, sshUser, options, command)
+		return sshExit(runSSH(target, port, sshUser, options, command))
 	},
 }
 
-func runSSH(target *tunnelTarget, port int, user string, options, command []string) error {
+// runSSH returns ssh's exit status rather than exiting on it, so a caller can
+// finish what the session was for before the process ends.
+func runSSH(target *tunnelTarget, port int, user string, options, command []string) (int, error) {
 	proxy, err := proxyCommand(target, port)
 	if err != nil {
-		return err
+		return 0, err
 	}
 
 	// The attested proxy pins the peer, so SSH host keys add no extra check.
@@ -98,7 +114,7 @@ func runSSH(target *tunnelTarget, port int, user string, options, command []stri
 		"-l", user,
 	}
 	argv = append(argv, options...)
-	argv = append(argv, target.host)
+	argv = append(argv, "-o", "ServerAliveInterval="+strconv.Itoa(int(sshServerAliveInterval/time.Second)), target.host)
 	argv = append(argv, command...)
 
 	ssh := exec.Command("ssh", argv...)
@@ -108,7 +124,32 @@ func runSSH(target *tunnelTarget, port int, user string, options, command []stri
 	if key := enclaveAPIKey(); key != "" {
 		ssh.Env = append(ssh.Env, envAPIKey+"="+key)
 	}
-	return ssh.Run()
+	// Ctrl-C reaches this process too, and what follows the session needs it
+	// alive. Notify rather than Ignore: an ignored signal survives the exec into
+	// ssh, which should still take an interrupt of its own.
+	interrupt := make(chan os.Signal, 1)
+	signal.Notify(interrupt, os.Interrupt)
+	defer signal.Stop(interrupt)
+
+	err = ssh.Run()
+	var exit *exec.ExitError
+	if errors.As(err, &exit) {
+		if exit.ExitCode() == sshExitConnectionFailed && term.IsTerminal(int(os.Stdout.Fd())) {
+			os.Stdout.WriteString(sshResetTerminalModes)
+		}
+		return exit.ExitCode(), nil
+	}
+	return 0, err
+}
+
+// sshExit ends the process with ssh's own status, which ssh has already
+// explained. It comes last: os.Exit skips whatever is still deferred.
+func sshExit(code int, err error) error {
+	if err != nil || code == 0 {
+		return err
+	}
+	os.Exit(code)
+	return nil
 }
 
 // proxyCommand builds the "tinfoil forward --stdio" invocation ssh runs through

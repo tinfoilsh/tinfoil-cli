@@ -12,6 +12,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
@@ -24,6 +25,9 @@ import (
 // debugToolboxContainer is the container tinfoild injects for debug mode
 // (tinfoil-config's ReservedDebugContainerName).
 const debugToolboxContainer = "tinfoil-debug-toolbox"
+
+// A PING this often notices a dead path; the shim's idle timer only counts real traffic.
+const tunnelReadIdleTimeout = 30 * time.Second
 
 var (
 	forwardPorts []string
@@ -110,7 +114,9 @@ release.
 			if err != nil {
 				return err
 			}
-			splice(stdioConn{}, stream)
+			if err := splice(stdioConn{}, stream); err != nil {
+				return fmt.Errorf("tunnel to %s port %d: %w", tun.host, forwardStdio, err)
+			}
 			return nil
 		}
 		return listenAndForward(tun, specs)
@@ -185,6 +191,9 @@ type tunnelTarget struct {
 	repo    string
 	sshPort int
 	debug   bool
+	// sealedTo is the RTMR3 the enclave must carry, for a caller that knows what
+	// this boot was sealed to. Empty requires an unextended register.
+	sealedTo string
 }
 
 // resolveTunnelTarget accepts an enclave hostname, a container name, or a
@@ -238,19 +247,26 @@ type tunnel struct {
 }
 
 // verifiedTLSFingerprint returns the TLS public key the enclave's attestation
-// commits to, for the tunnel to pin. With a repo the measurement is also
-// checked against that repo's published sigstore bundle; without one there is
-// nothing to compare against, so the check stops at proving the key is held by
-// genuine confidential-computing hardware.
-func verifiedTLSFingerprint(enclaveHost, repo string) (string, error) {
+// commits to, for the tunnel to pin. With a repo the measurement is also checked
+// against that repo's published sigstore bundle; without one there is nothing to
+// compare against, so the check stops at proving the key is held by genuine
+// confidential-computing hardware. A sealedTo value is the RTMR3 the enclave
+// must carry, which only that comparison can hold it to.
+func verifiedTLSFingerprint(enclaveHost, repo, sealedTo string) (string, error) {
 	log.WithFields(log.Fields{"enclave_host": enclaveHost, "repo": repo}).Info("verifying enclave")
 
 	if repo != "" {
-		groundTruth, err := client.NewSecureClient(enclaveHost, repo).Verify()
+		secure := client.NewSecureClient(enclaveHost, repo)
+		secure.SetExpectedRTMR3(sealedTo)
+		groundTruth, err := secure.Verify()
 		if err != nil {
 			return "", fmt.Errorf("verifying %s against %s: %w", enclaveHost, repo, err)
 		}
 		return groundTruth.TLSPublicKey, nil
+	}
+
+	if sealedTo != "" {
+		return "", fmt.Errorf("checking what %s is sealed to needs a release to check it against; pass --repo", enclaveHost)
 	}
 
 	document, err := attestation.Fetch(enclaveHost)
@@ -267,7 +283,7 @@ func verifiedTLSFingerprint(enclaveHost, repo string) (string, error) {
 }
 
 func newTunnel(target *tunnelTarget) (*tunnel, error) {
-	fingerprint, err := verifiedTLSFingerprint(target.host, target.repo)
+	fingerprint, err := verifiedTLSFingerprint(target.host, target.repo, target.sealedTo)
 	if err != nil {
 		return nil, err
 	}
@@ -282,6 +298,7 @@ func newTunnel(target *tunnelTarget) (*tunnel, error) {
 		host:   host,
 		apiKey: enclaveAPIKey(),
 		transport: &http2.Transport{
+			ReadIdleTimeout: tunnelReadIdleTimeout,
 			TLSClientConfig: &tls.Config{
 				VerifyConnection: func(state tls.ConnectionState) error {
 					certFP, err := attestation.ConnectionCertFP(state)
@@ -410,14 +427,15 @@ func (s tunnelStream) Close() error {
 
 // splice pumps a local connection through a tunnel stream. Ending the request
 // body on a local half-close lets replies still in flight arrive.
-func splice(local io.ReadWriteCloser, stream tunnelStream) {
+func splice(local io.ReadWriteCloser, stream tunnelStream) error {
 	go func() {
 		_, _ = io.Copy(stream, local)
 		stream.writer.Close()
 	}()
-	_, _ = io.Copy(local, stream)
+	_, err := io.Copy(local, stream)
 	local.Close()
 	stream.Close()
+	return err
 }
 
 // stdioConn presents this process's stdin/stdout as one connection, so --stdio
