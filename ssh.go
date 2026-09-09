@@ -165,6 +165,9 @@ func proxyCommand(target *tunnelTarget, port int) (string, error) {
 	if target.repo != "" {
 		argv = append(argv, "--repo", target.repo)
 	}
+	if target.sealedTo != "" {
+		argv = append(argv, "--sealed-to", target.sealedTo)
+	}
 	// Each connection re-runs the debug check, so the opt-in travels too.
 	if allowDebug {
 		argv = append(argv, "--allow-debug")

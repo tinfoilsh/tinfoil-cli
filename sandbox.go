@@ -3,7 +3,9 @@ package main
 import (
 	"bytes"
 	"crypto/ed25519"
+	"crypto/hkdf"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/sha512"
 	"encoding/base64"
 	"encoding/hex"
@@ -42,6 +44,9 @@ const (
 	// The volume worker requires the same length as volumeKeyBytes in
 	// confidential-agent-sandbox.
 	sandboxDiskKeyBytes = 64
+
+	// cvmimage's volume worker derives the same identity from the same key.
+	sealKeyInfo = "tinfoil seal identity v1"
 
 	sandboxDiskKeyName = "disk.key"
 	sandboxSSHKeyName  = "id_ed25519"
@@ -291,7 +296,7 @@ including anything another session left behind.`,
 		if err != nil {
 			return err
 		}
-		box, err := runningSandbox(name)
+		target, err := sandboxTunnelTarget(name)
 		if err != nil {
 			return err
 		}
@@ -304,25 +309,10 @@ including anything another session left behind.`,
 			return fmt.Errorf("no SSH key for %s in %s: enroll one with `tinfoil sandbox accept %s`", name, dir, name)
 		}
 
-		publicKey, err := ensureSSHKey(keyPath)
-		if err != nil {
-			return err
-		}
-
 		options, command := splitSSHArgs(sshArgs)
 		// Do not waste the sandbox's three authentication attempts on agent keys.
 		options = append([]string{"-i", keyPath, "-o", "IdentitiesOnly=yes"}, options...)
-		target := &tunnelTarget{
-			name: name, host: box.Domain, repo: sandboxRepo(),
-			// The enclave already verified, so this is the one thing the release
-			// cannot promise: that the workspace behind it was opened for this key
-			// and no other, on this boot.
-			sealedTo: sealFor(publicKey),
-		}
 		code, err := runSSH(target, defaultSSHPort, sandboxLoginUser, options, command)
-		if errors.Is(err, attestation.ErrRtmr3Mismatch) {
-			err = fmt.Errorf("sandbox %s is not sealed to the key in %s: this boot's workspace was opened for another key", name, dir)
-		}
 		if sandboxSSHStop {
 			if _, stopErr := stopSandbox(name); stopErr != nil {
 				err = errors.Join(err, stopErr)
@@ -424,13 +414,49 @@ func enrollSandbox(box sandboxView, permit string) error {
 	return nil
 }
 
+// sandboxTunnelTarget is a tunnel into a sandbox that must be sealed to the
+// disk key here, booting a stopped one only when --start asked for it.
+func sandboxTunnelTarget(name string) (*tunnelTarget, error) {
+	box, err := runningSandbox(name)
+	if err != nil {
+		return nil, err
+	}
+	key, err := loadDiskKey(name)
+	if err != nil {
+		return nil, err
+	}
+	return &tunnelTarget{name: name, host: box.Domain, repo: sandboxRepo(), sealedTo: sealFor(key)}, nil
+}
+
+// loadDiskKey never makes a key: a fresh one would fail the seal check against
+// a workspace it did not open, with nothing to say why.
+func loadDiskKey(name string) ([]byte, error) {
+	dir, err := sandboxKeyDir(name)
+	if err != nil {
+		return nil, err
+	}
+	path := filepath.Join(dir, sandboxDiskKeyName)
+	saved, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, fmt.Errorf("no disk key for %s in %s: enroll one with `tinfoil sandbox accept %s`", name, dir, name)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("reading %s: %w", path, err)
+	}
+	key, err := base64.StdEncoding.DecodeString(strings.TrimSpace(string(saved)))
+	if err != nil || len(key) != sandboxDiskKeyBytes {
+		return nil, fmt.Errorf("%s does not hold base64 for a %d-byte workspace key", path, sandboxDiskKeyBytes)
+	}
+	return key, nil
+}
+
 // sealFor is RTMR3 after the one extend a sandbox does per boot. The register
 // starts at zero and an extend replaces it with the SHA-384 of its old value
-// followed by the written digest, which the sandbox takes over the
-// authorized_keys line it seals -- the key with no comment and a trailing
-// newline, which is what confidential-agent-sandbox normalizes an enrollment to.
-func sealFor(publicKey string) string {
-	owner := sha512.Sum384([]byte(publicKey + "\n"))
+// followed by the written digest, which cvmimage's volume worker takes over
+// the public key it derives from the disk key that opened the workspace.
+func sealFor(diskKey []byte) string {
+	seed, _ := hkdf.Key(sha256.New, diskKey, nil, sealKeyInfo, ed25519.SeedSize)
+	owner := sha512.Sum384(ed25519.NewKeyFromSeed(seed).Public().(ed25519.PublicKey))
 	var zero [sha512.Size384]byte
 	sealed := sha512.Sum384(append(zero[:], owner[:]...))
 	return hex.EncodeToString(sealed[:])

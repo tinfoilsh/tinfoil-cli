@@ -114,6 +114,7 @@ Set `TINFOIL_API_KEY`, then forward a published workload port or connect with SS
 
 ```bash
 tinfoil forward my-server -L 5432:5432
+tinfoil forward --sandbox my-sandbox -L 6379:6379
 tinfoil ssh my-server
 tinfoil ssh my-server -- systemctl status
 ```
