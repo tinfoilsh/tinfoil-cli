@@ -23,6 +23,12 @@ func init() {
 var httpCmd = &cobra.Command{
 	Use:   "http",
 	Short: "Make verified HTTP requests",
+	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+		if enclaveHost == "" || repo == "" {
+			return fmt.Errorf("--host and --repo are required for verified HTTP requests")
+		}
+		return nil
+	},
 }
 
 func parseRequestHeaders(headerArgs []string) (map[string]string, error) {
