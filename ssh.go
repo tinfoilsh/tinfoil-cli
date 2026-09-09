@@ -12,22 +12,14 @@ import (
 
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
-	"golang.org/x/term"
 )
 
 // defaultSSHPort is the host side of the conventional "22:22" mapping, used
 // when no container record names a port.
 const defaultSSHPort = 22
 
-const (
-	sshExitConnectionFailed = 255
-
-	// Well inside the shim's tunnel idle timeout, and how a dead path gets noticed.
-	sshServerAliveInterval = 60 * time.Second
-
-	// What tmux emits on detach, for when the remote program never got to undo its own modes.
-	sshResetTerminalModes = "\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1004l\x1b[?2004l\x1b[?1049l\x1b[?25h\x1b[?1l\x1b>"
-)
+// Well inside the shim's tunnel idle timeout, and how a dead path gets noticed.
+const sshServerAliveInterval = 60 * time.Second
 
 var (
 	sshUser string
@@ -134,22 +126,16 @@ func runSSH(target *tunnelTarget, port int, user string, options, command []stri
 	err = ssh.Run()
 	var exit *exec.ExitError
 	if errors.As(err, &exit) {
-		if exit.ExitCode() == sshExitConnectionFailed && term.IsTerminal(int(os.Stdout.Fd())) {
-			os.Stdout.WriteString(sshResetTerminalModes)
-		}
 		return exit.ExitCode(), nil
 	}
 	return 0, err
 }
 
-// sshExit ends the process with ssh's own status, which ssh has already
-// explained. It comes last: os.Exit skips whatever is still deferred.
+// sshExit hands ssh's own status, which ssh has already explained, to main to
+// exit with once it has finished the work every command ends with.
 func sshExit(code int, err error) error {
-	if err != nil || code == 0 {
-		return err
-	}
-	os.Exit(code)
-	return nil
+	exitCode = code
+	return err
 }
 
 // proxyCommand builds the "tinfoil forward --stdio" invocation ssh runs through

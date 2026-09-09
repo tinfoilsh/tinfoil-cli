@@ -13,6 +13,9 @@ var (
 	enclaveHost, repo string
 	verbose, trace    bool
 	version           = defaultVersion
+	// exitCode is the status a command wants the process to end with, for the
+	// ones that stand in for another program.
+	exitCode int
 )
 
 func newRootCommand() *cobra.Command {
@@ -47,6 +50,7 @@ func main() {
 	}
 
 	if err != nil {
-		os.Exit(1)
+		exitCode = 1
 	}
+	os.Exit(exitCode)
 }

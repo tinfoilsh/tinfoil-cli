@@ -244,11 +244,12 @@ func resolveTunnelTarget(identifier string) (*tunnelTarget, error) {
 		return nil, fmt.Errorf("container %s has no repo recorded — cannot tunnel", container.Name)
 	}
 	return &tunnelTarget{
-		name:    container.Name,
-		host:    host,
-		repo:    container.Repo,
-		sshPort: container.SSHPort,
-		debug:   container.Debug,
+		name:     container.Name,
+		host:     host,
+		repo:     container.Repo,
+		sshPort:  container.SSHPort,
+		debug:    container.Debug,
+		sealedTo: forwardSealedTo,
 	}, nil
 }
 

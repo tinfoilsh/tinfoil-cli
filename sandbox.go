@@ -143,11 +143,7 @@ workspace cannot be opened again.`,
 		if err != nil {
 			return err
 		}
-		box, err := bootSandbox("POST", "/api/sandboxes", name, map[string]string{"id": name})
-		if err != nil {
-			return err
-		}
-		return renderSandbox(*box)
+		return renderSandbox(bootSandbox("POST", "/api/sandboxes", name, map[string]string{"id": name}))
 	},
 }
 
@@ -160,11 +156,7 @@ var sandboxStartCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		box, err := bootSandbox("POST", pathf("/api/sandboxes/%s/start", name), name, nil)
-		if err != nil {
-			return err
-		}
-		return renderSandbox(*box)
+		return renderSandbox(bootSandbox("POST", pathf("/api/sandboxes/%s/start", name), name, nil))
 	},
 }
 
@@ -179,11 +171,7 @@ enrolled: the new boot mints a new nonce and a permit to go with it.`,
 		if err != nil {
 			return err
 		}
-		box, err := bootSandbox("POST", pathf("/api/sandboxes/%s/restart", name), name, nil)
-		if err != nil {
-			return err
-		}
-		return renderSandbox(*box)
+		return renderSandbox(bootSandbox("POST", pathf("/api/sandboxes/%s/restart", name), name, nil))
 	},
 }
 
@@ -196,11 +184,7 @@ var sandboxStopCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		box, err := stopSandbox(name)
-		if err != nil {
-			return err
-		}
-		return renderSandbox(*box)
+		return renderSandbox(stopSandbox(name))
 	},
 }
 
@@ -415,13 +399,15 @@ func enrollSandbox(box sandboxView, permit string) error {
 }
 
 // sandboxTunnelTarget is a tunnel into a sandbox that must be sealed to the
-// disk key here, booting a stopped one only when --start asked for it.
+// disk key here, booting a stopped one only when --start asked for it. The key
+// is read before anything starts: a boot that enrolls a freshly minted one
+// cannot open the workspace that is already there.
 func sandboxTunnelTarget(name string) (*tunnelTarget, error) {
-	box, err := runningSandbox(name)
+	key, err := loadDiskKey(name)
 	if err != nil {
 		return nil, err
 	}
-	key, err := loadDiskKey(name)
+	box, err := runningSandbox(name)
 	if err != nil {
 		return nil, err
 	}
@@ -625,7 +611,11 @@ func writeNewFile(path string, content []byte) error {
 	return file.Close()
 }
 
-func renderSandbox(box sandboxView) error {
+func renderSandbox(from *sandboxView, err error) error {
+	if err != nil {
+		return err
+	}
+	box := *from
 	box.Permit = ""
 	if outputFormat == "json" {
 		return printJSON(box)

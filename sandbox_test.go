@@ -142,6 +142,14 @@ func TestEnsureDiskKeyRefusesAKeyItCannotUse(t *testing.T) {
 	}
 }
 
+func testSandboxKeys() *sandboxKeys {
+	return &sandboxKeys{
+		dir:       "/keys",
+		diskKey:   base64.StdEncoding.EncodeToString([]byte("the disk key")),
+		publicKey: "ssh-ed25519 AAAAC3Nz",
+	}
+}
+
 func TestPostEnrollmentSendsBothKeysWithThePermit(t *testing.T) {
 	type enrollment struct {
 		Key    string `json:"key"`
@@ -162,7 +170,7 @@ func TestPostEnrollmentSendsBothKeysWithThePermit(t *testing.T) {
 	}))
 	defer server.Close()
 
-	keys := &sandboxKeys{dir: "/keys", diskKey: "dGhlIGRpc2sga2V5", publicKey: "ssh-ed25519 AAAAC3Nz"}
+	keys := testSandboxKeys()
 	if err := postEnrollment(server.Client(), server.URL+sandboxEnrollPath, "the.permit.token", keys); err != nil {
 		t.Fatalf("postEnrollment: %v", err)
 	}
@@ -217,7 +225,7 @@ func TestPostEnrollmentExplainsWhatTheSandboxRefused(t *testing.T) {
 			}))
 			defer server.Close()
 
-			keys := &sandboxKeys{dir: "/keys", diskKey: "dGhlIGRpc2sga2V5", publicKey: "ssh-ed25519 AAAAC3Nz"}
+			keys := testSandboxKeys()
 			err := postEnrollment(server.Client(), server.URL+sandboxEnrollPath, "the.permit.token", keys)
 			if err == nil {
 				t.Fatalf("postEnrollment accepted %d", tt.status)
@@ -236,7 +244,7 @@ func TestRenderSandboxNeverPrintsThePermit(t *testing.T) {
 			outputFormat = format
 			t.Cleanup(func() { outputFormat = "table" })
 			out := captureStdout(t, func() {
-				if err := renderSandbox(box); err != nil {
+				if err := renderSandbox(&box, nil); err != nil {
 					t.Fatalf("renderSandbox: %v", err)
 				}
 			})
