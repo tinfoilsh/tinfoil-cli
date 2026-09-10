@@ -276,7 +276,7 @@ func TestProxyCommandNamesResolvedHost(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasSuffix(withRepo, "'forward' '--stdio' '22' '--host' 'box.example.com' '--repo' 'org/repo'") {
+	if !strings.HasSuffix(withRepo, "'forward' '--stdio' '22' '--host' 'box.example.com' '--nonce' '--repo' 'org/repo'") {
 		t.Errorf("proxy command = %q", withRepo)
 	}
 
@@ -285,7 +285,7 @@ func TestProxyCommandNamesResolvedHost(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasSuffix(bare, "'forward' '--stdio' '2022' '--host' '"+host+"'") {
+	if !strings.HasSuffix(bare, "'forward' '--stdio' '2022' '--host' '"+host+"' '--nonce'") {
 		t.Errorf("proxy command = %q", bare)
 	}
 	if strings.Contains(bare, testAPIKey) {

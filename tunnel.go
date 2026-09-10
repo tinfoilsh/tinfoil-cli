@@ -35,6 +35,7 @@ var (
 	forwardStdio    uint
 	forwardSandbox  string
 	forwardSealedTo string
+	forwardNonce    bool
 	tunnelAPIKey    string
 	allowDebug      bool
 )
@@ -46,6 +47,8 @@ func init() {
 	forwardCmd.Flags().StringVar(&forwardSandbox, "sandbox", "", "Tunnel into one of your sandboxes, which must be sealed to your disk key")
 	forwardCmd.Flags().StringVar(&forwardSealedTo, "sealed-to", "", "RTMR3 the enclave must carry")
 	forwardCmd.Flags().MarkHidden("sealed-to")
+	forwardCmd.Flags().BoolVar(&forwardNonce, "nonce", false, "Make the enclave quote a fresh nonce instead of serving its boot-time report")
+	forwardCmd.Flags().MarkHidden("nonce")
 	addTunnelFlags(forwardCmd)
 	forwardCmd.SilenceUsage = true
 }
@@ -270,12 +273,14 @@ type tunnel struct {
 // compare against, so the check stops at proving the key is held by genuine
 // confidential-computing hardware. A sealedTo value is the RTMR3 the enclave
 // must carry, which only that comparison can hold it to.
-func verifiedTLSFingerprint(enclaveHost, repo, sealedTo string) (string, error) {
+func verifiedTLSFingerprint(enclaveHost, repo, sealedTo string, nonced bool) (string, error) {
 	log.WithFields(log.Fields{"enclave_host": enclaveHost, "repo": repo}).Info("verifying enclave")
 
 	if repo != "" {
 		secure := client.NewSecureClient(enclaveHost, repo)
 		secure.SetExpectedRTMR3(sealedTo)
+		// Only a re-quote can carry an extend the boot-time report predates.
+		secure.SetNoncedAttestation(nonced || sealedTo != "")
 		groundTruth, err := secure.Verify()
 		if sealedTo != "" && errors.Is(err, attestation.ErrRtmr3Mismatch) {
 			return "", fmt.Errorf("%s is not sealed to your disk key: this boot's workspace was opened for another key", enclaveHost)
@@ -290,11 +295,17 @@ func verifiedTLSFingerprint(enclaveHost, repo, sealedTo string) (string, error) 
 		return "", fmt.Errorf("checking what %s is sealed to needs a release to check it against; pass --repo", enclaveHost)
 	}
 
-	document, err := attestation.Fetch(enclaveHost)
-	if err != nil {
-		return "", fmt.Errorf("fetching attestation from %s: %w", enclaveHost, err)
+	var verification *attestation.Verification
+	var err error
+	if nonced {
+		verification, err = attestation.FetchNonced(enclaveHost)
+	} else {
+		var document *attestation.Document
+		document, err = attestation.Fetch(enclaveHost)
+		if err == nil {
+			verification, err = document.Verify()
+		}
 	}
-	verification, err := document.Verify()
 	if err != nil {
 		return "", fmt.Errorf("verifying attestation from %s: %w", enclaveHost, err)
 	}
@@ -304,7 +315,7 @@ func verifiedTLSFingerprint(enclaveHost, repo, sealedTo string) (string, error) 
 }
 
 func newTunnel(target *tunnelTarget) (*tunnel, error) {
-	fingerprint, err := verifiedTLSFingerprint(target.host, target.repo, target.sealedTo)
+	fingerprint, err := verifiedTLSFingerprint(target.host, target.repo, target.sealedTo, forwardNonce)
 	if err != nil {
 		return nil, err
 	}

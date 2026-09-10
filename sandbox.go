@@ -375,7 +375,7 @@ func enrollSandbox(box sandboxView, permit string) error {
 		return err
 	}
 
-	fingerprint, err := verifiedTLSFingerprint(box.Domain, sandboxRepo(), "")
+	fingerprint, err := verifiedTLSFingerprint(box.Domain, sandboxRepo(), "", true)
 	if err != nil {
 		if errors.Is(err, attestation.ErrRtmr3Mismatch) {
 			return fmt.Errorf("sandbox %s is already sealed to an owner on this boot, so there is nothing left to enroll; restart it with `tinfoil sandbox restart %s`", box.ID, box.ID)
