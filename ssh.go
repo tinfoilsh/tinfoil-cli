@@ -147,7 +147,7 @@ func proxyCommand(target *tunnelTarget, port int) (string, error) {
 		return "", fmt.Errorf("locating the tinfoil binary: %w", err)
 	}
 
-	argv := []string{self, "forward", "--stdio", strconv.Itoa(port), "--host", target.host}
+	argv := []string{self, "forward", "--stdio", strconv.Itoa(port), "--host", target.host, "--nonce"}
 	if target.repo != "" {
 		argv = append(argv, "--repo", target.repo)
 	}

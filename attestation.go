@@ -39,6 +39,7 @@ type auditRecord struct {
 	Enclave string `json:"enclave"`
 	Repo    string `json:"repo,omitempty"`
 	Digest  string `json:"digest,omitempty"`
+	Nonce   string `json:"nonce,omitempty"`
 
 	Measurements struct {
 		Sigstore attestation.Measurement  `json:"sigstore,omitempty"` // Measurement from sigstore bundle
@@ -113,16 +114,22 @@ func verifyAttestation(l *log.Logger) (*auditRecord, error) {
 	}
 
 	l.Printf("Fetching attestation doc from %s", enclaveHost)
-	remoteAttestation, err := attestation.Fetch(enclaveHost)
-	if err != nil {
-		return nil, fmt.Errorf("fetching attestation document: %v", err)
+	var verification *attestation.Verification
+	var err error
+	if nonced {
+		verification, err = attestation.FetchNonced(enclaveHost)
+	} else {
+		var remoteAttestation *attestation.Document
+		remoteAttestation, err = attestation.Fetch(enclaveHost)
+		if err == nil {
+			l.Println("Verifying enclave measurements")
+			verification, err = remoteAttestation.Verify()
+		}
 	}
-
-	l.Println("Verifying enclave measurements")
-	verification, err := remoteAttestation.Verify()
 	if err != nil {
 		return nil, fmt.Errorf("verifying attestation document: %v", err)
 	}
+	auditRec.Nonce = verification.Nonce
 	auditRec.Measurements.Enclave = verification.Measurement
 	auditRec.Keys.Enclave = verification.TLSPublicKeyFP
 	l.Printf("Public key fingerprint: %s", verification.TLSPublicKeyFP)
