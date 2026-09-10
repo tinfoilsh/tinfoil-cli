@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -12,6 +13,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
@@ -25,17 +27,25 @@ import (
 // (tinfoil-config's ReservedDebugContainerName).
 const debugToolboxContainer = "tinfoil-debug-toolbox"
 
+// A PING this often notices a dead path; the shim's idle timer only counts real traffic.
+const tunnelReadIdleTimeout = 30 * time.Second
+
 var (
-	forwardPorts []string
-	forwardStdio uint
-	tunnelAPIKey string
-	allowDebug   bool
+	forwardPorts    []string
+	forwardStdio    uint
+	forwardSandbox  string
+	forwardSealedTo string
+	tunnelAPIKey    string
+	allowDebug      bool
 )
 
 func init() {
 	rootCmd.AddCommand(forwardCmd)
 	forwardCmd.Flags().StringArrayVarP(&forwardPorts, "local", "L", nil, "Forward [bind:]<local-port>:<enclave-port>; may be repeated")
 	forwardCmd.Flags().UintVar(&forwardStdio, "stdio", 0, "Pipe a single stream to <enclave-port> over stdin/stdout instead of listening")
+	forwardCmd.Flags().StringVar(&forwardSandbox, "sandbox", "", "Tunnel into one of your sandboxes, which must be sealed to your disk key")
+	forwardCmd.Flags().StringVar(&forwardSealedTo, "sealed-to", "", "RTMR3 the enclave must carry")
+	forwardCmd.Flags().MarkHidden("sealed-to")
 	addTunnelFlags(forwardCmd)
 	forwardCmd.SilenceUsage = true
 }
@@ -73,7 +83,8 @@ release.
 
   tinfoil forward my-server -L 25565:25565
   tinfoil forward my-server -L 5432:5432 -L 8080:8080
-  tinfoil forward otter-4s7ut6c3.box2.tinfoil.sh -L 2022:2022`,
+  tinfoil forward otter-4s7ut6c3.box2.tinfoil.sh -L 2022:2022
+  tinfoil forward --sandbox my-sandbox -L 6379:6379`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if (len(forwardPorts) == 0) == (forwardStdio == 0) {
@@ -98,7 +109,15 @@ release.
 		if len(args) == 1 {
 			identifier = args[0]
 		}
-		target, err := resolveTunnelTarget(identifier)
+		var target *tunnelTarget
+		var err error
+		if forwardSandbox == "" {
+			target, err = resolveTunnelTarget(identifier)
+		} else if identifier != "" || enclaveHost != "" {
+			return fmt.Errorf("--sandbox names the enclave, so pass no other target")
+		} else {
+			target, err = sandboxTunnelTarget(forwardSandbox)
+		}
 		if err != nil {
 			return err
 		}
@@ -112,7 +131,9 @@ release.
 			if err != nil {
 				return err
 			}
-			splice(stdioConn{}, stream)
+			if err := splice(stdioConn{}, stream); err != nil {
+				return fmt.Errorf("tunnel to %s port %d: %w", tun.host, forwardStdio, err)
+			}
 			return nil
 		}
 		return listenAndForward(tun, specs)
@@ -187,6 +208,9 @@ type tunnelTarget struct {
 	repo    string
 	sshPort int
 	debug   bool
+	// sealedTo is the RTMR3 the enclave must carry, for a caller that knows what
+	// this boot was sealed to. Empty requires an unextended register.
+	sealedTo string
 }
 
 // resolveTunnelTarget accepts an enclave hostname, a container name, or a
@@ -200,7 +224,7 @@ func resolveTunnelTarget(identifier string) (*tunnelTarget, error) {
 		return nil, fmt.Errorf("name a container or an enclave hostname, or pass --host")
 	}
 	if strings.Contains(identifier, ".") {
-		return &tunnelTarget{name: identifier, host: identifier, repo: repo}, nil
+		return &tunnelTarget{name: identifier, host: identifier, repo: repo, sealedTo: forwardSealedTo}, nil
 	}
 
 	cp, err := authedClient()
@@ -222,11 +246,12 @@ func resolveTunnelTarget(identifier string) (*tunnelTarget, error) {
 		return nil, fmt.Errorf("container %s has no repo recorded — cannot tunnel", container.Name)
 	}
 	return &tunnelTarget{
-		name:    container.Name,
-		host:    host,
-		repo:    container.Repo,
-		sshPort: container.SSHPort,
-		debug:   container.Debug,
+		name:     container.Name,
+		host:     host,
+		repo:     container.Repo,
+		sshPort:  container.SSHPort,
+		debug:    container.Debug,
+		sealedTo: forwardSealedTo,
 	}, nil
 }
 
@@ -240,19 +265,29 @@ type tunnel struct {
 }
 
 // verifiedTLSFingerprint returns the TLS public key the enclave's attestation
-// commits to, for the tunnel to pin. With a repo the measurement is also
-// checked against that repo's published sigstore bundle; without one there is
-// nothing to compare against, so the check stops at proving the key is held by
-// genuine confidential-computing hardware.
-func verifiedTLSFingerprint(enclaveHost, repo string) (string, error) {
+// commits to, for the tunnel to pin. With a repo the measurement is also checked
+// against that repo's published sigstore bundle; without one there is nothing to
+// compare against, so the check stops at proving the key is held by genuine
+// confidential-computing hardware. A sealedTo value is the RTMR3 the enclave
+// must carry, which only that comparison can hold it to.
+func verifiedTLSFingerprint(enclaveHost, repo, sealedTo string) (string, error) {
 	log.WithFields(log.Fields{"enclave_host": enclaveHost, "repo": repo}).Info("verifying enclave")
 
 	if repo != "" {
-		groundTruth, err := client.NewSecureClient(enclaveHost, repo).Verify()
+		secure := client.NewSecureClient(enclaveHost, repo)
+		secure.SetExpectedRTMR3(sealedTo)
+		groundTruth, err := secure.Verify()
+		if sealedTo != "" && errors.Is(err, attestation.ErrRtmr3Mismatch) {
+			return "", fmt.Errorf("%s is not sealed to your disk key: this boot's workspace was opened for another key", enclaveHost)
+		}
 		if err != nil {
 			return "", fmt.Errorf("verifying %s against %s: %w", enclaveHost, repo, err)
 		}
 		return groundTruth.TLSPublicKey, nil
+	}
+
+	if sealedTo != "" {
+		return "", fmt.Errorf("checking what %s is sealed to needs a release to check it against; pass --repo", enclaveHost)
 	}
 
 	document, err := attestation.Fetch(enclaveHost)
@@ -269,7 +304,7 @@ func verifiedTLSFingerprint(enclaveHost, repo string) (string, error) {
 }
 
 func newTunnel(target *tunnelTarget) (*tunnel, error) {
-	fingerprint, err := verifiedTLSFingerprint(target.host, target.repo)
+	fingerprint, err := verifiedTLSFingerprint(target.host, target.repo, target.sealedTo)
 	if err != nil {
 		return nil, err
 	}
@@ -284,6 +319,7 @@ func newTunnel(target *tunnelTarget) (*tunnel, error) {
 		host:   host,
 		apiKey: enclaveAPIKey(),
 		transport: &http2.Transport{
+			ReadIdleTimeout: tunnelReadIdleTimeout,
 			TLSClientConfig: &tls.Config{
 				VerifyConnection: func(state tls.ConnectionState) error {
 					certFP, err := attestation.ConnectionCertFP(state)
@@ -412,14 +448,15 @@ func (s tunnelStream) Close() error {
 
 // splice pumps a local connection through a tunnel stream. Ending the request
 // body on a local half-close lets replies still in flight arrive.
-func splice(local io.ReadWriteCloser, stream tunnelStream) {
+func splice(local io.ReadWriteCloser, stream tunnelStream) error {
 	go func() {
 		_, _ = io.Copy(stream, local)
 		stream.writer.Close()
 	}()
-	_, _ = io.Copy(local, stream)
+	_, err := io.Copy(local, stream)
 	local.Close()
 	stream.Close()
+	return err
 }
 
 // stdioConn presents this process's stdin/stdout as one connection, so --stdio

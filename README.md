@@ -114,6 +114,7 @@ Set `TINFOIL_TUNNEL_API_KEY` to an inference API key (`tk_...`), then forward a 
 
 ```bash
 tinfoil forward my-server -L 5432:5432
+tinfoil forward --sandbox my-sandbox -L 6379:6379
 tinfoil ssh my-server
 tinfoil ssh my-server -- systemctl status
 ```

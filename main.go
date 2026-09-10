@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"os"
 
 	log "github.com/sirupsen/logrus"
@@ -14,6 +13,9 @@ var (
 	enclaveHost, repo string
 	verbose, trace    bool
 	version           = defaultVersion
+	// exitCode is the status a command wants the process to end with, for the
+	// ones that stand in for another program.
+	exitCode int
 )
 
 func newRootCommand() *cobra.Command {
@@ -42,15 +44,13 @@ func main() {
 	waitForUpdateCheck := startUpdateCheck()
 
 	err := rootCmd.Execute()
-	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-	}
 
 	if latest, ok := waitForUpdateCheck(); ok {
 		printUpdateNotice(latest)
 	}
 
 	if err != nil {
-		os.Exit(1)
+		exitCode = 1
 	}
+	os.Exit(exitCode)
 }

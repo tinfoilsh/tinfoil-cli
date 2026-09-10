@@ -1,11 +1,14 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
 	"strconv"
 	"strings"
+	"time"
 
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
@@ -14,6 +17,9 @@ import (
 // defaultSSHPort is the host side of the conventional "22:22" mapping, used
 // when no container record names a port.
 const defaultSSHPort = 22
+
+// Well inside the shim's tunnel idle timeout, and how a dead path gets noticed.
+const sshServerAliveInterval = 60 * time.Second
 
 var (
 	sshUser string
@@ -80,14 +86,16 @@ command:
 		}
 
 		options, command := splitSSHArgs(sshArgs)
-		return runSSH(target, port, sshUser, options, command)
+		return sshExit(runSSH(target, port, sshUser, options, command))
 	},
 }
 
-func runSSH(target *tunnelTarget, port int, user string, options, command []string) error {
+// runSSH returns ssh's exit status rather than exiting on it, so a caller can
+// finish what the session was for before the process ends.
+func runSSH(target *tunnelTarget, port int, user string, options, command []string) (int, error) {
 	proxy, err := proxyCommand(target, port)
 	if err != nil {
-		return err
+		return 0, err
 	}
 
 	// The attested proxy pins the peer, so SSH host keys add no extra check.
@@ -98,7 +106,7 @@ func runSSH(target *tunnelTarget, port int, user string, options, command []stri
 		"-l", user,
 	}
 	argv = append(argv, options...)
-	argv = append(argv, target.host)
+	argv = append(argv, "-o", "ServerAliveInterval="+strconv.Itoa(int(sshServerAliveInterval/time.Second)), target.host)
 	argv = append(argv, command...)
 
 	ssh := exec.Command("ssh", argv...)
@@ -108,7 +116,26 @@ func runSSH(target *tunnelTarget, port int, user string, options, command []stri
 	if key := enclaveAPIKey(); key != "" {
 		ssh.Env = append(ssh.Env, envTunnelAPIKey+"="+key)
 	}
-	return ssh.Run()
+	// Ctrl-C reaches this process too, and what follows the session needs it
+	// alive. Notify rather than Ignore: an ignored signal survives the exec into
+	// ssh, which should still take an interrupt of its own.
+	interrupt := make(chan os.Signal, 1)
+	signal.Notify(interrupt, os.Interrupt)
+	defer signal.Stop(interrupt)
+
+	err = ssh.Run()
+	var exit *exec.ExitError
+	if errors.As(err, &exit) {
+		return exit.ExitCode(), nil
+	}
+	return 0, err
+}
+
+// sshExit hands ssh's own status, which ssh has already explained, to main to
+// exit with once it has finished the work every command ends with.
+func sshExit(code int, err error) error {
+	exitCode = code
+	return err
 }
 
 // proxyCommand builds the "tinfoil forward --stdio" invocation ssh runs through
@@ -123,6 +150,9 @@ func proxyCommand(target *tunnelTarget, port int) (string, error) {
 	argv := []string{self, "forward", "--stdio", strconv.Itoa(port), "--host", target.host}
 	if target.repo != "" {
 		argv = append(argv, "--repo", target.repo)
+	}
+	if target.sealedTo != "" {
+		argv = append(argv, "--sealed-to", target.sealedTo)
 	}
 	// Each connection re-runs the debug check, so the opt-in travels too.
 	if allowDebug {
