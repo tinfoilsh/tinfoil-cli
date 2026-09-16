@@ -121,6 +121,13 @@ tinfoil ssh my-server -- systemctl status
 
 `-L` accepts `[bind:]<local-port>:<enclave-port>` and may be repeated. SSH arguments go after `--`; `-l` sets the remote user and `-p` the enclave-side port. The target is a container name or a bare enclave hostname. The tunnel key is validated by the enclave and is separate from the admin key used to log in, which is why it has its own variable (or `--api-key`). Both commands refuse a debug-mode enclave unless `--allow-debug` is passed. Use `tinctl ssh` to connect to the debug toolbox instead of the workload.
 
+To pin an approved build, append `@sha256:<digest>` to `--repo`, using the digest in that release's `tinfoil.hash`. The CLI verifies the repo's Sigstore signature and requires the enclave's measurements to match that digest's attestation. An explicit pin never falls back to the latest release.
+
+```bash
+tinfoil ssh my-server --repo owner/repo@sha256:<digest>
+tinfoil forward my-server --repo owner/repo@sha256:<digest> -L 5432:5432
+```
+
 ## Attestation Verification
 
 Manually verify that an enclave is running the expected code:

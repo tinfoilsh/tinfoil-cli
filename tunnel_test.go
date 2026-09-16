@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -307,9 +308,11 @@ func TestResolveTunnelTargetTakesHostnamesWithoutControlplane(t *testing.T) {
 		t.Errorf("target = %+v", target)
 	}
 
-	repo = "org/repo"
-	if target, err = resolveTunnelTarget(host); err != nil || target.repo != "org/repo" {
-		t.Errorf("--repo not carried onto a hostname target: %+v, %v", target, err)
+	for _, explicitRepo := range []string{"org/repo", "org/repo@sha256:" + strings.Repeat("a", 64)} {
+		repo = explicitRepo
+		if target, err = resolveTunnelTarget(host); err != nil || target.repo != explicitRepo {
+			t.Errorf("--repo not carried onto a hostname target: %+v, %v", target, err)
+		}
 	}
 
 	repo = ""
@@ -321,6 +324,48 @@ func TestResolveTunnelTargetTakesHostnamesWithoutControlplane(t *testing.T) {
 	enclaveHost = ""
 	if _, err = resolveTunnelTarget(""); err == nil {
 		t.Error("resolveTunnelTarget with no target and no --host succeeded")
+	}
+}
+
+func TestResolveTunnelTargetPreservesPinThroughSSH(t *testing.T) {
+	previousHost, previousRepo := enclaveHost, repo
+	t.Cleanup(func() { enclaveHost, repo = previousHost, previousRepo })
+	enclaveHost = ""
+	pin := "org/repo@sha256:" + strings.Repeat("a", 64)
+	for _, tc := range []struct{ name, recorded, explicit, want string }{
+		{"default repo", "org/repo", "", "org/repo"},
+		{"pinned repo", "org/repo", pin, pin},
+		{"missing recorded repo", "", pin, pin},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodGet || r.URL.Path != "/api/containers" {
+					t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+					w.WriteHeader(http.StatusNotFound)
+					return
+				}
+				fmt.Fprintf(w, `[{"name":"box","domain":"box.example.com","repo":%q,"ssh_port":2022}]`, tc.recorded)
+			}))
+			defer server.Close()
+			t.Setenv(envConfigPath, filepath.Join(t.TempDir(), "config.json"))
+			t.Setenv(envCPURL, server.URL)
+			t.Setenv(envAPIKey, "admin_test")
+			repo = tc.explicit
+			target, err := resolveTunnelTarget("box")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if target.repo != tc.want || target.host != "box.example.com" || target.sshPort != 2022 {
+				t.Fatalf("resolved target = %+v", target)
+			}
+			proxy, err := proxyCommand(target, target.sshPort)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(proxy, "'--repo' '"+tc.want+"'") {
+				t.Fatalf("SSH proxy dropped repo pin: %s", proxy)
+			}
+		})
 	}
 }
 

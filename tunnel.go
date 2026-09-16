@@ -245,6 +245,9 @@ func resolveTunnelTarget(identifier string) (*tunnelTarget, error) {
 	if host == "" {
 		return nil, fmt.Errorf("container %s has no domain (status=%s) — cannot tunnel", container.Name, container.Status)
 	}
+	if repo != "" {
+		container.Repo = repo
+	}
 	if container.Repo == "" {
 		return nil, fmt.Errorf("container %s has no repo recorded — cannot tunnel", container.Name)
 	}
