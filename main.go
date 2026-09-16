@@ -29,7 +29,7 @@ var rootCmd = newRootCommand()
 
 func init() {
 	rootCmd.PersistentFlags().StringVarP(&enclaveHost, "host", "e", "", "Enclave hostname")
-	rootCmd.PersistentFlags().StringVarP(&repo, "repo", "r", "", "Enclave config repo")
+	rootCmd.PersistentFlags().StringVarP(&repo, "repo", "r", "", "Enclave config repo; forward/ssh also accept owner/repo@sha256:digest")
 	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "Verbose output")
 	rootCmd.PersistentFlags().BoolVarP(&trace, "trace", "t", false, "Trace output")
 }
