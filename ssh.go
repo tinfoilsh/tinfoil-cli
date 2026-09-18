@@ -74,47 +74,60 @@ command:
 			return err
 		}
 
-		port := int(sshPort)
-		if port == 0 {
-			port = target.sshPort
-		}
-		if port == 0 {
-			// A hostname target has no controlplane record to carry a port, so
-			// guess and let the shim say if nothing publishes it.
-			port = defaultSSHPort
-			log.Infof("No SSH port known for %s, trying %d", target.name, port)
-		}
-
 		options, command := splitSSHArgs(sshArgs)
-		return sshExit(runSSH(target, port, sshUser, options, command))
+		return sshExit(runSSH(target, sshTargetPort(target, sshPort), sshUser, options, command))
 	},
+}
+
+func sshTargetPort(target *tunnelTarget, override uint) int {
+	if override != 0 {
+		return int(override)
+	}
+	if target.sshPort != 0 {
+		return target.sshPort
+	}
+	// A hostname target has no controlplane record to carry a port, so
+	// guess and let the shim say if nothing publishes it.
+	log.Infof("No SSH port known for %s, trying %d", target.name, defaultSSHPort)
+	return defaultSSHPort
 }
 
 // runSSH returns ssh's exit status rather than exiting on it, so a caller can
 // finish what the session was for before the process ends.
 func runSSH(target *tunnelTarget, port int, user string, options, command []string) (int, error) {
-	proxy, err := proxyCommand(target, port)
+	argv, err := sshProxyOptions(target, port)
 	if err != nil {
 		return 0, err
 	}
-
-	// The attested proxy pins the peer, so SSH host keys add no extra check.
-	argv := []string{
-		"-o", "ProxyCommand=" + proxy,
-		"-o", "UserKnownHostsFile=" + os.DevNull,
-		"-o", "StrictHostKeyChecking=no",
-		"-l", user,
-	}
+	argv = append(argv, "-l", user)
 	argv = append(argv, options...)
 	argv = append(argv, "-o", "ServerAliveInterval="+strconv.Itoa(int(sshServerAliveInterval/time.Second)), target.host)
 	argv = append(argv, command...)
+	return runSSHClient("ssh", argv)
+}
 
-	ssh := exec.Command("ssh", argv...)
-	ssh.Stdin, ssh.Stdout, ssh.Stderr = os.Stdin, os.Stdout, os.Stderr
+// sshProxyOptions supplies the same attested connection to ssh and scp.
+func sshProxyOptions(target *tunnelTarget, port int) ([]string, error) {
+	proxy, err := proxyCommand(target, port)
+	if err != nil {
+		return nil, err
+	}
+
+	// The attested proxy pins the peer, so SSH host keys add no extra check.
+	return []string{
+		"-o", "ProxyCommand=" + proxy,
+		"-o", "UserKnownHostsFile=" + os.DevNull,
+		"-o", "StrictHostKeyChecking=no",
+	}, nil
+}
+
+func runSSHClient(program string, argv []string) (int, error) {
+	client := exec.Command(program, argv...)
+	client.Stdin, client.Stdout, client.Stderr = os.Stdin, os.Stdout, os.Stderr
 	// Keep the API key out of the ProxyCommand shown in the process table.
-	ssh.Env = os.Environ()
+	client.Env = os.Environ()
 	if key := enclaveAPIKey(); key != "" {
-		ssh.Env = append(ssh.Env, envTunnelAPIKey+"="+key)
+		client.Env = append(client.Env, envTunnelAPIKey+"="+key)
 	}
 	// Ctrl-C reaches this process too, and what follows the session needs it
 	// alive. Notify rather than Ignore: an ignored signal survives the exec into
@@ -123,7 +136,7 @@ func runSSH(target *tunnelTarget, port int, user string, options, command []stri
 	signal.Notify(interrupt, os.Interrupt)
 	defer signal.Stop(interrupt)
 
-	err = ssh.Run()
+	err := client.Run()
 	var exit *exec.ExitError
 	if errors.As(err, &exit) {
 		return exit.ExitCode(), nil
@@ -131,7 +144,7 @@ func runSSH(target *tunnelTarget, port int, user string, options, command []stri
 	return 0, err
 }
 
-// sshExit hands ssh's own status, which ssh has already explained, to main to
+// sshExit hands the client's own status, which it has already explained, to main to
 // exit with once it has finished the work every command ends with.
 func sshExit(code int, err error) error {
 	exitCode = code
