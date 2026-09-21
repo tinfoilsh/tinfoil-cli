@@ -14,7 +14,7 @@ func init() {
 	attestationCmd.AddCommand(attestationVerifyCmd)
 	attestationVerifyCmd.Flags().BoolVarP(&jsonOutput, "json", "j", false, "Output in JSON format")
 	attestationVerifyCmd.Flags().StringVarP(&jsonFile, "log-file", "l", "", "Path to write the JSON log")
-	attestationVerifyCmd.Flags().BoolVar(&nonced, "nonce", false, "Make the enclave quote a fresh nonce instead of serving its boot-time report")
+	attestationVerifyCmd.Flags().BoolVar(&nonced, "nonce", false, "Compatibility flag; v3 always requests a fresh nonce")
 }
 
 var (

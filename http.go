@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -11,8 +12,13 @@ import (
 
 var requestHeaders []string
 
-func secureClient() *client.SecureClient {
-	return client.NewSecureClient(enclaveHost, repo)
+func secureClient() (*client.SecureClient, error) {
+	return newVerifiedClient(enclaveHost, repo, "")
+}
+
+func requestWithHeaders(sc *client.SecureClient, method, url string, headers map[string]string, body []byte) (*client.Response, error) {
+	encoded, _ := json.Marshal(headers) // A map of strings always marshals.
+	return sc.Request(method, url, string(encoded), body)
 }
 
 func init() {

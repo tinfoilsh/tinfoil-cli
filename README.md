@@ -123,6 +123,34 @@ tinfoil ssh my-server -- systemctl status
 
 ## Attestation Verification
 
+Verification uses the v3 envelope, expected repository/release, a fresh caller
+nonce, and the endorsed TLS key. Explicit hostnames require `--repo
+owner/name[@tag][@sha256:digest]`; a supplied selector also overrides the
+repository returned for a managed container. Hardware-only verification is no
+longer an authorization path. The old `--nonce` flag is accepted for compatibility;
+v3 always requests a fresh nonce.
+
+HTTP requests, proxy requests, sandbox enrollment, and each new CONNECT stream
+use the SDK's freshness admission, including reused connections. Sandbox owner
+seals add an RTMR3 pin to normal code verification. `--allow-debug` overrides only
+the CLI's toolbox metadata check, never the v3 hardware/code policy.
+
+JSON audit output includes verified `crypto_material` and `freshness_expires_at`.
+It is a snapshot: reading it later does not perform fresh verification. This
+migration requires Go 1.27.1 to build. Native SSH profile enrollment is a separate
+follow-up; the existing SSH command still uses the verified tunnel.
+
+For a bare repository, the CLI resolves the latest release's tag and digest
+through the existing release service before contacting the target enclave.
+The resulting v3 policy pins both values. Explicit selectors are preserved.
+Sandbox enrollment defaults to this latest-release policy for the fixed
+`tinfoilsh/confidential-agent-sandbox` repository. Use `--repo
+tinfoilsh/confidential-agent-sandbox@tag` or `@sha256:digest` to pin an approved
+release explicitly. The existing sandbox response contains no deployed release
+selector, so it cannot automatically enroll an older deployment after latest
+changes. Deployment metadata alone must not silently replace the caller's
+expected-code policy.
+
 Manually verify that an enclave is running the expected code:
 
 ```bash
@@ -132,13 +160,7 @@ tinfoil attestation verify \
 ```
 
 ```
-INFO[0000] Fetching latest release for tinfoilsh/confidential-model-router
-INFO[0000] Fetching sigstore bundle for digest f2f48557c8b0...
-INFO[0001] Verifying code measurements
-INFO[0001] Fetching attestation doc from inference.tinfoil.sh
-INFO[0001] Verifying enclave measurements
-INFO[0001] Public key fingerprint: 5f6c24f54ed862c4...
-INFO[0001] Measurements match
+INFO[0001] Verified tinfoilsh/confidential-model-router at f2f48557c8b0...; TLS key 5f6c24f54ed862c4...
 ```
 
 Use `-j` for machine-readable JSON output:

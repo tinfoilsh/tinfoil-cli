@@ -23,9 +23,6 @@ import (
 
 	"github.com/spf13/cobra"
 	"golang.org/x/crypto/ssh"
-
-	"github.com/tinfoilsh/tinfoil-go/verifier/attestation"
-	"github.com/tinfoilsh/tinfoil-go/verifier/client"
 )
 
 const (
@@ -375,20 +372,18 @@ func enrollSandbox(box sandboxView, permit string) error {
 		return err
 	}
 
-	fingerprint, err := verifiedTLSFingerprint(box.Domain, sandboxRepo(), "", true)
+	secure, err := newVerifiedClient(box.Domain, sandboxRepo(), "")
 	if err != nil {
-		if errors.Is(err, attestation.ErrRtmr3Mismatch) {
-			return fmt.Errorf("sandbox %s is already sealed to an owner on this boot, so there is nothing left to enroll; restart it with `tinfoil sandbox restart %s`", box.ID, box.ID)
-		}
-		return fmt.Errorf("refusing to send the workspace key to an unverified sandbox: %w", err)
+		return err
 	}
-	httpClient := &http.Client{
-		Transport: &client.TLSBoundRoundTripper{ExpectedPublicKey: fingerprint},
-		Timeout:   sandboxEnrollTimeout,
-		CheckRedirect: func(*http.Request, []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
+	// Default v3 TDX policy requires the unextended owner register. The SDK
+	// refreshes expired evidence before sending any enrollment request.
+	httpClient, err := secure.HTTPClient()
+	if err != nil {
+		return fmt.Errorf("refusing to send the workspace key to an unverified or already sealed sandbox: %w", err)
 	}
+	httpClient.Timeout = sandboxEnrollTimeout
+	httpClient.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	if err := postEnrollment(httpClient, "https://"+box.Domain+sandboxEnrollPath, permit, keys); err != nil {
 		return err
 	}

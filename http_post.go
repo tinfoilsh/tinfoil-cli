@@ -26,7 +26,10 @@ var httpPostCmd = &cobra.Command{
 	Args:  cobra.MinimumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		url := args[0]
-		sc := secureClient()
+		sc, err := secureClient()
+		if err != nil {
+			return err
+		}
 
 		headers, err := parseRequestHeaders(requestHeaders)
 		if err != nil {
@@ -38,6 +41,12 @@ var httpPostCmd = &cobra.Command{
 			req, err := http.NewRequest("POST", url, bytes.NewBuffer([]byte(body)))
 			if err != nil {
 				return fmt.Errorf("error creating request: %w", err)
+			}
+			if req.URL.Host == "" {
+				req.URL.Scheme, req.URL.Host = "https", sc.Enclave()
+			}
+			if req.URL.Scheme != "https" {
+				return fmt.Errorf("verified HTTP requires an HTTPS URL")
 			}
 			for k, v := range headers {
 				req.Header.Set(k, v)
@@ -65,7 +74,7 @@ var httpPostCmd = &cobra.Command{
 				return fmt.Errorf("error reading stream: %w", err)
 			}
 		} else { // Not streaming
-			resp, err := sc.Post(url, headers, []byte(body))
+			resp, err := requestWithHeaders(sc, "POST", url, headers, []byte(body))
 			if err != nil {
 				return err
 			}
