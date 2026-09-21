@@ -205,7 +205,7 @@ func TestPromoteReleaseFlagsRequireValues(t *testing.T) {
 func configureContainerPromotionTest(t *testing.T, serverURL string) {
 	t.Helper()
 	t.Setenv(envCPURL, serverURL)
-	t.Setenv(envAPIKey, "admin_test")
+	t.Setenv(envAdminKey, "admin_test")
 	t.Setenv(envConfigPath, filepath.Join(t.TempDir(), "missing-config.json"))
 	for command, names := range map[*cobra.Command][]string{
 		containerCreateCmd:   {"display-order", "promote-release"},

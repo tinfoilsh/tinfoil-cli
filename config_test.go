@@ -16,6 +16,7 @@ func TestLoadConfigMalformedFileFallsBackToEnv(t *testing.T) {
 
 	t.Setenv(envConfigPath, cfgPath)
 	t.Setenv(envCPURL, "https://staging.tinfoil.sh")
+	t.Setenv(envAdminKey, "")
 	t.Setenv(envAPIKey, "admin_env_value")
 
 	cfg, gotPath, err := loadConfig()
@@ -39,6 +40,7 @@ func TestLoadConfigMissingFileUsesEnv(t *testing.T) {
 
 	t.Setenv(envConfigPath, cfgPath)
 	t.Setenv(envCPURL, "https://staging.tinfoil.sh")
+	t.Setenv(envAdminKey, "")
 	t.Setenv(envAPIKey, "admin_env_value")
 
 	cfg, _, err := loadConfig()
@@ -62,6 +64,7 @@ func TestLoadConfigValidFileStillParses(t *testing.T) {
 
 	t.Setenv(envConfigPath, cfgPath)
 	t.Setenv(envCPURL, "")
+	t.Setenv(envAdminKey, "")
 	t.Setenv(envAPIKey, "")
 
 	cfg, _, err := loadConfig()
@@ -73,6 +76,43 @@ func TestLoadConfigValidFileStillParses(t *testing.T) {
 	}
 	if cfg.ControlplaneURL != "https://saved.tinfoil.sh" {
 		t.Fatalf("ControlplaneURL = %q, want saved value", cfg.ControlplaneURL)
+	}
+}
+
+func TestLoadConfigAdminKeyPrecedence(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.json")
+	if err := os.WriteFile(cfgPath, []byte(`{"api_key":"admin_saved"}`), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	tests := []struct {
+		name     string
+		adminKey string
+		apiKey   string
+		want     string
+	}{
+		{name: "admin key wins over api key", adminKey: "admin_from_admin_env", apiKey: "admin_from_api_env", want: "admin_from_admin_env"},
+		{name: "admin key wins over saved", adminKey: "admin_from_admin_env", want: "admin_from_admin_env"},
+		{name: "api key with admin prefix falls back", apiKey: "admin_from_api_env", want: "admin_from_api_env"},
+		{name: "inference api key is ignored", apiKey: "tk_inference", want: "admin_saved"},
+		{name: "inference api key with admin key", adminKey: "admin_from_admin_env", apiKey: "tk_inference", want: "admin_from_admin_env"},
+		{name: "neither set uses saved", want: "admin_saved"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv(envConfigPath, cfgPath)
+			t.Setenv(envAdminKey, tt.adminKey)
+			t.Setenv(envAPIKey, tt.apiKey)
+
+			cfg, _, err := loadConfig()
+			if err != nil {
+				t.Fatalf("loadConfig: %v", err)
+			}
+			if cfg.APIKey != tt.want {
+				t.Fatalf("APIKey = %q, want %q", cfg.APIKey, tt.want)
+			}
+		})
 	}
 }
 

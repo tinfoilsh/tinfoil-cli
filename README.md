@@ -165,7 +165,7 @@ tinfoil whoami                       # confirm the credential and show org conte
 tinfoil logout                       # delete saved credentials
 ```
 
-Credentials are written to `~/.tinfoil/config.json` (mode 0600). Override on a per-command basis with `TINFOIL_API_KEY`, `TINFOIL_CONTROLPLANE_URL`, or `TINFOIL_CONFIG` for an alternate config path. `login --url` targets a different controlplane.
+Credentials are written to `~/.tinfoil/config.json` (mode 0600). Override on a per-command basis with `TINFOIL_ADMIN_KEY`, `TINFOIL_CONTROLPLANE_URL`, or `TINFOIL_CONFIG` for an alternate config path. `TINFOIL_API_KEY` is also accepted as a fallback when it holds an `admin_` key; a `tk_` inference key in that variable is ignored so the saved login keeps working. `login --url` targets a different controlplane.
 
 ### Containers
 
