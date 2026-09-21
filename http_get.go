@@ -20,7 +20,11 @@ var httpGetCmd = &cobra.Command{
 			return err
 		}
 
-		resp, err := secureClient().Get(args[0], headers)
+		sc, err := secureClient()
+		if err != nil {
+			return err
+		}
+		resp, err := requestWithHeaders(sc, "GET", args[0], headers, nil)
 		if err != nil {
 			return err
 		}
