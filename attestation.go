@@ -58,6 +58,10 @@ func newVerifiedClient(host, source, sealedTo string) (*client.SecureClient, err
 	if err != nil {
 		return nil, err
 	}
+	source, err = expectedRepository(source)
+	if err != nil {
+		return nil, err
+	}
 	return client.NewSecureClient(host, source, opts)
 }
 
@@ -103,6 +107,10 @@ func verifyAttestation(l *log.Logger) (*auditRecord, error) {
 	}
 	if source == "" {
 		return nil, fmt.Errorf("v3 verification requires --repo for an explicit --host")
+	}
+	source, err := expectedRepository(source)
+	if err != nil {
+		return nil, err
 	}
 	// Retain the caller nonce for the audit record. Never obtain the expected
 	// nonce or trusted repository from the document being verified.

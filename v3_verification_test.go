@@ -55,6 +55,17 @@ func TestV3RejectsMissingExpectedRepositoryBeforeDial(t *testing.T) {
 	}
 }
 
+func TestProxyRequiresHostAndRepositoryTogether(t *testing.T) {
+	previousHost, previousRepo := enclaveHost, repo
+	t.Cleanup(func() { enclaveHost, repo = previousHost, previousRepo })
+	for _, target := range [][2]string{{"unreachable.invalid", ""}, {"", "org/workload"}} {
+		enclaveHost, repo = target[0], target[1]
+		if err := proxyCmd.RunE(proxyCmd, nil); err == nil || !strings.Contains(err.Error(), "--repo") {
+			t.Fatalf("incomplete proxy policy did not fail before dial: %v", err)
+		}
+	}
+}
+
 func TestTunnelPinBeforeSendingCredentials(t *testing.T) {
 	var requests atomic.Int32
 	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

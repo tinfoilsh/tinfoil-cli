@@ -140,6 +140,17 @@ It is a snapshot: reading it later does not perform fresh verification. This
 migration requires Go 1.27.1 to build. Native SSH profile enrollment is a separate
 follow-up; the existing SSH command still uses the verified tunnel.
 
+For a bare repository, the CLI resolves the latest release's tag and digest
+through the existing release service before contacting the target enclave.
+The resulting v3 policy pins both values. Explicit selectors are preserved.
+Sandbox enrollment defaults to this latest-release policy for the fixed
+`tinfoilsh/confidential-agent-sandbox` repository. Use `--repo
+tinfoilsh/confidential-agent-sandbox@tag` or `@sha256:digest` to pin an approved
+release explicitly. The existing sandbox response contains no deployed release
+selector, so it cannot automatically enroll an older deployment after latest
+changes. Deployment metadata alone must not silently replace the caller's
+expected-code policy.
+
 Manually verify that an enclave is running the expected code:
 
 ```bash

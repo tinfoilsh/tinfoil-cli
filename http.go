@@ -17,10 +17,7 @@ func secureClient() (*client.SecureClient, error) {
 }
 
 func requestWithHeaders(sc *client.SecureClient, method, url string, headers map[string]string, body []byte) (*client.Response, error) {
-	encoded, err := json.Marshal(headers)
-	if err != nil {
-		return nil, err
-	}
+	encoded, _ := json.Marshal(headers) // A map of strings always marshals.
 	return sc.Request(method, url, string(encoded), body)
 }
 
