@@ -13,10 +13,13 @@ import (
 const (
 	defaultControlplaneURL = "https://api.tinfoil.sh"
 
+	envAdminKey     = "TINFOIL_ADMIN_KEY"
 	envAPIKey       = "TINFOIL_API_KEY"
 	envTunnelAPIKey = "TINFOIL_TUNNEL_API_KEY"
-	envCPURL        = "TINFOIL_CONTROLPLANE_URL"
-	envConfigPath   = "TINFOIL_CONFIG"
+
+	adminKeyPrefix = "admin_"
+	envCPURL       = "TINFOIL_CONTROLPLANE_URL"
+	envConfigPath  = "TINFOIL_CONFIG"
 )
 
 type cliConfig struct {
@@ -60,7 +63,7 @@ func loadConfig() (cliConfig, string, error) {
 	if v := strings.TrimSpace(os.Getenv(envCPURL)); v != "" {
 		cfg.ControlplaneURL = v
 	}
-	if v := strings.TrimSpace(os.Getenv(envAPIKey)); v != "" {
+	if v := envAdminAPIKey(); v != "" {
 		cfg.APIKey = v
 	}
 
@@ -70,6 +73,20 @@ func loadConfig() (cliConfig, string, error) {
 	cfg.ControlplaneURL = strings.TrimRight(cfg.ControlplaneURL, "/")
 
 	return cfg, path, nil
+}
+
+// envAdminAPIKey returns the admin key override from the environment.
+// TINFOIL_ADMIN_KEY takes precedence. TINFOIL_API_KEY is shared with the
+// inference SDKs and commonly holds a tk_ key, so it only counts when it
+// actually carries an admin key; otherwise the saved login stays in effect.
+func envAdminAPIKey() string {
+	if v := strings.TrimSpace(os.Getenv(envAdminKey)); v != "" {
+		return v
+	}
+	if v := strings.TrimSpace(os.Getenv(envAPIKey)); strings.HasPrefix(v, adminKeyPrefix) {
+		return v
+	}
+	return ""
 }
 
 func saveConfig(cfg cliConfig) (string, error) {
@@ -119,7 +136,7 @@ func requireAuth() (cliConfig, error) {
 		return cliConfig{}, err
 	}
 	if cfg.APIKey == "" {
-		return cliConfig{}, fmt.Errorf("not logged in: run `tinfoil login` or set %s", envAPIKey)
+		return cliConfig{}, fmt.Errorf("not logged in: run `tinfoil login` or set %s", envAdminKey)
 	}
 	if err := validateControlplaneURL(cfg.ControlplaneURL); err != nil {
 		return cliConfig{}, err

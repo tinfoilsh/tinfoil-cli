@@ -27,8 +27,9 @@ var loginCmd = &cobra.Command{
 
 Create an admin API key from the Tinfoil dashboard (Settings → API Keys → Admin keys).
 Admin keys are scoped to a single organization. The key is stored at
-~/.tinfoil/config.json (mode 0600). The TINFOIL_API_KEY and
-TINFOIL_CONTROLPLANE_URL environment variables override the saved values.`,
+~/.tinfoil/config.json (mode 0600). The TINFOIL_ADMIN_KEY and
+TINFOIL_CONTROLPLANE_URL environment variables override the saved values.
+TINFOIL_API_KEY is also honored when it holds an admin_ key.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		urlFlag, _ := cmd.Flags().GetString("url")
 		keyFlag, _ := cmd.Flags().GetString("api-key")
@@ -58,8 +59,8 @@ TINFOIL_CONTROLPLANE_URL environment variables override the saved values.`,
 		if key == "" {
 			return errors.New("api key is required")
 		}
-		if !strings.HasPrefix(key, "admin_") {
-			return fmt.Errorf("expected an admin key (prefix admin_), got %q", redactKey(key))
+		if !strings.HasPrefix(key, adminKeyPrefix) {
+			return fmt.Errorf("expected an admin key (prefix %s), got %q", adminKeyPrefix, redactKey(key))
 		}
 
 		cfg.APIKey = key
