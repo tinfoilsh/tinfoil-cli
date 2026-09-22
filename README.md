@@ -123,53 +123,18 @@ tinfoil ssh my-server -- systemctl status
 
 ## Attestation Verification
 
-Verification uses the v3 envelope, expected repository/release, a fresh caller
-nonce, and the endorsed TLS key. Explicit hostnames require `--repo
-owner/name[@tag][@sha256:digest]`; a supplied selector also overrides the
-repository returned for a managed container. Hardware-only verification is no
-longer an authorization path. The old `--nonce` flag is accepted for compatibility;
-v3 always requests a fresh nonce.
+Verification requires the expected workload: an explicit `--host` needs `--repo owner/name[@tag][@sha256:digest]`, and a bare `owner/name` accepts any release the freshness witness currently endorses. Hardware-only verification is no longer an authorization path. JSON output includes the verified `crypto_material` and `freshness_expires_at`.
 
-HTTP requests, proxy requests, sandbox enrollment, and each new CONNECT stream
-use the SDK's freshness admission, including reused connections. Sandbox owner
-seals add an RTMR3 pin to normal code verification. `--allow-debug` overrides only
-the CLI's toolbox metadata check, never the v3 hardware/code policy.
+### Native SSH profiles
 
-JSON audit output includes verified `crypto_material` and `freshness_expires_at`.
-It is a snapshot: reading it later does not perform fresh verification. This
-migration requires Go 1.27.1 to build. The existing SSH command still uses the
-verified tunnel; `attest-ssh` and sandbox setup install native profiles instead.
-
-## Installing a native SSH profile
-
-Workloads that declare an `attested-keys` entry named `host-ssh` and serve it
-as its sshd HostKey can be reached with plain `ssh` once its key is verified:
+Workloads that declare an `attested-keys` entry named `host-ssh` and serve it as their sshd HostKey can be reached with plain `ssh` once the key is verified:
 
 ```bash
-tinfoil attest-ssh enclave.example.com --repo owner/workload --name dev            # print only
-tinfoil attest-ssh enclave.example.com --repo owner/workload --name dev --install  # write the profile
+tinfoil attest-ssh enclave.example.com --repo owner/workload --name dev
 ssh dev
-scp ./file.txt dev:/workspace/
 ```
 
-The profile lives in `~/.ssh/tinfoil/config` with its pin in
-`~/.ssh/tinfoil/known_hosts/<name>`, and `~/.ssh/config` gains one
-`Include tinfoil/config` line; alternatively pass `ssh -F ~/.ssh/tinfoil/config`.
-The pin is the key verified at install time and is not re-attested per
-connection. A CVM reboot rotates the key, so rerun the command after one.
-`--ssh-host`, `--ssh-port`, `--user` and `--identity` set what the profile
-dials and logs in with when they differ from the attestation endpoint.
-
-For a bare repository, the CLI resolves the latest release's tag and digest
-through the existing release service before contacting the target enclave.
-The resulting v3 policy pins both values. Explicit selectors are preserved.
-Sandbox enrollment defaults to this latest-release policy for the fixed
-`tinfoilsh/confidential-agent-sandbox` repository. Use `--repo
-tinfoilsh/confidential-agent-sandbox@tag` or `@sha256:digest` to pin an approved
-release explicitly. The existing sandbox response contains no deployed release
-selector, so it cannot automatically enroll an older deployment after latest
-changes. Deployment metadata alone must not silently replace the caller's
-expected-code policy.
+This writes `~/.ssh/tinfoil/dev.conf` and its pinned `dev.known_hosts`, and adds one `Include tinfoil/*.conf` line to `~/.ssh/config`. The pin is the key verified at install time; a CVM reboot rotates it, so rerun the command after one. `--user`, `--ssh-port` and `--identity` set what the profile logs in with.
 
 Manually verify that an enclave is running the expected code:
 

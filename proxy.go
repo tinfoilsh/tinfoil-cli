@@ -11,7 +11,6 @@ import (
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 	"github.com/tinfoilsh/tinfoil-go"
-	"github.com/tinfoilsh/tinfoil-go/verifier/client"
 )
 
 var (
@@ -58,18 +57,17 @@ var proxyCmd = &cobra.Command{
 			"repo":         repo,
 		}).Info("initializing secure client")
 
+		var tinfoilClient *tinfoil.Client
+		var err error
 		if enclaveHost == "" && repo == "" {
-			router, err := client.NewDefaultClient(nil)
-			if err != nil {
-				return err
+			tinfoilClient, err = tinfoil.NewClient()
+			if err == nil {
+				enclaveHost = tinfoilClient.Enclave()
+				repo = tinfoilClient.Repo()
 			}
-			enclaveHost, repo = router.Enclave(), router.Repo()
+		} else {
+			tinfoilClient, err = tinfoil.NewClientWithOptions(tinfoil.WithEnclave(enclaveHost), tinfoil.WithRepo(repo))
 		}
-		expected, err := expectedRepository(repo)
-		if err != nil {
-			return err
-		}
-		tinfoilClient, err := tinfoil.NewClientWithOptions(tinfoil.WithEnclave(enclaveHost), tinfoil.WithRepo(expected))
 		if err != nil {
 			log.WithError(err).Error("failed to create HTTP client")
 			return err

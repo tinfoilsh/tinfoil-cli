@@ -29,14 +29,11 @@ const debugToolboxContainer = "tinfoil-debug-toolbox"
 // A PING this often notices a dead path; the shim's idle timer only counts real traffic.
 const tunnelReadIdleTimeout = 30 * time.Second
 
-var errTunnelCertMismatch = errors.New("tunnel certificate does not match the attested key; re-verify the enclave")
-
 var (
 	forwardPorts    []string
 	forwardStdio    uint
 	forwardSandbox  string
 	forwardSealedTo string
-	forwardNonce    bool
 	tunnelAPIKey    string
 	allowDebug      bool
 )
@@ -48,8 +45,6 @@ func init() {
 	forwardCmd.Flags().StringVar(&forwardSandbox, "sandbox", "", "Tunnel into one of your sandboxes, which must be sealed to your disk key")
 	forwardCmd.Flags().StringVar(&forwardSealedTo, "sealed-to", "", "RTMR3 the enclave must carry")
 	forwardCmd.Flags().MarkHidden("sealed-to")
-	forwardCmd.Flags().BoolVar(&forwardNonce, "nonce", false, "Compatibility flag; v3 always requests a fresh nonce")
-	forwardCmd.Flags().MarkHidden("nonce")
 	addTunnelFlags(forwardCmd)
 	forwardCmd.SilenceUsage = true
 }
@@ -270,9 +265,7 @@ type tunnel struct {
 	apiKey    string
 }
 
-// newTunnel uses the SDK's freshness admission for every CONNECT request,
-// including requests reusing an HTTP/2 connection. Streaming bodies are not
-// replayable, so key-error retries are deliberately disabled.
+// Streaming bodies are not replayable, so key-error retries stay disabled.
 func newTunnel(target *tunnelTarget) (*tunnel, error) {
 	secure, err := newVerifiedClient(target.host, target.repo, target.sealedTo)
 	if err != nil {
@@ -288,48 +281,39 @@ func newTunnel(target *tunnelTarget) (*tunnel, error) {
 		if err != nil {
 			return nil, err
 		}
-		return newPinnedTunnelTransport(address, fingerprint), nil
+		return &http2.Transport{
+			ReadIdleTimeout: tunnelReadIdleTimeout,
+			TLSClientConfig: &tls.Config{
+				VerifyConnection: func(state tls.ConnectionState) error {
+					certFP, err := client.ConnectionCertFP(state)
+					if err != nil {
+						return err
+					}
+					if certFP != fingerprint {
+						return errors.New("tunnel certificate does not match the attested key; re-verify the enclave")
+					}
+					return nil
+				},
+			},
+			// The request authority carries the enclave-side port, so the
+			// address http2 derives from it is never the one to dial.
+			DialTLSContext: func(ctx context.Context, network, _ string, config *tls.Config) (net.Conn, error) {
+				return (&tls.Dialer{Config: config}).DialContext(ctx, network, address)
+			},
+		}, nil
 	}, nil)
 	if err != nil {
 		return nil, fmt.Errorf("verifying %s against %s: %w", target.host, target.repo, err)
 	}
 	tun := &tunnel{host: host, apiKey: enclaveAPIKey(), transport: transport}
 	if err := checkDebugMode(tun, target); err != nil {
-		if closer, ok := transport.(interface{ CloseIdleConnections() }); ok {
-			closer.CloseIdleConnections()
-		}
 		return nil, err
 	}
 	return tun, nil
 }
 
-func newPinnedTunnelTransport(address, fingerprint string) *http2.Transport {
-	return &http2.Transport{
-		ReadIdleTimeout: tunnelReadIdleTimeout,
-		TLSClientConfig: &tls.Config{
-			VerifyConnection: func(state tls.ConnectionState) error {
-				actual, err := client.ConnectionCertFP(state)
-				if err != nil {
-					return err
-				}
-				if actual != fingerprint {
-					return errTunnelCertMismatch
-				}
-				return nil
-			},
-		},
-		// CONNECT's authority carries the guest-side port, not the HTTPS
-		// destination. Always dial the original attestation endpoint.
-		DialTLSContext: func(ctx context.Context, network, _ string, config *tls.Config) (net.Conn, error) {
-			return (&tls.Dialer{Config: config}).DialContext(ctx, network, address)
-		},
-	}
-}
-
 // checkDebugMode refuses a tunnel into an enclave running the debug toolbox,
 // which gives anyone holding an injected SSH key a shell next to the workload.
-// The v3 quote policy remains mandatory. --allow-debug can override this
-// additional metadata check, but never the hardware/code verification policy.
 func checkDebugMode(tun *tunnel, target *tunnelTarget) error {
 	debug, err := target.debug, error(nil)
 	if !debug {

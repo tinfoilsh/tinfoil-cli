@@ -42,12 +42,6 @@ var httpPostCmd = &cobra.Command{
 			if err != nil {
 				return fmt.Errorf("error creating request: %w", err)
 			}
-			if req.URL.Host == "" {
-				req.URL.Scheme, req.URL.Host = "https", sc.Enclave()
-			}
-			if req.URL.Scheme != "https" {
-				return fmt.Errorf("verified HTTP requires an HTTPS URL")
-			}
 			for k, v := range headers {
 				req.Header.Set(k, v)
 			}

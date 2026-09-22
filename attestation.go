@@ -2,49 +2,34 @@ package main
 
 import (
 	"crypto/tls"
-	"encoding/hex"
 	"fmt"
-	"net"
-	"strings"
 	"time"
 
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
+
 	"github.com/tinfoilsh/tinfoil-go/verifier/client"
 	"github.com/tinfoilsh/tinfoil-go/verifier/envelope"
 	"github.com/tinfoilsh/tinfoil-go/verifier/measurement"
 )
 
-func init() { rootCmd.AddCommand(attestationCmd) }
+func init() {
+	rootCmd.AddCommand(attestationCmd)
+}
 
 var attestationCmd = &cobra.Command{
-	Use: "attestation", Aliases: []string{"att"}, Short: "Attestation commands",
+	Use:     "attestation",
+	Aliases: []string{"att"},
+	Short:   "Attestation commands",
 }
 
-func tlsConnection(host string) (*tls.ConnectionState, error) {
-	conn, err := tls.DialWithDialer(&net.Dialer{Timeout: 30 * time.Second}, "tcp", host, &tls.Config{})
+func tlsConnection(enclaveHost string) (*tls.ConnectionState, error) {
+	conn, err := tls.Dial("tcp", enclaveHost, &tls.Config{})
 	if err != nil {
-		return nil, fmt.Errorf("dialing enclave: %w", err)
+		return nil, fmt.Errorf("dialing enclave: %v", err)
 	}
-	defer conn.Close()
-	state := conn.ConnectionState()
-	return &state, nil
-}
-
-// verificationOptions retains the ordinary v3 policy and adds an owner pin when
-// the caller has a sandbox disk key. This pin cannot replace code provenance.
-func verificationOptions(sealedTo string) (*client.VerificationOptions, error) {
-	if sealedTo == "" {
-		return nil, nil
-	}
-	decoded, err := hex.DecodeString(sealedTo)
-	if err != nil || len(decoded) != 48 {
-		return nil, fmt.Errorf("--sealed-to must be a 48-byte RTMR3 value encoded as hex")
-	}
-	return &client.VerificationOptions{PinnedRegisters: &measurement.Measurement{
-		Type:      measurement.TdxGuestV2,
-		Registers: []string{"", "", "", "", strings.ToLower(sealedTo)},
-	}}, nil
+	cs := conn.ConnectionState()
+	return &cs, nil
 }
 
 func newVerifiedClient(host, source, sealedTo string) (*client.SecureClient, error) {
@@ -54,37 +39,42 @@ func newVerifiedClient(host, source, sealedTo string) (*client.SecureClient, err
 	if source == "" {
 		return nil, fmt.Errorf("v3 verification requires an expected workload; pass --repo owner/name[@tag][@sha256:digest]")
 	}
-	opts, err := verificationOptions(sealedTo)
-	if err != nil {
-		return nil, err
-	}
-	source, err = expectedRepository(source)
-	if err != nil {
-		return nil, err
+	var opts *client.VerificationOptions
+	if sealedTo != "" {
+		opts = &client.VerificationOptions{PinnedRegisters: &measurement.Measurement{
+			Type:      measurement.TdxGuestV2,
+			Registers: []string{"", "", "", "", sealedTo},
+		}}
 	}
 	return client.NewSecureClient(host, source, opts)
 }
 
 type auditRecord struct {
-	Timestamp    string `json:"timestamp"`
-	Enclave      string `json:"enclave"`
-	Repo         string `json:"repo,omitempty"`
-	Digest       string `json:"digest,omitempty"`
-	Nonce        string `json:"nonce,omitempty"`
+	Timestamp string `json:"timestamp"`
+
+	Enclave string `json:"enclave"`
+	Repo    string `json:"repo,omitempty"`
+	Digest  string `json:"digest,omitempty"`
+
 	Measurements struct {
-		Sigstore measurement.Measurement  `json:"sigstore,omitempty"`
-		Enclave  *measurement.Measurement `json:"enclave,omitempty"`
+		Sigstore measurement.Measurement  `json:"sigstore,omitempty"` // Measurement from sigstore bundle
+		Enclave  *measurement.Measurement `json:"enclave,omitempty"`  // Measurement from enclave attestation over HTTP
 	} `json:"measurements"`
+
 	Keys struct {
-		Enclave    string `json:"enclave,omitempty"`
-		Connection string `json:"connection,omitempty"`
+		Enclave    string `json:"enclave,omitempty"`    // Public key from enclave attestation over HTTP
+		Connection string `json:"connection,omitempty"` // Public key from connection
 	} `json:"keys"`
+
 	CryptoMaterial     []envelope.CryptoMaterialItem `json:"crypto_material"`
 	FreshnessExpiresAt time.Time                     `json:"freshness_expires_at"`
-	Status             string                        `json:"status"`
-	Error              string                        `json:"error,omitempty"`
+
+	Status string `json:"status"`
+	Error  string `json:"error,omitempty"`
 }
 
+// verificationError returns an error when the audit record reports a
+// verification failure, so callers can exit non-zero.
 func (r *auditRecord) verificationError() error {
 	if r.Status == "ok" {
 		return nil
@@ -105,30 +95,17 @@ func verifyAttestation(l *log.Logger) (*auditRecord, error) {
 		}
 		l.Printf("Using auto selected router: %s", host)
 	}
-	if source == "" {
-		return nil, fmt.Errorf("v3 verification requires --repo for an explicit --host")
-	}
-	source, err := expectedRepository(source)
+	secure, err := newVerifiedClient(host, source, "")
 	if err != nil {
 		return nil, err
 	}
-	// Retain the caller nonce for the audit record. Never obtain the expected
-	// nonce or trusted repository from the document being verified.
-	nonce, err := envelope.RandomNonce()
+	verified, err := secure.Verify()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("verifying attestation: %w", err)
 	}
-	document, err := envelope.Fetch(host, nonce)
-	if err != nil {
-		return nil, fmt.Errorf("fetching v3 attestation: %w", err)
-	}
-	verified, err := client.VerifyDocumentV3(document, nonce, source, nil)
-	if err != nil {
-		return nil, fmt.Errorf("verifying v3 attestation: %w", err)
-	}
+
 	record := &auditRecord{
-		Timestamp: time.Now().UTC().Format(time.RFC3339), Enclave: host, Repo: source,
-		Digest: verified.CodeDigest, Nonce: hex.EncodeToString(nonce),
+		Timestamp: time.Now().UTC().Format(time.RFC3339), Enclave: host, Repo: source, Digest: verified.CodeDigest,
 		CryptoMaterial: verified.CryptoMaterial, FreshnessExpiresAt: verified.FreshnessExpiresAt,
 	}
 	record.Measurements.Sigstore = *verified.CodeMeasurement
@@ -137,24 +114,20 @@ func verifyAttestation(l *log.Logger) (*auditRecord, error) {
 	if err != nil {
 		return nil, err
 	}
-	address := host
-	if _, _, err := net.SplitHostPort(host); err != nil {
-		address = net.JoinHostPort(host, "443")
-	}
-	state, err := tlsConnection(address)
+
+	// Get remote pubkey fingerprint
+	cs, err := tlsConnection(host + ":443")
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("fetching remote public key fingerprint: %w", err)
 	}
-	record.Keys.Connection, err = client.ConnectionCertFP(*state)
+	record.Keys.Connection, err = client.ConnectionCertFP(*cs)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("fetching remote public key fingerprint: %w", err)
 	}
-	switch {
-	case !time.Now().Before(verified.FreshnessExpiresAt):
-		record.Status, record.Error = "fail", "attestation freshness expired before channel binding"
-	case record.Keys.Connection != record.Keys.Enclave:
+
+	if record.Keys.Connection != record.Keys.Enclave {
 		record.Status, record.Error = "fail", "remote public key does not match the endorsed TLS key"
-	default:
+	} else {
 		record.Status = "ok"
 		l.Printf("Verified %s at %s; TLS key %s", source, verified.CodeDigest, record.Keys.Enclave)
 	}

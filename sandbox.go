@@ -323,13 +323,12 @@ func bootSandbox(method, path, name string, body any) (*sandboxView, error) {
 		return nil, fmt.Errorf("%s booted but no key was enrolled into it: %w", name, err)
 	}
 	if err := installSandboxProfile(box); err != nil {
-		return nil, fmt.Errorf("%s booted and was enrolled, but its native ssh profile was not installed: %w; `tinfoil sandbox ssh %s` still works, and `tinfoil sandbox restart %s` retries the whole setup", name, err, name, name)
+		return nil, fmt.Errorf("%s booted and was enrolled, but its ssh profile was not installed: %w; `tinfoil sandbox ssh %s` still works", name, err, name)
 	}
 	return &box, nil
 }
 
-// installSandboxProfile pins the host key of the boot that was just enrolled,
-// accepting only a quote sealed to the disk key this machine enrolled with.
+// Only a quote sealed to the disk key enrolled here can supply the host key.
 func installSandboxProfile(box sandboxView) error {
 	if box.SSHPort == 0 {
 		fmt.Fprintf(os.Stderr, "%s offers no direct SSH port, so no native ssh profile was installed\n", box.ID)
@@ -347,15 +346,7 @@ func installSandboxProfile(box sandboxView) error {
 	if err != nil {
 		return err
 	}
-	profile := sshProfile{
-		name: box.ID, hostName: box.Domain, port: box.SSHPort,
-		user: sandboxLoginUser, identityFile: keys.sshKeyPath, hostKey: hostKey,
-	}
-	if err := profile.install(); err != nil {
-		return err
-	}
-	fmt.Fprintf(os.Stderr, "Installed ssh profile %s; connect with: ssh %s\n", box.ID, box.ID)
-	return nil
+	return sshProfile{name: box.ID, hostName: box.Domain, port: box.SSHPort, user: sandboxLoginUser, identityFile: keys.sshKeyPath, hostKey: hostKey}.install()
 }
 
 func stopSandbox(name string) (*sandboxView, error) {
@@ -410,8 +401,6 @@ func enrollSandbox(box sandboxView, permit string) error {
 	if err != nil {
 		return err
 	}
-	// Default v3 TDX policy requires the unextended owner register. The SDK
-	// refreshes expired evidence before sending any enrollment request.
 	httpClient, err := secure.HTTPClient()
 	if err != nil {
 		return fmt.Errorf("refusing to send the workspace key to an unverified or already sealed sandbox: %w", err)
@@ -652,9 +641,6 @@ func renderSandbox(from *sandboxView, err error) error {
 	fmt.Printf("Name:     %s\n", box.ID)
 	fmt.Printf("State:    %s\n", box.State)
 	fmt.Printf("Domain:   %s\n", box.Domain)
-	if box.SSHPort > 0 {
-		fmt.Printf("SSH:      %s:%d\n", box.Domain, box.SSHPort)
-	}
 	fmt.Printf("Updated:  %s\n", box.UpdatedAt)
 	return nil
 }
