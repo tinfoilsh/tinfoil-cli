@@ -1,12 +1,16 @@
 package main
 
 import (
+	"os"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 )
 
 func TestAttestationVerifySEV(t *testing.T) {
+	if os.Getenv("RUN_TINFOIL_INTEGRATION") != "true" {
+		t.Skip("set RUN_TINFOIL_INTEGRATION=true for live attestation")
+	}
 	args := []string{
 		"attestation",
 		"verify",
@@ -23,7 +27,7 @@ func TestVerificationError(t *testing.T) {
 		wantErr bool
 	}{
 		{"ok", false},
-		{"enclave_only", false},
+		{"enclave_only", true},
 		{"fail", true},
 		{"FAILED", true},
 	}

@@ -23,9 +23,6 @@ import (
 
 	"github.com/spf13/cobra"
 	"golang.org/x/crypto/ssh"
-
-	"github.com/tinfoilsh/tinfoil-go/verifier/attestation"
-	"github.com/tinfoilsh/tinfoil-go/verifier/client"
 )
 
 const (
@@ -68,6 +65,7 @@ type sandboxView struct {
 	State     string `json:"state"`
 	CreatedAt string `json:"created_at"`
 	UpdatedAt string `json:"updated_at"`
+	SSHPort   int    `json:"ssh_port,omitempty"`
 	Permit    string `json:"permit,omitempty"`
 }
 
@@ -324,7 +322,31 @@ func bootSandbox(method, path, name string, body any) (*sandboxView, error) {
 	if err := enrollSandbox(box, box.Permit); err != nil {
 		return nil, fmt.Errorf("%s booted but no key was enrolled into it: %w", name, err)
 	}
+	if err := installSandboxProfile(box); err != nil {
+		return nil, fmt.Errorf("%s booted and was enrolled, but its ssh profile was not installed: %w; `tinfoil sandbox ssh %s` still works", name, err, name)
+	}
 	return &box, nil
+}
+
+// Only a quote sealed to the disk key enrolled here can supply the host key.
+func installSandboxProfile(box sandboxView) error {
+	if box.SSHPort == 0 {
+		fmt.Fprintf(os.Stderr, "%s offers no direct SSH port, so no native ssh profile was installed\n", box.ID)
+		return nil
+	}
+	keys, err := ensureSandboxKeys(box.ID)
+	if err != nil {
+		return err
+	}
+	diskKey, err := loadDiskKey(box.ID)
+	if err != nil {
+		return err
+	}
+	hostKey, err := attestedHostKey(box.Domain, sandboxRepo(), sealFor(diskKey))
+	if err != nil {
+		return err
+	}
+	return sshProfile{name: box.ID, hostName: box.Domain, port: box.SSHPort, user: sandboxLoginUser, identityFile: keys.sshKeyPath, hostKey: hostKey}.install()
 }
 
 func stopSandbox(name string) (*sandboxView, error) {
@@ -375,20 +397,16 @@ func enrollSandbox(box sandboxView, permit string) error {
 		return err
 	}
 
-	fingerprint, err := verifiedTLSFingerprint(box.Domain, sandboxRepo(), "", true)
+	secure, err := newVerifiedClient(box.Domain, sandboxRepo(), "")
 	if err != nil {
-		if errors.Is(err, attestation.ErrRtmr3Mismatch) {
-			return fmt.Errorf("sandbox %s is already sealed to an owner on this boot, so there is nothing left to enroll; restart it with `tinfoil sandbox restart %s`", box.ID, box.ID)
-		}
-		return fmt.Errorf("refusing to send the workspace key to an unverified sandbox: %w", err)
+		return err
 	}
-	httpClient := &http.Client{
-		Transport: &client.TLSBoundRoundTripper{ExpectedPublicKey: fingerprint},
-		Timeout:   sandboxEnrollTimeout,
-		CheckRedirect: func(*http.Request, []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
+	httpClient, err := secure.HTTPClient()
+	if err != nil {
+		return fmt.Errorf("refusing to send the workspace key to an unverified or already sealed sandbox: %w", err)
 	}
+	httpClient.Timeout = sandboxEnrollTimeout
+	httpClient.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	if err := postEnrollment(httpClient, "https://"+box.Domain+sandboxEnrollPath, permit, keys); err != nil {
 		return err
 	}

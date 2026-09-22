@@ -123,6 +123,20 @@ tinfoil ssh my-server -- systemctl status
 
 ## Attestation Verification
 
+Verification requires the expected workload: an explicit `--host` needs `--repo owner/name[@tag][@sha256:digest]`, and a bare `owner/name` accepts any release the freshness witness currently endorses. Hardware-only verification is no longer an authorization path. JSON output includes the verified `crypto_material` and `freshness_expires_at`.
+
+### Native SSH profiles
+
+Workloads that declare an `attested-keys` entry named `host-ssh` and serve it as their sshd HostKey can be reached with plain `ssh` once the key is verified. The target is a container name or a bare enclave hostname, as with `tinfoil ssh`:
+
+```bash
+tinfoil attest-ssh ubuntu-test --install
+tinfoil attest-ssh enclave.example.com --repo owner/workload --name dev --install
+ssh ubuntu-test
+```
+
+This writes `~/.ssh/tinfoil/dev.conf` and its pinned `dev.known_hosts`, and adds one `Include tinfoil/*.conf` line to `~/.ssh/config`. The pin is the key verified at install time; a CVM reboot rotates it, so rerun the command after one. `--user`, `--ssh-port` and `--identity` set what the profile logs in with.
+
 Manually verify that an enclave is running the expected code:
 
 ```bash
@@ -132,13 +146,7 @@ tinfoil attestation verify \
 ```
 
 ```
-INFO[0000] Fetching latest release for tinfoilsh/confidential-model-router
-INFO[0000] Fetching sigstore bundle for digest f2f48557c8b0...
-INFO[0001] Verifying code measurements
-INFO[0001] Fetching attestation doc from inference.tinfoil.sh
-INFO[0001] Verifying enclave measurements
-INFO[0001] Public key fingerprint: 5f6c24f54ed862c4...
-INFO[0001] Measurements match
+INFO[0001] Verified tinfoilsh/confidential-model-router at f2f48557c8b0...; TLS key 5f6c24f54ed862c4...
 ```
 
 Use `-j` for machine-readable JSON output:
@@ -293,9 +301,10 @@ Pass `-o json` on any list/get to emit machine-readable JSON.
 Sandboxes are user-owned confidential VMs with persistent encrypted disks.
 
 ```bash
-tinfoil sandbox create my-sandbox
+tinfoil sandbox create my-sandbox     # boots, enrolls keys, installs an ssh profile
+ssh my-sandbox
 tinfoil sandbox list
-tinfoil sandbox ssh my-sandbox
+tinfoil sandbox ssh my-sandbox        # the tunnelled alternative
 tinfoil sandbox stop my-sandbox       # keep the disk
 tinfoil sandbox start my-sandbox
 tinfoil sandbox restart my-sandbox
@@ -303,7 +312,7 @@ tinfoil sandbox accept my-sandbox     # enroll with an existing permit
 tinfoil sandbox destroy my-sandbox    # erase the disk
 ```
 
-`create`, `start`, and `restart` wait for the VM, verify its attestation, and enroll local SSH and disk keys. The CLI stores them in `~/.tinfoil/sandboxes/<name>`. Back up `disk.key`; without it, the workspace cannot be opened.
+`create`, `start`, and `restart` wait for the VM, verify its attestation, enroll local SSH and disk keys, and install a native ssh profile when the VM exposes a direct SSH port. The CLI stores them in `~/.tinfoil/sandboxes/<name>`. Back up `disk.key`; without it, the workspace cannot be opened.
 
 `accept` uses a permit issued elsewhere, such as the dashboard. Permits expire after five minutes and work once for one boot.
 

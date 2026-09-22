@@ -26,7 +26,10 @@ var httpPostCmd = &cobra.Command{
 	Args:  cobra.MinimumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		url := args[0]
-		sc := secureClient()
+		sc, err := secureClient()
+		if err != nil {
+			return err
+		}
 
 		headers, err := parseRequestHeaders(requestHeaders)
 		if err != nil {
@@ -65,7 +68,7 @@ var httpPostCmd = &cobra.Command{
 				return fmt.Errorf("error reading stream: %w", err)
 			}
 		} else { // Not streaming
-			resp, err := sc.Post(url, headers, []byte(body))
+			resp, err := requestWithHeaders(sc, "POST", url, headers, []byte(body))
 			if err != nil {
 				return err
 			}

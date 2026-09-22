@@ -8,10 +8,9 @@ import (
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 
-	"github.com/tinfoilsh/tinfoil-go/verifier/attestation"
 	"github.com/tinfoilsh/tinfoil-go/verifier/client"
-	"github.com/tinfoilsh/tinfoil-go/verifier/github"
-	"github.com/tinfoilsh/tinfoil-go/verifier/sigstore"
+	"github.com/tinfoilsh/tinfoil-go/verifier/envelope"
+	"github.com/tinfoilsh/tinfoil-go/verifier/measurement"
 )
 
 func init() {
@@ -33,25 +32,42 @@ func tlsConnection(enclaveHost string) (*tls.ConnectionState, error) {
 	return &cs, nil
 }
 
+func newVerifiedClient(host, source, sealedTo string) (*client.SecureClient, error) {
+	if host == "" {
+		return nil, fmt.Errorf("--host is required")
+	}
+	if source == "" {
+		return nil, fmt.Errorf("v3 verification requires an expected workload; pass --repo owner/name[@tag][@sha256:digest]")
+	}
+	var opts *client.VerificationOptions
+	if sealedTo != "" {
+		opts = &client.VerificationOptions{PinnedRegisters: &measurement.Measurement{
+			Type:      measurement.TdxGuestV2,
+			Registers: []string{"", "", "", "", sealedTo},
+		}}
+	}
+	return client.NewSecureClient(host, source, opts)
+}
+
 type auditRecord struct {
 	Timestamp string `json:"timestamp"`
 
 	Enclave string `json:"enclave"`
 	Repo    string `json:"repo,omitempty"`
 	Digest  string `json:"digest,omitempty"`
-	Nonce   string `json:"nonce,omitempty"`
 
 	Measurements struct {
-		Sigstore attestation.Measurement  `json:"sigstore,omitempty"` // Measurement from sigstore bundle
-		Enclave  *attestation.Measurement `json:"enclave,omitempty"`  // Measurement from enclave attestation over HTTP
-		Cert     string                   `json:"cert,omitempty"`     // Measurement from enclave attestation in certificate
+		Sigstore measurement.Measurement  `json:"sigstore,omitempty"` // Measurement from sigstore bundle
+		Enclave  *measurement.Measurement `json:"enclave,omitempty"`  // Measurement from enclave attestation over HTTP
 	} `json:"measurements"`
 
 	Keys struct {
 		Enclave    string `json:"enclave,omitempty"`    // Public key from enclave attestation over HTTP
 		Connection string `json:"connection,omitempty"` // Public key from connection
-		Cert       string `json:"cert,omitempty"`       // Public key from dcode attestation in certificate
 	} `json:"keys"`
+
+	CryptoMaterial     []envelope.CryptoMaterialItem `json:"crypto_material"`
+	FreshnessExpiresAt time.Time                     `json:"freshness_expires_at"`
 
 	Status string `json:"status"`
 	Error  string `json:"error,omitempty"`
@@ -60,121 +76,60 @@ type auditRecord struct {
 // verificationError returns an error when the audit record reports a
 // verification failure, so callers can exit non-zero.
 func (r *auditRecord) verificationError() error {
-	if r.Status == "ok" || r.Status == "enclave_only" {
+	if r.Status == "ok" {
 		return nil
 	}
 	return fmt.Errorf("verification failed: %s", r.Error)
 }
 
 func verifyAttestation(l *log.Logger) (*auditRecord, error) {
-	if enclaveHost == "" {
-		routerClient, err := client.NewDefaultClient()
+	host, source := enclaveHost, repo
+	if host == "" {
+		router, err := client.NewDefaultClient(nil)
 		if err != nil {
-			return nil, fmt.Errorf("getting router: %v", err)
+			return nil, fmt.Errorf("getting router: %w", err)
 		}
-		enclaveHost = routerClient.Enclave()
-		l.Printf("Using auto selected router: %s", enclaveHost)
+		host = router.Enclave()
+		if source == "" {
+			source = router.Repo()
+		}
+		l.Printf("Using auto selected router: %s", host)
 	}
-
-	var auditRec auditRecord
-	auditRec.Timestamp = time.Now().UTC().Format(time.RFC3339)
-	auditRec.Enclave = enclaveHost
-
-	var codeMeasurements *attestation.Measurement
-	if repo != "" {
-		l.Printf("Fetching latest release for %s", repo)
-		digest, err := github.FetchLatestDigest(repo)
-		if err != nil {
-			return nil, fmt.Errorf("fetching latest release: %v", err)
-		}
-		auditRec.Repo = repo
-		auditRec.Digest = digest
-
-		l.Printf("Fetching sigstore bundle from %s for digest %s", repo, digest)
-		bundleBytes, err := github.FetchAttestationBundle(repo, digest)
-		if err != nil {
-			return nil, fmt.Errorf("fetching attestation bundle: %v", err)
-		}
-
-		l.Println("Fetching trust root")
-		trustRootJSON, err := sigstore.FetchTrustRoot()
-		if err != nil {
-			return nil, fmt.Errorf("fetching trust root: %v", err)
-		}
-
-		l.Println("Verifying code measurements")
-		codeMeasurements, err = sigstore.VerifyAttestation(trustRootJSON, bundleBytes, repo, digest)
-		if err != nil {
-			return nil, fmt.Errorf("sigstore verify: %v", err)
-		}
-		auditRec.Measurements.Sigstore = *codeMeasurements
-	} else {
-		l.Warn("No repo specified, skipping code measurements")
-		auditRec.Status = "enclave_only"
-	}
-
-	l.Printf("Fetching attestation doc from %s", enclaveHost)
-	var verification *attestation.Verification
-	var err error
-	if nonced {
-		verification, err = attestation.FetchNonced(enclaveHost)
-	} else {
-		var remoteAttestation *attestation.Document
-		remoteAttestation, err = attestation.Fetch(enclaveHost)
-		if err == nil {
-			l.Println("Verifying enclave measurements")
-			verification, err = remoteAttestation.Verify()
-		}
-	}
+	secure, err := newVerifiedClient(host, source, "")
 	if err != nil {
-		return nil, fmt.Errorf("verifying attestation document: %v", err)
+		return nil, err
 	}
-	auditRec.Nonce = verification.Nonce
-	auditRec.Measurements.Enclave = verification.Measurement
-	auditRec.Keys.Enclave = verification.TLSPublicKeyFP
-	l.Printf("Public key fingerprint: %s", verification.TLSPublicKeyFP)
-	if verification.HPKEPublicKey != "" {
-		l.Printf("HPKE public key: %s", verification.HPKEPublicKey)
+	verified, err := secure.Verify()
+	if err != nil {
+		return nil, fmt.Errorf("verifying attestation: %w", err)
+	}
+
+	record := &auditRecord{
+		Timestamp: time.Now().UTC().Format(time.RFC3339), Enclave: host, Repo: source, Digest: verified.CodeDigest,
+		CryptoMaterial: verified.CryptoMaterial, FreshnessExpiresAt: verified.FreshnessExpiresAt,
+	}
+	record.Measurements.Sigstore = *verified.CodeMeasurement
+	record.Measurements.Enclave = verified.EnclaveMeasurement
+	record.Keys.Enclave, err = verified.TLSPublicKeyFP()
+	if err != nil {
+		return nil, err
 	}
 
 	// Get remote pubkey fingerprint
-	cs, err := tlsConnection(enclaveHost + ":443")
+	cs, err := tlsConnection(host + ":443")
 	if err != nil {
-		return nil, fmt.Errorf("fetching remote public key fingerprint: %v", err)
+		return nil, fmt.Errorf("fetching remote public key fingerprint: %w", err)
 	}
-	pubkeyFP, err := attestation.ConnectionCertFP(*cs)
+	record.Keys.Connection, err = client.ConnectionCertFP(*cs)
 	if err != nil {
-		return nil, fmt.Errorf("fetching remote public key fingerprint: %v", err)
-	}
-	auditRec.Keys.Connection = pubkeyFP
-	l.Debugf("Remote public key fingerprint: %s", pubkeyFP)
-
-	l.Debugf("Certificate SANs: %v", cs.PeerCertificates[0].DNSNames)
-
-	// Compare remote public key fingerprint with attestation public key
-	if pubkeyFP != verification.TLSPublicKeyFP {
-		auditRec.Status = "FAILED"
-		auditRec.Error = "Remote public key fingerprint does not match attestation public key"
-		log.Printf("Remote public key fingerprint does not match attestation public key")
+		return nil, fmt.Errorf("fetching remote public key fingerprint: %w", err)
 	}
 
-	if repo != "" && codeMeasurements != nil && verification.Measurement != nil {
-		if err := codeMeasurements.Equals(verification.Measurement); err != nil {
-			auditRec.Status = "fail"
-			auditRec.Error = fmt.Sprintf("PCR register mismatch: %v", err)
-			log.Printf("PCR register mismatch. Verification failed: %v", err)
-			log.Printf("Code: %+v", codeMeasurements)
-			log.Printf("Enclave: %+v", verification.Measurement)
-		} else {
-			l.Println("Measurements match")
-		}
+	if record.Keys.Connection != record.Keys.Enclave {
+		record.Status, record.Error = "fail", "remote public key does not match the endorsed TLS key"
 	} else {
-		l.Printf("Enclave measurement: %+v", verification.Measurement)
+		record.Status = "ok"
+		l.Printf("Verified %s at %s; TLS key %s", source, verified.CodeDigest, record.Keys.Enclave)
 	}
-
-	if auditRec.Status == "" {
-		auditRec.Status = "ok"
-	}
-
-	return &auditRec, nil
+	return record, nil
 }

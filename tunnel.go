@@ -19,7 +19,6 @@ import (
 	"github.com/spf13/cobra"
 	"golang.org/x/net/http2"
 
-	"github.com/tinfoilsh/tinfoil-go/verifier/attestation"
 	"github.com/tinfoilsh/tinfoil-go/verifier/client"
 )
 
@@ -35,7 +34,6 @@ var (
 	forwardStdio    uint
 	forwardSandbox  string
 	forwardSealedTo string
-	forwardNonce    bool
 	tunnelAPIKey    string
 	allowDebug      bool
 )
@@ -47,8 +45,6 @@ func init() {
 	forwardCmd.Flags().StringVar(&forwardSandbox, "sandbox", "", "Tunnel into one of your sandboxes, which must be sealed to your disk key")
 	forwardCmd.Flags().StringVar(&forwardSealedTo, "sealed-to", "", "RTMR3 the enclave must carry")
 	forwardCmd.Flags().MarkHidden("sealed-to")
-	forwardCmd.Flags().BoolVar(&forwardNonce, "nonce", false, "Make the enclave quote a fresh nonce instead of serving its boot-time report")
-	forwardCmd.Flags().MarkHidden("nonce")
 	addTunnelFlags(forwardCmd)
 	forwardCmd.SilenceUsage = true
 }
@@ -80,13 +76,12 @@ deployment declared and nothing else.
 
 The target is a container name, whose domain and repo are looked up through the
 controlplane, or an enclave hostname (anything containing a dot), which needs no
-controlplane record. A hostname without --repo is attested as genuine
-confidential-computing hardware, but its measurement is checked against no
-release.
+controlplane record. A hostname requires --repo owner/name[@tag][@sha256:digest]
+to select the expected workload. All connections require v3 code verification.
 
   tinfoil forward my-server -L 25565:25565
   tinfoil forward my-server -L 5432:5432 -L 8080:8080
-  tinfoil forward otter-4s7ut6c3.box2.tinfoil.sh -L 2022:2022
+  tinfoil forward enclave.example.com --repo org/workload -L 2022:2022
   tinfoil forward --sandbox my-sandbox -L 6379:6379`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -245,6 +240,9 @@ func resolveTunnelTarget(identifier string) (*tunnelTarget, error) {
 	if host == "" {
 		return nil, fmt.Errorf("container %s has no domain (status=%s) — cannot tunnel", container.Name, container.Status)
 	}
+	if repo != "" {
+		container.Repo = repo
+	}
 	if container.Repo == "" {
 		return nil, fmt.Errorf("container %s has no repo recorded — cannot tunnel", container.Name)
 	}
@@ -259,86 +257,40 @@ func resolveTunnelTarget(identifier string) (*tunnelTarget, error) {
 }
 
 // tunnel opens TCP streams inside a verified enclave through the shim's HTTP/2
-// CONNECT handler. The enclave is verified once, and every stream then rides a
-// connection pinned to the attested certificate.
+// CONNECT handler. Each new stream requires unexpired v3 verification and rides
+// a connection pinned to the endorsed TLS key.
 type tunnel struct {
-	transport *http2.Transport
+	transport http.RoundTripper
 	host      string
 	apiKey    string
 }
 
-// verifiedTLSFingerprint returns the TLS public key the enclave's attestation
-// commits to, for the tunnel to pin. With a repo the measurement is also checked
-// against that repo's published sigstore bundle; without one there is nothing to
-// compare against, so the check stops at proving the key is held by genuine
-// confidential-computing hardware. A sealedTo value is the RTMR3 the enclave
-// must carry, which only that comparison can hold it to.
-func verifiedTLSFingerprint(enclaveHost, repo, sealedTo string, nonced bool) (string, error) {
-	log.WithFields(log.Fields{"enclave_host": enclaveHost, "repo": repo}).Info("verifying enclave")
-
-	if repo != "" {
-		secure := client.NewSecureClient(enclaveHost, repo)
-		secure.SetExpectedRTMR3(sealedTo)
-		// Only a re-quote can carry an extend the boot-time report predates.
-		secure.SetNoncedAttestation(nonced || sealedTo != "")
-		groundTruth, err := secure.Verify()
-		if sealedTo != "" && errors.Is(err, attestation.ErrRtmr3Mismatch) {
-			return "", fmt.Errorf("%s is not sealed to your disk key: this boot's workspace was opened for another key", enclaveHost)
-		}
-		if err != nil {
-			return "", fmt.Errorf("verifying %s against %s: %w", enclaveHost, repo, err)
-		}
-		return groundTruth.TLSPublicKey, nil
-	}
-
-	if sealedTo != "" {
-		return "", fmt.Errorf("checking what %s is sealed to needs a release to check it against; pass --repo", enclaveHost)
-	}
-
-	var verification *attestation.Verification
-	var err error
-	if nonced {
-		verification, err = attestation.FetchNonced(enclaveHost)
-	} else {
-		var document *attestation.Document
-		document, err = attestation.Fetch(enclaveHost)
-		if err == nil {
-			verification, err = document.Verify()
-		}
-	}
-	if err != nil {
-		return "", fmt.Errorf("verifying attestation from %s: %w", enclaveHost, err)
-	}
-	log.Warnf("No repo given, so %s runs unverified code on verified hardware; pass --repo to check the measurement against a release", enclaveHost)
-	log.Warnf("Enclave measurement: %s", verification.Measurement)
-	return verification.TLSPublicKeyFP, nil
-}
-
+// Streaming bodies are not replayable, so key-error retries stay disabled.
 func newTunnel(target *tunnelTarget) (*tunnel, error) {
-	fingerprint, err := verifiedTLSFingerprint(target.host, target.repo, target.sealedTo, forwardNonce)
+	secure, err := newVerifiedClient(target.host, target.repo, target.sealedTo)
 	if err != nil {
 		return nil, err
 	}
-
 	host, port, splitErr := net.SplitHostPort(target.host)
 	if splitErr != nil {
 		host, port = target.host, "443"
 	}
 	address := net.JoinHostPort(host, port)
-
-	tun := &tunnel{
-		host:   host,
-		apiKey: enclaveAPIKey(),
-		transport: &http2.Transport{
+	transport, err := secure.NewTransport(func(verified *client.VerifiedDocumentV3) (http.RoundTripper, error) {
+		fingerprint, err := verified.TLSPublicKeyFP()
+		if err != nil {
+			return nil, err
+		}
+		return &http2.Transport{
 			ReadIdleTimeout: tunnelReadIdleTimeout,
 			TLSClientConfig: &tls.Config{
 				VerifyConnection: func(state tls.ConnectionState) error {
-					certFP, err := attestation.ConnectionCertFP(state)
+					certFP, err := client.ConnectionCertFP(state)
 					if err != nil {
 						return err
 					}
 					if certFP != fingerprint {
-						return client.ErrCertMismatch
+						return errors.New("tunnel certificate does not match the attested key; re-verify the enclave")
 					}
 					return nil
 				},
@@ -348,8 +300,12 @@ func newTunnel(target *tunnelTarget) (*tunnel, error) {
 			DialTLSContext: func(ctx context.Context, network, _ string, config *tls.Config) (net.Conn, error) {
 				return (&tls.Dialer{Config: config}).DialContext(ctx, network, address)
 			},
-		},
+		}, nil
+	}, nil)
+	if err != nil {
+		return nil, fmt.Errorf("verifying %s against %s: %w", target.host, target.repo, err)
 	}
+	tun := &tunnel{host: host, apiKey: enclaveAPIKey(), transport: transport}
 	if err := checkDebugMode(tun, target); err != nil {
 		return nil, err
 	}
@@ -358,8 +314,6 @@ func newTunnel(target *tunnelTarget) (*tunnel, error) {
 
 // checkDebugMode refuses a tunnel into an enclave running the debug toolbox,
 // which gives anyone holding an injected SSH key a shell next to the workload.
-// Debug mode is a measured boot flag, so --repo already rejects one; this covers
-// the repo-less path, where the enclave's container list is all there is to go on.
 func checkDebugMode(tun *tunnel, target *tunnelTarget) error {
 	debug, err := target.debug, error(nil)
 	if !debug {
