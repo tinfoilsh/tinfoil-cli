@@ -22,7 +22,7 @@ import (
 const attestedHostKeyID = "host-ssh"
 
 // Profiles live under ~/.ssh so the Include and UserKnownHostsFile paths stay relative.
-const sshIncludeLine = "Include tinfoil/*.conf"
+const sshIncludeGlob = "tinfoil/*.conf"
 
 // sshProfileNamePattern keeps a profile name a literal ssh Host alias and a single path component.
 var sshProfileNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,254}$`)
@@ -127,10 +127,10 @@ func (p sshProfile) install() error {
 	}
 	address := knownhosts.Normalize(net.JoinHostPort(p.hostName, strconv.Itoa(p.port)))
 	pin := knownhosts.Line([]string{address}, p.hostKey) + "\n"
-	if err := os.WriteFile(filepath.Join(dir, p.name+".known_hosts"), []byte(pin), 0o600); err != nil {
+	if err := writeAtomic(filepath.Join(dir, p.name+".known_hosts"), []byte(pin)); err != nil {
 		return err
 	}
-	if err := os.WriteFile(filepath.Join(dir, p.name+".conf"), []byte(p.render()), 0o600); err != nil {
+	if err := writeAtomic(filepath.Join(dir, p.name+".conf"), []byte(p.render())); err != nil {
 		return err
 	}
 	if err := ensureInclude(filepath.Join(home, ".ssh", "config")); err != nil {
@@ -146,11 +146,36 @@ func ensureInclude(path string) error {
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	if strings.Contains(string(existing), sshIncludeLine) {
+	if hasTopLevelInclude(existing) {
 		return nil
 	}
-	tmp := path + ".tinfoil.tmp"
-	if err := os.WriteFile(tmp, append([]byte(sshIncludeLine+"\n\n"), existing...), 0o600); err != nil {
+	return writeAtomic(path, append([]byte("Include "+sshIncludeGlob+"\n\n"), existing...))
+}
+
+// Only an uncommented Include before the first Host or Match block applies to every host.
+func hasTopLevelInclude(config []byte) bool {
+	for _, line := range strings.Split(string(config), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 0 || strings.HasPrefix(fields[0], "#") {
+			continue
+		}
+		switch strings.ToLower(fields[0]) {
+		case "host", "match":
+			return false
+		case "include":
+			for _, glob := range fields[1:] {
+				if glob == sshIncludeGlob {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+func writeAtomic(path string, data []byte) error {
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
 		return err
 	}
 	return os.Rename(tmp, path)
