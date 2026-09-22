@@ -137,8 +137,28 @@ the CLI's toolbox metadata check, never the v3 hardware/code policy.
 
 JSON audit output includes verified `crypto_material` and `freshness_expires_at`.
 It is a snapshot: reading it later does not perform fresh verification. This
-migration requires Go 1.27.1 to build. Native SSH profile enrollment is a separate
-follow-up; the existing SSH command still uses the verified tunnel.
+migration requires Go 1.27.1 to build. The existing SSH command still uses the
+verified tunnel; `attest-ssh` and sandbox setup install native profiles instead.
+
+## Native SSH from attested host keys
+
+A workload that declares an `attested-keys` entry named `host-ssh` and serves it
+as its sshd HostKey can be reached with plain `ssh` once its key is verified:
+
+```bash
+tinfoil attest-ssh enclave.example.com --repo owner/workload --name dev            # print only
+tinfoil attest-ssh enclave.example.com --repo owner/workload --name dev --install  # write the profile
+ssh dev
+scp ./file.txt dev:/workspace/
+```
+
+The profile lives in `~/.ssh/tinfoil/config` with its pin in
+`~/.ssh/tinfoil/known_hosts/<name>`, and `~/.ssh/config` gains one
+`Include tinfoil/config` line; alternatively pass `ssh -F ~/.ssh/tinfoil/config`.
+The pin is the key verified at install time and is not re-attested per
+connection. A CVM reboot rotates the key, so rerun the command after one.
+`--ssh-host`, `--ssh-port`, `--user` and `--identity` set what the profile
+dials and logs in with when they differ from the attestation endpoint.
 
 For a bare repository, the CLI resolves the latest release's tag and digest
 through the existing release service before contacting the target enclave.
@@ -315,9 +335,10 @@ Pass `-o json` on any list/get to emit machine-readable JSON.
 Sandboxes are user-owned confidential VMs with persistent encrypted disks.
 
 ```bash
-tinfoil sandbox create my-sandbox
+tinfoil sandbox create my-sandbox     # boots, enrolls keys, installs an ssh profile
+ssh my-sandbox
 tinfoil sandbox list
-tinfoil sandbox ssh my-sandbox
+tinfoil sandbox ssh my-sandbox        # the tunnelled alternative
 tinfoil sandbox stop my-sandbox       # keep the disk
 tinfoil sandbox start my-sandbox
 tinfoil sandbox restart my-sandbox

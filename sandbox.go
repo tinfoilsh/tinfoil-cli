@@ -65,6 +65,7 @@ type sandboxView struct {
 	State     string `json:"state"`
 	CreatedAt string `json:"created_at"`
 	UpdatedAt string `json:"updated_at"`
+	SSHPort   int    `json:"ssh_port,omitempty"`
 	Permit    string `json:"permit,omitempty"`
 }
 
@@ -321,7 +322,40 @@ func bootSandbox(method, path, name string, body any) (*sandboxView, error) {
 	if err := enrollSandbox(box, box.Permit); err != nil {
 		return nil, fmt.Errorf("%s booted but no key was enrolled into it: %w", name, err)
 	}
+	if err := installSandboxProfile(box); err != nil {
+		return nil, fmt.Errorf("%s booted and was enrolled, but its native ssh profile was not installed: %w; `tinfoil sandbox ssh %s` still works, and `tinfoil sandbox restart %s` retries the whole setup", name, err, name, name)
+	}
 	return &box, nil
+}
+
+// installSandboxProfile pins the host key of the boot that was just enrolled,
+// accepting only a quote sealed to the disk key this machine enrolled with.
+func installSandboxProfile(box sandboxView) error {
+	if box.SSHPort == 0 {
+		fmt.Fprintf(os.Stderr, "%s offers no direct SSH port, so no native ssh profile was installed\n", box.ID)
+		return nil
+	}
+	keys, err := ensureSandboxKeys(box.ID)
+	if err != nil {
+		return err
+	}
+	diskKey, err := loadDiskKey(box.ID)
+	if err != nil {
+		return err
+	}
+	hostKey, err := attestedHostKey(box.Domain, sandboxRepo(), sealFor(diskKey))
+	if err != nil {
+		return err
+	}
+	profile := sshProfile{
+		name: box.ID, hostName: box.Domain, port: box.SSHPort,
+		user: sandboxLoginUser, identityFile: keys.sshKeyPath, hostKey: hostKey,
+	}
+	if err := profile.install(); err != nil {
+		return err
+	}
+	fmt.Fprintf(os.Stderr, "Installed ssh profile %s; connect with: ssh %s\n", box.ID, box.ID)
+	return nil
 }
 
 func stopSandbox(name string) (*sandboxView, error) {
@@ -618,6 +652,9 @@ func renderSandbox(from *sandboxView, err error) error {
 	fmt.Printf("Name:     %s\n", box.ID)
 	fmt.Printf("State:    %s\n", box.State)
 	fmt.Printf("Domain:   %s\n", box.Domain)
+	if box.SSHPort > 0 {
+		fmt.Printf("SSH:      %s:%d\n", box.Domain, box.SSHPort)
+	}
 	fmt.Printf("Updated:  %s\n", box.UpdatedAt)
 	return nil
 }
