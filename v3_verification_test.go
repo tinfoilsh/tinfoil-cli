@@ -104,7 +104,7 @@ func TestTunnelPinBeforeSendingCredentials(t *testing.T) {
 			if requests.Load() != 1 {
 				t.Fatal("correctly pinned request did not reach the server")
 			}
-		} else if !errors.Is(err, client.ErrCertMismatch) || requests.Load() != 0 {
+		} else if !errors.Is(err, errTunnelCertMismatch) || requests.Load() != 0 {
 			t.Fatalf("wrong pin: requests=%d error=%v", requests.Load(), err)
 		}
 		transport.CloseIdleConnections()

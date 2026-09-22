@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -27,6 +28,8 @@ const debugToolboxContainer = "tinfoil-debug-toolbox"
 
 // A PING this often notices a dead path; the shim's idle timer only counts real traffic.
 const tunnelReadIdleTimeout = 30 * time.Second
+
+var errTunnelCertMismatch = errors.New("tunnel certificate does not match the attested key; re-verify the enclave")
 
 var (
 	forwardPorts    []string
@@ -310,7 +313,7 @@ func newPinnedTunnelTransport(address, fingerprint string) *http2.Transport {
 					return err
 				}
 				if actual != fingerprint {
-					return client.ErrCertMismatch
+					return errTunnelCertMismatch
 				}
 				return nil
 			},
