@@ -152,7 +152,7 @@ tinfoil attestation verify \
 
 ## Container management
 
-The `container`, `deployment`, `model`, `repo`, `secret`, `ssh-key`, `registry`, and `domain` subcommands manage Tinfoil Containers through the same controlplane API the dashboard uses. See the [Tinfoil Containers docs](https://docs.tinfoil.sh/containers/overview) for the underlying concepts and the [CLI reference](https://docs.tinfoil.sh/containers/cli) for the full command surface.
+The `container`, `deployment`, `volume`, `model`, `repo`, `secret`, `ssh-key`, `registry`, and `domain` subcommands manage Tinfoil Containers through the same controlplane API the dashboard uses. See the [Tinfoil Containers docs](https://docs.tinfoil.sh/containers/overview) for the underlying concepts and the [CLI reference](https://docs.tinfoil.sh/containers/cli) for the full command surface.
 
 ### Logging in
 
@@ -184,9 +184,13 @@ tinfoil container create my-container \
   --secret OPENAI_API_KEY \
   --custom-domain api.example.com
 
+# Deploy with a persistent volume (the config must declare it; see Volume management)
+tinfoil container create my-db --repo myorg/my-db --tag v1.0.0 --volume my-db-data
+
 # Lifecycle
 tinfoil container stop my-container
 tinfoil container start my-container --tag v1.2.4
+tinfoil container start my-db --volume my-db-data           # attach, then start
 tinfoil container relaunch my-container --tag v1.2.4 --staging=true
 tinfoil container relaunch my-container --tag v1.2.2 --promote-release=false   # roll back without changing the latest release
 tinfoil container delete my-container
@@ -210,6 +214,8 @@ tinfoil container connect my-container -p 8080
 `container connect <name>` resolves the container's enclave domain and source repo, then runs a verified proxy locally — equivalent to `tinfoil proxy -e <domain> -r <repo>` but without copy-pasting either value.
 
 Container create, start, relaunch, and deployment update promote the deployed tag as the repository's latest release by default. Pass `--promote-release=false` to leave the latest release unchanged.
+
+`--volume <id|name>[:<declared name>]` on `create` and `start` attaches an existing volume to a volume the repository's `tinfoil-config.yml` declares, then starts the container. The declared name is optional when the config declares exactly one volume, and the volume's host becomes the container's host (an explicit `--host` must match). A container whose config declares volumes is created stopped when `--volume` is omitted; the output lists the commands that attach one and start it.
 
 ### Model weights
 
@@ -287,6 +293,34 @@ tinfoil domain delete api.example.com
 ```
 
 Pass `-o json` on any list/get to emit machine-readable JSON.
+
+## Volume management
+
+Volumes are encrypted persistent disks that live on one container host and attach to a volume declared in a repository's `tinfoil-config.yml`. A volume can be attached to one stopped container at a time and keeps its data across stops, starts, and relaunches.
+
+```bash
+# Inspect
+tinfoil volume list                             # includes the org's storage quota
+tinfoil volume get my-db-data
+
+# Create (sizes take GiB/TiB or GB/TB; --host is optional when only one host is available)
+tinfoil volume create my-db-data --size 16TiB --host gpu-host-1
+
+# Attach to a stopped container, then start it
+tinfoil volume attach my-db-data my-db          # --as <declared name> when the config declares several
+tinfoil container start my-db
+
+# Move a volume between containers
+tinfoil container stop my-db
+tinfoil volume detach my-db-data
+tinfoil volume attach my-db-data my-other-db
+
+# Rename or delete (delete destroys the data and requires the volume to be detached)
+tinfoil volume update my-db-data --name archive-data
+tinfoil volume delete archive-data              # prompts; pass --yes to skip
+```
+
+Volume names are not unique within an organization; when several volumes share a name, the commands ask for the volume ID.
 
 ## Sandboxes
 
