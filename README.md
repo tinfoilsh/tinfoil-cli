@@ -190,7 +190,7 @@ tinfoil container create my-db --repo myorg/my-db --tag v1.0.0 --volume my-db-da
 # Lifecycle
 tinfoil container stop my-container
 tinfoil container start my-container --tag v1.2.4
-tinfoil container start my-db --volume my-db-data           # attach, then start
+tinfoil container start my-db                               # attached volume is reused
 tinfoil container relaunch my-container --tag v1.2.4 --staging=true
 tinfoil container relaunch my-container --tag v1.2.2 --promote-release=false   # roll back without changing the latest release
 tinfoil container delete my-container
@@ -215,7 +215,7 @@ tinfoil container connect my-container -p 8080
 
 Container create, start, relaunch, and deployment update promote the deployed tag as the repository's latest release by default. Pass `--promote-release=false` to leave the latest release unchanged.
 
-`--volume <id|name>[:<declared name>]` on `create` and `start` attaches an existing volume to a volume the repository's `tinfoil-config.yml` declares, then starts the container. The declared name is optional when the config declares exactly one volume, and the volume's host becomes the container's host (an explicit `--host` must match). A container whose config declares volumes is created stopped when `--volume` is omitted; the output lists the commands that attach one and start it.
+`--volume <id|name>[:<declared name>]` on `create` and `start` attaches an existing unattached volume to a slot the repository's `tinfoil-config.yml` declares, then starts the container. The declared name is optional when the config declares exactly one volume. On create, the volume's host becomes the container's host (an explicit `--host` must match). On start, the container must already be on that host unless `--host` moves it there. Once attached, later starts reuse the disk; omit `--volume`. A container whose config declares volumes is created stopped when `--volume` is omitted; the output lists the commands that attach one and start it.
 
 ### Model weights
 

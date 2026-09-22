@@ -330,13 +330,10 @@ var containerCreateCmd = &cobra.Command{
 			return err
 		}
 		if len(created.VolumeSlots) == 0 {
-			if err := renderContainer(created); err != nil {
-				return err
-			}
 			if len(requests) > 0 {
-				return fmt.Errorf("%s declares no volumes in tinfoil-config.yml; --volume was not applied", created.Name)
+				return fmt.Errorf("Created %s but it declares no volumes in tinfoil-config.yml; --volume was not applied", created.Name)
 			}
-			return nil
+			return renderContainer(created)
 		}
 		if len(requests) == 0 {
 			if err := renderContainer(created); err != nil {
@@ -423,7 +420,7 @@ var containerStartCmd = &cobra.Command{
 			if err != nil {
 				return err
 			}
-			if c.HostName != host {
+			if startHost == "" && c.HostName != host {
 				return fmt.Errorf("container %s is on host %s but volume %s is on %s; volumes must be on the container's host", c.Name, c.HostName, volumes[0].Name, host)
 			}
 			if err := attachVolumes(client, c, requests, volumes); err != nil {
