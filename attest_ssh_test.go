@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/ed25519"
 	"crypto/rand"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,6 +12,22 @@ import (
 
 	"golang.org/x/crypto/ssh"
 )
+
+func TestInteractiveInstallDemo(t *testing.T) {
+	if os.Getenv("ATTEST_SSH_DEMO") == "" {
+		t.Skip("set ATTEST_SSH_DEMO=1 to exercise the install prompt")
+	}
+	home := os.Getenv("ATTEST_SSH_DEMO_HOME")
+	if home == "" {
+		home = t.TempDir()
+	}
+	profile := sshProfile{name: "demo-enclave", hostName: "enclave.example.com", port: 22, user: "root", hostKey: testHostKey(t)}
+	t.Logf("Installing into %s", home)
+	fmt.Fprintln(os.Stderr, "Attestation successful.")
+	if err := profile.installTo(home, os.Stdin, os.Stderr, true, false); err != nil {
+		t.Fatal(err)
+	}
+}
 
 func testHostKey(t *testing.T) ssh.PublicKey {
 	t.Helper()
@@ -63,6 +80,9 @@ func TestInstallToAddsProfileAndPromptsInclude(t *testing.T) {
 	if !strings.Contains(out.String(), "Added Include tinfoil/*.conf") {
 		t.Fatalf("include message missing: %s", out.String())
 	}
+	if !strings.HasSuffix(strings.TrimSpace(out.String()), "Connect with: ssh my-container") {
+		t.Fatalf("connect should be last: %s", out.String())
+	}
 
 	conf, err := os.ReadFile(filepath.Join(home, ".ssh", "config"))
 	if err != nil {
@@ -82,8 +102,11 @@ func TestInstallToAddsProfileAndPromptsInclude(t *testing.T) {
 	if !strings.Contains(out.String(), "Updated SSH profile my-container") {
 		t.Fatalf("updated message missing: %s", out.String())
 	}
-	if strings.Contains(out.String(), "Add Include") {
+	if strings.Contains(out.String(), "Add it now") {
 		t.Fatalf("prompted again after include exists: %s", out.String())
+	}
+	if !strings.HasSuffix(strings.TrimSpace(out.String()), "Connect with: ssh my-container") {
+		t.Fatalf("connect should be last: %s", out.String())
 	}
 }
 
@@ -97,6 +120,12 @@ func TestInstallToDeclinedIncludeLeavesConfig(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "For your SSH client to use this profile") {
 		t.Fatalf("help missing: %s", out.String())
+	}
+	if strings.Contains(out.String(), "Then connect with") {
+		t.Fatalf("stale connect line in help: %s", out.String())
+	}
+	if !strings.HasSuffix(strings.TrimSpace(out.String()), "Connect with: ssh my-container") {
+		t.Fatalf("connect should be last: %s", out.String())
 	}
 	if _, err := os.Stat(filepath.Join(home, ".ssh", "config")); !os.IsNotExist(err) {
 		t.Fatalf("config should not be created, err=%v", err)
