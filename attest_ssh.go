@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -28,6 +29,10 @@ const (
 	sshProfileDir  = "tinfoil"
 	sshIncludeLine = "Include " + sshProfileDir + "/config"
 )
+
+// sshProfileNamePattern keeps a profile name a literal ssh Host alias and a
+// single path component under the known_hosts directory.
+var sshProfileNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,254}$`)
 
 var (
 	attestSSHName     string
@@ -68,13 +73,9 @@ this command after one.`,
 	Args:         cobra.ExactArgs(1),
 	SilenceUsage: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		hostKey, err := attestedHostKey(args[0], repo, attestSSHSealedTo)
-		if err != nil {
-			return err
-		}
 		profile := sshProfile{
 			name: attestSSHName, hostName: attestSSHHost, port: attestSSHPort,
-			user: attestSSHUser, identityFile: attestSSHIdentity, hostKey: hostKey,
+			user: attestSSHUser, identityFile: attestSSHIdentity,
 		}
 		if profile.name == "" {
 			profile.name = args[0]
@@ -82,6 +83,17 @@ this command after one.`,
 		if profile.hostName == "" {
 			profile.hostName = args[0]
 		}
+		if !sshProfileNamePattern.MatchString(profile.name) || strings.Contains(profile.name, "..") {
+			return fmt.Errorf("invalid profile name %q: use letters, digits, dots, dashes or underscores, starting with a letter or digit", profile.name)
+		}
+		if profile.port < 1 || profile.port > 65535 {
+			return fmt.Errorf("--ssh-port must be between 1 and 65535 (got %d)", profile.port)
+		}
+		hostKey, err := attestedHostKey(args[0], repo, attestSSHSealedTo)
+		if err != nil {
+			return err
+		}
+		profile.hostKey = hostKey
 		if !attestSSHInstall {
 			fmt.Printf("%s\n# %s\n%s\n", profile.render(), profile.pinPath("~/.ssh"), profile.knownHostsLine())
 			return nil
@@ -182,13 +194,13 @@ func (p sshProfile) install() error {
 }
 
 // replaceHostBlock swaps the single-alias `Host name` block in a config this
-// CLI owns; a block runs from its Host line to the next one.
+// CLI owns; a block runs from its Host line to the next Host or Match line.
 func replaceHostBlock(config []byte, name, block string) []byte {
 	var out strings.Builder
 	skipping := false
 	for _, line := range strings.SplitAfter(string(config), "\n") {
-		if fields := strings.Fields(line); len(fields) >= 2 && strings.EqualFold(fields[0], "Host") {
-			skipping = len(fields) == 2 && fields[1] == name
+		if fields := strings.Fields(line); len(fields) >= 2 && (strings.EqualFold(fields[0], "Host") || strings.EqualFold(fields[0], "Match")) {
+			skipping = len(fields) == 2 && fields[0] == "Host" && fields[1] == name
 		}
 		if !skipping {
 			out.WriteString(line)

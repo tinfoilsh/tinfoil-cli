@@ -140,9 +140,9 @@ It is a snapshot: reading it later does not perform fresh verification. This
 migration requires Go 1.27.1 to build. The existing SSH command still uses the
 verified tunnel; `attest-ssh` and sandbox setup install native profiles instead.
 
-## Native SSH from attested host keys
+## Installing a native SSH profile
 
-A workload that declares an `attested-keys` entry named `host-ssh` and serves it
+Workloads that declare an `attested-keys` entry named `host-ssh` and serve it
 as its sshd HostKey can be reached with plain `ssh` once its key is verified:
 
 ```bash
