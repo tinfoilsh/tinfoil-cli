@@ -31,7 +31,7 @@ var (
 	attestSSHName     string
 	attestSSHHost     string
 	attestSSHUser     string
-	attestSSHPort     int
+	attestSSHPort     uint
 	attestSSHIdentity string
 	attestSSHInstall  bool
 )
@@ -42,36 +42,40 @@ func init() {
 	flags.StringVar(&attestSSHName, "name", "", "Host alias for the profile (default: HOST)")
 	flags.StringVar(&attestSSHHost, "ssh-host", "", "Hostname ssh dials (default: HOST)")
 	flags.StringVar(&attestSSHUser, "user", "root", "Login user written to the profile")
-	flags.IntVar(&attestSSHPort, "ssh-port", defaultSSHPort, "Port ssh dials")
+	flags.UintVar(&attestSSHPort, "ssh-port", 0, "Port ssh dials (default: the container's published SSH port, else 22)")
 	flags.StringVar(&attestSSHIdentity, "identity", "", "IdentityFile written to the profile")
 	flags.BoolVar(&attestSSHInstall, "install", false, "Write the profile under ~/.ssh/tinfoil instead of printing it")
 }
 
 var attestSSHCmd = &cobra.Command{
-	Use:   "attest-ssh HOST",
+	Use:   "attest-ssh [container|hostname]",
 	Short: "Print or install a native ssh profile pinned to an enclave's attested host key",
-	Long: `Verify HOST against --repo, read the attested "host-ssh" key its quote
-endorses, and print an ssh profile pinned to it. With --install the profile is
-written to ~/.ssh/tinfoil/<name>.conf and included from ~/.ssh/config. A CVM
-reboot rotates the key, so rerun this command after one.`,
+	Long: `Resolve a container name or enclave hostname, verify it against its recorded
+repo or --repo, read the attested "host-ssh" key its quote endorses, and print an
+ssh profile pinned to it. With --install the profile is written to
+~/.ssh/tinfoil/<name>.conf and included from ~/.ssh/config. A CVM reboot
+rotates the key, so rerun this command after one.`,
 	Args:         cobra.ExactArgs(1),
 	SilenceUsage: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		profile := sshProfile{name: attestSSHName, hostName: attestSSHHost, port: attestSSHPort, user: attestSSHUser, identityFile: attestSSHIdentity}
+		target, err := resolveTunnelTarget(args[0])
+		if err != nil {
+			return err
+		}
+		profile := sshProfile{name: attestSSHName, hostName: attestSSHHost, port: sshTargetPort(target, attestSSHPort), user: attestSSHUser, identityFile: attestSSHIdentity}
 		if profile.name == "" {
-			profile.name = args[0]
+			profile.name = target.name
 		}
 		if profile.hostName == "" {
-			profile.hostName = args[0]
+			profile.hostName = target.host
 		}
 		if !sshProfileNamePattern.MatchString(profile.name) {
 			return fmt.Errorf("invalid profile name %q: use letters, digits, dots, dashes or underscores, starting with a letter or digit", profile.name)
 		}
-		if profile.port < 1 || profile.port > 65535 {
-			return fmt.Errorf("--ssh-port must be between 1 and 65535 (got %d)", profile.port)
+		if profile.port > 65535 {
+			return fmt.Errorf("--ssh-port must be at most 65535 (got %d)", profile.port)
 		}
-		var err error
-		if profile.hostKey, err = attestedHostKey(args[0], repo, ""); err != nil {
+		if profile.hostKey, err = attestedHostKey(target.host, target.repo, target.sealedTo); err != nil {
 			return err
 		}
 		if !attestSSHInstall {

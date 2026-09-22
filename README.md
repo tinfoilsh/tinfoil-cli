@@ -127,11 +127,12 @@ Verification requires the expected workload: an explicit `--host` needs `--repo 
 
 ### Native SSH profiles
 
-Workloads that declare an `attested-keys` entry named `host-ssh` and serve it as their sshd HostKey can be reached with plain `ssh` once the key is verified:
+Workloads that declare an `attested-keys` entry named `host-ssh` and serve it as their sshd HostKey can be reached with plain `ssh` once the key is verified. The target is a container name or a bare enclave hostname, as with `tinfoil ssh`:
 
 ```bash
-tinfoil attest-ssh enclave.example.com --repo owner/workload --name dev
-ssh dev
+tinfoil attest-ssh ubuntu-test --install
+tinfoil attest-ssh enclave.example.com --repo owner/workload --name dev --install
+ssh ubuntu-test
 ```
 
 This writes `~/.ssh/tinfoil/dev.conf` and its pinned `dev.known_hosts`, and adds one `Include tinfoil/*.conf` line to `~/.ssh/config`. The pin is the key verified at install time; a CVM reboot rotates it, so rerun the command after one. `--user`, `--ssh-port` and `--identity` set what the profile logs in with.
