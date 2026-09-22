@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -160,6 +161,81 @@ func TestInstallToNonInteractiveDoesNotWriteConfig(t *testing.T) {
 	if !strings.Contains(out.String(), "Note: For your SSH client to use this profile") {
 		t.Fatalf("help missing: %s", out.String())
 	}
+}
+
+func TestInstallToRereadsConfigAfterPrompt(t *testing.T) {
+	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(home, ".ssh"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(home, ".ssh", "config")
+	if err := os.WriteFile(configPath, []byte("Host stale\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	profile := sshProfile{name: "my-container", hostName: "enclave.example.com", port: 22, user: "root", hostKey: testHostKey(t)}
+
+	var out bytes.Buffer
+	in := &onRead{r: strings.NewReader("y\n"), fn: func() {
+		if err := os.WriteFile(configPath, []byte("Host other\n  HostName example.com\n"), 0o600); err != nil {
+			t.Error(err)
+		}
+	}}
+	if err := profile.installTo(home, in, &out, true, false); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "Include tinfoil/*.conf\n\nHost other\n  HostName example.com\n"; string(got) != want {
+		t.Fatalf("config = %q, want %q", got, want)
+	}
+}
+
+func TestInstallToSkipsWriteIfIncludeAppearsDuringPrompt(t *testing.T) {
+	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(home, ".ssh"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(home, ".ssh", "config")
+	if err := os.WriteFile(configPath, []byte("Host other\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	profile := sshProfile{name: "my-container", hostName: "enclave.example.com", port: 22, user: "root", hostKey: testHostKey(t)}
+
+	var out bytes.Buffer
+	in := &onRead{r: strings.NewReader("y\n"), fn: func() {
+		if err := os.WriteFile(configPath, []byte("Include tinfoil/*.conf\n\nHost other\n"), 0o600); err != nil {
+			t.Error(err)
+		}
+	}}
+	if err := profile.installTo(home, in, &out, true, false); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "Include tinfoil/*.conf\n\nHost other\n"; string(got) != want {
+		t.Fatalf("config = %q, want %q", got, want)
+	}
+	if strings.Contains(out.String(), "Added Include") {
+		t.Fatalf("wrote include that already existed: %s", out.String())
+	}
+}
+
+type onRead struct {
+	r    io.Reader
+	fn   func()
+	done bool
+}
+
+func (o *onRead) Read(p []byte) (int, error) {
+	if !o.done {
+		o.done = true
+		o.fn()
+	}
+	return o.r.Read(p)
 }
 
 func TestInstallToYesFlagWritesInclude(t *testing.T) {

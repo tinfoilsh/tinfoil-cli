@@ -52,7 +52,7 @@ func init() {
 	flags.UintVar(&attestSSHPort, "ssh-port", 0, "Port ssh dials (default: the container's published SSH port, else 22)")
 	flags.StringVar(&attestSSHIdentity, "identity", "", "IdentityFile written to the profile")
 	flags.BoolVar(&attestSSHInstall, "install", false, "Write the profile under ~/.ssh/tinfoil instead of printing it")
-	flags.BoolVar(&attestSSHYes, "yes", false, "Add Include tinfoil/*.conf to ~/.ssh/config without prompting")
+	flags.BoolVar(&attestSSHYes, "yes", false, "Add Include "+sshIncludeGlob+" to ~/.ssh/config without prompting")
 }
 
 var attestSSHCmd = &cobra.Command{
@@ -62,7 +62,7 @@ var attestSSHCmd = &cobra.Command{
 repo or --repo, read the attested "host-ssh" key its quote endorses, and print an
 ssh profile pinned to it. With --install the profile is written to
 ~/.ssh/tinfoil/<name>.conf. If ~/.ssh/config is missing a top-level
-Include tinfoil/*.conf line, you are asked whether to add it. A CVM reboot
+` + sshIncludeLine() + ` line, you are asked whether to add it. A CVM reboot
 rotates the key, so rerun this command after one.
 
 Containers with a published SSH port connect through console.tinfoil.sh.
@@ -197,8 +197,8 @@ func (p sshProfile) installTo(home string, in io.Reader, out io.Writer, interact
 
 // offerSSHInclude prepends Include tinfoil/*.conf only after an explicit yes.
 func offerSSHInclude(path string, in io.Reader, out io.Writer, interactive, autoYes bool) error {
-	existing, err := os.ReadFile(path)
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
+	existing, err := readSSHConfig(path)
+	if err != nil {
 		return err
 	}
 	if hasTopLevelInclude(existing) {
@@ -219,15 +219,35 @@ func offerSSHInclude(path string, in io.Reader, out io.Writer, interactive, auto
 		printSSHIncludeHelp(out)
 		return nil
 	}
-	if err := writeAtomic(path, append([]byte("Include "+sshIncludeGlob+"\n\n"), existing...)); err != nil {
+	// Re-read after consent so a concurrent edit of ~/.ssh/config is not overwritten.
+	existing, err = readSSHConfig(path)
+	if err != nil {
 		return err
 	}
-	fmt.Fprintln(out, "Added Include tinfoil/*.conf to ~/.ssh/config.")
+	if hasTopLevelInclude(existing) {
+		return nil
+	}
+	if err := writeAtomic(path, append([]byte(sshIncludeLine()+"\n\n"), existing...)); err != nil {
+		return err
+	}
+	fmt.Fprintf(out, "Added %s to ~/.ssh/config.\n", sshIncludeLine())
 	return nil
 }
 
+func readSSHConfig(path string) ([]byte, error) {
+	existing, err := os.ReadFile(path)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
+	return existing, nil
+}
+
+func sshIncludeLine() string {
+	return "Include " + sshIncludeGlob
+}
+
 func promptAddSSHInclude(in io.Reader, out io.Writer) (bool, error) {
-	fmt.Fprint(out, "For your SSH client to use this profile, ~/.ssh/config needs this line before any Host or Match block:\n\nInclude tinfoil/*.conf\n\nAdd it now? [y/N] ")
+	fmt.Fprintf(out, "For your SSH client to use this profile, ~/.ssh/config needs this line before any Host or Match block:\n\n%s\n\nAdd it now? [y/N] ", sshIncludeLine())
 	scanner := bufio.NewScanner(in)
 	if !scanner.Scan() {
 		fmt.Fprintln(out)
@@ -245,7 +265,7 @@ func promptAddSSHInclude(in io.Reader, out io.Writer) (bool, error) {
 }
 
 func printSSHIncludeHelp(out io.Writer) {
-	fmt.Fprint(out, "Note: For your SSH client to use this profile, add this line at the top of ~/.ssh/config:\n\nInclude tinfoil/*.conf\n\nIt must appear before any Host or Match block.\n")
+	fmt.Fprintf(out, "Note: For your SSH client to use this profile, add this line at the top of ~/.ssh/config:\n\n%s\n\nIt must appear before any Host or Match block.\n", sshIncludeLine())
 }
 
 // Only an uncommented Include before the first Host or Match block applies to every host.
