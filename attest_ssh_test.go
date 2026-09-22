@@ -118,7 +118,7 @@ func TestInstallToDeclinedIncludeLeavesConfig(t *testing.T) {
 	if err := profile.installTo(home, strings.NewReader("n\n"), &out, true, false); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out.String(), "For your SSH client to use this profile") {
+	if !strings.Contains(out.String(), "Note: For your SSH client to use this profile") {
 		t.Fatalf("help missing: %s", out.String())
 	}
 	if strings.Contains(out.String(), "Then connect with") {
@@ -157,7 +157,7 @@ func TestInstallToNonInteractiveDoesNotWriteConfig(t *testing.T) {
 	if !bytes.Equal(got, existing) {
 		t.Fatalf("config changed without consent: %q", got)
 	}
-	if !strings.Contains(out.String(), "For your SSH client to use this profile") {
+	if !strings.Contains(out.String(), "Note: For your SSH client to use this profile") {
 		t.Fatalf("help missing: %s", out.String())
 	}
 }
