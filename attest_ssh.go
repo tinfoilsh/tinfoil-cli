@@ -188,7 +188,7 @@ func (p sshProfile) installTo(home string, in io.Reader, out io.Writer, interact
 		action = "Updated"
 	}
 	fmt.Fprintf(out, "%s SSH profile %s (~/.ssh/tinfoil/%s.conf).\n", action, p.name, p.name)
-	if err := offerSSHInclude(filepath.Join(home, ".ssh", "config"), p.name, in, out, interactive, autoYes); err != nil {
+	if err := offerSSHInclude(filepath.Join(home, ".ssh", "config"), in, out, interactive, autoYes); err != nil {
 		return err
 	}
 	fmt.Fprintf(out, "Connect with: ssh %s\n", p.name)
@@ -196,7 +196,7 @@ func (p sshProfile) installTo(home string, in io.Reader, out io.Writer, interact
 }
 
 // offerSSHInclude prepends Include tinfoil/*.conf only after an explicit yes.
-func offerSSHInclude(path, name string, in io.Reader, out io.Writer, interactive, autoYes bool) error {
+func offerSSHInclude(path string, in io.Reader, out io.Writer, interactive, autoYes bool) error {
 	existing, err := os.ReadFile(path)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
@@ -210,7 +210,7 @@ func offerSSHInclude(path, name string, in io.Reader, out io.Writer, interactive
 			printSSHIncludeHelp(out)
 			return nil
 		}
-		add, err = promptAddSSHInclude(in, out, name)
+		add, err = promptAddSSHInclude(in, out)
 		if err != nil {
 			return err
 		}
@@ -226,8 +226,8 @@ func offerSSHInclude(path, name string, in io.Reader, out io.Writer, interactive
 	return nil
 }
 
-func promptAddSSHInclude(in io.Reader, out io.Writer, name string) (bool, error) {
-	fmt.Fprintf(out, "For ssh %s to use this profile, ~/.ssh/config needs this line before any Host or Match block:\n\nInclude tinfoil/*.conf\n\nAdd it now? [y/N] ", name)
+func promptAddSSHInclude(in io.Reader, out io.Writer) (bool, error) {
+	fmt.Fprint(out, "For your SSH client to use this profile, ~/.ssh/config needs this line before any Host or Match block:\n\nInclude tinfoil/*.conf\n\nAdd it now? [y/N] ")
 	scanner := bufio.NewScanner(in)
 	if !scanner.Scan() {
 		fmt.Fprintln(out)
@@ -245,7 +245,7 @@ func promptAddSSHInclude(in io.Reader, out io.Writer, name string) (bool, error)
 }
 
 func printSSHIncludeHelp(out io.Writer) {
-	fmt.Fprint(out, "For your SSH client to use this profile, add this line at the top of ~/.ssh/config:\n\nInclude tinfoil/*.conf\n\nIt must appear before any Host or Match block.\n")
+	fmt.Fprint(out, "Note: For your SSH client to use this profile, add this line at the top of ~/.ssh/config:\n\nInclude tinfoil/*.conf\n\nIt must appear before any Host or Match block.\n")
 }
 
 // Only an uncommented Include before the first Host or Match block applies to every host.
