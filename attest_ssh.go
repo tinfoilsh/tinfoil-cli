@@ -29,32 +29,40 @@ var sshProfileNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,254
 
 var (
 	attestSSHName     string
+	attestSSHHost     string
 	attestSSHUser     string
 	attestSSHPort     int
 	attestSSHIdentity string
+	attestSSHInstall  bool
 )
 
 func init() {
 	rootCmd.AddCommand(attestSSHCmd)
 	flags := attestSSHCmd.Flags()
 	flags.StringVar(&attestSSHName, "name", "", "Host alias for the profile (default: HOST)")
+	flags.StringVar(&attestSSHHost, "ssh-host", "", "Hostname ssh dials (default: HOST)")
 	flags.StringVar(&attestSSHUser, "user", "root", "Login user written to the profile")
 	flags.IntVar(&attestSSHPort, "ssh-port", defaultSSHPort, "Port ssh dials")
 	flags.StringVar(&attestSSHIdentity, "identity", "", "IdentityFile written to the profile")
+	flags.BoolVar(&attestSSHInstall, "install", false, "Write the profile under ~/.ssh/tinfoil instead of printing it")
 }
 
 var attestSSHCmd = &cobra.Command{
 	Use:   "attest-ssh HOST",
-	Short: "Install a native ssh profile pinned to an enclave's attested host key",
+	Short: "Print or install a native ssh profile pinned to an enclave's attested host key",
 	Long: `Verify HOST against --repo, read the attested "host-ssh" key its quote
-endorses, and write ~/.ssh/tinfoil/<name>.conf pinned to it, included from
-~/.ssh/config. A CVM reboot rotates the key, so rerun this command after one.`,
+endorses, and print an ssh profile pinned to it. With --install the profile is
+written to ~/.ssh/tinfoil/<name>.conf and included from ~/.ssh/config. A CVM
+reboot rotates the key, so rerun this command after one.`,
 	Args:         cobra.ExactArgs(1),
 	SilenceUsage: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		profile := sshProfile{name: attestSSHName, hostName: args[0], port: attestSSHPort, user: attestSSHUser, identityFile: attestSSHIdentity}
+		profile := sshProfile{name: attestSSHName, hostName: attestSSHHost, port: attestSSHPort, user: attestSSHUser, identityFile: attestSSHIdentity}
 		if profile.name == "" {
 			profile.name = args[0]
+		}
+		if profile.hostName == "" {
+			profile.hostName = args[0]
 		}
 		if !sshProfileNamePattern.MatchString(profile.name) {
 			return fmt.Errorf("invalid profile name %q: use letters, digits, dots, dashes or underscores, starting with a letter or digit", profile.name)
@@ -65,6 +73,10 @@ endorses, and write ~/.ssh/tinfoil/<name>.conf pinned to it, included from
 		var err error
 		if profile.hostKey, err = attestedHostKey(args[0], repo, ""); err != nil {
 			return err
+		}
+		if !attestSSHInstall {
+			fmt.Printf("%s\n# ~/.ssh/tinfoil/%s.known_hosts\n%s", profile.render(), profile.name, profile.pin())
+			return nil
 		}
 		return profile.install()
 	},
@@ -116,6 +128,11 @@ func (p sshProfile) render() string {
 	return b.String()
 }
 
+func (p sshProfile) pin() string {
+	address := knownhosts.Normalize(net.JoinHostPort(p.hostName, strconv.Itoa(p.port)))
+	return knownhosts.Line([]string{address}, p.hostKey) + "\n"
+}
+
 func (p sshProfile) install() error {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -125,9 +142,7 @@ func (p sshProfile) install() error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
-	address := knownhosts.Normalize(net.JoinHostPort(p.hostName, strconv.Itoa(p.port)))
-	pin := knownhosts.Line([]string{address}, p.hostKey) + "\n"
-	if err := writeAtomic(filepath.Join(dir, p.name+".known_hosts"), []byte(pin)); err != nil {
+	if err := writeAtomic(filepath.Join(dir, p.name+".known_hosts"), []byte(p.pin())); err != nil {
 		return err
 	}
 	if err := writeAtomic(filepath.Join(dir, p.name+".conf"), []byte(p.render())); err != nil {
