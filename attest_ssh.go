@@ -195,7 +195,9 @@ func (p sshProfile) installTo(home string, in io.Reader, out io.Writer, interact
 	return nil
 }
 
-// offerSSHInclude prepends Include tinfoil/*.conf only after an explicit yes.
+// offerSSHInclude checks for a top-level Include first. If the line is
+// already there, it returns without printing or writing. Otherwise it
+// prompts (or honors --yes) and prepends the line.
 func offerSSHInclude(path string, in io.Reader, out io.Writer, interactive, autoYes bool) error {
 	existing, err := readSSHConfig(path)
 	if err != nil {
@@ -217,14 +219,6 @@ func offerSSHInclude(path string, in io.Reader, out io.Writer, interactive, auto
 	}
 	if !add {
 		printSSHIncludeHelp(out)
-		return nil
-	}
-	// Re-read after consent so a concurrent edit of ~/.ssh/config is not overwritten.
-	existing, err = readSSHConfig(path)
-	if err != nil {
-		return err
-	}
-	if hasTopLevelInclude(existing) {
 		return nil
 	}
 	if err := writeAtomic(path, append([]byte(sshIncludeLine()+"\n\n"), existing...)); err != nil {
