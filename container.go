@@ -48,9 +48,15 @@ type containerView struct {
 	CreatedAt          string          `json:"created_at"`
 	UpdatedAt          string          `json:"updated_at"`
 	SSHPort            int             `json:"ssh_port"`
+	HostID             string          `json:"host_id,omitempty"`
+	// VolumeSlots are the volumes tinfoil-config.yml declares; Volumes maps a
+	// slot to the attached volume ID. Only the single-container view has them.
+	VolumeSlots []volumeSlot      `json:"volume_slots,omitempty"`
+	Volumes     map[string]string `json:"volumes,omitempty"`
 }
 
 type hostInfo struct {
+	ID                 string `json:"id"`
 	Name               string `json:"name"`
 	IsDefault          bool   `json:"is_default"`
 	AvailableGpuValues []int  `json:"available_gpu_values"`
@@ -71,6 +77,7 @@ var (
 	createVariables      []string
 	createSecrets        []string
 	createSSHKeys        []string
+	createVolumes        []string
 	createDisplayOrder   int32
 
 	relaunchTag            string
@@ -91,6 +98,7 @@ var (
 	startPromoteRelease string
 	startCustomDomain   string
 	startHost           string
+	startVolumes        []string
 
 	metricsTime string
 
@@ -133,6 +141,7 @@ func init() {
 	containerCreateCmd.Flags().StringArrayVar(&createVariables, "variable", nil, "Environment variable in KEY=VALUE form; may be repeated")
 	containerCreateCmd.Flags().StringArrayVar(&createSecrets, "secret", nil, "Org secret name to mount; may be repeated")
 	containerCreateCmd.Flags().StringArrayVar(&createSSHKeys, "ssh-key", nil, "Org SSH key name (debug only); may be repeated")
+	containerCreateCmd.Flags().StringArrayVar(&createVolumes, "volume", nil, "Volume to attach before the first start, as <id|name>[:<declared name>]; may be repeated")
 	containerCreateCmd.Flags().Int32Var(&createDisplayOrder, "display-order", 0, "Sort order of this container within its repository deployment")
 	_ = containerCreateCmd.MarkFlagRequired("repo")
 	_ = containerCreateCmd.MarkFlagRequired("tag")
@@ -156,6 +165,7 @@ func init() {
 	containerStartCmd.Flags().StringVar(&startPromoteRelease, "promote-release", "", "Promote the deployed tag to the repository's latest release when it goes live (default true; pass false to decline)")
 	containerStartCmd.Flags().StringVar(&startCustomDomain, "custom-domain", "", "Override custom domain (empty string clears it)")
 	containerStartCmd.Flags().StringVar(&startHost, "host", "", "Move stopped container to a different host")
+	containerStartCmd.Flags().StringArrayVar(&startVolumes, "volume", nil, "Volume to attach before starting, as <id|name>[:<declared name>]; may be repeated")
 
 	containerRelaunchCmd.Flags().StringVar(&relaunchTag, "tag", "", "Override the deployed tag")
 	containerRelaunchCmd.Flags().StringArrayVar(&relaunchVariables, "variable", nil, "Override environment variable in KEY=VALUE form")
@@ -225,11 +235,15 @@ var containerGetCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		c, err := resolveContainer(client, args[0])
+		c, err := resolveContainerDetail(client, args[0])
 		if err != nil {
 			return err
 		}
-		return renderContainer(*c)
+		attached, err := loadContainerVolumes(client, *c)
+		if err != nil {
+			return err
+		}
+		return renderContainerDetail(*c, attached)
 	},
 }
 
@@ -263,6 +277,26 @@ var containerCreateCmd = &cobra.Command{
 			}
 		}
 
+		requests, err := parseVolumeRequests(createVolumes)
+		if err != nil {
+			return err
+		}
+		var volumes []volumeView
+		if len(requests) > 0 {
+			list, err := listVolumes(client)
+			if err != nil {
+				return err
+			}
+			if volumes, err = resolveVolumeRequests(list.Volumes, requests); err != nil {
+				return err
+			}
+			host, err := volumesHost(volumes, createHost)
+			if err != nil {
+				return err
+			}
+			body["host_name"] = host
+		}
+
 		if cmd.Flags().Changed("display-order") {
 			body["display_order"] = createDisplayOrder
 		}
@@ -284,7 +318,7 @@ var containerCreateCmd = &cobra.Command{
 		if createCustomDomain != "" {
 			body["custom_domain"] = createCustomDomain
 		}
-		if createHost != "" {
+		if createHost != "" && len(requests) == 0 {
 			body["host_name"] = createHost
 		}
 		if createReplaceID != "" {
@@ -295,7 +329,36 @@ var containerCreateCmd = &cobra.Command{
 		if _, err := client.do("POST", "/api/containers", nil, body, &created); err != nil {
 			return err
 		}
-		return renderContainer(created)
+		if len(created.VolumeSlots) == 0 {
+			if err := renderContainer(created); err != nil {
+				return err
+			}
+			if len(requests) > 0 {
+				return fmt.Errorf("%s declares no volumes in tinfoil-config.yml; --volume was not applied", created.Name)
+			}
+			return nil
+		}
+		if len(requests) == 0 {
+			if err := renderContainer(created); err != nil {
+				return err
+			}
+			if outputFormat != "json" {
+				printVolumeHint(created)
+			}
+			return nil
+		}
+		if err := attachVolumes(client, &created, requests, volumes); err != nil {
+			return fmt.Errorf("Created %s but %w", created.Name, err)
+		}
+		var started containerView
+		if _, err := client.do("POST", pathf("/api/containers/%s/start", created.ID), nil, map[string]any{}, &started); err != nil {
+			return fmt.Errorf("Created %s and attached its volumes but could not start it: %s. Run: tinfoil container start %s", created.Name, errMessage(err), created.Name)
+		}
+		attached, err := loadContainerVolumes(client, started)
+		if err != nil {
+			return err
+		}
+		return renderContainerDetail(started, attached)
 	},
 }
 
@@ -334,19 +397,48 @@ var containerStartCmd = &cobra.Command{
 			return err
 		}
 
+		requests, err := parseVolumeRequests(startVolumes)
+		if err != nil {
+			return err
+		}
+
 		client, err := authedClient()
 		if err != nil {
 			return err
 		}
-		c, err := resolveContainer(client, args[0])
+		c, err := resolveContainerDetail(client, args[0])
 		if err != nil {
 			return err
 		}
+		if len(requests) > 0 {
+			list, err := listVolumes(client)
+			if err != nil {
+				return err
+			}
+			volumes, err := resolveVolumeRequests(list.Volumes, requests)
+			if err != nil {
+				return err
+			}
+			host, err := volumesHost(volumes, startHost)
+			if err != nil {
+				return err
+			}
+			if c.HostName != host {
+				return fmt.Errorf("container %s is on host %s but volume %s is on %s; volumes must be on the container's host", c.Name, c.HostName, volumes[0].Name, host)
+			}
+			if err := attachVolumes(client, c, requests, volumes); err != nil {
+				return err
+			}
+		}
 		var updated containerView
 		if _, err := client.do("POST", pathf("/api/containers/%s/start", c.ID), nil, body, &updated); err != nil {
+			return withAttachHint(err, c)
+		}
+		attached, err := loadContainerVolumes(client, updated)
+		if err != nil {
 			return err
 		}
-		return renderContainer(updated)
+		return renderContainerDetail(updated, attached)
 	},
 }
 
@@ -616,6 +708,23 @@ func resolveContainer(client *cpClient, identifier string) (*containerView, erro
 	}
 }
 
+// resolveContainerDetail is resolveContainer followed by the single-container
+// view, which is the only one that carries volume fields.
+func resolveContainerDetail(client *cpClient, identifier string) (*containerView, error) {
+	c, err := resolveContainer(client, identifier)
+	if err != nil {
+		return nil, err
+	}
+	if looksLikeUUID(strings.TrimSpace(identifier)) {
+		return c, nil
+	}
+	var full containerView
+	if _, err := client.do("GET", pathf("/api/containers/%s", c.ID), nil, nil, &full); err != nil {
+		return nil, err
+	}
+	return &full, nil
+}
+
 func looksLikeUUID(s string) bool {
 	// 8-4-4-4-12 hex; cheap check that avoids importing google/uuid.
 	if len(s) != 36 {
@@ -781,6 +890,12 @@ func formatInts(in []int) string {
 }
 
 func renderContainer(c containerView) error {
+	return renderContainerDetail(c, nil)
+}
+
+// renderContainerDetail prints c with its declared volumes; attached maps a
+// slot to its volume when known, otherwise the view's volume ID is shown.
+func renderContainerDetail(c containerView, attached map[string]volumeView) error {
 	if outputFormat == "json" {
 		return printJSON(c)
 	}
@@ -829,6 +944,18 @@ func renderContainer(c containerView) error {
 	}
 	if len(c.SSHKeys) > 0 {
 		fmt.Printf("SSH keys:     %s\n", strings.Join(c.SSHKeys, ", "))
+	}
+	label := "Volumes:      "
+	for _, slot := range c.VolumeSlots {
+		switch v, ok := attached[slot.Name]; {
+		case ok:
+			fmt.Printf("%s%s ← %s (%s)\n", label, slot.Name, v.Name, formatSize(v.SizeBytes))
+		case c.Volumes[slot.Name] != "":
+			fmt.Printf("%s%s ← %s\n", label, slot.Name, c.Volumes[slot.Name])
+		default:
+			fmt.Printf("%s%s (none attached)\n", label, slot.Name)
+		}
+		label = strings.Repeat(" ", len(label))
 	}
 	if c.UpdateTag != "" {
 		state := c.UpdateStatus

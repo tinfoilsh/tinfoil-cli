@@ -208,8 +208,8 @@ func configureContainerPromotionTest(t *testing.T, serverURL string) {
 	t.Setenv(envAdminKey, "admin_test")
 	t.Setenv(envConfigPath, filepath.Join(t.TempDir(), "missing-config.json"))
 	for command, names := range map[*cobra.Command][]string{
-		containerCreateCmd:   {"display-order", "promote-release"},
-		containerStartCmd:    {"tag", "variable", "secret", "ssh-key", "debug", "promote-release", "custom-domain", "host"},
+		containerCreateCmd:   {"display-order", "promote-release", "volume"},
+		containerStartCmd:    {"tag", "variable", "secret", "ssh-key", "debug", "promote-release", "custom-domain", "host", "volume"},
 		containerRelaunchCmd: {"tag", "variable", "secret", "ssh-key", "debug", "staging", "promote-release", "custom-domain", "host"},
 	} {
 		for _, name := range names {
@@ -228,11 +228,11 @@ func configureContainerPromotionTest(t *testing.T, serverURL string) {
 	previousCreateDebug, previousCreateDisableCC := createDebug, createDisableCC
 	previousCreateVariables, previousCreateSecrets, previousCreateSSHKeys := createVariables, createSecrets, createSSHKeys
 	previousCreateCustomDomain, previousCreateHost, previousCreateReplaceID := createCustomDomain, createHost, createReplaceID
-	previousCreateDisplayOrder := createDisplayOrder
+	previousCreateDisplayOrder, previousCreateVolumes := createDisplayOrder, createVolumes
 	previousStartTag, previousStartDebug := startTag, startDebug
 	previousStartPromoteRelease := startPromoteRelease
 	previousStartVariables, previousStartSecrets, previousStartSSHKeys := startVariables, startSecrets, startSSHKeys
-	previousStartCustomDomain, previousStartHost := startCustomDomain, startHost
+	previousStartCustomDomain, previousStartHost, previousStartVolumes := startCustomDomain, startHost, startVolumes
 	previousRelaunchTag, previousRelaunchDebug := relaunchTag, relaunchDebug
 	previousRelaunchStaging, previousRelaunchPromoteRelease := relaunchStaging, relaunchPromoteRelease
 	previousRelaunchVariables, previousRelaunchSecrets, previousRelaunchSSHKeys := relaunchVariables, relaunchSecrets, relaunchSSHKeys
@@ -243,10 +243,10 @@ func configureContainerPromotionTest(t *testing.T, serverURL string) {
 	createDebug, createDisableCC = false, false
 	createVariables, createSecrets, createSSHKeys = nil, nil, nil
 	createCustomDomain, createHost, createReplaceID = "", "", ""
-	createDisplayOrder = 0
+	createDisplayOrder, createVolumes = 0, nil
 	startTag, startDebug, startPromoteRelease = "", "", ""
 	startVariables, startSecrets, startSSHKeys = nil, nil, nil
-	startCustomDomain, startHost = "", ""
+	startCustomDomain, startHost, startVolumes = "", "", nil
 	relaunchTag, relaunchDebug, relaunchStaging, relaunchPromoteRelease = "", "", "", ""
 	relaunchVariables, relaunchSecrets, relaunchSSHKeys = nil, nil, nil
 	relaunchCustomDomain, relaunchHost = "", ""
@@ -258,10 +258,10 @@ func configureContainerPromotionTest(t *testing.T, serverURL string) {
 		createDebug, createDisableCC = previousCreateDebug, previousCreateDisableCC
 		createVariables, createSecrets, createSSHKeys = previousCreateVariables, previousCreateSecrets, previousCreateSSHKeys
 		createCustomDomain, createHost, createReplaceID = previousCreateCustomDomain, previousCreateHost, previousCreateReplaceID
-		createDisplayOrder = previousCreateDisplayOrder
+		createDisplayOrder, createVolumes = previousCreateDisplayOrder, previousCreateVolumes
 		startTag, startDebug, startPromoteRelease = previousStartTag, previousStartDebug, previousStartPromoteRelease
 		startVariables, startSecrets, startSSHKeys = previousStartVariables, previousStartSecrets, previousStartSSHKeys
-		startCustomDomain, startHost = previousStartCustomDomain, previousStartHost
+		startCustomDomain, startHost, startVolumes = previousStartCustomDomain, previousStartHost, previousStartVolumes
 		relaunchTag, relaunchDebug = previousRelaunchTag, previousRelaunchDebug
 		relaunchStaging, relaunchPromoteRelease = previousRelaunchStaging, previousRelaunchPromoteRelease
 		relaunchVariables, relaunchSecrets, relaunchSSHKeys = previousRelaunchVariables, previousRelaunchSecrets, previousRelaunchSSHKeys
