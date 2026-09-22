@@ -48,6 +48,13 @@ type containerView struct {
 	CreatedAt          string          `json:"created_at"`
 	UpdatedAt          string          `json:"updated_at"`
 	SSHPort            int             `json:"ssh_port"`
+
+	Volumes map[string]containerVolume `json:"volumes"`
+}
+
+type containerVolume struct {
+	Volume string `json:"volume"`
+	Image  string `json:"image"`
 }
 
 type hostInfo struct {
@@ -71,12 +78,14 @@ var (
 	createVariables      []string
 	createSecrets        []string
 	createSSHKeys        []string
+	createVolumes        []string
 	createDisplayOrder   int32
 
 	relaunchTag            string
 	relaunchVariables      []string
 	relaunchSecrets        []string
 	relaunchSSHKeys        []string
+	relaunchVolumes        []string
 	relaunchDebug          string
 	relaunchStaging        string
 	relaunchPromoteRelease string
@@ -87,6 +96,7 @@ var (
 	startVariables      []string
 	startSecrets        []string
 	startSSHKeys        []string
+	startVolumes        []string
 	startDebug          string
 	startPromoteRelease string
 	startCustomDomain   string
@@ -116,6 +126,8 @@ func init() {
 	containerCmd.AddCommand(containerHostsCmd)
 	containerCmd.AddCommand(containerUpdateCmd)
 	containerCmd.AddCommand(containerConnectCmd)
+	containerCmd.AddCommand(containerAttachCmd)
+	containerCmd.AddCommand(containerDetachCmd)
 
 	containerUpdateCmd.AddCommand(containerUpdateStatusCmd)
 	containerUpdateCmd.AddCommand(containerUpdateAcceptCmd)
@@ -133,6 +145,7 @@ func init() {
 	containerCreateCmd.Flags().StringArrayVar(&createVariables, "variable", nil, "Environment variable in KEY=VALUE form; may be repeated")
 	containerCreateCmd.Flags().StringArrayVar(&createSecrets, "secret", nil, "Org secret name to mount; may be repeated")
 	containerCreateCmd.Flags().StringArrayVar(&createSSHKeys, "ssh-key", nil, "Org SSH key name (debug only); may be repeated")
+	containerCreateCmd.Flags().StringArrayVar(&createVolumes, "volume", nil, "Volume to mount in slot=volume form; may be repeated")
 	containerCreateCmd.Flags().Int32Var(&createDisplayOrder, "display-order", 0, "Sort order of this container within its repository deployment")
 	_ = containerCreateCmd.MarkFlagRequired("repo")
 	_ = containerCreateCmd.MarkFlagRequired("tag")
@@ -147,11 +160,14 @@ func init() {
 	addDebugSelector(containerUpdateAcceptCmd)
 	addDebugSelector(containerUpdateCancelCmd)
 	addDebugSelector(containerConnectCmd)
+	addDebugSelector(containerAttachCmd)
+	addDebugSelector(containerDetachCmd)
 
 	containerStartCmd.Flags().StringVar(&startTag, "tag", "", "Override the deployed tag")
 	containerStartCmd.Flags().StringArrayVar(&startVariables, "variable", nil, "Override environment variable in KEY=VALUE form")
 	containerStartCmd.Flags().StringArrayVar(&startSecrets, "secret", nil, "Override secrets list (specify all)")
 	containerStartCmd.Flags().StringArrayVar(&startSSHKeys, "ssh-key", nil, "Override SSH keys list")
+	containerStartCmd.Flags().StringArrayVar(&startVolumes, "volume", nil, "Override volume slots in slot=volume form (specify all)")
 	containerStartCmd.Flags().StringVar(&startDebug, "debug", "", "Override debug mode (true/false)")
 	containerStartCmd.Flags().StringVar(&startPromoteRelease, "promote-release", "", "Promote the deployed tag to the repository's latest release when it goes live (default true; pass false to decline)")
 	containerStartCmd.Flags().StringVar(&startCustomDomain, "custom-domain", "", "Override custom domain (empty string clears it)")
@@ -161,6 +177,7 @@ func init() {
 	containerRelaunchCmd.Flags().StringArrayVar(&relaunchVariables, "variable", nil, "Override environment variable in KEY=VALUE form")
 	containerRelaunchCmd.Flags().StringArrayVar(&relaunchSecrets, "secret", nil, "Override secrets list (specify all)")
 	containerRelaunchCmd.Flags().StringArrayVar(&relaunchSSHKeys, "ssh-key", nil, "Override SSH keys list")
+	containerRelaunchCmd.Flags().StringArrayVar(&relaunchVolumes, "volume", nil, "Override volume slots in slot=volume form (specify all)")
 	containerRelaunchCmd.Flags().StringVar(&relaunchDebug, "debug", "", "Override debug mode (true/false)")
 	containerRelaunchCmd.Flags().StringVar(&relaunchStaging, "staging", "", "Hold an eligible ready update candidate for manual acceptance (true/false)")
 	containerRelaunchCmd.Flags().StringVar(&relaunchPromoteRelease, "promote-release", "", "Promote the deployed tag to the repository's latest release when it goes live (default true; pass false to decline)")
@@ -246,6 +263,9 @@ var containerCreateCmd = &cobra.Command{
 		if err := setPromoteRelease(cmd, body, createPromoteRelease); err != nil {
 			return err
 		}
+		if err := setVolumes(cmd, body, createVolumes); err != nil {
+			return err
+		}
 
 		client, err := authedClient()
 		if err != nil {
@@ -327,7 +347,7 @@ var containerStartCmd = &cobra.Command{
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		body, err := buildLifecycleBody(cmd,
-			startTag, startVariables, startSecrets, startSSHKeys,
+			startTag, startVariables, startSecrets, startSSHKeys, startVolumes,
 			startDebug, startPromoteRelease, startCustomDomain, startHost,
 		)
 		if err != nil {
@@ -377,7 +397,7 @@ var containerRelaunchCmd = &cobra.Command{
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		body, err := buildLifecycleBody(cmd,
-			relaunchTag, relaunchVariables, relaunchSecrets, relaunchSSHKeys,
+			relaunchTag, relaunchVariables, relaunchSecrets, relaunchSSHKeys, relaunchVolumes,
 			relaunchDebug, relaunchPromoteRelease, relaunchCustomDomain, relaunchHost,
 		)
 		if err != nil {
@@ -567,6 +587,64 @@ attestation and forwards HTTP requests to it. This is a convenience around
 	},
 }
 
+var containerAttachCmd = &cobra.Command{
+	Use:   "attach [id|name] slot=volume [slot=volume ...]",
+	Short: "Attach volumes to a stopped container's slots",
+	Args:  cobra.MinimumNArgs(2),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		pairs, err := parseVolumeSlots(args[1:])
+		if err != nil {
+			return err
+		}
+		return updateVolumes(args[0], func(volumes map[string]string) {
+			for slot, volume := range pairs {
+				volumes[slot] = volume
+			}
+		})
+	},
+}
+
+var containerDetachCmd = &cobra.Command{
+	Use:   "detach [id|name] slot [slot ...]",
+	Short: "Detach volumes from a stopped container's slots",
+	Args:  cobra.MinimumNArgs(2),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return updateVolumes(args[0], func(volumes map[string]string) {
+			for _, slot := range args[1:] {
+				delete(volumes, slot)
+			}
+		})
+	},
+}
+
+// The PUT replaces the whole mapping, so edit works on the current one.
+func updateVolumes(ref string, edit func(map[string]string)) error {
+	client, err := authedClient()
+	if err != nil {
+		return err
+	}
+	c, err := resolveContainer(client, ref)
+	if err != nil {
+		return err
+	}
+	volumes := map[string]string{}
+	for slot, v := range c.Volumes {
+		if v.Volume != "" {
+			volumes[slot] = v.Volume
+		}
+	}
+	edit(volumes)
+	var updated containerView
+	if _, err := client.do("PUT", pathf("/api/containers/%s/volumes", c.ID), nil, map[string]any{"volumes": volumes}, &updated); err != nil {
+		return err
+	}
+	if outputFormat == "json" {
+		return printJSON(updated.Volumes)
+	}
+	fmt.Println(formatVolumeSlots(updated.Volumes))
+	return nil
+}
+
 func authedClient() (*cpClient, error) {
 	cfg, err := requireAuth()
 	if err != nil {
@@ -655,12 +733,40 @@ func parseKeyValues(in []string) (map[string]string, error) {
 	return out, nil
 }
 
+func parseVolumeSlots(in []string) (map[string]string, error) {
+	out := make(map[string]string, len(in))
+	for _, raw := range in {
+		slot, volume, ok := strings.Cut(raw, "=")
+		if !ok {
+			return nil, fmt.Errorf("invalid volume %q: expected slot=volume", raw)
+		}
+		if _, dup := out[slot]; dup {
+			return nil, fmt.Errorf("slot %q given more than once", slot)
+		}
+		out[slot] = volume
+	}
+	return out, nil
+}
+
+// An omitted --volume keeps the container's saved mapping.
+func setVolumes(cmd *cobra.Command, body map[string]any, raw []string) error {
+	if !cmd.Flags().Changed("volume") {
+		return nil
+	}
+	volumes, err := parseVolumeSlots(raw)
+	if err != nil {
+		return err
+	}
+	body["volumes"] = volumes
+	return nil
+}
+
 // buildLifecycleBody assembles the request body shared by /start and
 // /relaunch. Only fields whose flag was set on the command line are included
 // so the controlplane keeps the existing values for the rest.
 func buildLifecycleBody(cmd *cobra.Command,
 	tag string,
-	variables, secrets, sshKeys []string,
+	variables, secrets, sshKeys, volumes []string,
 	debug, promoteRelease, customDomain, host string,
 ) (map[string]any, error) {
 	body := map[string]any{}
@@ -704,6 +810,9 @@ func buildLifecycleBody(cmd *cobra.Command,
 	}
 	if cmd.Flags().Changed("host") {
 		body["host_name"] = host
+	}
+	if err := setVolumes(cmd, body, volumes); err != nil {
+		return nil, err
 	}
 	return body, nil
 }
@@ -830,6 +939,9 @@ func renderContainer(c containerView) error {
 	if len(c.SSHKeys) > 0 {
 		fmt.Printf("SSH keys:     %s\n", strings.Join(c.SSHKeys, ", "))
 	}
+	if len(c.Volumes) > 0 {
+		fmt.Printf("Volumes:      %s\n", formatVolumeSlots(c.Volumes))
+	}
 	if c.UpdateTag != "" {
 		state := c.UpdateStatus
 		if c.UpdateType != "" {
@@ -866,6 +978,25 @@ func renderContainers(list []containerView) error {
 		)
 	}
 	return nil
+}
+
+func formatVolumeSlots(volumes map[string]containerVolume) string {
+	if len(volumes) == 0 {
+		return "-"
+	}
+	slots := make([]string, 0, len(volumes))
+	for slot := range volumes {
+		slots = append(slots, slot)
+	}
+	sort.Strings(slots)
+	for i, slot := range slots {
+		volume := volumes[slot].Volume
+		if volume == "" {
+			volume = "(container-owned)"
+		}
+		slots[i] = slot + "=" + volume
+	}
+	return strings.Join(slots, ", ")
 }
 
 func truncate(s string, max int) string {
