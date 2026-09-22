@@ -144,7 +144,7 @@ tinfoil attest-ssh enclave.example.com --repo owner/workload --name dev \
 ssh dev
 ```
 
-`--install` writes `~/.ssh/tinfoil/<name>.conf` and its pinned `<name>.known_hosts`, and adds one `Include tinfoil/*.conf` line to `~/.ssh/config`. Without it, the command prints the profile and pin. The pin is the key verified at install time; a CVM reboot rotates it, so rerun the command after one. `--user` and `--identity` select the login user and client key.
+`--install` writes `~/.ssh/tinfoil/<name>.conf` and its pinned `<name>.known_hosts`. If `~/.ssh/config` is missing a top-level `Include tinfoil/*.conf` line, the command asks whether to add it (`--yes` adds it without prompting). Without `--install`, the command prints the profile and pin. The pin is the key verified at install time; a CVM reboot rotates it, so rerun the command after one. `--user` and `--identity` select the login user and client key.
 
 Manually verify that an enclave is running the expected code:
 
