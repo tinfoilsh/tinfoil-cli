@@ -2,17 +2,22 @@ package main
 
 import (
 	"context"
+	"crypto/ed25519"
 	"crypto/tls"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"golang.org/x/crypto/ssh"
+	"golang.org/x/crypto/ssh/knownhosts"
 	"golang.org/x/net/http2"
 )
 
@@ -321,6 +326,50 @@ func TestResolveTunnelTargetTakesHostnamesWithoutControlplane(t *testing.T) {
 	enclaveHost = ""
 	if _, err = resolveTunnelTarget(""); err == nil {
 		t.Error("resolveTunnelTarget with no target and no --host succeeded")
+	}
+}
+
+func TestNativeSSHProfilePinsDialHost(t *testing.T) {
+	hostKey, err := ssh.NewPublicKey(ed25519.NewKeyFromSeed(make([]byte, ed25519.SeedSize)).Public())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name         string
+		published    int
+		hostOverride string
+		portOverride uint
+		wantHost     string
+		wantPort     int
+	}{
+		{name: "managed container", published: 11234, wantHost: "console.tinfoil.sh", wantPort: 11234},
+		{name: "managed override", published: 11234, hostOverride: "forwarder.test", portOverride: 2222, wantHost: "forwarder.test", wantPort: 2222},
+		{name: "bare hostname", wantHost: "enclave.test", wantPort: 22},
+		{name: "bare hostname with port", portOverride: 2222, wantHost: "enclave.test", wantPort: 2222},
+		{name: "bare hostname override", hostOverride: "forwarder.test", wantHost: "forwarder.test", wantPort: 22},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			target := &tunnelTarget{host: "enclave.test", sshPort: tc.published}
+			profile := sshProfile{name: "workspace", hostName: nativeSSHHost(target, tc.hostOverride), port: sshTargetPort(target, tc.portOverride), user: "root", hostKey: hostKey}
+			if !strings.Contains(profile.render(), fmt.Sprintf("  HostName %s\n  Port %d\n", tc.wantHost, tc.wantPort)) {
+				t.Fatalf("profile has wrong SSH endpoint:\n%s", profile.render())
+			}
+			pinPath := filepath.Join(t.TempDir(), "known_hosts")
+			if err := os.WriteFile(pinPath, []byte(profile.pin()), 0600); err != nil {
+				t.Fatal(err)
+			}
+			checkHostKey, err := knownhosts.New(pinPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			remote := &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: tc.wantPort}
+			if err := checkHostKey(fmt.Sprintf("%s:%d", tc.wantHost, tc.wantPort), remote, hostKey); err != nil {
+				t.Fatalf("pin does not match SSH endpoint: %v", err)
+			}
+			if tc.wantHost != target.host && checkHostKey(fmt.Sprintf("%s:%d", target.host, tc.wantPort), remote, hostKey) == nil {
+				t.Fatal("pin matches the attestation hostname instead of only the SSH endpoint")
+			}
+		})
 	}
 }
 

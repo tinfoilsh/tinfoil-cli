@@ -21,6 +21,9 @@ import (
 // attestedHostKeyID is the attested-keys declaration a workload serves as its sshd HostKey.
 const attestedHostKeyID = "host-ssh"
 
+// managedSSHHost forwards controlplane-assigned SSH ports to their enclaves.
+const managedSSHHost = "console.tinfoil.sh"
+
 // Profiles live under ~/.ssh so the Include and UserKnownHostsFile paths stay relative.
 const sshIncludeGlob = "tinfoil/*.conf"
 
@@ -40,7 +43,7 @@ func init() {
 	rootCmd.AddCommand(attestSSHCmd)
 	flags := attestSSHCmd.Flags()
 	flags.StringVar(&attestSSHName, "name", "", "Host alias for the profile (default: HOST)")
-	flags.StringVar(&attestSSHHost, "ssh-host", "", "Hostname ssh dials (default: HOST)")
+	flags.StringVar(&attestSSHHost, "ssh-host", "", "Hostname ssh dials (default: console.tinfoil.sh for a container with a published SSH port, else HOST)")
 	flags.StringVar(&attestSSHUser, "user", "root", "Login user written to the profile")
 	flags.UintVar(&attestSSHPort, "ssh-port", 0, "Port ssh dials (default: the container's published SSH port, else 22)")
 	flags.StringVar(&attestSSHIdentity, "identity", "", "IdentityFile written to the profile")
@@ -54,7 +57,11 @@ var attestSSHCmd = &cobra.Command{
 repo or --repo, read the attested "host-ssh" key its quote endorses, and print an
 ssh profile pinned to it. With --install the profile is written to
 ~/.ssh/tinfoil/<name>.conf and included from ~/.ssh/config. A CVM reboot
-rotates the key, so rerun this command after one.`,
+rotates the key, so rerun this command after one.
+
+Containers with a published SSH port connect through console.tinfoil.sh.
+Bare hostname targets connect directly. --ssh-host overrides the SSH endpoint;
+attestation always uses the enclave hostname.`,
 	Args:         cobra.ExactArgs(1),
 	SilenceUsage: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -62,12 +69,9 @@ rotates the key, so rerun this command after one.`,
 		if err != nil {
 			return err
 		}
-		profile := sshProfile{name: attestSSHName, hostName: attestSSHHost, port: sshTargetPort(target, attestSSHPort), user: attestSSHUser, identityFile: attestSSHIdentity}
+		profile := sshProfile{name: attestSSHName, hostName: nativeSSHHost(target, attestSSHHost), port: sshTargetPort(target, attestSSHPort), user: attestSSHUser, identityFile: attestSSHIdentity}
 		if profile.name == "" {
 			profile.name = target.name
-		}
-		if profile.hostName == "" {
-			profile.hostName = target.host
 		}
 		if !sshProfileNamePattern.MatchString(profile.name) {
 			return fmt.Errorf("invalid profile name %q: use letters, digits, dots, dashes or underscores, starting with a letter or digit", profile.name)
@@ -84,6 +88,16 @@ rotates the key, so rerun this command after one.`,
 		}
 		return profile.install()
 	},
+}
+
+func nativeSSHHost(target *tunnelTarget, override string) string {
+	if override != "" {
+		return override
+	}
+	if target.sshPort > 0 {
+		return managedSSHHost
+	}
+	return target.host
 }
 
 // attestedHostKey verifies host against source and returns the endorsed

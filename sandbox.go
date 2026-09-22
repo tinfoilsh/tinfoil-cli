@@ -346,7 +346,7 @@ func installSandboxProfile(box sandboxView) error {
 	if err != nil {
 		return err
 	}
-	return sshProfile{name: box.ID, hostName: box.Domain, port: box.SSHPort, user: sandboxLoginUser, identityFile: keys.sshKeyPath, hostKey: hostKey}.install()
+	return sshProfile{name: box.ID, hostName: managedSSHHost, port: box.SSHPort, user: sandboxLoginUser, identityFile: keys.sshKeyPath, hostKey: hostKey}.install()
 }
 
 func stopSandbox(name string) (*sandboxView, error) {
