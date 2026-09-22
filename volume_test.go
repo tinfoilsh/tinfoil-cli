@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 )
@@ -203,11 +204,11 @@ func TestVolumeAttachSlotSelection(t *testing.T) {
 }
 
 func TestContainerCreateWithVolume(t *testing.T) {
-	const slots = `[{"name":"data","key_secret":"DATA_KEY"}]`
 	for _, tt := range []struct {
 		name         string
 		volumes      []string
 		host         string
+		slots        string
 		attachStatus int
 		wantOut      []string
 		wantErr      string
@@ -246,6 +247,13 @@ func TestContainerCreateWithVolume(t *testing.T) {
 			wantPaths: []string{"GET /api/volumes"},
 		},
 		{
+			name:      "--volume is not applied when the config declares no slots",
+			volumes:   []string{"data-vol"},
+			slots:     `[]`,
+			wantErr:   "Created app but it declares no volumes in tinfoil-config.yml; --volume was not applied",
+			wantPaths: []string{"GET /api/volumes", "POST /api/containers"},
+		},
+		{
 			name: "without --volume prints the attach hint",
 			wantOut: []string{
 				"Status:       stopped",
@@ -259,10 +267,17 @@ func TestContainerCreateWithVolume(t *testing.T) {
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
+			slots := tt.slots
+			if slots == "" {
+				slots = `[{"name":"data","key_secret":"DATA_KEY"}]`
+			}
 			var attached atomic.Bool
+			var mu sync.Mutex
 			var paths []string
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				mu.Lock()
 				paths = append(paths, r.Method+" "+r.URL.Path)
+				mu.Unlock()
 				switch {
 				case r.Method == http.MethodGet && r.URL.Path == "/api/volumes":
 					_, _ = io.WriteString(w, testVolumeList(attached.Load()))
@@ -306,7 +321,96 @@ func TestContainerCreateWithVolume(t *testing.T) {
 					t.Fatalf("output does not contain %q:\n%s", want, out)
 				}
 			}
-			if got, want := strings.Join(paths, "\n"), strings.Join(tt.wantPaths, "\n"); got != want {
+			mu.Lock()
+			got := strings.Join(paths, "\n")
+			mu.Unlock()
+			if want := strings.Join(tt.wantPaths, "\n"); got != want {
+				t.Fatalf("requests:\n%s\nwant:\n%s", got, want)
+			}
+		})
+	}
+}
+
+func TestContainerStartWithVolume(t *testing.T) {
+	const slots = `[{"name":"data","key_secret":"DATA_KEY"}]`
+	for _, tt := range []struct {
+		name      string
+		host      string
+		wantErr   string
+		wantPaths []string
+	}{
+		{
+			name:    "volume host must match the container's host",
+			wantErr: "container app is on host inf14 but volume data-vol is on inf13; volumes must be on the container's host",
+			wantPaths: []string{
+				"GET /api/containers",
+				"GET /api/containers/" + testContainerID,
+				"GET /api/volumes",
+			},
+		},
+		{
+			name: "--host can move the container onto the volume's host",
+			host: "inf13",
+			wantPaths: []string{
+				"GET /api/containers",
+				"GET /api/containers/" + testContainerID,
+				"GET /api/volumes",
+				"PUT /api/containers/" + testContainerID + "/volumes/data",
+				"POST /api/containers/" + testContainerID + "/start",
+				"GET /api/volumes",
+			},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var attached atomic.Bool
+			var mu sync.Mutex
+			var paths []string
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				mu.Lock()
+				paths = append(paths, r.Method+" "+r.URL.Path)
+				mu.Unlock()
+				switch {
+				case r.Method == http.MethodGet && r.URL.Path == "/api/containers":
+					_, _ = io.WriteString(w, `[{"id":"`+testContainerID+`","name":"app","status":"stopped","host_name":"inf14"}]`)
+				case r.Method == http.MethodGet && r.URL.Path == "/api/containers/"+testContainerID:
+					_, _ = io.WriteString(w, `{"id":"`+testContainerID+`","name":"app","status":"stopped","host_name":"inf14","volume_slots":`+slots+`}`)
+				case r.Method == http.MethodGet && r.URL.Path == "/api/volumes":
+					_, _ = io.WriteString(w, testVolumeList(attached.Load()))
+				case r.Method == http.MethodPut && r.URL.Path == "/api/containers/"+testContainerID+"/volumes/data":
+					attached.Store(true)
+					w.WriteHeader(http.StatusNoContent)
+				case r.Method == http.MethodPost && r.URL.Path == "/api/containers/"+testContainerID+"/start":
+					body, _ := io.ReadAll(r.Body)
+					if tt.host != "" && !strings.Contains(string(body), `"host_name":"`+tt.host+`"`) {
+						t.Errorf("start body %s lacks host_name %s", body, tt.host)
+					}
+					_, _ = io.WriteString(w, `{"id":"`+testContainerID+`","name":"app","status":"deploying","host_name":"inf13","volume_slots":`+slots+`}`)
+				default:
+					t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+				}
+			}))
+			defer server.Close()
+
+			configureContainerPromotionTest(t, server.URL)
+			outputFormat = "table"
+			startVolumes, startHost = []string{"data-vol"}, tt.host
+			if tt.host != "" {
+				containerStartCmd.Flags().Lookup("host").Changed = true
+			}
+			_, err := captureTestStdout(func() error {
+				return containerStartCmd.RunE(containerStartCmd, []string{"app"})
+			})
+			if tt.wantErr != "" {
+				if err == nil || err.Error() != tt.wantErr {
+					t.Fatalf("error = %q, want %q", err, tt.wantErr)
+				}
+			} else if err != nil {
+				t.Fatalf("start: %v", err)
+			}
+			mu.Lock()
+			got := strings.Join(paths, "\n")
+			mu.Unlock()
+			if want := strings.Join(tt.wantPaths, "\n"); got != want {
 				t.Fatalf("requests:\n%s\nwant:\n%s", got, want)
 			}
 		})
