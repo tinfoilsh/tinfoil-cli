@@ -131,11 +131,20 @@ Workloads that declare an `attested-keys` entry named `host-ssh` and serve it as
 
 ```bash
 tinfoil attest-ssh ubuntu-test --install
-tinfoil attest-ssh enclave.example.com --repo owner/workload --name dev --install
 ssh ubuntu-test
 ```
 
-This writes `~/.ssh/tinfoil/dev.conf` and its pinned `dev.known_hosts`, and adds one `Include tinfoil/*.conf` line to `~/.ssh/config`. The pin is the key verified at install time; a CVM reboot rotates it, so rerun the command after one. `--user`, `--ssh-port` and `--identity` set what the profile logs in with.
+For a container with a published SSH port, the profile connects to `console.tinfoil.sh` on the allocated port. Attestation uses the enclave's hostname; the console endpoint only forwards encrypted SSH traffic.
+
+Bare hostname targets connect directly on port 22 by default and require `--repo`. Use `--ssh-host` and `--ssh-port` to select a different SSH endpoint:
+
+```bash
+tinfoil attest-ssh enclave.example.com --repo owner/workload --name dev \
+  --ssh-host ssh.example.com --ssh-port 2222 --install
+ssh dev
+```
+
+`--install` writes `~/.ssh/tinfoil/<name>.conf` and its pinned `<name>.known_hosts`, and adds one `Include tinfoil/*.conf` line to `~/.ssh/config`. Without it, the command prints the profile and pin. The pin is the key verified at install time; a CVM reboot rotates it, so rerun the command after one. `--user` and `--identity` select the login user and client key.
 
 Manually verify that an enclave is running the expected code:
 
@@ -312,7 +321,7 @@ tinfoil sandbox accept my-sandbox     # enroll with an existing permit
 tinfoil sandbox destroy my-sandbox    # erase the disk
 ```
 
-`create`, `start`, and `restart` wait for the VM, verify its attestation, enroll local SSH and disk keys, and install a native ssh profile when the VM exposes a direct SSH port. The CLI stores them in `~/.tinfoil/sandboxes/<name>`. Back up `disk.key`; without it, the workspace cannot be opened.
+`create`, `start`, and `restart` wait for the VM, verify its attestation, enroll local SSH and disk keys, and install a native ssh profile when the VM exposes a direct SSH port. The profile connects through `console.tinfoil.sh` on the allocated port, with the host key verified against the sandbox's domain. The CLI stores the local SSH and disk keys in `~/.tinfoil/sandboxes/<name>`. Back up `disk.key`; without it, the workspace cannot be opened.
 
 `accept` uses a permit issued elsewhere, such as the dashboard. Permits expire after five minutes and work once for one boot.
 
