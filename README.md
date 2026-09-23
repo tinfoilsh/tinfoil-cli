@@ -156,6 +156,7 @@ tinfoil deployment settings myorg/my-repo-container --default-staging=true
 tinfoil container update status my-container
 tinfoil container update accept my-container
 tinfoil container update cancel my-container
+tinfoil container update cancel my-container --rollback-latest
 
 # Open a verified proxy to a deployed container
 tinfoil container connect my-container -p 8080
@@ -164,6 +165,8 @@ tinfoil container connect my-container -p 8080
 `container connect <name>` resolves the container's enclave domain and source repo, then runs a verified proxy locally so you can reach the container at `http://localhost:<port>` without copy-pasting either value.
 
 Container create, start, relaunch, and deployment update promote the deployed tag as the repository's latest release by default. Pass `--promote-release=false` to leave the latest release unchanged.
+
+`container update cancel --rollback-latest` also requests restoring the repository's latest release to the container's current production tag. The controlplane selects that tag; no tag argument is accepted. The command requires the server to acknowledge the restoration request and report its tag, so an older server that only cancels the update returns an error. Restoration is queued; verify the latest release afterward.
 
 `--volume <id|name>[:<declared name>]` on `create` and `start` attaches an existing unattached volume to a slot the repository's `tinfoil-config.yml` declares, then starts the container. The declared name is optional when the config declares exactly one volume. On create, the volume's host becomes the container's host (an explicit `--host` must match). On start, the container must already be on that host unless `--host` moves it there. Once attached, later starts reuse the disk; omit `--volume`. A container whose config declares volumes is created stopped when `--volume` is omitted; the output lists the commands that attach one and start it.
 
