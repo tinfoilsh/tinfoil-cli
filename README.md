@@ -18,74 +18,7 @@ Re-run the install script to update to the latest release. The CLI checks for ne
 
 ## Proxy
 
-Run a local proxy that verifies enclave attestation and forwards requests. This lets any language or tool (PHP, Ruby, Java, curl, etc.) use Tinfoil without a native SDK — just point your HTTP client at `localhost`.
-
-The proxy verifies the enclave on startup (hardware attestation, Sigstore bundle, measurement comparison) and pins the TLS certificate. If the certificate rotates, the proxy re-verifies automatically. If verification fails, requests are rejected.
-
-```bash
-tinfoil proxy -p 8080
-```
-
-By default this connects to the public Tinfoil router for inference. To proxy a specific enclave, pass `-e` and `-r`:
-
-```bash
-tinfoil proxy \
-  -e inference.tinfoil.sh \
-  -r tinfoilsh/confidential-model-router \
-  -p 8080
-```
-
-Then send requests to `http://localhost:8080` using the OpenAI-compatible API:
-
-```bash
-curl http://localhost:8080/v1/chat/completions \
-  -H "Authorization: Bearer $TINFOIL_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "deepseek-r1-0528",
-    "messages": [{"role": "user", "content": "Hello"}]
-  }'
-```
-
-The proxy passes your `Authorization` header through to the enclave — it does not inject or store credentials.
-
-### Docker
-
-```bash
-docker run -p 8080:8080 ghcr.io/tinfoilsh/tinfoil-cli:<version> \
-  proxy -b 0.0.0.0
-```
-
-Add `-e <host> -r <owner/repo>` to target a specific enclave instead of the Tinfoil router.
-
-Example `docker-compose.yml`:
-
-```yaml
-services:
-  tinfoil-proxy:
-    image: ghcr.io/tinfoilsh/tinfoil-cli:<version>
-    command: >
-      proxy
-      -b 0.0.0.0
-      -p 8080
-    ports:
-      - "8080:8080"
-
-  your-app:
-    # Your application connects to http://tinfoil-proxy:8080
-    environment:
-      - INFERENCE_URL=http://tinfoil-proxy:8080
-```
-
-### Proxy Options
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `-p, --port` | `8080` | Port to listen on |
-| `-b, --bind` | `127.0.0.1` | Address to bind to (use `0.0.0.0` in Docker) |
-| `-e, --host` | public router | Enclave hostname (override to target a specific enclave; must be set together with `-r`) |
-| `-r, --repo` | public router | Enclave config repo (override to target a specific enclave; must be set together with `-e`) |
-| `--log-format` | `text` | `text` or `json` |
+`tinfoil proxy` is deprecated. For a local verified proxy that lets any HTTP client use Tinfoil without a native SDK, use [tinfoil-proxy](https://github.com/tinfoilsh/tinfoil-proxy), available as a standalone binary or the Tinfoil Tray menu-bar app. `tinfoil container connect` (below) still runs a proxy scoped to one of your deployed containers.
 
 ## HTTP Requests
 
@@ -119,7 +52,7 @@ tinfoil ssh my-server
 tinfoil ssh my-server -- systemctl status
 ```
 
-`-L` accepts `[bind:]<local-port>:<enclave-port>` and may be repeated. SSH arguments go after `--`; `-l` sets the remote user and `-p` the enclave-side port. The target is a container name or a bare enclave hostname. The tunnel key is validated by the enclave and is separate from the admin key used to log in, which is why it has its own variable (or `--api-key`). Both commands refuse a debug-mode enclave unless `--allow-debug` is passed. Use `tinctl ssh` to connect to the debug toolbox instead of the workload.
+`-L` accepts `[bind:]<local-port>:<enclave-port>` and may be repeated. SSH arguments go after `--`; `-l` sets the remote user and `-p` the enclave-side port. The target is a container name or a bare enclave hostname. The tunnel key is validated by the enclave and is separate from the admin key used to log in, which is why it has its own variable (or `--api-key`). Both commands refuse a debug-mode enclave unless `--allow-debug` is passed.
 
 ## Attestation Verification
 
@@ -228,7 +161,7 @@ tinfoil container update cancel my-container
 tinfoil container connect my-container -p 8080
 ```
 
-`container connect <name>` resolves the container's enclave domain and source repo, then runs a verified proxy locally — equivalent to `tinfoil proxy -e <domain> -r <repo>` but without copy-pasting either value.
+`container connect <name>` resolves the container's enclave domain and source repo, then runs a verified proxy locally so you can reach the container at `http://localhost:<port>` without copy-pasting either value.
 
 Container create, start, relaunch, and deployment update promote the deployed tag as the repository's latest release by default. Pass `--promote-release=false` to leave the latest release unchanged.
 
@@ -373,6 +306,9 @@ go build -o tinfoil
 
 ## Reporting Vulnerabilities
 
-Please report security vulnerabilities by emailing [security@tinfoil.sh](mailto:security@tinfoil.sh).
+Please report security vulnerabilities by either:
+
+- Emailing [security@tinfoil.sh](mailto:security@tinfoil.sh)
+- Opening an issue on GitHub on this repository
 
 We aim to respond to (legitimate) security reports within 24 hours.
