@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"net/url"
 	"os"
 	"sort"
@@ -102,6 +103,8 @@ var (
 
 	metricsTime string
 
+	cancelRollbackLatest bool
+
 	connectPort     uint
 	connectBindAddr string
 
@@ -128,6 +131,7 @@ func init() {
 	containerUpdateCmd.AddCommand(containerUpdateStatusCmd)
 	containerUpdateCmd.AddCommand(containerUpdateAcceptCmd)
 	containerUpdateCmd.AddCommand(containerUpdateCancelCmd)
+	containerUpdateCancelCmd.Flags().BoolVar(&cancelRollbackLatest, "rollback-latest", false, "Request restoring the repository's latest release to the current production tag")
 
 	containerCreateCmd.Flags().StringVar(&createRepo, "repo", "", "GitHub repo (owner/repo) holding tinfoil-config.yml [required]")
 	containerCreateCmd.Flags().StringVar(&createTag, "tag", "", "Repository release tag to deploy [required]")
@@ -611,8 +615,29 @@ var containerUpdateCancelCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		if _, err := client.do("POST", pathf("/api/containers/%s/update/cancel", c.ID), nil, nil, nil); err != nil {
+		var body any
+		var response any
+		var acknowledgment struct {
+			RollbackLatest bool   `json:"rollback_latest"`
+			Tag            string `json:"tag"`
+		}
+		if cancelRollbackLatest {
+			body = map[string]bool{"rollback_latest": true}
+			response = &acknowledgment
+		}
+		status, err := client.do("POST", pathf("/api/containers/%s/update/cancel", c.ID), nil, body, response)
+		if err != nil {
+			if cancelRollbackLatest && status == http.StatusOK {
+				return fmt.Errorf("update cancellation may have completed, but the controlplane did not confirm latest release restoration: %w", err)
+			}
 			return err
+		}
+		if cancelRollbackLatest {
+			if status != http.StatusOK || !acknowledgment.RollbackLatest || strings.TrimSpace(acknowledgment.Tag) == "" {
+				return fmt.Errorf("update cancellation may have completed, but the controlplane did not confirm latest release restoration (HTTP %d)", status)
+			}
+			fmt.Printf("Canceled in-progress update on %s; latest release restoration to %s requested\n", c.Name, acknowledgment.Tag)
+			return nil
 		}
 		fmt.Printf("Cancelled in-progress update on %s\n", c.Name)
 		return nil
