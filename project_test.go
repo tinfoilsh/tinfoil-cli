@@ -12,8 +12,8 @@ import (
 	"testing"
 )
 
-func TestDeploymentOutputLabelsDeployingAndPreservesJSONField(t *testing.T) {
-	deployment := deploymentView{
+func TestProjectOutputLabelsDeployingAndPreservesJSONField(t *testing.T) {
+	deployment := projectView{
 		ID:             "deployment-1",
 		Repo:           "acme/app",
 		InstanceCount:  4,
@@ -28,8 +28,8 @@ func TestDeploymentOutputLabelsDeployingAndPreservesJSONField(t *testing.T) {
 		name string
 		run  func() error
 	}{
-		{name: "get", run: func() error { return renderDeployment(deployment) }},
-		{name: "list", run: func() error { return renderDeployments([]deploymentView{deployment}) }},
+		{name: "get", run: func() error { return renderProject(deployment) }},
+		{name: "list", run: func() error { return renderProjects([]projectView{deployment}) }},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			outputFormat = "table"
@@ -72,8 +72,8 @@ func TestDeploymentOutputLabelsDeployingAndPreservesJSONField(t *testing.T) {
 
 func TestResolveDeploymentMatchesIDAndRepository(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet || r.URL.Path != "/api/deployments" {
-			t.Fatalf("request = %s %s, want GET /api/deployments", r.Method, r.URL.Path)
+		if r.Method != http.MethodGet || r.URL.Path != "/api/containers/projects" {
+			t.Fatalf("request = %s %s, want GET /api/containers/projects", r.Method, r.URL.Path)
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = io.WriteString(w, `[{"id":"deployment-1","repo":"acme/app"}]`)
@@ -82,9 +82,9 @@ func TestResolveDeploymentMatchesIDAndRepository(t *testing.T) {
 
 	client := &cpClient{baseURL: server.URL, http: server.Client()}
 	for _, identifier := range []string{"deployment-1", "acme/app"} {
-		deployment, err := resolveDeployment(client, identifier)
+		deployment, err := resolveProject(client, identifier)
 		if err != nil {
-			t.Fatalf("resolveDeployment(%q): %v", identifier, err)
+			t.Fatalf("resolveProject(%q): %v", identifier, err)
 		}
 		if deployment.ID != "deployment-1" {
 			t.Fatalf("deployment ID = %q", deployment.ID)
@@ -92,14 +92,14 @@ func TestResolveDeploymentMatchesIDAndRepository(t *testing.T) {
 	}
 }
 
-func TestDeploymentSettingsUpdatesDefaultStaging(t *testing.T) {
+func TestProjectSettingsUpdatesDefaultStaging(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case r.Method == http.MethodGet && r.URL.Path == "/api/deployments":
+		case r.Method == http.MethodGet && r.URL.Path == "/api/containers/projects":
 			_, _ = io.WriteString(w, `[{"id":"deployment-1","repo":"acme/app"}]`)
-		case r.Method == http.MethodPatch && r.URL.Path == "/api/deployments/deployment-1":
+		case r.Method == http.MethodPatch && r.URL.Path == "/api/containers/projects/deployment-1":
 			var body struct {
-				DefaultStaging bool `json:"default_staging"`
+				DefaultStaging bool `json:"hold_by_default"`
 			}
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 				t.Fatalf("decode body: %v", err)
@@ -107,22 +107,22 @@ func TestDeploymentSettingsUpdatesDefaultStaging(t *testing.T) {
 			if !body.DefaultStaging {
 				t.Fatal("default_staging = false, want true")
 			}
-			_, _ = io.WriteString(w, `{"id":"deployment-1","repo":"acme/app","default_staging":true}`)
+			_, _ = io.WriteString(w, `{"id":"deployment-1","repo":"acme/app","hold_by_default":true}`)
 		default:
 			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
 		}
 	}))
 	defer server.Close()
 
-	configureDeploymentCommandTest(t, server.URL)
-	deploymentSettingsDefaultStaging = "true"
+	configureProjectCommandTest(t, server.URL)
+	projectSettingsHoldByDefault = "true"
 
-	if err := deploymentSettingsCmd.RunE(deploymentSettingsCmd, []string{"acme/app"}); err != nil {
+	if err := projectSettingsCmd.RunE(projectSettingsCmd, []string{"acme/app"}); err != nil {
 		t.Fatalf("run deployment settings: %v", err)
 	}
 }
 
-func TestDeploymentUpdateMarkLatestReleaseRequestBodies(t *testing.T) {
+func TestProjectUpdateMarkLatestReleaseRequestBodies(t *testing.T) {
 	tests := []struct {
 		name              string
 		markLatestRelease string
@@ -134,28 +134,28 @@ func TestDeploymentUpdateMarkLatestReleaseRequestBodies(t *testing.T) {
 		{
 			name:         "omitted",
 			wantRequests: 3,
-			wantBody:     `{"instance_ids":["container-1"],"staging":true,"tag":"v1.2.3"}`,
+			wantBody:     `{"hold":true,"instance_ids":["container-1"],"tag":"v1.2.3"}`,
 		},
 		{
 			name:              "true",
 			markLatestRelease: "true",
 			changed:           true,
 			wantRequests:      3,
-			wantBody:          `{"instance_ids":["container-1"],"mark_latest_release":true,"staging":true,"tag":"v1.2.3"}`,
+			wantBody:          `{"hold":true,"instance_ids":["container-1"],"mark_latest_release":true,"tag":"v1.2.3"}`,
 		},
 		{
 			name:              "false",
 			markLatestRelease: "false",
 			changed:           true,
 			wantRequests:      3,
-			wantBody:          `{"instance_ids":["container-1"],"mark_latest_release":false,"staging":true,"tag":"v1.2.3"}`,
+			wantBody:          `{"hold":true,"instance_ids":["container-1"],"mark_latest_release":false,"tag":"v1.2.3"}`,
 		},
 		{
 			name:              "relaxed",
 			markLatestRelease: "no",
 			changed:           true,
 			wantRequests:      3,
-			wantBody:          `{"instance_ids":["container-1"],"mark_latest_release":false,"staging":true,"tag":"v1.2.3"}`,
+			wantBody:          `{"hold":true,"instance_ids":["container-1"],"mark_latest_release":false,"tag":"v1.2.3"}`,
 		},
 		{
 			name:              "invalid",
@@ -171,11 +171,11 @@ func TestDeploymentUpdateMarkLatestReleaseRequestBodies(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				requests.Add(1)
 				switch {
-				case r.Method == http.MethodGet && r.URL.Path == "/api/deployments":
+				case r.Method == http.MethodGet && r.URL.Path == "/api/containers/projects":
 					_, _ = io.WriteString(w, `[{"id":"deployment-1","repo":"acme/app"}]`)
 				case r.Method == http.MethodGet && r.URL.Path == "/api/containers":
 					_, _ = io.WriteString(w, `[{"id":"container-1","name":"app-1","repo":"acme/app","status":"running","update_strategy":"blue_green"}]`)
-				case r.Method == http.MethodPost && r.URL.Path == "/api/deployments/deployment-1/update":
+				case r.Method == http.MethodPost && r.URL.Path == "/api/containers/projects/deployment-1/update":
 					body, err := io.ReadAll(r.Body)
 					if err != nil {
 						t.Fatalf("read body: %v", err)
@@ -190,20 +190,20 @@ func TestDeploymentUpdateMarkLatestReleaseRequestBodies(t *testing.T) {
 			}))
 			defer server.Close()
 
-			configureDeploymentCommandTest(t, server.URL)
-			deploymentUpdateTag = "v1.2.3"
-			deploymentUpdateStaging = "true"
-			deploymentUpdateMarkLatestRelease = tt.markLatestRelease
-			deploymentUpdateInstanceIDs = []string{"container-1"}
-			deploymentUpdateCmd.Flags().Lookup("staging").Changed = true
-			deploymentUpdateCmd.Flags().Lookup("mark-latest").Changed = tt.changed
+			configureProjectCommandTest(t, server.URL)
+			projectUpdateTag = "v1.2.3"
+			projectUpdateHold = "true"
+			projectUpdateMarkLatestRelease = tt.markLatestRelease
+			projectUpdateInstanceIDs = []string{"container-1"}
+			projectUpdateCmd.Flags().Lookup("hold").Changed = true
+			projectUpdateCmd.Flags().Lookup("mark-latest").Changed = tt.changed
 
 			_, err := captureTestStdout(func() error {
-				return deploymentUpdateCmd.RunE(deploymentUpdateCmd, []string{"acme/app"})
+				return projectUpdateCmd.RunE(projectUpdateCmd, []string{"acme/app"})
 			})
 			if tt.wantErr == "" {
 				if err != nil {
-					t.Fatalf("run deployment update: %v", err)
+					t.Fatalf("run project update: %v", err)
 				}
 			} else if err == nil || err.Error() != tt.wantErr {
 				t.Fatalf("error = %v, want %q", err, tt.wantErr)
@@ -225,7 +225,7 @@ func TestLifecycleCommandSurface(t *testing.T) {
 
 	for _, command := range containerCmd.Commands() {
 		switch command.Name() {
-		case "group", "start", "relaunch":
+		case "group", "start", "relaunch", "accept":
 			t.Fatalf("container %s command is registered", command.Name())
 		}
 		if command.Flags().Lookup("debug-mode") != nil {
@@ -235,7 +235,7 @@ func TestLifecycleCommandSurface(t *testing.T) {
 	if len(containerUpdateCmd.Commands()) != 0 {
 		t.Fatal("container update is a namespace instead of an action")
 	}
-	for _, name := range []string{"accept", "cancel"} {
+	for _, name := range []string{"promote", "cancel"} {
 		found := false
 		for _, command := range containerCmd.Commands() {
 			if command.Name() == name {
@@ -249,7 +249,7 @@ func TestLifecycleCommandSurface(t *testing.T) {
 	if containerUpdateCmd.Flags().Lookup("host") != nil {
 		t.Fatal("container update has --host; hosts change through stop and deploy")
 	}
-	if containerUpdateCmd.Flags().Lookup("yes") == nil || deploymentUpdateCmd.Flags().Lookup("yes") == nil {
+	if containerUpdateCmd.Flags().Lookup("yes") == nil || projectUpdateCmd.Flags().Lookup("yes") == nil {
 		t.Fatal("update commands are missing --yes for downtime confirmation")
 	}
 	if containerDeleteCmd.Flags().Lookup("yes") == nil {
@@ -260,7 +260,7 @@ func TestLifecycleCommandSurface(t *testing.T) {
 	}
 	for _, command := range sandboxCmd.Commands() {
 		switch command.Name() {
-		case "destroy", "accept":
+		case "destroy", "promote":
 			t.Fatalf("sandbox %s command is registered", command.Name())
 		}
 	}
@@ -269,17 +269,17 @@ func TestLifecycleCommandSurface(t *testing.T) {
 			t.Fatal("volume update command is registered; renames use volume rename")
 		}
 	}
-	for _, command := range deploymentCmd.Commands() {
+	for _, command := range projectCmd.Commands() {
 		if command.Name() == "group" {
 			t.Fatal("deployment group command is registered")
 		}
 	}
 
-	if containerCreateCmd.Flags().Lookup("staging") != nil {
-		t.Fatal("container create has --staging")
+	if containerCreateCmd.Flags().Lookup("hold") != nil {
+		t.Fatal("container create has --hold")
 	}
-	if containerDeployCmd.Flags().Lookup("staging") != nil {
-		t.Fatal("container deploy has --staging")
+	if containerDeployCmd.Flags().Lookup("hold") != nil {
+		t.Fatal("container deploy has --hold")
 	}
 	if containerCreateCmd.Flags().Lookup("group-name") != nil || containerCreateCmd.Flags().Lookup("group-order") != nil {
 		t.Fatal("container create has grouping flags")
@@ -287,70 +287,70 @@ func TestLifecycleCommandSurface(t *testing.T) {
 	if containerCreateCmd.Flags().Lookup("display-order") == nil {
 		t.Fatal("container create does not have --display-order")
 	}
-	if containerUpdateCmd.Flags().Lookup("staging") == nil {
-		t.Fatal("container update does not have --staging")
+	if containerUpdateCmd.Flags().Lookup("hold") == nil {
+		t.Fatal("container update does not have --hold")
 	}
-	if deploymentUpdateCmd.Flags().Lookup("staging") == nil || deploymentUpdateCmd.Flags().Lookup("mark-latest") == nil {
+	if projectUpdateCmd.Flags().Lookup("hold") == nil || projectUpdateCmd.Flags().Lookup("mark-latest") == nil {
 		t.Fatal("deployment update is missing staging or mark-latest flags")
 	}
-	if deploymentSettingsCmd.Flags().Lookup("default-staging") == nil {
+	if projectSettingsCmd.Flags().Lookup("hold-by-default") == nil {
 		t.Fatal("deployment settings does not have --default-staging")
 	}
 }
 
-func TestDeploymentUpdateResultsFailForIncompleteUpdates(t *testing.T) {
+func TestProjectUpdateResultsFailForIncompleteUpdates(t *testing.T) {
 	previousOutput := outputFormat
 	t.Cleanup(func() {
 		outputFormat = previousOutput
 	})
 
-	results := []deploymentInstanceResult{
-		{Name: "app-1", Status: deploymentInstanceStatusFailed, Error: "host unavailable"},
-		{Name: "app-2", Status: deploymentInstanceStatusSkipped, Error: "update already in progress"},
+	results := []projectInstanceResult{
+		{Name: "app-1", Status: projectInstanceStatusFailed, Error: "host unavailable"},
+		{Name: "app-2", Status: projectInstanceStatusSkipped, Error: "update already in progress"},
 	}
 	for _, format := range []string{"table", "json"} {
 		t.Run(format, func(t *testing.T) {
 			outputFormat = format
-			if err := renderDeploymentUpdateResults(results); err == nil {
+			if err := renderProjectUpdateResults(results); err == nil {
 				t.Fatal("expected incomplete deployment update error")
 			}
 		})
 	}
 }
 
-func configureDeploymentCommandTest(t *testing.T, serverURL string) {
+func configureProjectCommandTest(t *testing.T, serverURL string) {
 	t.Helper()
 	t.Setenv(envCPURL, serverURL)
 	t.Setenv(envAdminKey, "admin_test")
 	t.Setenv(envConfigPath, filepath.Join(t.TempDir(), "missing-config.json"))
 
 	previousOutput := outputFormat
-	previousSettingsDefaultStaging := deploymentSettingsDefaultStaging
-	previousUpdateTag := deploymentUpdateTag
-	previousUpdateStaging := deploymentUpdateStaging
-	previousUpdateMarkLatestRelease := deploymentUpdateMarkLatestRelease
-	previousUpdateInstanceIDs := deploymentUpdateInstanceIDs
-	stagingFlag := deploymentUpdateCmd.Flags().Lookup("staging")
-	markLatestReleaseFlag := deploymentUpdateCmd.Flags().Lookup("mark-latest")
+	previousSettingsDefaultStaging := projectSettingsHoldByDefault
+	previousUpdateTag := projectUpdateTag
+	previousUpdateHold := projectUpdateHold
+	previousUpdateMarkLatestRelease := projectUpdateMarkLatestRelease
+	previousUpdateInstanceIDs := projectUpdateInstanceIDs
+	stagingFlag := projectUpdateCmd.Flags().Lookup("hold")
+	markLatestReleaseFlag := projectUpdateCmd.Flags().Lookup("mark-latest")
 	previousStagingChanged := stagingFlag.Changed
 	previousMarkLatestReleaseChanged := markLatestReleaseFlag.Changed
 
 	outputFormat = "json"
-	deploymentSettingsDefaultStaging = ""
-	deploymentUpdateTag = ""
-	deploymentUpdateStaging = ""
-	deploymentUpdateMarkLatestRelease = ""
-	deploymentUpdateInstanceIDs = nil
+	projectSettingsHoldByDefault = ""
+	projectUpdateTag = ""
+	projectUpdateHold = ""
+	projectUpdateMarkLatestRelease = ""
+	projectUpdateInstanceIDs = nil
 	stagingFlag.Changed = false
 	markLatestReleaseFlag.Changed = false
 
 	t.Cleanup(func() {
 		outputFormat = previousOutput
-		deploymentSettingsDefaultStaging = previousSettingsDefaultStaging
-		deploymentUpdateTag = previousUpdateTag
-		deploymentUpdateStaging = previousUpdateStaging
-		deploymentUpdateMarkLatestRelease = previousUpdateMarkLatestRelease
-		deploymentUpdateInstanceIDs = previousUpdateInstanceIDs
+		projectSettingsHoldByDefault = previousSettingsDefaultStaging
+		projectUpdateTag = previousUpdateTag
+		projectUpdateHold = previousUpdateHold
+		projectUpdateMarkLatestRelease = previousUpdateMarkLatestRelease
+		projectUpdateInstanceIDs = previousUpdateInstanceIDs
 		stagingFlag.Changed = previousStagingChanged
 		markLatestReleaseFlag.Changed = previousMarkLatestReleaseChanged
 	})
@@ -401,11 +401,11 @@ func captureTestStdout(run func() error) ([]byte, error) {
 	return output, readErr
 }
 
-func TestDeploymentUpdateRefusesStagingForReplaceInstances(t *testing.T) {
+func TestProjectUpdateRefusesHoldForReplaceInstances(t *testing.T) {
 	var posts atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case r.Method == http.MethodGet && r.URL.Path == "/api/deployments":
+		case r.Method == http.MethodGet && r.URL.Path == "/api/containers/projects":
 			_, _ = io.WriteString(w, `[{"id":"deployment-1","repo":"acme/app"}]`)
 		case r.Method == http.MethodGet && r.URL.Path == "/api/containers":
 			_, _ = io.WriteString(w, `[{"id":"gpu-1","name":"big","repo":"acme/app","status":"running","gpus":8,"update_strategy":"replace"}]`)
@@ -418,15 +418,15 @@ func TestDeploymentUpdateRefusesStagingForReplaceInstances(t *testing.T) {
 	}))
 	defer server.Close()
 
-	configureDeploymentCommandTest(t, server.URL)
-	deploymentUpdateTag = "v2"
-	deploymentUpdateStaging = "true"
-	deploymentUpdateCmd.Flags().Lookup("staging").Changed = true
+	configureProjectCommandTest(t, server.URL)
+	projectUpdateTag = "v2"
+	projectUpdateHold = "true"
+	projectUpdateCmd.Flags().Lookup("hold").Changed = true
 
 	_, err := captureTestStdout(func() error {
-		return deploymentUpdateCmd.RunE(deploymentUpdateCmd, []string{"acme/app"})
+		return projectUpdateCmd.RunE(projectUpdateCmd, []string{"acme/app"})
 	})
-	if err == nil || !strings.Contains(err.Error(), "staging is not available for big: it uses 8 GPUs") {
+	if err == nil || !strings.Contains(err.Error(), "holding for review is not available for big: it uses 8 GPUs") {
 		t.Fatalf("error = %v", err)
 	}
 	if posts.Load() != 0 {

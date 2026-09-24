@@ -24,9 +24,9 @@ func TestStatusLabelIsSentenceCaseAPIValue(t *testing.T) {
 	}
 }
 
-func TestUpdateLabelDistinguishesStagedFromAutoSwitch(t *testing.T) {
-	staged := containerView{UpdateTag: "v2", UpdateStatus: updateStatusReady, Staging: true}
-	if got := updateLabel(staged); got != "ready to accept" {
+func TestUpdateLabelDistinguishesHeldFromAutoSwitch(t *testing.T) {
+	staged := containerView{UpdateTag: "v2", UpdateStatus: updateStatusReady, Held: true}
+	if got := updateLabel(staged); got != "held for review; promote to switch traffic" {
 		t.Fatalf("staged label = %q", got)
 	}
 	auto := containerView{UpdateTag: "v2", UpdateStatus: updateStatusReady}
@@ -108,7 +108,7 @@ func TestIsTerminalHoldsForStagedCandidateAndStopsForRunning(t *testing.T) {
 	if isTerminal(containerView{Status: statusRunning, UpdateTag: "v2", UpdateStatus: statusDeploying}) {
 		t.Fatal("container with a booting candidate should not be terminal")
 	}
-	if !isTerminal(containerView{Status: statusRunning, UpdateTag: "v2", UpdateStatus: updateStatusReady, Staging: true}) {
+	if !isTerminal(containerView{Status: statusRunning, UpdateTag: "v2", UpdateStatus: updateStatusReady, Held: true}) {
 		t.Fatal("staged ready candidate should be terminal (waits for accept)")
 	}
 	if isTerminal(containerView{Status: statusRunning, UpdateTag: "v2", UpdateStatus: updateStatusReady}) {
@@ -116,7 +116,7 @@ func TestIsTerminalHoldsForStagedCandidateAndStopsForRunning(t *testing.T) {
 	}
 }
 
-func TestContainerUpdateRefusesStagingOnReplaceStrategyLocally(t *testing.T) {
+func TestContainerUpdateRefusesHoldOnReplaceStrategyLocally(t *testing.T) {
 	var posts atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
@@ -131,13 +131,13 @@ func TestContainerUpdateRefusesStagingOnReplaceStrategyLocally(t *testing.T) {
 	}))
 	defer server.Close()
 	configureContainerPromotionTest(t, server.URL)
-	updateStaging = "true"
-	containerUpdateCmd.Flags().Lookup("staging").Changed = true
+	updateHold = "true"
+	containerUpdateCmd.Flags().Lookup("hold").Changed = true
 
 	_, err := captureTestStdout(func() error {
 		return containerUpdateCmd.RunE(containerUpdateCmd, []string{testContainerID})
 	})
-	if err == nil || !strings.Contains(err.Error(), "staging is not available for app: it uses 8 GPUs") {
+	if err == nil || !strings.Contains(err.Error(), "holding for review is not available for app: it uses 8 GPUs") {
 		t.Fatalf("error = %v", err)
 	}
 	if posts.Load() != 0 {

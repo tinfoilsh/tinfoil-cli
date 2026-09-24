@@ -194,7 +194,7 @@ func TestPromoteReleaseFlagsRequireValues(t *testing.T) {
 		containerCreateCmd,
 		containerDeployCmd,
 		containerUpdateCmd,
-		deploymentUpdateCmd,
+		projectUpdateCmd,
 	} {
 		t.Run(command.CommandPath(), func(t *testing.T) {
 			if got := command.Flags().Lookup("mark-latest").NoOptDefVal; got != "" {
@@ -212,7 +212,7 @@ func configureContainerPromotionTest(t *testing.T, serverURL string) {
 	for command, names := range map[*cobra.Command][]string{
 		containerCreateCmd: {"display-order", "mark-latest", "volume"},
 		containerDeployCmd: {"tag", "variable", "secret", "ssh-key", "debug", "mark-latest", "custom-domain", "host", "volume", "no-wait"},
-		containerUpdateCmd: {"tag", "variable", "secret", "ssh-key", "debug", "staging", "mark-latest", "custom-domain", "yes", "no-wait"},
+		containerUpdateCmd: {"tag", "variable", "secret", "ssh-key", "debug", "hold", "mark-latest", "custom-domain", "yes", "no-wait"},
 	} {
 		for _, name := range names {
 			flag := command.Flags().Lookup(name)
@@ -236,7 +236,7 @@ func configureContainerPromotionTest(t *testing.T, serverURL string) {
 	previousDeployVariables, previousDeploySecrets, previousDeploySSHKeys := deployVariables, deploySecrets, deploySSHKeys
 	previousDeployCustomDomain, previousDeployHost, previousDeployVolumes := deployCustomDomain, deployHost, deployVolumes
 	previousUpdateTag, previousUpdateDebug := updateTag, updateDebug
-	previousUpdateStaging, previousUpdateMarkLatestRelease := updateStaging, updateMarkLatestRelease
+	previousUpdateHold, previousUpdateMarkLatestRelease := updateHold, updateMarkLatestRelease
 	previousUpdateVariables, previousUpdateSecrets, previousUpdateSSHKeys := updateVariables, updateSecrets, updateSSHKeys
 	previousUpdateCustomDomain, previousUpdateYes := updateCustomDomain, updateYes
 
@@ -249,7 +249,7 @@ func configureContainerPromotionTest(t *testing.T, serverURL string) {
 	deployTag, deployDebug, deployMarkLatestRelease = "", "", ""
 	deployVariables, deploySecrets, deploySSHKeys = nil, nil, nil
 	deployCustomDomain, deployHost, deployVolumes = "", "", nil
-	updateTag, updateDebug, updateStaging, updateMarkLatestRelease = "", "", "", ""
+	updateTag, updateDebug, updateHold, updateMarkLatestRelease = "", "", "", ""
 	updateVariables, updateSecrets, updateSSHKeys = nil, nil, nil
 	updateCustomDomain, updateYes = "", false
 
@@ -265,7 +265,7 @@ func configureContainerPromotionTest(t *testing.T, serverURL string) {
 		deployVariables, deploySecrets, deploySSHKeys = previousDeployVariables, previousDeploySecrets, previousDeploySSHKeys
 		deployCustomDomain, deployHost, deployVolumes = previousDeployCustomDomain, previousDeployHost, previousDeployVolumes
 		updateTag, updateDebug = previousUpdateTag, previousUpdateDebug
-		updateStaging, updateMarkLatestRelease = previousUpdateStaging, previousUpdateMarkLatestRelease
+		updateHold, updateMarkLatestRelease = previousUpdateHold, previousUpdateMarkLatestRelease
 		updateVariables, updateSecrets, updateSSHKeys = previousUpdateVariables, previousUpdateSecrets, previousUpdateSSHKeys
 		updateCustomDomain, updateYes = previousUpdateCustomDomain, previousUpdateYes
 	})
