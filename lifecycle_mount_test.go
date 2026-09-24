@@ -4,11 +4,14 @@ import (
 	"encoding/json"
 	"net/http"
 	"os"
+	"regexp"
 	"strings"
 	"testing"
 
 	"github.com/spf13/cobra"
 )
+
+var legacyMountWording = regexp.MustCompile(`(?i)\b(?:volume|config|required|declared|to a)\s+slots?\b`)
 
 func TestMountTerminologyPreservesVolumeWireFields(t *testing.T) {
 	var c containerView
@@ -84,7 +87,31 @@ func TestMountTerminologyPreservesVolumeWireFields(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(strings.ToLower(string(readme)), "slot") {
+	if legacyMountWording.Match(readme) {
 		t.Fatal("README uses slot instead of mount")
+	}
+}
+
+func TestMountWordingGuardAllowsWireDocumentation(t *testing.T) {
+	for _, tt := range []struct {
+		text string
+		want bool
+	}{
+		{text: "The response includes `volume_slots` and `slot` wire fields."},
+		{text: "The volume is slotted into a mount."},
+		{text: "Reserve a time slot for maintenance."},
+		{text: "Attach a disk to a declared mount."},
+		{text: "Attach disks to volume slots.", want: true},
+		{text: "A required slot needs a disk.", want: true},
+		{text: "Choose the declared slot.", want: true},
+		{text: "Remove a config slot.", want: true},
+		{text: "Attach a disk to a slot the repository declares.", want: true},
+		{text: "VOLUME SLOTS", want: true},
+	} {
+		t.Run(tt.text, func(t *testing.T) {
+			if got := legacyMountWording.MatchString(tt.text); got != tt.want {
+				t.Fatalf("legacy wording = %t, want %t for %q", got, tt.want, tt.text)
+			}
+		})
 	}
 }
