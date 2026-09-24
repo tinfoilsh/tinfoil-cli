@@ -260,7 +260,8 @@ func TestContainerCreateWithVolume(t *testing.T) {
 			host: "inf13",
 			wantErr: "required mount \"data\" has no disk; select an existing disk with --volume or create one:\n" +
 				"  tinfoil volume create app-data --size <SIZE> --host inf13\n" +
-				"  tinfoil container create app ... --volume app-data:data",
+				"  tinfoil container create app ... --volume app-data:data\n" +
+				"Mount data: automatic unlock requires keyserver configuration and secret DATA_KEY outside Tinfoil; attaching a disk does not establish unlock readiness.\n",
 			wantPaths: []string{"POST /api/containers/validate"},
 		},
 		{
