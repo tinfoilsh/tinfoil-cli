@@ -56,7 +56,7 @@ tinfoil ssh my-server -- systemctl status
 
 ## Attestation Verification
 
-Verification requires the expected workload: an explicit `--host` needs `--repo owner/name[@tag][@sha256:digest]`, and a bare `owner/name` accepts any release the freshness witness currently endorses. Hardware-only verification is no longer an authorization path. JSON output includes the verified `crypto_material` and `freshness_expires_at`.
+Verification requires the expected workload: an explicit `--enclave` needs `--repo owner/name[@tag][@sha256:digest]`, and a bare `owner/name` accepts any release the freshness witness currently endorses. Hardware-only verification is no longer an authorization path. JSON output includes the verified `crypto_material` and `freshness_expires_at`.
 
 ### Native SSH profiles
 
@@ -126,7 +126,7 @@ tinfoil container get my-container
 tinfoil container metrics my-container --time 24h
 tinfoil container hosts             # which hosts your org may target
 
-# Deploy
+# Create (deploys immediately and follows progress until Running)
 tinfoil container create my-container \
   --repo myorg/my-repo-container \
   --tag v1.2.3 \
@@ -134,41 +134,50 @@ tinfoil container create my-container \
   --secret OPENAI_API_KEY \
   --custom-domain api.example.com
 
-# Deploy with a persistent volume (the config must declare it; see Volume management)
+# Create with a persistent volume (the config must declare it; see Volume management)
 tinfoil container create my-db --repo myorg/my-db --tag v1.0.0 --volume my-db-data
 
-# Lifecycle
+# Stop, then deploy again (stopped or failed containers; saved config unless flags override it)
 tinfoil container stop my-container
-tinfoil container start my-container --tag v1.2.4
-tinfoil container start my-db                               # attached volume is reused
-tinfoil container relaunch my-container --tag v1.2.4 --staging=true
-tinfoil container relaunch my-container --tag v1.2.2 --promote-release=false   # roll back without changing the latest release
-tinfoil container delete my-container
+tinfoil container deploy my-container
+tinfoil container deploy my-container --tag v1.2.4 --host gpu-host-2
 
-# Repository deployments (all instances of one repo)
+# Update a running container (blue/green when possible; asks before causing downtime)
+tinfoil container update my-container --tag v1.2.4
+tinfoil container update my-container --tag v1.2.4 --staging=true      # hold for accept
+tinfoil container update my-container --tag v1.2.2 --promote-release=false   # roll back without changing the latest release
+tinfoil container accept my-container
+tinfoil container cancel my-container
+tinfoil container cancel my-container --rollback-latest
+
+tinfoil container delete my-container                                  # prompts; --yes to skip
+
+# Repository deployments (all running instances of one repo)
 tinfoil deployment list
 tinfoil deployment get myorg/my-repo-container
 tinfoil deployment update myorg/my-repo-container --tag v1.2.4 --staging=true
 tinfoil deployment update myorg/my-repo-container --tag v1.2.4 --instance <container-id>
 tinfoil deployment settings myorg/my-repo-container --default-staging=true
 
-# Updates
-tinfoil container update status my-container
-tinfoil container update accept my-container
-tinfoil container update cancel my-container
-tinfoil container update cancel my-container --rollback-latest
-
 # Open a verified proxy to a deployed container
 tinfoil container connect my-container -p 8080
 ```
 
+A container is either running or it is not. `deploy` boots an enclave for a container that has none (stopped, failed, or stopping); `update` replaces the version a running container serves. There is no in-place restart: `update` with the same tag restarts a running container without downtime, `stop` then `deploy` restarts it with downtime.
+
+Single-GPU containers without persistent volumes update blue/green: the new version boots next to the current one and traffic switches when it is Running. Multi-GPU containers and containers with persistent volumes cannot run two copies, so `update` stops the current version first; the CLI describes the downtime and asks you to type `yes` (pass `--yes` in scripts). Staging is only available for blue/green updates.
+
+`create`, `deploy`, `update`, and `accept` follow the container's progress and print each boot stage until it is Running, exiting non-zero if it fails. Pass `--no-wait` to return as soon as the request is accepted, or `-o json` for the raw response.
+
 `container connect <name>` resolves the container's enclave domain and source repo, then runs a verified proxy locally so you can reach the container at `http://localhost:<port>` without copy-pasting either value.
 
-Container create, start, relaunch, and deployment update promote the deployed tag as the repository's latest release by default. Pass `--promote-release=false` to leave the latest release unchanged.
+Container create, deploy, update, and deployment update promote the deployed tag as the repository's latest release by default. Pass `--promote-release=false` to leave the latest release unchanged.
 
-`container update cancel --rollback-latest` also requests restoring the repository's latest release to the container's current production tag. The controlplane selects that tag; no tag argument is accepted. The command requires the server to acknowledge the restoration request and report its tag, so an older server that only cancels the update returns an error. Restoration is queued; verify the latest release afterward.
+`--volume <id|name>[:<declared name>]` on `create` and `deploy` attaches an existing unattached volume to a slot the repository's `tinfoil-config.yml` declares, then deploys the container. The declared name is optional when the config declares exactly one volume. On create, the volume's host becomes the container's host (an explicit `--host` must match). On deploy, the container must already be on that host unless `--host` moves it there. Once attached, later deploys reuse the disk; omit `--volume`. A container whose config declares volumes is created stopped when `--volume` is omitted; the output lists the commands that attach one and deploy it.
 
-`--volume <id|name>[:<declared name>]` on `create` and `start` attaches an existing unattached volume to a slot the repository's `tinfoil-config.yml` declares, then starts the container. The declared name is optional when the config declares exactly one volume. On create, the volume's host becomes the container's host (an explicit `--host` must match). On start, the container must already be on that host unless `--host` moves it there. Once attached, later starts reuse the disk; omit `--volume`. A container whose config declares volumes is created stopped when `--volume` is omitted; the output lists the commands that attach one and start it.
+A name shared by a debug and a production container is ambiguous; the CLI lists both and asks for the ID.
+
+`container cancel --rollback-latest` also requests restoring the repository's latest release to the container's current production tag. The controlplane selects that tag; no tag argument is accepted. The command requires the server to acknowledge the restoration request and report its tag, so an older server that only cancels the update returns an error. Restoration is queued; verify the latest release afterward.
 
 ### Model weights
 
@@ -249,7 +258,7 @@ Pass `-o json` on any list/get to emit machine-readable JSON.
 
 ## Volume management
 
-Volumes are encrypted persistent disks that live on one container host and attach to a volume declared in a repository's `tinfoil-config.yml`. A volume can be attached to one stopped container at a time and keeps its data across stops, starts, and relaunches.
+Volumes are encrypted persistent disks that live on one container host and attach to a volume declared in a repository's `tinfoil-config.yml`. A volume can be attached to one stopped container at a time and keeps its data across stops, deploys, and updates.
 
 ```bash
 # Inspect
@@ -259,17 +268,17 @@ tinfoil volume get my-db-data
 # Create (sizes take GiB/TiB or GB/TB; --host is optional when only one host is available)
 tinfoil volume create my-db-data --size 16TiB --host gpu-host-1
 
-# Attach to a stopped container, then start it
+# Attach to a stopped container, then deploy it
 tinfoil volume attach my-db-data my-db          # --as <declared name> when the config declares several
-tinfoil container start my-db
+tinfoil container deploy my-db
 
 # Move a volume between containers
 tinfoil container stop my-db
 tinfoil volume detach my-db-data
 tinfoil volume attach my-db-data my-other-db
 
-# Rename or delete (delete destroys the data and requires the volume to be detached)
-tinfoil volume update my-db-data --name archive-data
+# Rename or delete (delete erases the data and requires the volume to be detached)
+tinfoil volume rename my-db-data --name archive-data
 tinfoil volume delete archive-data              # prompts; pass --yes to skip
 ```
 
@@ -287,13 +296,13 @@ tinfoil sandbox ssh my-sandbox        # the tunnelled alternative
 tinfoil sandbox stop my-sandbox       # keep the disk
 tinfoil sandbox start my-sandbox
 tinfoil sandbox restart my-sandbox
-tinfoil sandbox accept my-sandbox     # enroll with an existing permit
-tinfoil sandbox destroy my-sandbox    # erase the disk
+tinfoil sandbox enroll my-sandbox     # enroll with an existing permit
+tinfoil sandbox delete my-sandbox     # erase the disk
 ```
 
 `create`, `start`, and `restart` wait for the VM, verify its attestation, enroll local SSH and disk keys, and install a native ssh profile when the VM exposes a direct SSH port. The profile connects through `console.tinfoil.sh` on the allocated port, with the host key verified against the sandbox's domain. The CLI stores the local SSH and disk keys in `~/.tinfoil/sandboxes/<name>`. Back up `disk.key`; without it, the workspace cannot be opened.
 
-`accept` uses a permit issued elsewhere, such as the dashboard. Permits expire after five minutes and work once for one boot.
+`enroll` uses a permit issued elsewhere, such as the dashboard. Permits expire after five minutes and work once for one boot.
 
 ## Building from Source
 

@@ -92,26 +92,26 @@ func TestContainerCommandsPromoteReleaseRequestBodies(t *testing.T) {
 			run:      func() error { return containerCreateCmd.RunE(containerCreateCmd, []string{"app"}) },
 		},
 		{
-			name:         "start",
-			command:      containerStartCmd,
-			path:         "/api/containers/" + containerID + "/start",
+			name:         "deploy",
+			command:      containerDeployCmd,
+			path:         "/api/containers/" + containerID + "/deploy",
 			wantRequests: 2,
 			wantBody: func(promote string) string {
 				return `{` + strings.TrimSuffix(promote, ",") + `}`
 			},
-			setValue: func(value string) { startPromoteRelease = value },
-			run:      func() error { return containerStartCmd.RunE(containerStartCmd, []string{containerID}) },
+			setValue: func(value string) { deployPromoteRelease = value },
+			run:      func() error { return containerDeployCmd.RunE(containerDeployCmd, []string{containerID}) },
 		},
 		{
-			name:         "relaunch",
-			command:      containerRelaunchCmd,
-			path:         "/api/containers/" + containerID + "/relaunch",
+			name:         "update",
+			command:      containerUpdateCmd,
+			path:         "/api/containers/" + containerID + "/update",
 			wantRequests: 2,
 			wantBody: func(promote string) string {
 				return `{` + strings.TrimSuffix(promote, ",") + `}`
 			},
-			setValue: func(value string) { relaunchPromoteRelease = value },
-			run:      func() error { return containerRelaunchCmd.RunE(containerRelaunchCmd, []string{containerID}) },
+			setValue: func(value string) { updatePromoteRelease = value },
+			run:      func() error { return containerUpdateCmd.RunE(containerUpdateCmd, []string{containerID}) },
 		},
 	}
 	// wantPromote is the JSON fragment expected in the body, including its
@@ -190,8 +190,8 @@ func TestContainerCommandsPromoteReleaseRequestBodies(t *testing.T) {
 func TestPromoteReleaseFlagsRequireValues(t *testing.T) {
 	for _, command := range []*cobra.Command{
 		containerCreateCmd,
-		containerStartCmd,
-		containerRelaunchCmd,
+		containerDeployCmd,
+		containerUpdateCmd,
 		deploymentUpdateCmd,
 	} {
 		t.Run(command.CommandPath(), func(t *testing.T) {
@@ -208,9 +208,9 @@ func configureContainerPromotionTest(t *testing.T, serverURL string) {
 	t.Setenv(envAdminKey, "admin_test")
 	t.Setenv(envConfigPath, filepath.Join(t.TempDir(), "missing-config.json"))
 	for command, names := range map[*cobra.Command][]string{
-		containerCreateCmd:   {"display-order", "promote-release", "volume"},
-		containerStartCmd:    {"tag", "variable", "secret", "ssh-key", "debug", "promote-release", "custom-domain", "host", "volume"},
-		containerRelaunchCmd: {"tag", "variable", "secret", "ssh-key", "debug", "staging", "promote-release", "custom-domain", "host"},
+		containerCreateCmd: {"display-order", "promote-release", "volume"},
+		containerDeployCmd: {"tag", "variable", "secret", "ssh-key", "debug", "promote-release", "custom-domain", "host", "volume", "no-wait"},
+		containerUpdateCmd: {"tag", "variable", "secret", "ssh-key", "debug", "staging", "promote-release", "custom-domain", "yes", "no-wait"},
 	} {
 		for _, name := range names {
 			flag := command.Flags().Lookup(name)
@@ -222,49 +222,49 @@ func configureContainerPromotionTest(t *testing.T, serverURL string) {
 		}
 	}
 
-	previousOutput := outputFormat
+	previousOutput, previousNoWait := outputFormat, noWait
 	previousCreateRepo, previousCreateTag := createRepo, createTag
 	previousCreatePromoteRelease := createPromoteRelease
 	previousCreateDebug, previousCreateDisableCC := createDebug, createDisableCC
 	previousCreateVariables, previousCreateSecrets, previousCreateSSHKeys := createVariables, createSecrets, createSSHKeys
 	previousCreateCustomDomain, previousCreateHost, previousCreateReplaceID := createCustomDomain, createHost, createReplaceID
 	previousCreateDisplayOrder, previousCreateVolumes := createDisplayOrder, createVolumes
-	previousStartTag, previousStartDebug := startTag, startDebug
-	previousStartPromoteRelease := startPromoteRelease
-	previousStartVariables, previousStartSecrets, previousStartSSHKeys := startVariables, startSecrets, startSSHKeys
-	previousStartCustomDomain, previousStartHost, previousStartVolumes := startCustomDomain, startHost, startVolumes
-	previousRelaunchTag, previousRelaunchDebug := relaunchTag, relaunchDebug
-	previousRelaunchStaging, previousRelaunchPromoteRelease := relaunchStaging, relaunchPromoteRelease
-	previousRelaunchVariables, previousRelaunchSecrets, previousRelaunchSSHKeys := relaunchVariables, relaunchSecrets, relaunchSSHKeys
-	previousRelaunchCustomDomain, previousRelaunchHost := relaunchCustomDomain, relaunchHost
+	previousDeployTag, previousDeployDebug := deployTag, deployDebug
+	previousDeployPromoteRelease := deployPromoteRelease
+	previousDeployVariables, previousDeploySecrets, previousDeploySSHKeys := deployVariables, deploySecrets, deploySSHKeys
+	previousDeployCustomDomain, previousDeployHost, previousDeployVolumes := deployCustomDomain, deployHost, deployVolumes
+	previousUpdateTag, previousUpdateDebug := updateTag, updateDebug
+	previousUpdateStaging, previousUpdatePromoteRelease := updateStaging, updatePromoteRelease
+	previousUpdateVariables, previousUpdateSecrets, previousUpdateSSHKeys := updateVariables, updateSecrets, updateSSHKeys
+	previousUpdateCustomDomain, previousUpdateYes := updateCustomDomain, updateYes
 
-	outputFormat = "json"
+	outputFormat, noWait = "json", true
 	createRepo, createTag, createPromoteRelease = "acme/app", "v1.2.3", ""
 	createDebug, createDisableCC = false, false
 	createVariables, createSecrets, createSSHKeys = nil, nil, nil
 	createCustomDomain, createHost, createReplaceID = "", "", ""
 	createDisplayOrder, createVolumes = 0, nil
-	startTag, startDebug, startPromoteRelease = "", "", ""
-	startVariables, startSecrets, startSSHKeys = nil, nil, nil
-	startCustomDomain, startHost, startVolumes = "", "", nil
-	relaunchTag, relaunchDebug, relaunchStaging, relaunchPromoteRelease = "", "", "", ""
-	relaunchVariables, relaunchSecrets, relaunchSSHKeys = nil, nil, nil
-	relaunchCustomDomain, relaunchHost = "", ""
+	deployTag, deployDebug, deployPromoteRelease = "", "", ""
+	deployVariables, deploySecrets, deploySSHKeys = nil, nil, nil
+	deployCustomDomain, deployHost, deployVolumes = "", "", nil
+	updateTag, updateDebug, updateStaging, updatePromoteRelease = "", "", "", ""
+	updateVariables, updateSecrets, updateSSHKeys = nil, nil, nil
+	updateCustomDomain, updateYes = "", false
 
 	t.Cleanup(func() {
-		outputFormat = previousOutput
+		outputFormat, noWait = previousOutput, previousNoWait
 		createRepo, createTag = previousCreateRepo, previousCreateTag
 		createPromoteRelease = previousCreatePromoteRelease
 		createDebug, createDisableCC = previousCreateDebug, previousCreateDisableCC
 		createVariables, createSecrets, createSSHKeys = previousCreateVariables, previousCreateSecrets, previousCreateSSHKeys
 		createCustomDomain, createHost, createReplaceID = previousCreateCustomDomain, previousCreateHost, previousCreateReplaceID
 		createDisplayOrder, createVolumes = previousCreateDisplayOrder, previousCreateVolumes
-		startTag, startDebug, startPromoteRelease = previousStartTag, previousStartDebug, previousStartPromoteRelease
-		startVariables, startSecrets, startSSHKeys = previousStartVariables, previousStartSecrets, previousStartSSHKeys
-		startCustomDomain, startHost, startVolumes = previousStartCustomDomain, previousStartHost, previousStartVolumes
-		relaunchTag, relaunchDebug = previousRelaunchTag, previousRelaunchDebug
-		relaunchStaging, relaunchPromoteRelease = previousRelaunchStaging, previousRelaunchPromoteRelease
-		relaunchVariables, relaunchSecrets, relaunchSSHKeys = previousRelaunchVariables, previousRelaunchSecrets, previousRelaunchSSHKeys
-		relaunchCustomDomain, relaunchHost = previousRelaunchCustomDomain, previousRelaunchHost
+		deployTag, deployDebug, deployPromoteRelease = previousDeployTag, previousDeployDebug, previousDeployPromoteRelease
+		deployVariables, deploySecrets, deploySSHKeys = previousDeployVariables, previousDeploySecrets, previousDeploySSHKeys
+		deployCustomDomain, deployHost, deployVolumes = previousDeployCustomDomain, previousDeployHost, previousDeployVolumes
+		updateTag, updateDebug = previousUpdateTag, previousUpdateDebug
+		updateStaging, updatePromoteRelease = previousUpdateStaging, previousUpdatePromoteRelease
+		updateVariables, updateSecrets, updateSSHKeys = previousUpdateVariables, previousUpdateSecrets, previousUpdateSSHKeys
+		updateCustomDomain, updateYes = previousUpdateCustomDomain, previousUpdateYes
 	})
 }

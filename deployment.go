@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -19,7 +20,7 @@ type deploymentView struct {
 	CreatedAt      string `json:"created_at"`
 	UpdatedAt      string `json:"updated_at"`
 	InstanceCount  int32  `json:"instance_count"`
-	ReadyCount     int32  `json:"ready_count"`
+	RunningCount   int32  `json:"running_count"`
 	FailedCount    int32  `json:"failed_count"`
 	StoppedCount   int32  `json:"stopped_count"`
 	DeployingCount int32  `json:"deploying_count"`
@@ -44,6 +45,7 @@ var (
 	deploymentUpdateStaging        string
 	deploymentUpdatePromoteRelease string
 	deploymentUpdateInstanceIDs    []string
+	deploymentUpdateYes            bool
 )
 
 func init() {
@@ -58,18 +60,19 @@ func init() {
 		&deploymentSettingsDefaultStaging,
 		"default-staging",
 		"",
-		"By default, hold eligible ready update candidates for manual acceptance (true/false)",
+		"Hold new versions for manual acceptance by default instead of switching traffic automatically (true/false)",
 	)
 
-	deploymentUpdateCmd.Flags().StringVar(&deploymentUpdateTag, "tag", "", "Repository release tag to deploy")
-	deploymentUpdateCmd.Flags().StringVar(&deploymentUpdateStaging, "staging", "", "Hold eligible ready update candidates for manual acceptance (true/false)")
+	deploymentUpdateCmd.Flags().StringVar(&deploymentUpdateTag, "tag", "", "Release tag to update to")
+	deploymentUpdateCmd.Flags().StringVar(&deploymentUpdateStaging, "staging", "", "Hold new versions for manual acceptance instead of switching traffic automatically (true/false)")
 	deploymentUpdateCmd.Flags().StringVar(&deploymentUpdatePromoteRelease, "promote-release", "", "Promote the deployed tag to the repository's latest release when it goes live (default true; pass false to decline)")
 	deploymentUpdateCmd.Flags().StringArrayVar(
 		&deploymentUpdateInstanceIDs,
 		"instance",
 		nil,
-		"Eligible container instance ID to update; may be repeated (default: all eligible instances)",
+		"Running container instance ID to update; may be repeated (default: all running instances)",
 	)
+	deploymentUpdateCmd.Flags().BoolVar(&deploymentUpdateYes, "yes", false, "Skip the downtime confirmation for instances that must be replaced")
 	_ = deploymentUpdateCmd.MarkFlagRequired("tag")
 
 	silenceUsageRecursive(deploymentCmd)
@@ -153,8 +156,13 @@ var deploymentSettingsCmd = &cobra.Command{
 
 var deploymentUpdateCmd = &cobra.Command{
 	Use:   "update [id|owner/repo]",
-	Short: "Create update candidates for all or selected eligible instances",
-	Args:  cobra.ExactArgs(1),
+	Short: "Update every running instance of a repository to a tag",
+	Long: `Update all running container instances that use this repository, or only
+those named with --instance. Instances that must be replaced (multi-GPU or
+persistent volumes) go down while they redeploy; the command lists them and
+asks for confirmation unless --yes is given. Stopped and failed instances are
+skipped; bring those up with "tinfoil container deploy".`,
+	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		body := map[string]any{
 			"tag": deploymentUpdateTag,
@@ -182,12 +190,60 @@ var deploymentUpdateCmd = &cobra.Command{
 			return err
 		}
 
+		replaced, err := replaceStrategyInstances(client, deployment.Repo, deploymentUpdateInstanceIDs)
+		if err != nil {
+			return err
+		}
+		if len(replaced) > 0 {
+			if err := confirmDeploymentDowntime(replaced); err != nil {
+				return err
+			}
+			body["confirm_downtime"] = true
+		}
+
 		response, err := updateDeploymentInstances(client, deployment.ID, body)
 		if err != nil {
 			return err
 		}
 		return renderDeploymentUpdateResults(response.Results)
 	},
+}
+
+// replaceStrategyInstances lists the running instances of repo (or the
+// selected ones) whose update replaces the running enclave and so causes
+// downtime.
+func replaceStrategyInstances(client *cpClient, repo string, selected []string) ([]containerView, error) {
+	var list []containerView
+	if _, err := client.do("GET", "/api/containers", nil, nil, &list); err != nil {
+		return nil, err
+	}
+	wanted := map[string]bool{}
+	for _, id := range selected {
+		wanted[id] = true
+	}
+	var out []containerView
+	for _, c := range list {
+		if !strings.EqualFold(c.Repo, repo) || c.Status != statusRunning || c.UpdateStrategy != updateStrategyReplace {
+			continue
+		}
+		if len(wanted) > 0 && !wanted[c.ID] {
+			continue
+		}
+		out = append(out, c)
+	}
+	return out, nil
+}
+
+func confirmDeploymentDowntime(instances []containerView) error {
+	fmt.Fprintln(os.Stderr, "This update will cause downtime for:")
+	for _, c := range instances {
+		fmt.Fprintf(os.Stderr, "  %-24s %s\n", c.Name, replaceReason(c))
+	}
+	fmt.Fprintln(os.Stderr)
+	fmt.Fprintln(os.Stderr, "These instances cannot run two versions at once. Each is stopped first and the")
+	fmt.Fprintln(os.Stderr, "new version deploys in its place; each is unreachable until it is Running.")
+	fmt.Fprintln(os.Stderr)
+	return confirmYes(deploymentUpdateYes, "deployment update")
 }
 
 func listDeployments(client *cpClient) ([]deploymentView, error) {
@@ -234,7 +290,7 @@ func updateDeploymentInstances(client *cpClient, deploymentID string, body map[s
 
 func preserveDeploymentCounts(updated, current deploymentView) deploymentView {
 	updated.InstanceCount = current.InstanceCount
-	updated.ReadyCount = current.ReadyCount
+	updated.RunningCount = current.RunningCount
 	updated.FailedCount = current.FailedCount
 	updated.StoppedCount = current.StoppedCount
 	updated.DeployingCount = current.DeployingCount
@@ -248,8 +304,8 @@ func renderDeployment(deployment deploymentView) error {
 	fmt.Printf("ID:              %s\n", deployment.ID)
 	fmt.Printf("Repository:      %s\n", deployment.Repo)
 	fmt.Printf("Instances:       %d\n", deployment.InstanceCount)
-	fmt.Printf("Ready:           %d\n", deployment.ReadyCount)
-	fmt.Printf("In progress:     %d\n", deployment.DeployingCount)
+	fmt.Printf("Running:         %d\n", deployment.RunningCount)
+	fmt.Printf("Deploying:       %d\n", deployment.DeployingCount)
 	fmt.Printf("Failed:          %d\n", deployment.FailedCount)
 	fmt.Printf("Stopped:         %d\n", deployment.StoppedCount)
 	fmt.Printf("Default staging: %v\n", deployment.DefaultStaging)
@@ -265,13 +321,13 @@ func renderDeployments(deployments []deploymentView) error {
 		return nil
 	}
 	fmt.Printf("%-36s  %-9s  %-7s  %-11s  %s\n",
-		"REPOSITORY", "INSTANCES", "READY", "IN-PROGRESS", "FAILED",
+		"REPOSITORY", "INSTANCES", "RUNNING", "DEPLOYING", "FAILED",
 	)
 	for _, deployment := range deployments {
 		fmt.Printf("%-36s  %-9d  %-7d  %-11d  %d\n",
 			truncate(deployment.Repo, 36),
 			deployment.InstanceCount,
-			deployment.ReadyCount,
+			deployment.RunningCount,
 			deployment.DeployingCount,
 			deployment.FailedCount,
 		)
