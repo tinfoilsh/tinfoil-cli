@@ -38,7 +38,7 @@ type containerView struct {
 	SSHKeys            []string        `json:"ssh_keys"`
 	Debug              bool            `json:"debug"`
 	Staging            bool            `json:"staging"`
-	PromoteRelease     *bool           `json:"promote_release,omitempty"`
+	MarkLatestRelease  *bool           `json:"mark_latest_release,omitempty"`
 	DisableCCMode      bool            `json:"disable_cc_mode"`
 	GithubAppConnected bool            `json:"github_app_connected"`
 	DisplayOrder       int32           `json:"display_order"`
@@ -77,40 +77,40 @@ type hostInfo struct {
 var (
 	outputFormat string
 
-	createRepo           string
-	createTag            string
-	createDebug          bool
-	createPromoteRelease string
-	createDisableCC      bool
-	createYes            bool
-	createCustomDomain   string
-	createHost           string
-	createReplaceID      string
-	createVariables      []string
-	createSecrets        []string
-	createSSHKeys        []string
-	createVolumes        []string
-	createDisplayOrder   int32
+	createRepo              string
+	createTag               string
+	createDebug             bool
+	createMarkLatestRelease string
+	createDisableCC         bool
+	createYes               bool
+	createCustomDomain      string
+	createHost              string
+	createReplaceID         string
+	createVariables         []string
+	createSecrets           []string
+	createSSHKeys           []string
+	createVolumes           []string
+	createDisplayOrder      int32
 
-	updateTag            string
-	updateVariables      []string
-	updateSecrets        []string
-	updateSSHKeys        []string
-	updateDebug          string
-	updateStaging        string
-	updatePromoteRelease string
-	updateCustomDomain   string
-	updateYes            bool
+	updateTag               string
+	updateVariables         []string
+	updateSecrets           []string
+	updateSSHKeys           []string
+	updateDebug             string
+	updateStaging           string
+	updateMarkLatestRelease string
+	updateCustomDomain      string
+	updateYes               bool
 
-	deployTag            string
-	deployVariables      []string
-	deploySecrets        []string
-	deploySSHKeys        []string
-	deployDebug          string
-	deployPromoteRelease string
-	deployCustomDomain   string
-	deployHost           string
-	deployVolumes        []string
+	deployTag               string
+	deployVariables         []string
+	deploySecrets           []string
+	deploySSHKeys           []string
+	deployDebug             string
+	deployMarkLatestRelease string
+	deployCustomDomain      string
+	deployHost              string
+	deployVolumes           []string
 
 	deleteYes bool
 	noWait    bool
@@ -148,7 +148,7 @@ func init() {
 	containerCreateCmd.Flags().StringVar(&createRepo, "repo", "", "GitHub repo (owner/repo) holding tinfoil-config.yml [required]")
 	containerCreateCmd.Flags().StringVar(&createTag, "tag", "", "Repository release tag to deploy [required]")
 	containerCreateCmd.Flags().BoolVar(&createDebug, "debug", false, "Enable debug mode (allows SSH into the enclave)")
-	containerCreateCmd.Flags().StringVar(&createPromoteRelease, "promote-release", "", "Promote the deployed tag to the repository's latest release when it goes live (default true; pass false to decline)")
+	containerCreateCmd.Flags().StringVar(&createMarkLatestRelease, "mark-latest", "", "Mark the deployed tag as the repository's latest GitHub release once it is running (default true; pass false to leave the latest release unchanged)")
 	containerCreateCmd.Flags().BoolVar(&createDisableCC, "disable-cc-mode", false, "EXPERIMENTAL: disable confidential computing (benchmarks only; requires org entitlement)")
 	containerCreateCmd.Flags().BoolVar(&createYes, "yes", false, "Skip interactive confirmation for --disable-cc-mode")
 	containerCreateCmd.Flags().StringVar(&createCustomDomain, "custom-domain", "", "Verified custom domain to expose the container on")
@@ -169,7 +169,7 @@ func init() {
 	containerDeployCmd.Flags().StringArrayVar(&deploySecrets, "secret", nil, "Replace the saved secrets list (specify all)")
 	containerDeployCmd.Flags().StringArrayVar(&deploySSHKeys, "ssh-key", nil, "Replace the saved SSH keys list")
 	containerDeployCmd.Flags().StringVar(&deployDebug, "debug", "", "Deploy in debug mode (true/false)")
-	containerDeployCmd.Flags().StringVar(&deployPromoteRelease, "promote-release", "", "Promote the deployed tag to the repository's latest release when it goes live (default true; pass false to decline)")
+	containerDeployCmd.Flags().StringVar(&deployMarkLatestRelease, "mark-latest", "", "Mark the deployed tag as the repository's latest GitHub release once it is running (default true; pass false to leave the latest release unchanged)")
 	containerDeployCmd.Flags().StringVar(&deployCustomDomain, "custom-domain", "", "Replace the custom domain (empty string clears it)")
 	containerDeployCmd.Flags().StringVar(&deployHost, "host", "", "Deploy on a different host (see 'tinfoil container hosts')")
 	containerDeployCmd.Flags().StringArrayVar(&deployVolumes, "volume", nil, "Volume to attach before deploying, as <id|name>[:<declared name>]; may be repeated")
@@ -180,7 +180,7 @@ func init() {
 	containerUpdateCmd.Flags().StringArrayVar(&updateSSHKeys, "ssh-key", nil, "Replace the saved SSH keys list")
 	containerUpdateCmd.Flags().StringVar(&updateDebug, "debug", "", "Switch debug mode on or off (true/false)")
 	containerUpdateCmd.Flags().StringVar(&updateStaging, "staging", "", "Hold the new version for manual acceptance instead of switching traffic automatically (true/false)")
-	containerUpdateCmd.Flags().StringVar(&updatePromoteRelease, "promote-release", "", "Promote the deployed tag to the repository's latest release when it goes live (default true; pass false to decline)")
+	containerUpdateCmd.Flags().StringVar(&updateMarkLatestRelease, "mark-latest", "", "Mark the deployed tag as the repository's latest GitHub release once it is running (default true; pass false to leave the latest release unchanged)")
 	containerUpdateCmd.Flags().StringVar(&updateCustomDomain, "custom-domain", "", "Replace the custom domain (empty string clears it)")
 	containerUpdateCmd.Flags().BoolVar(&updateYes, "yes", false, "Skip the downtime confirmation for containers that must be replaced")
 
@@ -256,7 +256,7 @@ var containerCreateCmd = &cobra.Command{
 			"repo": createRepo,
 			"tag":  createTag,
 		}
-		if err := setPromoteRelease(cmd, body, createPromoteRelease); err != nil {
+		if err := setMarkLatestRelease(cmd, body, createMarkLatestRelease); err != nil {
 			return err
 		}
 
@@ -279,6 +279,18 @@ var containerCreateCmd = &cobra.Command{
 		requests, err := parseVolumeRequests(createVolumes)
 		if err != nil {
 			return err
+		}
+		// A config that declares volumes cannot run until each slot has a disk,
+		// so refuse up front with the commands to run rather than creating a
+		// container that sits stopped.
+		if len(requests) == 0 {
+			slots, err := declaredVolumeSlots(client, createRepo, createTag)
+			if err != nil {
+				return err
+			}
+			if len(slots) > 0 {
+				return errVolumesRequired(args[0], slots, createHost)
+			}
 		}
 		var volumes []volumeView
 		if len(requests) > 0 {
@@ -334,15 +346,6 @@ var containerCreateCmd = &cobra.Command{
 			}
 			return followAndRender(client, created, nil)
 		}
-		if len(requests) == 0 {
-			if err := renderContainer(created); err != nil {
-				return err
-			}
-			if outputFormat != "json" {
-				printVolumeHint(created)
-			}
-			return nil
-		}
 		if err := attachVolumes(client, &created, requests, volumes); err != nil {
 			return fmt.Errorf("created %s but %w", created.Name, err)
 		}
@@ -396,7 +399,7 @@ of it. To change a running container, use "tinfoil container update".`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		body, err := buildLifecycleBody(cmd,
 			deployTag, deployVariables, deploySecrets, deploySSHKeys,
-			deployDebug, deployPromoteRelease, deployCustomDomain, deployHost,
+			deployDebug, deployMarkLatestRelease, deployCustomDomain, deployHost,
 		)
 		if err != nil {
 			return err
@@ -484,7 +487,7 @@ command asks you to confirm the downtime unless --yes is given.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		body, err := buildLifecycleBody(cmd,
 			updateTag, updateVariables, updateSecrets, updateSSHKeys,
-			updateDebug, updatePromoteRelease, updateCustomDomain, "",
+			updateDebug, updateMarkLatestRelease, updateCustomDomain, "",
 		)
 		if err != nil {
 			return err
@@ -795,7 +798,7 @@ func parseKeyValues(in []string) (map[string]string, error) {
 func buildLifecycleBody(cmd *cobra.Command,
 	tag string,
 	variables, secrets, sshKeys []string,
-	debug, promoteRelease, customDomain, host string,
+	debug, markLatestRelease, customDomain, host string,
 ) (map[string]any, error) {
 	body := map[string]any{}
 	if cmd.Flags().Changed("tag") && tag != "" {
@@ -830,7 +833,7 @@ func buildLifecycleBody(cmd *cobra.Command,
 		}
 		body["debug"] = v
 	}
-	if err := setPromoteRelease(cmd, body, promoteRelease); err != nil {
+	if err := setMarkLatestRelease(cmd, body, markLatestRelease); err != nil {
 		return nil, err
 	}
 	if cmd.Flags().Changed("custom-domain") {
@@ -842,17 +845,17 @@ func buildLifecycleBody(cmd *cobra.Command,
 	return body, nil
 }
 
-// setPromoteRelease adds promote_release to body only when the flag was set,
+// setMarkLatestRelease adds mark_latest_release to body only when the flag was set,
 // so an omitted flag defers to the controlplane default.
-func setPromoteRelease(cmd *cobra.Command, body map[string]any, value string) error {
-	if !cmd.Flags().Changed("promote-release") {
+func setMarkLatestRelease(cmd *cobra.Command, body map[string]any, value string) error {
+	if !cmd.Flags().Changed("mark-latest") {
 		return nil
 	}
 	v, err := parseTriBool(value)
 	if err != nil {
-		return fmt.Errorf("--promote-release: %w", err)
+		return fmt.Errorf("--mark-latest: %w", err)
 	}
-	body["promote_release"] = v
+	body["mark_latest_release"] = v
 	return nil
 }
 
@@ -941,8 +944,8 @@ func renderContainerDetail(c containerView, attached map[string]volumeView) erro
 		fmt.Printf("Host:         %s (cpu=%s gpu=%s)\n", c.HostName, c.HostCpuType, c.HostGpuType)
 	}
 	fmt.Printf("Resources:    cpus=%d gpus=%d mem=%dMB\n", c.CPUs, c.GPUs, c.MemoryMB)
-	if c.PromoteRelease != nil {
-		fmt.Printf("Promote:      %t\n", *c.PromoteRelease)
+	if c.MarkLatestRelease != nil {
+		fmt.Printf("Mark latest:  %t\n", *c.MarkLatestRelease)
 	}
 	if c.Debug {
 		fmt.Printf("Debug:        yes (SSH enabled, does not pass attestation)\n")

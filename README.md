@@ -145,7 +145,7 @@ tinfoil container deploy my-container --tag v1.2.4 --host gpu-host-2
 # Update a running container (blue/green when possible; asks before causing downtime)
 tinfoil container update my-container --tag v1.2.4
 tinfoil container update my-container --tag v1.2.4 --staging=true      # hold for accept
-tinfoil container update my-container --tag v1.2.2 --promote-release=false   # roll back without changing the latest release
+tinfoil container update my-container --tag v1.2.2 --mark-latest=false   # roll back without changing the latest release
 tinfoil container accept my-container
 tinfoil container cancel my-container
 tinfoil container cancel my-container --rollback-latest
@@ -171,9 +171,9 @@ Single-GPU containers without persistent volumes update blue/green: the new vers
 
 `container connect <name>` resolves the container's enclave domain and source repo, then runs a verified proxy locally so you can reach the container at `http://localhost:<port>` without copy-pasting either value.
 
-Container create, deploy, update, and deployment update promote the deployed tag as the repository's latest release by default. Pass `--promote-release=false` to leave the latest release unchanged.
+Container create, deploy, update, and deployment update mark the deployed tag as the repository's latest GitHub release once it is running. Pass `--mark-latest=false` to leave the latest release unchanged, for example when rolling back.
 
-`--volume <id|name>[:<declared name>]` on `create` and `deploy` attaches an existing unattached volume to a slot the repository's `tinfoil-config.yml` declares, then deploys the container. The declared name is optional when the config declares exactly one volume. On create, the volume's host becomes the container's host (an explicit `--host` must match). On deploy, the container must already be on that host unless `--host` moves it there. Once attached, later deploys reuse the disk; omit `--volume`. A container whose config declares volumes is created stopped when `--volume` is omitted; the output lists the commands that attach one and deploy it.
+`--volume <id|name>[:<declared name>]` on `create` and `deploy` attaches an existing unattached volume to a slot the repository's `tinfoil-config.yml` declares, then deploys the container. The declared name is optional when the config declares exactly one volume. On create, the volume's host becomes the container's host (an explicit `--host` must match). On deploy, the container must already be on that host unless `--host` moves it there. Once attached, later deploys reuse the disk; omit `--volume`. When the config declares volumes and `--volume` is omitted, `create` refuses and prints the `volume create` and `container create --volume` commands to run, so a container is never created without the disks it needs.
 
 A name shared by a debug and a production container is ambiguous; the CLI lists both and asks for the ID.
 

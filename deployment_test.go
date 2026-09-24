@@ -124,12 +124,12 @@ func TestDeploymentSettingsUpdatesDefaultStaging(t *testing.T) {
 
 func TestDeploymentUpdatePromoteReleaseRequestBodies(t *testing.T) {
 	tests := []struct {
-		name           string
-		promoteRelease string
-		changed        bool
-		wantErr        string
-		wantRequests   int32
-		wantBody       string
+		name              string
+		markLatestRelease string
+		changed           bool
+		wantErr           string
+		wantRequests      int32
+		wantBody          string
 	}{
 		{
 			name:         "omitted",
@@ -137,31 +137,31 @@ func TestDeploymentUpdatePromoteReleaseRequestBodies(t *testing.T) {
 			wantBody:     `{"instance_ids":["container-1"],"staging":true,"tag":"v1.2.3"}`,
 		},
 		{
-			name:           "true",
-			promoteRelease: "true",
-			changed:        true,
-			wantRequests:   3,
-			wantBody:       `{"instance_ids":["container-1"],"promote_release":true,"staging":true,"tag":"v1.2.3"}`,
+			name:              "true",
+			markLatestRelease: "true",
+			changed:           true,
+			wantRequests:      3,
+			wantBody:          `{"instance_ids":["container-1"],"mark_latest_release":true,"staging":true,"tag":"v1.2.3"}`,
 		},
 		{
-			name:           "false",
-			promoteRelease: "false",
-			changed:        true,
-			wantRequests:   3,
-			wantBody:       `{"instance_ids":["container-1"],"promote_release":false,"staging":true,"tag":"v1.2.3"}`,
+			name:              "false",
+			markLatestRelease: "false",
+			changed:           true,
+			wantRequests:      3,
+			wantBody:          `{"instance_ids":["container-1"],"mark_latest_release":false,"staging":true,"tag":"v1.2.3"}`,
 		},
 		{
-			name:           "relaxed",
-			promoteRelease: "no",
-			changed:        true,
-			wantRequests:   3,
-			wantBody:       `{"instance_ids":["container-1"],"promote_release":false,"staging":true,"tag":"v1.2.3"}`,
+			name:              "relaxed",
+			markLatestRelease: "no",
+			changed:           true,
+			wantRequests:      3,
+			wantBody:          `{"instance_ids":["container-1"],"mark_latest_release":false,"staging":true,"tag":"v1.2.3"}`,
 		},
 		{
-			name:           "invalid",
-			promoteRelease: "maybe",
-			changed:        true,
-			wantErr:        `--promote-release: expected true/false, got "maybe"`,
+			name:              "invalid",
+			markLatestRelease: "maybe",
+			changed:           true,
+			wantErr:           `--mark-latest: expected true/false, got "maybe"`,
 		},
 	}
 
@@ -193,10 +193,10 @@ func TestDeploymentUpdatePromoteReleaseRequestBodies(t *testing.T) {
 			configureDeploymentCommandTest(t, server.URL)
 			deploymentUpdateTag = "v1.2.3"
 			deploymentUpdateStaging = "true"
-			deploymentUpdatePromoteRelease = tt.promoteRelease
+			deploymentUpdateMarkLatestRelease = tt.markLatestRelease
 			deploymentUpdateInstanceIDs = []string{"container-1"}
 			deploymentUpdateCmd.Flags().Lookup("staging").Changed = true
-			deploymentUpdateCmd.Flags().Lookup("promote-release").Changed = tt.changed
+			deploymentUpdateCmd.Flags().Lookup("mark-latest").Changed = tt.changed
 
 			_, err := captureTestStdout(func() error {
 				return deploymentUpdateCmd.RunE(deploymentUpdateCmd, []string{"acme/app"})
@@ -290,7 +290,7 @@ func TestLifecycleCommandSurface(t *testing.T) {
 	if containerUpdateCmd.Flags().Lookup("staging") == nil {
 		t.Fatal("container update does not have --staging")
 	}
-	if deploymentUpdateCmd.Flags().Lookup("staging") == nil || deploymentUpdateCmd.Flags().Lookup("promote-release") == nil {
+	if deploymentUpdateCmd.Flags().Lookup("staging") == nil || deploymentUpdateCmd.Flags().Lookup("mark-latest") == nil {
 		t.Fatal("deployment update is missing staging or promotion flags")
 	}
 	if deploymentSettingsCmd.Flags().Lookup("default-staging") == nil {
@@ -328,10 +328,10 @@ func configureDeploymentCommandTest(t *testing.T, serverURL string) {
 	previousSettingsDefaultStaging := deploymentSettingsDefaultStaging
 	previousUpdateTag := deploymentUpdateTag
 	previousUpdateStaging := deploymentUpdateStaging
-	previousUpdatePromoteRelease := deploymentUpdatePromoteRelease
+	previousUpdateMarkLatestRelease := deploymentUpdateMarkLatestRelease
 	previousUpdateInstanceIDs := deploymentUpdateInstanceIDs
 	stagingFlag := deploymentUpdateCmd.Flags().Lookup("staging")
-	promoteReleaseFlag := deploymentUpdateCmd.Flags().Lookup("promote-release")
+	promoteReleaseFlag := deploymentUpdateCmd.Flags().Lookup("mark-latest")
 	previousStagingChanged := stagingFlag.Changed
 	previousPromoteReleaseChanged := promoteReleaseFlag.Changed
 
@@ -339,7 +339,7 @@ func configureDeploymentCommandTest(t *testing.T, serverURL string) {
 	deploymentSettingsDefaultStaging = ""
 	deploymentUpdateTag = ""
 	deploymentUpdateStaging = ""
-	deploymentUpdatePromoteRelease = ""
+	deploymentUpdateMarkLatestRelease = ""
 	deploymentUpdateInstanceIDs = nil
 	stagingFlag.Changed = false
 	promoteReleaseFlag.Changed = false
@@ -349,7 +349,7 @@ func configureDeploymentCommandTest(t *testing.T, serverURL string) {
 		deploymentSettingsDefaultStaging = previousSettingsDefaultStaging
 		deploymentUpdateTag = previousUpdateTag
 		deploymentUpdateStaging = previousUpdateStaging
-		deploymentUpdatePromoteRelease = previousUpdatePromoteRelease
+		deploymentUpdateMarkLatestRelease = previousUpdateMarkLatestRelease
 		deploymentUpdateInstanceIDs = previousUpdateInstanceIDs
 		stagingFlag.Changed = previousStagingChanged
 		promoteReleaseFlag.Changed = previousPromoteReleaseChanged

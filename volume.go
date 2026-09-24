@@ -519,29 +519,48 @@ func containerVolumes(c containerView, volumes []volumeView) map[string]volumeVi
 	return attached
 }
 
-// printVolumeHint follows a create that left the container stopped because
-// its config declares volumes and none were attached.
-func printVolumeHint(c containerView) {
-	names := make([]string, len(c.VolumeSlots))
-	for i, s := range c.VolumeSlots {
+// declaredVolumeSlots asks the controlplane to validate repo@tag and returns
+// the volume slots its tinfoil-config.yml declares.
+func declaredVolumeSlots(client *cpClient, repo, tag string) ([]volumeSlot, error) {
+	var result struct {
+		Config *struct {
+			Volumes []volumeSlot `json:"volumes"`
+		} `json:"config"`
+	}
+	if _, err := client.do("POST", "/api/containers/validate", nil, map[string]any{"repo": repo, "tag": tag}, &result); err != nil {
+		return nil, err
+	}
+	if result.Config == nil {
+		return nil, nil
+	}
+	return result.Config.Volumes, nil
+}
+
+// errVolumesRequired explains that the config needs a disk per declared slot
+// and lists the commands that create and attach one, so the user never ends
+// up with a container that exists but cannot run.
+func errVolumesRequired(name string, slots []volumeSlot, host string) error {
+	if host == "" {
+		host = "<HOST>"
+	}
+	names := make([]string, len(slots))
+	for i, s := range slots {
 		names[i] = fmt.Sprintf("%q", s.Name)
 	}
-	fmt.Println()
+	var b strings.Builder
 	if len(names) == 1 {
-		fmt.Printf("The config declares volume %s; attach one before deploying:\n", names[0])
+		fmt.Fprintf(&b, "the config declares volume %s; create a disk for it and pass --volume:\n", names[0])
 	} else {
-		fmt.Printf("The config declares volumes %s; attach them before deploying:\n", strings.Join(names, ", "))
+		fmt.Fprintf(&b, "the config declares volumes %s; create a disk for each and pass --volume:\n", strings.Join(names, ", "))
 	}
-	for _, s := range c.VolumeSlots {
-		name := c.Name + "-" + s.Name
-		as := ""
-		if len(c.VolumeSlots) > 1 {
-			as = " --as " + s.Name
-		}
-		fmt.Printf("  tinfoil volume create %s --size <SIZE> --host %s\n", name, c.HostName)
-		fmt.Printf("  tinfoil volume attach %s %s%s\n", name, c.Name, as)
+	var volumeFlags []string
+	for _, s := range slots {
+		disk := name + "-" + s.Name
+		fmt.Fprintf(&b, "  tinfoil volume create %s --size <SIZE> --host %s\n", disk, host)
+		volumeFlags = append(volumeFlags, "--volume "+disk+":"+s.Name)
 	}
-	fmt.Printf("  tinfoil container deploy %s\n", c.Name)
+	fmt.Fprintf(&b, "  tinfoil container create %s ... %s", name, strings.Join(volumeFlags, " "))
+	return fmt.Errorf("%s", b.String())
 }
 
 // errMessage is the controlplane's message when err came from it, else the
