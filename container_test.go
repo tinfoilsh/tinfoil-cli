@@ -37,9 +37,9 @@ func TestContainerDetailIncludesMarkLatestRelease(t *testing.T) {
 			if err != nil {
 				t.Fatalf("render human output: %v", err)
 			}
-			promoteLine := "Mark latest:  " + tt.want
-			if tt.want != "" && !strings.Contains(string(output), promoteLine) {
-				t.Fatalf("human output does not contain %q:\n%s", promoteLine, output)
+			markLatestLine := "Mark latest:  " + tt.want
+			if tt.want != "" && !strings.Contains(string(output), markLatestLine) {
+				t.Fatalf("human output does not contain %q:\n%s", markLatestLine, output)
 			}
 			if tt.want == "" && strings.Contains(string(output), "Mark latest:") {
 				t.Fatalf("human output includes promotion value for omitted field:\n%s", output)
@@ -68,7 +68,7 @@ func TestContainerDetailIncludesMarkLatestRelease(t *testing.T) {
 	}
 }
 
-func TestContainerCommandsPromoteReleaseRequestBodies(t *testing.T) {
+func TestContainerCommandsMarkLatestReleaseRequestBodies(t *testing.T) {
 	const containerID = "61bd4a3e-5b48-4320-9215-0c7a7f974979"
 
 	commands := []struct {
@@ -114,20 +114,20 @@ func TestContainerCommandsPromoteReleaseRequestBodies(t *testing.T) {
 			run:      func() error { return containerUpdateCmd.RunE(containerUpdateCmd, []string{containerID}) },
 		},
 	}
-	// wantPromote is the JSON fragment expected in the body, including its
+	// wantMarkLatest is the JSON fragment expected in the body, including its
 	// trailing comma, or empty when the field must be omitted entirely.
 	values := []struct {
-		name         string
-		value        string
-		changed      bool
-		wantPromote  string
-		wantErr      string
-		localFailure bool
+		name           string
+		value          string
+		changed        bool
+		wantMarkLatest string
+		wantErr        string
+		localFailure   bool
 	}{
 		{name: "omitted"},
-		{name: "true", value: "true", changed: true, wantPromote: `"mark_latest_release":true,`},
-		{name: "false", value: "false", changed: true, wantPromote: `"mark_latest_release":false,`},
-		{name: "relaxed", value: "no", changed: true, wantPromote: `"mark_latest_release":false,`},
+		{name: "true", value: "true", changed: true, wantMarkLatest: `"mark_latest_release":true,`},
+		{name: "false", value: "false", changed: true, wantMarkLatest: `"mark_latest_release":false,`},
+		{name: "relaxed", value: "no", changed: true, wantMarkLatest: `"mark_latest_release":false,`},
 		{
 			name:         "invalid",
 			value:        "maybe",
@@ -154,7 +154,7 @@ func TestContainerCommandsPromoteReleaseRequestBodies(t *testing.T) {
 							t.Errorf("read body: %v", err)
 							return
 						}
-						if got, want := string(body), command.wantBody(value.wantPromote); got != want {
+						if got, want := string(body), command.wantBody(value.wantMarkLatest); got != want {
 							t.Errorf("body = %s, want %s", got, want)
 						}
 						_, _ = io.WriteString(w, `{}`)
