@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -58,18 +59,20 @@ func TestCreateRejectsInvalidConfigBeforeDiskAdvice(t *testing.T) {
 }
 
 type createFlowFixture struct {
-	mounts            []volumeSlot
-	volumes           []volumeView
-	replaceStatus     int
-	replaceResponseID string
-	attachFailureAt   int
-	deployStatus      int
-	loadFailure       bool
-	returnedNoMounts  bool
-	paths             []string
-	bodies            map[string]map[string]any
-	created, deployed bool
-	attachments       int
+	mounts                 []volumeSlot
+	volumes                []volumeView
+	replaceStatus          int
+	replaceResponseID      string
+	allowedName            *regexp.Regexp
+	validationTargetDenied bool
+	attachFailureAt        int
+	deployStatus           int
+	loadFailure            bool
+	returnedNoMounts       bool
+	paths                  []string
+	bodies                 map[string]map[string]any
+	created, deployed      bool
+	attachments            int
 }
 
 func newCreateFlowFixture() *createFlowFixture {
@@ -111,6 +114,20 @@ func (f *createFlowFixture) serve(t *testing.T) *httptest.Server {
 			}
 			write(containerView{ID: replaceID, Name: "old-app", Status: statusRunning, HostID: "h1", HostName: "inf13"})
 		case path == "POST /api/containers/validate":
+			name, _ := f.bodies[path]["instance_name"].(string)
+			if f.bodies[path]["replace_container_id"] != nil {
+				name = "old-app"
+			}
+			if f.allowedName != nil && !f.allowedName.MatchString(name) {
+				w.WriteHeader(http.StatusForbidden)
+				write(map[string]any{"error": "instance name is outside the key's scope"})
+				return
+			}
+			if f.validationTargetDenied && f.bodies[path]["replace_container_id"] != nil {
+				w.WriteHeader(http.StatusForbidden)
+				write(map[string]any{"error": "replacement target is outside the key's scope"})
+				return
+			}
 			write(map[string]any{"valid": true, "config": map[string]any{"volumes": f.mounts}})
 		case path == "GET /api/volumes":
 			if f.deployed && f.loadFailure {
@@ -121,6 +138,7 @@ func (f *createFlowFixture) serve(t *testing.T) *httptest.Server {
 			write(volumeList{Volumes: f.volumes})
 		case path == "POST /api/containers":
 			f.created = true
+			container.Name, _ = f.bodies[path]["name"].(string)
 			if f.returnedNoMounts {
 				container.VolumeSlots = nil
 			}
@@ -189,6 +207,9 @@ func TestCreateForwardsReleaseChoiceThroughVolumeDeploy(t *testing.T) {
 				}
 				if !f.created || !f.deployed {
 					t.Fatal("create must automatically deploy")
+				}
+				if f.bodies["POST /api/containers/validate"]["instance_name"] != "app" {
+					t.Fatalf("validation must carry the create name: %v", f.bodies["POST /api/containers/validate"])
 				}
 				for _, path := range []string{"POST /api/containers", "POST /api/containers/" + testContainerID + "/deploy"} {
 					value, exists := f.bodies[path]["mark_latest_release"]
@@ -272,6 +293,77 @@ func TestCreateWithoutReplacementCannotReuseAttachedDisk(t *testing.T) {
 	_, err := captureTestStdout(func() error { return containerCreateCmd.RunE(containerCreateCmd, []string{"app"}) })
 	if err == nil || !strings.Contains(err.Error(), "already attached") || f.created {
 		t.Fatalf("attached disk accepted without --replace: %v", err)
+	}
+}
+
+func TestCreateValidationUsesInstanceNamePolicy(t *testing.T) {
+	for _, tt := range []struct {
+		name, instanceName, wantErr string
+		replace, targetDenied       bool
+	}{
+		{name: "matching name", instanceName: "svc-alpha"},
+		{name: "another matching name", instanceName: "svc-beta"},
+		{name: "nonmatching name", instanceName: "other", wantErr: "instance name is outside the key's scope"},
+		{name: "matching replacement", instanceName: "svc-alpha", replace: true},
+		{name: "matching name does not authorize replacement target", instanceName: "svc-alpha", replace: true, targetDenied: true, wantErr: "replacement target is outside the key's scope"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			f := newCreateFlowFixture()
+			f.mounts = nil
+			f.allowedName = regexp.MustCompile(`^(svc-(alpha|beta)|old-app)$`)
+			f.validationTargetDenied = tt.targetDenied
+			server := f.serve(t)
+			defer server.Close()
+			configureContainerPromotionTest(t, server.URL)
+			if tt.replace {
+				createReplaceID = testReplacedContainerID
+			}
+			client, err := authedClient()
+			if err != nil {
+				t.Fatal(err)
+			}
+			baseline := map[string]any{"repo": createRepo, "tag": createTag}
+			if tt.replace {
+				baseline["replace_container_id"] = testReplacedContainerID
+			}
+			status, err := client.do("POST", "/api/containers/validate", nil, baseline, nil)
+			if tt.replace && !tt.targetDenied {
+				if status != http.StatusOK || err != nil {
+					t.Fatalf("replacement validation must use the actual target: status=%d err=%v", status, err)
+				}
+			} else if status != http.StatusForbidden || err == nil {
+				t.Fatalf("validation must reject a missing create name or unauthorized target: status=%d err=%v", status, err)
+			}
+			_, err = captureTestStdout(func() error {
+				return containerCreateCmd.RunE(containerCreateCmd, []string{tt.instanceName})
+			})
+			body := f.bodies["POST /api/containers/validate"]
+			if body["instance_name"] != tt.instanceName {
+				t.Fatalf("validation did not receive the actual create argument: %v", body)
+			}
+			if tt.replace && body["replace_container_id"] != testReplacedContainerID {
+				t.Fatalf("validation lost replacement context: %v", body)
+			}
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) || !strings.Contains(err.Error(), "containers.validate") {
+					t.Fatalf("validation denial must surface without bypass: %v", err)
+				}
+				if f.created || f.attachments != 0 || f.deployed {
+					t.Fatalf("validation denial caused writes: %v", f.paths)
+				}
+			} else if err != nil || !f.created || f.bodies["POST /api/containers"]["name"] != tt.instanceName {
+				t.Fatalf("matching name must create the requested instance: created=%t err=%v", f.created, err)
+			}
+			validations := 0
+			for _, path := range f.paths {
+				if path == "POST /api/containers/validate" {
+					validations++
+				}
+			}
+			if validations != 2 {
+				t.Fatalf("expected one baseline and one CLI validation, no retries: %v", f.paths)
+			}
+		})
 	}
 }
 

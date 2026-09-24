@@ -327,7 +327,7 @@ var containerCreateCmd = &cobra.Command{
 		// with the commands to run rather than creating a container that sits
 		// stopped. Slots without one are optional and the container deploys
 		// with them empty.
-		slots, err := declaredVolumeSlots(client, createRepo, createTag, replaceID)
+		slots, err := declaredVolumeSlots(client, createRepo, createTag, args[0], replaceID)
 		if err != nil {
 			return err
 		}
