@@ -167,7 +167,10 @@ func TestUpdateTargetDowntimeConfirmation(t *testing.T) {
 							w.WriteHeader(tt.status)
 							response := tt.response
 							if response == "" {
-								response = `{"code":"DOWNTIME_CONFIRMATION_REQUIRED","error":"target requires replacement","instances":["current-replace","target-8gpu"]}`
+								response = `{"code":"DOWNTIME_CONFIRMATION_REQUIRED","error":"target requires replacement","update_strategy":"replace"}`
+								if project {
+									response = `{"code":"DOWNTIME_CONFIRMATION_REQUIRED","error":"target requires replacement","instances":["current-replace","target-8gpu"]}`
+								}
 							}
 							io.WriteString(w, response)
 						} else {
@@ -210,7 +213,11 @@ func TestUpdateTargetDowntimeConfirmation(t *testing.T) {
 					}
 				}
 				if tt.status == 409 && tt.response == "" {
-					for _, want := range []string{"current-replace", "target-8gpu", "downtime", "unreachable"} {
+					wants := []string{"app", "downtime", "unreachable"}
+					if project {
+						wants = []string{"current-replace", "target-8gpu", "downtime", "unreachable"}
+					}
+					for _, want := range wants {
 						if !strings.Contains(string(out), want) {
 							t.Fatalf("warning lacks %q: %s", want, out)
 						}
@@ -240,4 +247,96 @@ func captureTestStderr(run func() error) ([]byte, error) {
 		return output, runErr
 	}
 	return output, err
+}
+
+func TestChangedTagCanAllowHeldBlueGreenUpdate(t *testing.T) {
+	for _, project := range []bool{false, true} {
+		name := "container"
+		if project {
+			name = "project"
+		}
+		t.Run(name, func(t *testing.T) {
+			posts := 0
+			current := `{"id":"` + testContainerID + `","name":"app","repo":"acme/app","status":"running","current_tag":"v1","gpus":1,"update_strategy":"replace","volume_slots":[{"name":"optional"}]}`
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch {
+				case r.Method == http.MethodGet && r.URL.Path == "/api/containers/projects":
+					io.WriteString(w, `[{"id":"project-1","repo":"acme/app"}]`)
+				case r.Method == http.MethodGet && r.URL.Path == "/api/containers":
+					io.WriteString(w, `[`+current+`]`)
+				case r.Method == http.MethodGet:
+					io.WriteString(w, current)
+				case r.Method == http.MethodPost:
+					posts++
+					var body map[string]any
+					if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+						t.Error(err)
+					}
+					if body["hold"] != true || body["tag"] != "v2-no-mounts" || body["confirm_downtime"] == true {
+						t.Errorf("body = %v", body)
+					}
+					io.WriteString(w, `{}`)
+				default:
+					t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+				}
+			}))
+			defer server.Close()
+			configureContainerPromotionTest(t, server.URL)
+			configureProjectCommandTest(t, server.URL)
+			updateTag, projectUpdateTag = "v2-no-mounts", "v2-no-mounts"
+			updateHold, projectUpdateHold = "true", "true"
+			containerUpdateCmd.Flags().Lookup("tag").Changed = true
+			containerUpdateCmd.Flags().Lookup("hold").Changed = true
+			projectUpdateCmd.Flags().Lookup("hold").Changed = true
+			_, err := captureTestStdout(func() error {
+				if project {
+					return projectUpdateCmd.RunE(projectUpdateCmd, []string{"acme/app"})
+				}
+				return containerUpdateCmd.RunE(containerUpdateCmd, []string{testContainerID})
+			})
+			if err != nil || posts != 1 {
+				t.Fatalf("must defer target strategy to server: posts=%d err=%v", posts, err)
+			}
+		})
+	}
+}
+
+func TestKnownReplaceConfirmationDoesNotRetryAgain(t *testing.T) {
+	for _, yes := range []bool{false, true} {
+		name := "without confirmation"
+		if yes {
+			name = "already confirmed"
+		}
+		t.Run(name, func(t *testing.T) {
+			posts := 0
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method == http.MethodGet {
+					io.WriteString(w, `{"id":"`+testContainerID+`","name":"app","gpus":8,"update_strategy":"replace"}`)
+					return
+				}
+				posts++
+				var body map[string]any
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+					t.Error(err)
+				}
+				if body["confirm_downtime"] != true {
+					t.Error("known replacement must be confirmed")
+				}
+				w.WriteHeader(http.StatusConflict)
+				io.WriteString(w, `{"code":"DOWNTIME_CONFIRMATION_REQUIRED","error":"still needs confirmation"}`)
+			}))
+			defer server.Close()
+			configureContainerPromotionTest(t, server.URL)
+			updateYes = yes
+			_, err := captureTestStdout(func() error { return containerUpdateCmd.RunE(containerUpdateCmd, []string{testContainerID}) })
+			wantPosts := 0
+			wantErr := "requires interactive confirmation"
+			if yes {
+				wantPosts, wantErr = 1, "still needs confirmation"
+			}
+			if posts != wantPosts || err == nil || !strings.Contains(err.Error(), wantErr) {
+				t.Fatalf("posts=%d err=%v", posts, err)
+			}
+		})
+	}
 }

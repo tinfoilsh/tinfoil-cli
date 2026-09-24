@@ -158,7 +158,7 @@ func failureError(c containerView) error {
 	if msg == "" {
 		msg = "deployment failed; run \"tinfoil container get " + c.Name + "\" for details"
 	}
-	return fmt.Errorf("%s", msg)
+	return fmt.Errorf("%s", humanVolumeMessage(msg))
 }
 
 // isTerminal reports whether there is nothing left to follow for c. A
@@ -204,7 +204,7 @@ func followedDeploymentState(c containerView, deploymentID string) (bool, error)
 // overwritten when stderr is a terminal.
 func followContainer(client *cpClient, id string, initial containerView) (containerView, error) {
 	deploymentID := initial.UpdateDeploymentID
-	if deploymentID == "" {
+	if deploymentID == "" && initial.UpdateTag == "" && initial.UpdateType == "" {
 		deploymentID = initial.TinfoildDeploymentID
 	}
 	if deploymentID == "" {
