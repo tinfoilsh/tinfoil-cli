@@ -120,19 +120,34 @@ func validConnectionHost(host string) bool {
 
 func printContainerConnections(out io.Writer, c containerView) {
 	for _, review := range []bool{false, true} {
-		label, flag := "Production", ""
-		if review {
-			label, flag = "Review", " --review"
-		}
-		target, err := containerConnection(c, review, "")
-		if err != nil {
-			if c.Connections != nil && (review && c.Connections.Review != nil || !review && c.Connections.Production != nil) || review && heldCandidateReady(c) {
-				fmt.Fprintf(out, "%s unavailable: %s\n", label, err)
-			}
-			continue
-		}
-		fmt.Fprintf(out, "%s URL: %s\nExpected source: %s\n", label, target.URL, target.source)
-		fmt.Fprintf(out, "Verified request: tinfoil http get %s --enclave %s --repo %s\n", shellQuote(target.URL), shellQuote(target.host), shellQuote(target.source))
-		fmt.Fprintf(out, "Verified proxy: tinfoil container connect %s%s\n", shellQuote(c.ID), flag)
+		fmt.Fprint(out, containerConnectionGuidance(c, review))
 	}
+}
+
+func printChangedContainerConnections(out io.Writer, initial, final containerView) {
+	for _, review := range []bool{false, true} {
+		guidance := containerConnectionGuidance(final, review)
+		if guidance != containerConnectionGuidance(initial, review) {
+			fmt.Fprint(out, guidance)
+		}
+	}
+}
+
+func containerConnectionGuidance(c containerView, review bool) string {
+	label, flag := "Production", ""
+	if review {
+		label, flag = "Review", " --review"
+	}
+	target, err := containerConnection(c, review, "")
+	if err != nil {
+		if c.Connections != nil && (review && c.Connections.Review != nil || !review && c.Connections.Production != nil) || review && heldCandidateReady(c) {
+			return fmt.Sprintf("%s unavailable: %s\n", label, err)
+		}
+		return ""
+	}
+	var out strings.Builder
+	fmt.Fprintf(&out, "%s URL: %s\nExpected source: %s\n", label, target.URL, target.source)
+	fmt.Fprintf(&out, "Verified request: tinfoil http get %s --enclave %s --repo %s\n", shellQuote(target.URL), shellQuote(target.host), shellQuote(target.source))
+	fmt.Fprintf(&out, "Verified proxy: tinfoil container connect %s%s\n", shellQuote(c.ID), flag)
+	return out.String()
 }
