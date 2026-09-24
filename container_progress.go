@@ -75,34 +75,68 @@ func replaceReason(c containerView) string {
 	return "it has persistent volumes"
 }
 
-func postLifecycleUpdate(client *cpClient, path string, body map[string]any, out any, yes bool, action string, instances []string) error {
-	_, err := client.do("POST", path, nil, body, out)
-	var cp *cpError
-	if !errors.As(err, &cp) || cp.Status != http.StatusConflict || body["confirm_downtime"] == true {
+func postLifecycleUpdate(client *cpClient, path string, body map[string]any, out any, yes bool, action string, replan func() (updateReview, error)) error {
+	delete(body, "confirm_downtime")
+	review, err := replan()
+	if err != nil {
 		return err
+	}
+	changed, retried := false, false
+	for range maxUpdatePlanReviews {
+		if err := review.render(); err != nil {
+			return err
+		}
+		if err := review.freezeSelection(body); err != nil {
+			return err
+		}
+		if err := confirmUpdatePlans(review.plans, yes, action, changed); err != nil {
+			return err
+		}
+		next, err := replan()
+		if err != nil {
+			return err
+		}
+		if !sameUpdateReview(review, next) {
+			review, changed = next, true
+			continue
+		}
+		if review.requiresDowntime() {
+			body["confirm_downtime"] = true
+		}
+		_, err = client.do("POST", path, nil, body, out)
+		if !needsDowntimeReplan(err) || retried || body["confirm_downtime"] == true {
+			return err
+		}
+		delete(body, "confirm_downtime")
+		refreshed, planErr := replan()
+		if planErr != nil {
+			return planErr
+		}
+		if !refreshed.requiresDowntime() {
+			if printErr := refreshed.render(); printErr != nil {
+				return printErr
+			}
+			return fmt.Errorf("execution requires downtime but the refreshed plan does not; no retry was sent: %w", err)
+		}
+		// The retry must pass through the same review and post-consent recheck.
+		review = refreshed
+		changed, retried = true, true
+	}
+	if err := review.render(); err != nil {
+		return err
+	}
+	return fmt.Errorf("update plan did not stabilize after %d reviews; no further update was sent; rerun to review current settings", maxUpdatePlanReviews)
+}
+
+func needsDowntimeReplan(err error) bool {
+	var cp *cpError
+	if !errors.As(err, &cp) || cp.Status != http.StatusConflict {
+		return false
 	}
 	var detail struct {
-		Code      string   `json:"code"`
-		Instances []string `json:"instances"`
+		Code string `json:"code"`
 	}
-	if json.Unmarshal(cp.Body, &detail) != nil || detail.Code != downtimeConfirmationRequired {
-		return err
-	}
-	if len(detail.Instances) > 0 {
-		instances = detail.Instances
-	}
-	fmt.Fprintln(os.Stderr, "This update will cause downtime for:")
-	for _, name := range instances {
-		fmt.Fprintf(os.Stderr, "  %s\n", name)
-	}
-	fmt.Fprintln(os.Stderr, "The target configuration requires replacement: each running instance stops first and")
-	fmt.Fprintln(os.Stderr, "is unreachable until its new version is Running.")
-	if err := confirmYes(yes, action); err != nil {
-		return err
-	}
-	body["confirm_downtime"] = true
-	_, err = client.do("POST", path, nil, body, out)
-	return err
+	return json.Unmarshal(cp.Body, &detail) == nil && detail.Code == downtimeConfirmationRequired
 }
 
 // activeBootStage returns the name of the first stage still in progress.

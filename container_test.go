@@ -106,7 +106,7 @@ func TestContainerCommandsMarkLatestReleaseRequestBodies(t *testing.T) {
 			name:         "update",
 			command:      containerUpdateCmd,
 			path:         "/api/containers/" + containerID + "/update",
-			wantRequests: 3,
+			wantRequests: 4,
 			wantBody: func(promote string) string {
 				return `{` + strings.TrimSuffix(promote, ",") + `}`
 			},

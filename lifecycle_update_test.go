@@ -168,7 +168,11 @@ func TestUpdateTargetDowntimeConfirmation(t *testing.T) {
 						if project {
 							projectID = "project-1"
 						}
-						writeTestUpdatePlan(t, w, r, testContainerID, projectID, updateStrategyBlueGreen)
+						strategy := updateStrategyBlueGreen
+						if posts > 0 {
+							strategy = updateStrategyReplace
+						}
+						writeTestUpdatePlan(t, w, r, testContainerID, projectID, strategy)
 					case r.Method == http.MethodPost:
 						posts++
 						var body map[string]any
@@ -227,9 +231,6 @@ func TestUpdateTargetDowntimeConfirmation(t *testing.T) {
 				}
 				if tt.status == 409 && tt.response == "" {
 					wants := []string{"app", "downtime", "unreachable"}
-					if project {
-						wants = []string{"current-replace", "target-8gpu", "downtime", "unreachable"}
-					}
 					for _, want := range wants {
 						if !strings.Contains(string(out), want) {
 							t.Fatalf("warning lacks %q: %s", want, out)

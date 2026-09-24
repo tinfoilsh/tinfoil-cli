@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -73,7 +74,7 @@ func init() {
 		nil,
 		"Running container instance ID to update; may be repeated (default: all running instances)",
 	)
-	projectUpdateCmd.Flags().BoolVar(&projectUpdateYes, "yes", false, "Skip the downtime confirmation for instances that must be replaced")
+	projectUpdateCmd.Flags().BoolVar(&projectUpdateYes, "yes", false, "Automatically approve displayed update plans, including changes and downtime")
 	_ = projectUpdateCmd.MarkFlagRequired("tag")
 
 	silenceUsageRecursive(projectCmd)
@@ -195,16 +196,11 @@ explicitly disables it (use equals, not --hold false).`,
 			return err
 		}
 
-		plans, err := planProjectUpdate(client, project.ID, body)
-		if err != nil {
-			return err
-		}
-		if err := confirmUpdatePlans(plans, body, projectUpdateYes, "project update"); err != nil {
-			return err
-		}
-
 		response, err := updateProjectInstances(client, project.ID, body)
 		if err != nil {
+			if len(response.Results) > 0 {
+				return errors.Join(err, renderProjectUpdateResults(response.Results))
+			}
 			return err
 		}
 		return renderProjectUpdateResults(response.Results)
@@ -247,10 +243,29 @@ func patchProject(client *cpClient, projectID string, body map[string]any) (proj
 
 func updateProjectInstances(client *cpClient, projectID string, body map[string]any) (projectUpdateResponse, error) {
 	var response projectUpdateResponse
-	if err := postLifecycleUpdate(client, pathf("/api/containers/projects/%s/update", projectID), body, &response, projectUpdateYes, "project update", []string{"selected project instances"}); err != nil {
-		return projectUpdateResponse{}, err
+	var excluded []projectInstanceResult
+	seen := make(map[string]bool)
+	replan := func() (updateReview, error) {
+		review, err := planProjectUpdate(client, projectID, body)
+		if err != nil {
+			return review, err
+		}
+		for _, result := range review.project.Results {
+			if result.Status == planStatusPlanned || seen[result.InstanceID] {
+				continue
+			}
+			detail := "not executed: excluded by update plan"
+			if result.Error != nil {
+				detail += ": " + *result.Error
+			}
+			excluded = append(excluded, projectInstanceResult{ContainerID: result.InstanceID, Name: result.Name, Status: result.Status, Error: detail})
+			seen[result.InstanceID] = true
+		}
+		return review, nil
 	}
-	return response, nil
+	err := postLifecycleUpdate(client, pathf("/api/containers/projects/%s/update", projectID), body, &response, projectUpdateYes, "project update", replan)
+	response.Results = append(response.Results, excluded...)
+	return response, err
 }
 
 func preserveProjectCounts(updated, current projectView) projectView {

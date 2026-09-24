@@ -133,28 +133,28 @@ func TestProjectUpdateMarkLatestReleaseRequestBodies(t *testing.T) {
 	}{
 		{
 			name:         "omitted",
-			wantRequests: 3,
+			wantRequests: 4,
 			wantBody:     `{"hold":true,"instance_ids":["container-1"],"tag":"v1.2.3"}`,
 		},
 		{
 			name:              "true",
 			markLatestRelease: "true",
 			changed:           true,
-			wantRequests:      3,
+			wantRequests:      4,
 			wantBody:          `{"hold":true,"instance_ids":["container-1"],"mark_latest_release":true,"tag":"v1.2.3"}`,
 		},
 		{
 			name:              "false",
 			markLatestRelease: "false",
 			changed:           true,
-			wantRequests:      3,
+			wantRequests:      4,
 			wantBody:          `{"hold":true,"instance_ids":["container-1"],"mark_latest_release":false,"tag":"v1.2.3"}`,
 		},
 		{
 			name:              "relaxed",
 			markLatestRelease: "no",
 			changed:           true,
-			wantRequests:      3,
+			wantRequests:      4,
 			wantBody:          `{"hold":true,"instance_ids":["container-1"],"mark_latest_release":false,"tag":"v1.2.3"}`,
 		},
 		{
