@@ -185,7 +185,7 @@ func init() {
 	containerCreateCmd.Flags().StringVar(&createHost, "host", "", "Target host name (see 'tinfoil container hosts')")
 	containerCreateCmd.Flags().StringVar(&createReplaceID, "replace", "", "ID of the existing container to replace; its disks may be reused with --volume")
 	containerCreateCmd.Flags().StringArrayVar(&createVariables, "variable", nil, "Environment variable in KEY=VALUE form; may be repeated")
-	containerCreateCmd.Flags().StringArrayVar(&createSecrets, "secret", nil, "Org secret name to mount; may be repeated")
+	containerCreateCmd.Flags().StringArrayVar(&createSecrets, "secret", nil, "Tinfoil-managed secret name; may be repeated (use --secret=\"\" for none)")
 	containerCreateCmd.Flags().StringArrayVar(&createSSHKeys, "ssh-key", nil, "Org SSH key name (debug only); may be repeated")
 	containerCreateCmd.Flags().StringArrayVar(&createVolumes, "volume", nil, "Volume to attach before the first deploy, as <id|name>[:<mount name>]; may be repeated")
 	containerCreateCmd.Flags().Int32Var(&createDisplayOrder, "display-order", 0, "Sort order of this instance within its project")
@@ -196,7 +196,7 @@ func init() {
 
 	containerDeployCmd.Flags().StringVar(&deployTag, "tag", "", "Deploy a different release tag than the saved one")
 	containerDeployCmd.Flags().StringArrayVar(&deployVariables, "variable", nil, "Replace the saved environment variables with KEY=VALUE pairs; may be repeated")
-	containerDeployCmd.Flags().StringArrayVar(&deploySecrets, "secret", nil, "Replace the saved secrets list (specify all)")
+	containerDeployCmd.Flags().StringArrayVar(&deploySecrets, "secret", nil, "Replace the saved Tinfoil-managed secrets list (specify all; --secret=\"\" clears it)")
 	containerDeployCmd.Flags().StringArrayVar(&deploySSHKeys, "ssh-key", nil, "Replace the saved SSH keys list")
 	containerDeployCmd.Flags().StringVar(&deployDebug, "debug", "", "Deploy in debug mode (true/false)")
 	containerDeployCmd.Flags().StringVar(&deployMarkLatestRelease, "mark-latest", "", "Mark the deployed tag as the repository's latest GitHub release once it is running (default true; pass false to leave the latest release unchanged)")
@@ -206,7 +206,7 @@ func init() {
 
 	containerUpdateCmd.Flags().StringVar(&updateTag, "tag", "", "Release tag to update to")
 	containerUpdateCmd.Flags().StringArrayVar(&updateVariables, "variable", nil, "Replace the saved environment variables with KEY=VALUE pairs; may be repeated")
-	containerUpdateCmd.Flags().StringArrayVar(&updateSecrets, "secret", nil, "Replace the saved secrets list (specify all)")
+	containerUpdateCmd.Flags().StringArrayVar(&updateSecrets, "secret", nil, "Replace the saved Tinfoil-managed secrets list (specify all; --secret=\"\" clears it)")
 	containerUpdateCmd.Flags().StringArrayVar(&updateSSHKeys, "ssh-key", nil, "Replace the saved SSH keys list")
 	containerUpdateCmd.Flags().StringVar(&updateDebug, "debug", "", "Switch debug mode on or off (true/false)")
 	containerUpdateCmd.Flags().StringVar(&updateHold, "hold", "", "Hold the new version for review instead of switching traffic automatically (true/false)")
@@ -289,6 +289,10 @@ var containerCreateCmd = &cobra.Command{
 			"tag":  createTag,
 		}
 		if err := setMarkLatestRelease(cmd, body, createMarkLatestRelease); err != nil {
+			return err
+		}
+		secrets, err := parseSecretSelection(createSecrets)
+		if err != nil {
 			return err
 		}
 
@@ -376,7 +380,7 @@ var containerCreateCmd = &cobra.Command{
 			body["variables"] = vars
 		}
 		if len(createSecrets) > 0 {
-			body["secrets"] = createSecrets
+			body["secrets"] = secrets
 		}
 		if len(createSSHKeys) > 0 {
 			body["ssh_keys"] = createSSHKeys
@@ -900,10 +904,11 @@ func buildLifecycleBody(cmd *cobra.Command,
 		body["variables"] = vars
 	}
 	if cmd.Flags().Changed("secret") {
-		if secrets == nil {
-			secrets = []string{}
+		selection, err := parseSecretSelection(secrets)
+		if err != nil {
+			return nil, err
 		}
-		body["secrets"] = secrets
+		body["secrets"] = selection
 	}
 	if cmd.Flags().Changed("ssh-key") {
 		if sshKeys == nil {
