@@ -515,7 +515,12 @@ of it. To change a running container, use "tinfoil container update".`,
 			if deployHost == "" && c.HostName != host {
 				return fmt.Errorf("container %s is on host %s but volume %s is on %s; volumes must be on the container's host", c.Name, c.HostName, volumes[0].Name, host)
 			}
-			if err := attachVolumes(client, c, requests, volumes); err != nil {
+			attachTarget := *c
+			attachTarget.MarkLatestRelease = nil
+			if value, ok := body["mark_latest_release"].(bool); ok {
+				attachTarget.MarkLatestRelease = &value
+			}
+			if err := attachVolumes(client, &attachTarget, requests, volumes); err != nil {
 				return err
 			}
 		}
