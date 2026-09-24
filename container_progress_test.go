@@ -54,7 +54,7 @@ func TestFollowContainerStopsAtTerminalStateAndFailsOnFailed(t *testing.T) {
 		if n >= len(statuses) {
 			n = len(statuses) - 1
 		}
-		_, _ = io.WriteString(w, `{"id":"`+testContainerID+`","name":"app","status":"`+statuses[n]+`","error_message":"health check failed"}`)
+		_, _ = io.WriteString(w, `{"id":"`+testContainerID+`","name":"app","tinfoild_deployment_id":"deploy-1","status":"`+statuses[n]+`","error_message":"health check failed"}`)
 	}))
 	defer server.Close()
 	configureContainerPromotionTest(t, server.URL)
@@ -65,7 +65,7 @@ func TestFollowContainerStopsAtTerminalStateAndFailsOnFailed(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = captureTestStdout(func() error {
-		return followAndRender(client, containerView{ID: testContainerID, Name: "app", Status: statusPending}, nil)
+		return followAndRender(client, containerView{ID: testContainerID, Name: "app", Status: statusPending, TinfoildDeploymentID: "deploy-1"}, nil)
 	})
 	if err == nil || err.Error() != "health check failed" {
 		t.Fatalf("error = %v, want the container's error message", err)
