@@ -56,6 +56,8 @@ type containerView struct {
 	UpdatedAt            string           `json:"updated_at"`
 	SSHPort              int              `json:"ssh_port"`
 	HostID               string           `json:"host_id,omitempty"`
+
+	Connections *containerConnections `json:"connections,omitempty"`
 	// VolumeSlots are the volumes tinfoil-config.yml declares; Volumes maps a
 	// slot to the attached volume ID. Only the single-container view has them.
 	VolumeSlots []volumeSlot      `json:"volume_slots,omitempty"`
@@ -148,6 +150,7 @@ var (
 
 	connectPort     uint
 	connectBindAddr string
+	connectReview   bool
 )
 
 func init() {
@@ -216,6 +219,7 @@ func init() {
 
 	containerConnectCmd.Flags().UintVarP(&connectPort, "port", "p", 8080, "Local port for the verified proxy")
 	containerConnectCmd.Flags().StringVarP(&connectBindAddr, "bind", "b", "127.0.0.1", "Address to bind to")
+	containerConnectCmd.Flags().BoolVar(&connectReview, "review", false, "Connect to the available blue/green review candidate, pinned to its release (never production)")
 
 	silenceUsageRecursive(containerCmd)
 }
@@ -568,7 +572,11 @@ persistent volumes boot the new version alongside the current one and switch
 traffic when it is running (no downtime); pass --hold=true to hold the new
 version for review until "tinfoil container promote". Multi-GPU containers and
 containers with persistent volumes must stop the current version first, so the
-command asks you to confirm the downtime unless --yes is given.`,
+command asks you to confirm the downtime unless --yes is given.
+
+Every update first prints a read-only server plan. --yes and --no-wait do not
+skip it. Omit --hold to inherit the project's default; --hold is true and
+--hold=false explicitly disables it (use equals, not --hold false).`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		body, err := buildLifecycleBody(cmd,
@@ -578,9 +586,8 @@ command asks you to confirm the downtime unless --yes is given.`,
 		if err != nil {
 			return err
 		}
-		hold := false
 		if cmd.Flags().Changed("hold") {
-			hold, err = parseTriBool(updateHold)
+			hold, err := parseTriBool(updateHold)
 			if err != nil {
 				return fmt.Errorf("--hold: %w", err)
 			}
@@ -595,15 +602,12 @@ command asks you to confirm the downtime unless --yes is given.`,
 		if err != nil {
 			return err
 		}
-		currentStrategyApplies := !cmd.Flags().Changed("tag") || updateTag == c.CurrentTag || c.GPUs > 1 || len(c.Volumes) > 0
-		if c.UpdateStrategy == updateStrategyReplace && currentStrategyApplies {
-			if hold {
-				return fmt.Errorf("holding for review is not available for %s: %s, so the update replaces the running enclave instead of starting the new version alongside it", c.Name, replaceReason(*c))
-			}
-			if err := confirmDowntime(*c); err != nil {
-				return err
-			}
-			body["confirm_downtime"] = true
+		plan, err := planContainerUpdate(client, c.ID, body)
+		if err != nil {
+			return err
+		}
+		if err := confirmUpdatePlans([]updatePlan{plan}, body, updateYes, "container update"); err != nil {
+			return err
 		}
 		var updated containerView
 		if err := postLifecycleUpdate(client, pathf("/api/containers/%s/update", c.ID), body, &updated, updateYes, "container update", []string{c.Name}); err != nil {
@@ -737,32 +741,31 @@ var containerConnectCmd = &cobra.Command{
 	Short: "Run a verified proxy to a deployed container",
 	Long: `Resolve a deployed container by name (or ID), look up its enclave domain
 and source repository, then start a local proxy that verifies the enclave's
-attestation and forwards HTTP requests to it. This is a convenience around
-` + "`tinfoil proxy -e <domain> -r <repo>`" + `.`,
+attestation and forwards HTTP requests to it. Pass --review to select the real
+blue/green candidate instead of production. Verification is pinned to the selected
+release. An explicit --repo retains its verification pins; in review mode it must
+match the candidate's repository and tag.
+
+  tinfoil container connect my-container
+  tinfoil container connect my-container --review`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client, err := authedClient()
 		if err != nil {
 			return err
 		}
-		c, err := resolveContainer(client, args[0])
+		c, err := resolveContainerDetail(client, args[0])
 		if err != nil {
 			return err
 		}
-		host := strings.TrimSpace(c.Domain)
-		if host == "" {
-			host = strings.TrimSpace(c.InternalDomain)
+		target, err := containerConnection(*c, connectReview, repo)
+		if err != nil {
+			return err
 		}
-		if host == "" {
-			return fmt.Errorf("container %s has no domain (status=%s) — cannot connect", c.Name, c.Status)
-		}
-		if c.Repo == "" {
-			return fmt.Errorf("container %s has no repo recorded — cannot connect", c.Name)
-		}
-		fmt.Printf("Connecting verified proxy to %s (%s) for repo %s\n", c.Name, host, c.Repo)
+		fmt.Printf("Connecting verified proxy to %s: %s (expected %s)\n", c.Name, target.URL, target.source)
 
-		enclaveHost = host
-		repo = c.Repo
+		enclaveHost = target.host
+		repo = target.source
 		listenAddr = connectBindAddr
 		listenPort = connectPort
 		return proxyCmd.RunE(proxyCmd, nil)
@@ -1075,12 +1078,14 @@ func renderContainerDetail(c containerView, attached map[string]volumeView) erro
 		}
 		label = strings.Repeat(" ", len(label))
 	}
+	printVolumeUnlockGuidance(os.Stdout, c.VolumeSlots)
 	if c.UpdateTag != "" {
 		fmt.Printf("Updating to:  %s (%s)\n", c.UpdateTag, updateLabel(c))
 	}
 	if c.ErrorMessage != "" {
 		fmt.Printf("Error:        %s\n", humanVolumeMessage(c.ErrorMessage))
 	}
+	printContainerConnections(os.Stdout, c)
 	return nil
 }
 
