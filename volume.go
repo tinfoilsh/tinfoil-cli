@@ -33,7 +33,7 @@ type volumeList struct {
 }
 
 // volumeSlot is a volume declared in tinfoil-config.yml. A key secret marks
-// the slot as required at start.
+// the slot as required at deploy.
 type volumeSlot struct {
 	Name      string `json:"name"`
 	KeySecret string `json:"key_secret,omitempty"`
@@ -49,7 +49,7 @@ type volumeRequest struct {
 var (
 	volumeCreateSize string
 	volumeCreateHost string
-	volumeUpdateName string
+	volumeRenameName string
 	volumeAttachAs   string
 	volumeYes        bool
 )
@@ -58,13 +58,13 @@ func init() {
 	rootCmd.AddCommand(volumeCmd)
 	volumeCmd.PersistentFlags().StringVarP(&outputFormat, "output", "o", "table", "Output format: table or json")
 
-	volumeCmd.AddCommand(volumeListCmd, volumeGetCmd, volumeCreateCmd, volumeUpdateCmd, volumeAttachCmd, volumeDetachCmd, volumeDeleteCmd)
+	volumeCmd.AddCommand(volumeListCmd, volumeGetCmd, volumeCreateCmd, volumeRenameCmd, volumeAttachCmd, volumeDetachCmd, volumeDeleteCmd)
 
 	volumeCreateCmd.Flags().StringVar(&volumeCreateSize, "size", "", "Volume size, e.g. 16TiB or 30GiB [required]")
 	volumeCreateCmd.Flags().StringVar(&volumeCreateHost, "host", "", "Host to store the volume on (see 'tinfoil container hosts'); required unless only one host is available")
 	_ = volumeCreateCmd.MarkFlagRequired("size")
-	volumeUpdateCmd.Flags().StringVar(&volumeUpdateName, "name", "", "New volume name [required]")
-	_ = volumeUpdateCmd.MarkFlagRequired("name")
+	volumeRenameCmd.Flags().StringVar(&volumeRenameName, "name", "", "New volume name [required]")
+	_ = volumeRenameCmd.MarkFlagRequired("name")
 	volumeAttachCmd.Flags().StringVar(&volumeAttachAs, "as", "", "volume name declared in tinfoil-config.yml (defaults to the only declared volume)")
 	volumeDeleteCmd.Flags().BoolVar(&volumeYes, "yes", false, "Skip interactive confirmation")
 	silenceUsageRecursive(volumeCmd)
@@ -154,8 +154,8 @@ var volumeCreateCmd = &cobra.Command{
 	},
 }
 
-var volumeUpdateCmd = &cobra.Command{
-	Use:   "update [id|name]",
+var volumeRenameCmd = &cobra.Command{
+	Use:   "rename [id|name]",
 	Short: "Rename a volume",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -167,11 +167,11 @@ var volumeUpdateCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		body := map[string]any{"name": volumeUpdateName}
+		body := map[string]any{"name": volumeRenameName}
 		if _, err := client.do("PATCH", pathf("/api/volumes/%s", v.ID), nil, body, nil); err != nil {
 			return err
 		}
-		fmt.Printf("Updated volume %s → %s\n", v.Name, volumeUpdateName)
+		fmt.Printf("Renamed volume %s to %s\n", v.Name, volumeRenameName)
 		return nil
 	},
 }
@@ -465,12 +465,12 @@ func attachRecovery(c *containerView, remaining []volumeRequest, volume string, 
 		}
 		fmt.Fprintf(&b, "\n  tinfoil volume attach %s %s%s", r.identifier, c.Name, as)
 	}
-	fmt.Fprintf(&b, "\n  tinfoil container start %s", c.Name)
+	fmt.Fprintf(&b, "\n  tinfoil container deploy %s", c.Name)
 	return errors.New(b.String())
 }
 
 // withAttachHint appends the attach command when the controlplane refused a
-// start because a required volume is unattached.
+// deploy because a required volume is unattached.
 func withAttachHint(err error, c *containerView) error {
 	msg := errMessage(err)
 	const prefix = "select a volume for required slot "
@@ -528,9 +528,9 @@ func printVolumeHint(c containerView) {
 	}
 	fmt.Println()
 	if len(names) == 1 {
-		fmt.Printf("The config declares volume %s; attach one before starting:\n", names[0])
+		fmt.Printf("The config declares volume %s; attach one before deploying:\n", names[0])
 	} else {
-		fmt.Printf("The config declares volumes %s; attach them before starting:\n", strings.Join(names, ", "))
+		fmt.Printf("The config declares volumes %s; attach them before deploying:\n", strings.Join(names, ", "))
 	}
 	for _, s := range c.VolumeSlots {
 		name := c.Name + "-" + s.Name
@@ -541,7 +541,7 @@ func printVolumeHint(c containerView) {
 		fmt.Printf("  tinfoil volume create %s --size <SIZE> --host %s\n", name, c.HostName)
 		fmt.Printf("  tinfoil volume attach %s %s%s\n", name, c.Name, as)
 	}
-	fmt.Printf("  tinfoil container start %s\n", c.Name)
+	fmt.Printf("  tinfoil container deploy %s\n", c.Name)
 }
 
 // errMessage is the controlplane's message when err came from it, else the
