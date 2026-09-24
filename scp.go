@@ -25,7 +25,7 @@ attested TLS connection, using your local scp and the same tunnel as tinfoil ssh
 Use [user@]container:path or [user@]hostname:path for remote files. The target
 and SSH port are resolved just as for tinfoil ssh. The default user is root;
 -l changes it, and an explicit user@ in a path takes precedence. Use :path
-with --host to select the remote enclave separately.
+with --enclave to select the remote enclave separately.
 
 The container must publish its SSH port in tinfoil-config.yml. Transfers may
 use multiple sources, but must be between your machine and one enclave.
@@ -37,7 +37,7 @@ enclave-side port; scp's -p after -- preserves file times and permissions.
   tinfoil scp my-container:/var/log/app.log ./app.log
   tinfoil scp ./data my-container:/data -- -r
   tinfoil scp ./file.txt ubuntu@enclave.example.com:/tmp/ -p 2022
-  tinfoil scp --host enclave.example.com ./file.txt :/tmp/`,
+  tinfoil scp --enclave enclave.example.com ./file.txt :/tmp/`,
 		Args:         cobra.ArbitraryArgs,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -107,7 +107,7 @@ func resolveSCPPaths(args []string, user string) (*tunnelTarget, []string, error
 			path.identifier = enclaveHost
 		}
 		if path.identifier == "" {
-			return nil, nil, fmt.Errorf("name a container or hostname before ':', or pass --host")
+			return nil, nil, fmt.Errorf("name a container or hostname before ':', or pass --enclave")
 		}
 		if hasRemote && path.identifier != identifier {
 			return nil, nil, fmt.Errorf("all remote paths must name the same container or hostname")

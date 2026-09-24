@@ -219,7 +219,7 @@ func resolveTunnelTarget(identifier string) (*tunnelTarget, error) {
 		identifier = enclaveHost
 	}
 	if identifier == "" {
-		return nil, fmt.Errorf("name a container or an enclave hostname, or pass --host")
+		return nil, fmt.Errorf("name a container or an enclave hostname, or pass --enclave")
 	}
 	if strings.Contains(identifier, ".") {
 		return &tunnelTarget{name: identifier, host: identifier, repo: repo, sealedTo: forwardSealedTo}, nil
