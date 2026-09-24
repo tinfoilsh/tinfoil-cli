@@ -180,11 +180,11 @@ func init() {
 	containerCreateCmd.Flags().BoolVar(&createYes, "yes", false, "Skip interactive confirmation for --disable-cc-mode")
 	containerCreateCmd.Flags().StringVar(&createCustomDomain, "custom-domain", "", "Verified custom domain to expose the container on")
 	containerCreateCmd.Flags().StringVar(&createHost, "host", "", "Target host name (see 'tinfoil container hosts')")
-	containerCreateCmd.Flags().StringVar(&createReplaceID, "replace", "", "ID of an existing container to atomically replace")
+	containerCreateCmd.Flags().StringVar(&createReplaceID, "replace", "", "ID of the existing container to replace; its disks may be reused with --volume")
 	containerCreateCmd.Flags().StringArrayVar(&createVariables, "variable", nil, "Environment variable in KEY=VALUE form; may be repeated")
 	containerCreateCmd.Flags().StringArrayVar(&createSecrets, "secret", nil, "Org secret name to mount; may be repeated")
 	containerCreateCmd.Flags().StringArrayVar(&createSSHKeys, "ssh-key", nil, "Org SSH key name (debug only); may be repeated")
-	containerCreateCmd.Flags().StringArrayVar(&createVolumes, "volume", nil, "Volume to attach before the first deploy, as <id|name>[:<declared name>]; may be repeated")
+	containerCreateCmd.Flags().StringArrayVar(&createVolumes, "volume", nil, "Volume to attach before the first deploy, as <id|name>[:<mount name>]; may be repeated")
 	containerCreateCmd.Flags().Int32Var(&createDisplayOrder, "display-order", 0, "Sort order of this instance within its project")
 	_ = containerCreateCmd.MarkFlagRequired("repo")
 	_ = containerCreateCmd.MarkFlagRequired("tag")
@@ -199,7 +199,7 @@ func init() {
 	containerDeployCmd.Flags().StringVar(&deployMarkLatestRelease, "mark-latest", "", "Mark the deployed tag as the repository's latest GitHub release once it is running (default true; pass false to leave the latest release unchanged)")
 	containerDeployCmd.Flags().StringVar(&deployCustomDomain, "custom-domain", "", "Replace the custom domain (empty string clears it)")
 	containerDeployCmd.Flags().StringVar(&deployHost, "host", "", "Deploy on a different host (see 'tinfoil container hosts')")
-	containerDeployCmd.Flags().StringArrayVar(&deployVolumes, "volume", nil, "Volume to attach before deploying, as <id|name>[:<declared name>]; may be repeated")
+	containerDeployCmd.Flags().StringArrayVar(&deployVolumes, "volume", nil, "Volume to attach before deploying, as <id|name>[:<mount name>]; may be repeated")
 
 	containerUpdateCmd.Flags().StringVar(&updateTag, "tag", "", "Release tag to update to")
 	containerUpdateCmd.Flags().StringArrayVar(&updateVariables, "variable", nil, "Replace the saved environment variables with KEY=VALUE pairs; may be repeated")
@@ -308,18 +308,43 @@ var containerCreateCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
+		var replacement *containerView
+		replaceID := strings.TrimSpace(createReplaceID)
+		if replaceID != "" {
+			if !looksLikeUUID(replaceID) {
+				return fmt.Errorf("--replace requires a container ID")
+			}
+			replacement, err = resolveContainerDetail(client, replaceID)
+			if err != nil {
+				return fmt.Errorf("resolve --replace target: %w", err)
+			}
+			replaceID = replacement.ID
+		}
 		// A slot with a key secret cannot run without a disk, so refuse up front
 		// with the commands to run rather than creating a container that sits
 		// stopped. Slots without one are optional and the container deploys
 		// with them empty.
-		if len(requests) == 0 {
-			slots, err := declaredVolumeSlots(client, createRepo, createTag)
-			if err != nil {
-				return err
+		slots, err := declaredVolumeSlots(client, createRepo, createTag, replaceID)
+		if err != nil {
+			return err
+		}
+		planned := containerView{Name: args[0], VolumeSlots: slots}
+		assignments, err := volumeAssignments(&planned, requests)
+		if err != nil {
+			return err
+		}
+		assigned := map[string]bool{}
+		for _, name := range assignments {
+			assigned[name] = true
+		}
+		var missing []volumeSlot
+		for _, mount := range requiredVolumeSlots(slots) {
+			if !assigned[mount.Name] {
+				missing = append(missing, mount)
 			}
-			if required := requiredVolumeSlots(slots); len(required) > 0 {
-				return errVolumesRequired(args[0], required, createHost)
-			}
+		}
+		if len(missing) > 0 {
+			return errVolumesRequired(args[0], missing, createHost)
 		}
 		var volumes []volumeView
 		if len(requests) > 0 {
@@ -327,7 +352,7 @@ var containerCreateCmd = &cobra.Command{
 			if err != nil {
 				return err
 			}
-			if volumes, err = resolveVolumeRequests(list.Volumes, requests); err != nil {
+			if volumes, err = resolveVolumeRequests(list.Volumes, requests, replacement); err != nil {
 				return err
 			}
 			host, err := volumesHost(volumes, createHost)
@@ -361,37 +386,53 @@ var containerCreateCmd = &cobra.Command{
 		if createHost != "" && len(requests) == 0 {
 			body["host_name"] = createHost
 		}
-		if createReplaceID != "" {
-			body["replace_container_id"] = createReplaceID
+		if replaceID != "" {
+			body["replace_container_id"] = replaceID
 		}
 
 		var created containerView
 		if _, err := client.do("POST", "/api/containers", nil, body, &created); err != nil {
 			return err
 		}
+		deployBody := map[string]any{}
+		if value, ok := body["mark_latest_release"].(bool); ok {
+			deployBody["mark_latest_release"] = value
+			created.MarkLatestRelease = &value
+		}
 		if len(created.VolumeSlots) == 0 {
 			if len(requests) > 0 {
-				return fmt.Errorf("created %s but it declares no volumes in tinfoil-config.yml; --volume was not applied", created.Name)
+				return createFollowupError(created, replaceID, fmt.Errorf("the returned configuration declares no mounts; --volume was not applied"))
 			}
-			return followAndRender(client, created, nil)
+			return createFollowupError(created, replaceID, followAndRender(client, created, nil))
 		}
 		if len(requests) > 0 {
 			if err := attachVolumes(client, &created, requests, volumes); err != nil {
-				return fmt.Errorf("created %s but %w", created.Name, err)
+				return createFollowupError(created, replaceID, err)
 			}
 		}
 		// The controlplane leaves any volume-declaring container stopped after
 		// create; deploy it now so optional slots do not strand it.
 		var deployed containerView
-		if _, err := client.do("POST", pathf("/api/containers/%s/deploy", created.ID), nil, map[string]any{}, &deployed); err != nil {
-			return fmt.Errorf("created %s but could not deploy it: %s. Run: tinfoil container deploy %s", created.Name, errMessage(err), created.Name)
+		if _, err := client.do("POST", pathf("/api/containers/%s/deploy", created.ID), nil, deployBody, &deployed); err != nil {
+			return createFollowupError(created, replaceID, fmt.Errorf("deploy request failed: %w. Check its state before retrying: %s", err, deployRecoveryCommand(&created)))
 		}
 		attached, err := loadContainerVolumes(client, deployed)
 		if err != nil {
-			return err
+			return createFollowupError(created, replaceID, fmt.Errorf("deploy was accepted (status %s), but could not load attached volumes: %w", deployed.Status, err))
 		}
-		return followAndRender(client, deployed, attached)
+		return createFollowupError(created, replaceID, followAndRender(client, deployed, attached))
 	},
+}
+
+func createFollowupError(created containerView, replaceID string, err error) error {
+	if err == nil {
+		return nil
+	}
+	replaced := ""
+	if replaceID != "" {
+		replaced = fmt.Sprintf("; replaced container %s was removed", replaceID)
+	}
+	return fmt.Errorf("created %s (%s)%s, but follow-up failed: %w. The new container and any successful disk attachments were retained; inspect with: tinfoil container get %s", created.Name, created.ID, replaced, err, created.ID)
 }
 
 var containerDeleteCmd = &cobra.Command{
@@ -452,7 +493,7 @@ of it. To change a running container, use "tinfoil container update".`,
 			return err
 		}
 		if c.Status == statusFailed && c.ErrorMessage != "" && outputFormat != "json" {
-			fmt.Fprintf(os.Stderr, "Last attempt failed: %s\n", c.ErrorMessage)
+			fmt.Fprintf(os.Stderr, "Last attempt failed: %s\n", humanVolumeMessage(c.ErrorMessage))
 			fmt.Fprintln(os.Stderr, "Deploying again with the same settings; pass flags to change them.")
 		}
 		if len(requests) > 0 {
@@ -460,7 +501,7 @@ of it. To change a running container, use "tinfoil container update".`,
 			if err != nil {
 				return err
 			}
-			volumes, err := resolveVolumeRequests(list.Volumes, requests)
+			volumes, err := resolveVolumeRequests(list.Volumes, requests, nil)
 			if err != nil {
 				return err
 			}
@@ -1029,7 +1070,7 @@ func renderContainerDetail(c containerView, attached map[string]volumeView) erro
 		fmt.Printf("Updating to:  %s (%s)\n", c.UpdateTag, updateLabel(c))
 	}
 	if c.ErrorMessage != "" {
-		fmt.Printf("Error:        %s\n", c.ErrorMessage)
+		fmt.Printf("Error:        %s\n", humanVolumeMessage(c.ErrorMessage))
 	}
 	return nil
 }
