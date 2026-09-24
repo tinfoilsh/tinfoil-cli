@@ -75,9 +75,35 @@ func TestFollowContainerStopsAtTerminalStateAndFailsOnFailed(t *testing.T) {
 	}
 }
 
+func TestFollowAndRenderExitsNonZeroWhenInitialResponseAlreadyFailed(t *testing.T) {
+	previousNoWait, previousOutput := noWait, outputFormat
+	t.Cleanup(func() { noWait, outputFormat = previousNoWait, previousOutput })
+	for _, mode := range []struct {
+		name   string
+		noWait bool
+		format string
+	}{{"json", false, "json"}, {"no-wait", true, "table"}, {"follow", false, "table"}} {
+		t.Run(mode.name, func(t *testing.T) {
+			noWait, outputFormat = mode.noWait, mode.format
+			_, err := captureTestStdout(func() error {
+				return followAndRender(nil, containerView{ID: testContainerID, Name: "app", Status: statusFailed, ErrorMessage: "boot failed"}, nil)
+			})
+			if err == nil || err.Error() != "boot failed" {
+				t.Fatalf("error = %v, want the container's error message", err)
+			}
+		})
+	}
+}
+
 func TestIsTerminalHoldsForStagedCandidateAndStopsForRunning(t *testing.T) {
 	if !isTerminal(containerView{Status: statusRunning}) {
 		t.Fatal("running container should be terminal")
+	}
+	if isTerminal(containerView{Status: statusStopped}) {
+		t.Fatal("stopped is transient while a queued deploy waits; keep following")
+	}
+	if isTerminal(containerView{Status: statusStopping}) {
+		t.Fatal("stopping container should keep being followed")
 	}
 	if isTerminal(containerView{Status: statusRunning, UpdateTag: "v2", UpdateStatus: statusDeploying}) {
 		t.Fatal("container with a booting candidate should not be terminal")
