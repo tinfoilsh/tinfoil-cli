@@ -276,6 +276,7 @@ var repoBuildRunCmd = &cobra.Command{
 		}
 		fmt.Printf("Queued release %s; not yet deployable.\n", response.Version)
 		fmt.Printf("GitHub Actions: %s\n", response.WorkflowRunURL)
+		fmt.Printf("All workflows (including Build & Publish): https://github.com/%s/%s/actions\n", repository.owner, repository.name)
 		fmt.Printf("Check status (read-only): tinfoil repo build status %s/%s --version %s\n", repository.owner, repository.name, shellQuote(response.Version))
 		fmt.Println("Wait for both Tinfoil Release and Build & Publish to succeed, then confirm the same tag is published with repo build info before creating a container.")
 		return nil
@@ -304,6 +305,7 @@ var repoBuildStatusCmd = &cobra.Command{
 			fmt.Printf("Release %s: %s (conclusion: %s)\nGitHub Actions: %s\n", response.Version, response.Run.Status, response.Run.Conclusion, response.Run.HTMLURL)
 		}
 		fmt.Printf("Confirm Build & Publish also succeeds, then check the published tag: tinfoil repo build info %s/%s\n", repository.owner, repository.name)
+		fmt.Printf("All workflows: https://github.com/%s/%s/actions\n", repository.owner, repository.name)
 		return nil
 	},
 }
