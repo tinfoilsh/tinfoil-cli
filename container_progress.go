@@ -99,37 +99,42 @@ func activeBootStage(stages []bootStage) string {
 // it. JSON output and --no-wait print the initial response only. Exits
 // non-zero when the container or its update candidate fails.
 func followAndRender(client *cpClient, c containerView, attached map[string]volumeView) error {
-	if outputFormat == "json" || noWait {
-		return renderContainerDetail(c, attached)
-	}
 	if err := renderContainerDetail(c, attached); err != nil {
 		return err
 	}
-	if isTerminal(c) {
-		return nil
-	}
-
-	final, err := followContainer(client, c.ID, c)
-	if err != nil {
-		return err
-	}
-	if final.Status == statusFailed || final.UpdateStatus == statusFailed {
-		msg := final.ErrorMessage
-		if msg == "" {
-			msg = "deployment failed; run \"tinfoil container get " + final.Name + "\" for details"
+	final := c
+	if outputFormat != "json" && !noWait && !isTerminal(c) {
+		var err error
+		if final, err = followContainer(client, c.ID, c); err != nil {
+			return err
 		}
-		return fmt.Errorf("%s", msg)
 	}
-	return nil
+	return failureError(final)
 }
 
-// isTerminal reports whether there is nothing left to follow for c.
+// failureError turns a failed container or update candidate into a non-zero
+// exit, whether the failure was in the initial response or observed while
+// following.
+func failureError(c containerView) error {
+	if c.Status != statusFailed && c.UpdateStatus != statusFailed {
+		return nil
+	}
+	msg := c.ErrorMessage
+	if msg == "" {
+		msg = "deployment failed; run \"tinfoil container get " + c.Name + "\" for details"
+	}
+	return fmt.Errorf("%s", msg)
+}
+
+// isTerminal reports whether there is nothing left to follow for c. A
+// lifecycle command only returns a stopped container transiently (a deploy
+// queued behind a stop), so stopped is not terminal here.
 func isTerminal(c containerView) bool {
 	if c.UpdateTag != "" {
 		return c.UpdateStatus == statusFailed || (c.UpdateStatus == updateStatusReady && c.Staging)
 	}
 	switch c.Status {
-	case statusRunning, statusFailed, statusStopped:
+	case statusRunning, statusFailed:
 		return true
 	}
 	return false

@@ -195,6 +195,9 @@ skipped; bring those up with "tinfoil container deploy".`,
 			return err
 		}
 		if len(replaced) > 0 {
+			if staging, ok := body["staging"].(bool); ok && staging {
+				return fmt.Errorf("staging is not available for %s: %s, so the update replaces the running instance instead of booting the new version alongside it; pass --staging=false or select other instances with --instance", replaced[0].Name, replaceReason(replaced[0]))
+			}
 			if err := confirmDeploymentDowntime(replaced); err != nil {
 				return err
 			}

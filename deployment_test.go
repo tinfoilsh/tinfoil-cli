@@ -400,3 +400,36 @@ func captureTestStdout(run func() error) ([]byte, error) {
 	}
 	return output, readErr
 }
+
+func TestDeploymentUpdateRefusesStagingForReplaceInstances(t *testing.T) {
+	var posts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/deployments":
+			_, _ = io.WriteString(w, `[{"id":"deployment-1","repo":"acme/app"}]`)
+		case r.Method == http.MethodGet && r.URL.Path == "/api/containers":
+			_, _ = io.WriteString(w, `[{"id":"gpu-1","name":"big","repo":"acme/app","status":"running","gpus":8,"update_strategy":"replace"}]`)
+		case r.Method == http.MethodPost:
+			posts.Add(1)
+			_, _ = io.WriteString(w, `{"results":[]}`)
+		default:
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	configureDeploymentCommandTest(t, server.URL)
+	deploymentUpdateTag = "v2"
+	deploymentUpdateStaging = "true"
+	deploymentUpdateCmd.Flags().Lookup("staging").Changed = true
+
+	_, err := captureTestStdout(func() error {
+		return deploymentUpdateCmd.RunE(deploymentUpdateCmd, []string{"acme/app"})
+	})
+	if err == nil || !strings.Contains(err.Error(), "staging is not available for big: it uses 8 GPUs") {
+		t.Fatalf("error = %v", err)
+	}
+	if posts.Load() != 0 {
+		t.Fatal("update must not be sent when staging is refused locally")
+	}
+}
