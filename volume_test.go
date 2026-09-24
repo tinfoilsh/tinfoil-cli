@@ -254,16 +254,18 @@ func TestContainerCreateWithVolume(t *testing.T) {
 			wantPaths: []string{"GET /api/volumes", "POST /api/containers"},
 		},
 		{
-			name: "without --volume prints the attach hint",
-			wantOut: []string{
-				"Status:       Stopped",
-				"Volumes:      data (none attached)",
-				"\nThe config declares volume \"data\"; attach one before deploying:\n" +
-					"  tinfoil volume create app-data --size <SIZE> --host inf13\n" +
-					"  tinfoil volume attach app-data app\n" +
-					"  tinfoil container deploy app\n",
-			},
-			wantPaths: []string{"POST /api/containers"},
+			name: "without --volume refuses before creating anything",
+			host: "inf13",
+			wantErr: "the config declares volume \"data\"; create a disk for it and pass --volume:\n" +
+				"  tinfoil volume create app-data --size <SIZE> --host inf13\n" +
+				"  tinfoil container create app ... --volume app-data:data",
+			wantPaths: []string{"POST /api/containers/validate"},
+		},
+		{
+			name:      "without --volume and a config with no slots creates normally",
+			slots:     `[]`,
+			wantOut:   []string{"Status:       Stopped"},
+			wantPaths: []string{"POST /api/containers/validate", "POST /api/containers"},
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -279,6 +281,8 @@ func TestContainerCreateWithVolume(t *testing.T) {
 				paths = append(paths, r.Method+" "+r.URL.Path)
 				mu.Unlock()
 				switch {
+				case r.Method == http.MethodPost && r.URL.Path == "/api/containers/validate":
+					_, _ = io.WriteString(w, `{"valid":true,"config":{"volumes":`+slots+`}}`)
 				case r.Method == http.MethodGet && r.URL.Path == "/api/volumes":
 					_, _ = io.WriteString(w, testVolumeList(attached.Load()))
 				case r.Method == http.MethodPost && r.URL.Path == "/api/containers":

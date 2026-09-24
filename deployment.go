@@ -41,11 +41,11 @@ type deploymentUpdateResponse struct {
 var (
 	deploymentSettingsDefaultStaging string
 
-	deploymentUpdateTag            string
-	deploymentUpdateStaging        string
-	deploymentUpdatePromoteRelease string
-	deploymentUpdateInstanceIDs    []string
-	deploymentUpdateYes            bool
+	deploymentUpdateTag               string
+	deploymentUpdateStaging           string
+	deploymentUpdateMarkLatestRelease string
+	deploymentUpdateInstanceIDs       []string
+	deploymentUpdateYes               bool
 )
 
 func init() {
@@ -65,7 +65,7 @@ func init() {
 
 	deploymentUpdateCmd.Flags().StringVar(&deploymentUpdateTag, "tag", "", "Release tag to update to")
 	deploymentUpdateCmd.Flags().StringVar(&deploymentUpdateStaging, "staging", "", "Hold new versions for manual acceptance instead of switching traffic automatically (true/false)")
-	deploymentUpdateCmd.Flags().StringVar(&deploymentUpdatePromoteRelease, "promote-release", "", "Promote the deployed tag to the repository's latest release when it goes live (default true; pass false to decline)")
+	deploymentUpdateCmd.Flags().StringVar(&deploymentUpdateMarkLatestRelease, "mark-latest", "", "Mark the deployed tag as the repository's latest GitHub release once it is running (default true; pass false to leave the latest release unchanged)")
 	deploymentUpdateCmd.Flags().StringArrayVar(
 		&deploymentUpdateInstanceIDs,
 		"instance",
@@ -167,7 +167,7 @@ skipped; bring those up with "tinfoil container deploy".`,
 		body := map[string]any{
 			"tag": deploymentUpdateTag,
 		}
-		if err := setPromoteRelease(cmd, body, deploymentUpdatePromoteRelease); err != nil {
+		if err := setMarkLatestRelease(cmd, body, deploymentUpdateMarkLatestRelease); err != nil {
 			return err
 		}
 		if cmd.Flags().Changed("staging") {
