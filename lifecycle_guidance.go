@@ -7,7 +7,7 @@ import (
 )
 
 func shellQuote(value string) string {
-	if value != "" && !strings.ContainsAny(value, " \t\r\n'\"`$;&|<>*?(){}[]!\\") && !strings.HasPrefix(value, "-") {
+	if value != "" && !strings.ContainsAny(value, " \t\r\n'\"`$;&|<>*?(){}[]!\\#~") && !strings.HasPrefix(value, "-") {
 		return value
 	}
 	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"

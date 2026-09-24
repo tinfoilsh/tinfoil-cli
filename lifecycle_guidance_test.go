@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os/exec"
 	"strings"
 	"testing"
 )
@@ -68,5 +69,26 @@ func TestVolumeUnlockGuidance(t *testing.T) {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("missing %q: %s", want, out.String())
 		}
+	}
+}
+
+func TestShellQuotePreservesArguments(t *testing.T) {
+	for _, shell := range []string{"sh", "bash", "zsh"} {
+		t.Run(shell, func(t *testing.T) {
+			path, err := exec.LookPath(shell)
+			if err != nil {
+				t.Skipf("%s is not installed", shell)
+			}
+			t.Setenv("HOME", t.TempDir())
+			for _, value := range []string{"#app", "~", "~/data", "~root", "ordinary", "acme/app@v1", "", "single'quote", "a b", "$(printf injected)", "a\nb", "a#b", "a~b", "--not-an-option"} {
+				t.Run(value, func(t *testing.T) {
+					script := "set -- " + shellQuote(value) + `; printf '%s\n' "$#" "$1"`
+					out, err := exec.Command(path, "-c", script).CombinedOutput()
+					if err != nil || string(out) != "1\n"+value+"\n" {
+						t.Fatalf("argument %q was changed by %s: output=%q err=%v", value, shell, out, err)
+					}
+				})
+			}
+		})
 	}
 }
