@@ -22,7 +22,7 @@ type containerView struct {
 	ID                 string          `json:"id"`
 	Name               string          `json:"name"`
 	Repo               string          `json:"repo"`
-	DeploymentID       string          `json:"deployment_id"`
+	ProjectID          string          `json:"project_id"`
 	Status             string          `json:"status"`
 	CurrentTag         string          `json:"current_tag"`
 	Domain             string          `json:"domain"`
@@ -37,7 +37,7 @@ type containerView struct {
 	Secrets            []string        `json:"secrets"`
 	SSHKeys            []string        `json:"ssh_keys"`
 	Debug              bool            `json:"debug"`
-	Staging            bool            `json:"staging"`
+	Held               bool            `json:"held"`
 	MarkLatestRelease  *bool           `json:"mark_latest_release,omitempty"`
 	DisableCCMode      bool            `json:"disable_cc_mode"`
 	GithubAppConnected bool            `json:"github_app_connected"`
@@ -97,7 +97,7 @@ var (
 	updateSecrets           []string
 	updateSSHKeys           []string
 	updateDebug             string
-	updateStaging           string
+	updateHold              string
 	updateMarkLatestRelease string
 	updateCustomDomain      string
 	updateYes               bool
@@ -134,13 +134,13 @@ func init() {
 	containerCmd.AddCommand(containerDeployCmd)
 	containerCmd.AddCommand(containerStopCmd)
 	containerCmd.AddCommand(containerUpdateCmd)
-	containerCmd.AddCommand(containerAcceptCmd)
+	containerCmd.AddCommand(containerPromoteCmd)
 	containerCmd.AddCommand(containerCancelCmd)
 	containerCmd.AddCommand(containerMetricsCmd)
 	containerCmd.AddCommand(containerHostsCmd)
 	containerCmd.AddCommand(containerConnectCmd)
 
-	for _, c := range []*cobra.Command{containerCreateCmd, containerDeployCmd, containerUpdateCmd, containerAcceptCmd} {
+	for _, c := range []*cobra.Command{containerCreateCmd, containerDeployCmd, containerUpdateCmd, containerPromoteCmd} {
 		c.Flags().BoolVar(&noWait, "no-wait", false, "Return as soon as the request is accepted instead of following progress")
 	}
 	containerCancelCmd.Flags().BoolVar(&cancelRollbackLatest, "rollback-latest", false, "Request restoring the repository's latest release to the current production tag")
@@ -158,7 +158,7 @@ func init() {
 	containerCreateCmd.Flags().StringArrayVar(&createSecrets, "secret", nil, "Org secret name to mount; may be repeated")
 	containerCreateCmd.Flags().StringArrayVar(&createSSHKeys, "ssh-key", nil, "Org SSH key name (debug only); may be repeated")
 	containerCreateCmd.Flags().StringArrayVar(&createVolumes, "volume", nil, "Volume to attach before the first deploy, as <id|name>[:<declared name>]; may be repeated")
-	containerCreateCmd.Flags().Int32Var(&createDisplayOrder, "display-order", 0, "Sort order of this container within its repository deployment")
+	containerCreateCmd.Flags().Int32Var(&createDisplayOrder, "display-order", 0, "Sort order of this instance within its project")
 	_ = containerCreateCmd.MarkFlagRequired("repo")
 	_ = containerCreateCmd.MarkFlagRequired("tag")
 
@@ -179,7 +179,7 @@ func init() {
 	containerUpdateCmd.Flags().StringArrayVar(&updateSecrets, "secret", nil, "Replace the saved secrets list (specify all)")
 	containerUpdateCmd.Flags().StringArrayVar(&updateSSHKeys, "ssh-key", nil, "Replace the saved SSH keys list")
 	containerUpdateCmd.Flags().StringVar(&updateDebug, "debug", "", "Switch debug mode on or off (true/false)")
-	containerUpdateCmd.Flags().StringVar(&updateStaging, "staging", "", "Hold the new version for manual acceptance instead of switching traffic automatically (true/false)")
+	containerUpdateCmd.Flags().StringVar(&updateHold, "hold", "", "Hold the new version for review instead of switching traffic automatically (true/false)")
 	containerUpdateCmd.Flags().StringVar(&updateMarkLatestRelease, "mark-latest", "", "Mark the deployed tag as the repository's latest GitHub release once it is running (default true; pass false to leave the latest release unchanged)")
 	containerUpdateCmd.Flags().StringVar(&updateCustomDomain, "custom-domain", "", "Replace the custom domain (empty string clears it)")
 	containerUpdateCmd.Flags().BoolVar(&updateYes, "yes", false, "Skip the downtime confirmation for containers that must be replaced")
@@ -423,6 +423,10 @@ of it. To change a running container, use "tinfoil container update".`,
 		if err != nil {
 			return err
 		}
+		if c.Status == statusFailed && c.ErrorMessage != "" && outputFormat != "json" {
+			fmt.Fprintf(os.Stderr, "Last attempt failed: %s\n", c.ErrorMessage)
+			fmt.Fprintln(os.Stderr, "Deploying again with the same settings; pass flags to change them.")
+		}
 		if len(requests) > 0 {
 			list, err := listVolumes(client)
 			if err != nil {
@@ -484,8 +488,8 @@ var containerUpdateCmd = &cobra.Command{
 	Short: "Update a running container to a new tag or configuration",
 	Long: `Replace the running version of a container. Single-GPU containers without
 persistent volumes boot the new version alongside the current one and switch
-traffic when it is running (no downtime); pass --staging=true to hold the new
-version for "tinfoil container accept" instead. Multi-GPU containers and
+traffic when it is running (no downtime); pass --hold=true to hold the new
+version for review until "tinfoil container promote". Multi-GPU containers and
 containers with persistent volumes must stop the current version first, so the
 command asks you to confirm the downtime unless --yes is given.`,
 	Args: cobra.ExactArgs(1),
@@ -497,13 +501,13 @@ command asks you to confirm the downtime unless --yes is given.`,
 		if err != nil {
 			return err
 		}
-		staging := false
-		if cmd.Flags().Changed("staging") {
-			staging, err = parseTriBool(updateStaging)
+		hold := false
+		if cmd.Flags().Changed("hold") {
+			hold, err = parseTriBool(updateHold)
 			if err != nil {
-				return fmt.Errorf("--staging: %w", err)
+				return fmt.Errorf("--hold: %w", err)
 			}
-			body["staging"] = staging
+			body["hold"] = hold
 		}
 
 		client, err := authedClient()
@@ -515,8 +519,8 @@ command asks you to confirm the downtime unless --yes is given.`,
 			return err
 		}
 		if c.UpdateStrategy == updateStrategyReplace {
-			if staging {
-				return fmt.Errorf("staging is not available for %s: %s, so the update replaces the running instance instead of booting the new version alongside it", c.Name, replaceReason(*c))
+			if hold {
+				return fmt.Errorf("holding for review is not available for %s: %s, so the update replaces the running enclave instead of starting the new version alongside it", c.Name, replaceReason(*c))
 			}
 			if err := confirmDowntime(*c); err != nil {
 				return err
@@ -584,9 +588,9 @@ var containerHostsCmd = &cobra.Command{
 	},
 }
 
-var containerAcceptCmd = &cobra.Command{
-	Use:   "accept [id|name]",
-	Short: "Switch traffic to a staged update that is ready",
+var containerPromoteCmd = &cobra.Command{
+	Use:   "promote [id|name]",
+	Short: "Switch traffic to an update that was held for review",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client, err := authedClient()
@@ -597,14 +601,14 @@ var containerAcceptCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		var accepted containerView
-		if _, err := client.do("POST", pathf("/api/containers/%s/update/accept", c.ID), nil, nil, &accepted); err != nil {
+		var promoted containerView
+		if _, err := client.do("POST", pathf("/api/containers/%s/update/promote", c.ID), nil, nil, &promoted); err != nil {
 			return err
 		}
 		if outputFormat != "json" {
-			fmt.Printf("Accepted update on %s; traffic is switching to %s.\n", c.Name, accepted.CurrentTag)
+			fmt.Printf("Promoted update on %s; traffic is switching to %s.\n", c.Name, promoted.CurrentTag)
 		}
-		return followAndRender(client, accepted, nil)
+		return followAndRender(client, promoted, nil)
 	},
 }
 
@@ -936,8 +940,8 @@ func renderContainerDetail(c containerView, attached map[string]volumeView) erro
 	fmt.Printf("Name:         %s\n", c.Name)
 	fmt.Printf("Status:       %s\n", statusLabel(c.Status))
 	fmt.Printf("Repo:         %s@%s\n", c.Repo, c.CurrentTag)
-	if c.DeploymentID != "" {
-		fmt.Printf("Deployment:   %s\n", c.DeploymentID)
+	if c.ProjectID != "" {
+		fmt.Printf("Project:      %s\n", c.ProjectID)
 	}
 	if c.Domain != "" {
 		fmt.Printf("Domain:       %s\n", c.Domain)
@@ -955,8 +959,8 @@ func renderContainerDetail(c containerView, attached map[string]volumeView) erro
 	if c.Debug {
 		fmt.Printf("Debug:        yes (SSH enabled, does not pass attestation)\n")
 	}
-	if c.Staging {
-		fmt.Printf("Staged:       yes (this version is held on the staging ingress)\n")
+	if c.Held {
+		fmt.Printf("Held:         yes (this version is waiting for review; promote to switch traffic)\n")
 	}
 	if c.DisableCCMode {
 		fmt.Printf("Confidential: disabled\n")

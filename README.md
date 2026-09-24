@@ -102,7 +102,7 @@ tinfoil attestation verify \
 
 ## Container management
 
-The `container`, `deployment`, `volume`, `model`, `repo`, `secret`, `ssh-key`, `registry`, and `domain` subcommands manage Tinfoil Containers through the same controlplane API the dashboard uses. See the [Tinfoil Containers docs](https://docs.tinfoil.sh/containers/overview) for the underlying concepts and the [CLI reference](https://docs.tinfoil.sh/containers/cli) for the full command surface.
+The `container`, `project`, `volume`, `model`, `repo`, `secret`, `ssh-key`, `registry`, and `domain` subcommands manage Tinfoil Containers through the same controlplane API the dashboard uses. See the [Tinfoil Containers docs](https://docs.tinfoil.sh/containers/overview) for the underlying concepts and the [CLI reference](https://docs.tinfoil.sh/containers/cli) for the full command surface.
 
 ### Logging in
 
@@ -144,20 +144,20 @@ tinfoil container deploy my-container --tag v1.2.4 --host gpu-host-2
 
 # Update a running container (blue/green when possible; asks before causing downtime)
 tinfoil container update my-container --tag v1.2.4
-tinfoil container update my-container --tag v1.2.4 --staging=true      # hold for accept
+tinfoil container update my-container --tag v1.2.4 --hold=true         # hold for review
 tinfoil container update my-container --tag v1.2.2 --mark-latest=false   # roll back without changing the latest release
-tinfoil container accept my-container
+tinfoil container promote my-container                                 # switch traffic to the held version
 tinfoil container cancel my-container
 tinfoil container cancel my-container --rollback-latest
 
 tinfoil container delete my-container                                  # prompts; --yes to skip
 
-# Repository deployments (all running instances of one repo)
-tinfoil deployment list
-tinfoil deployment get myorg/my-repo-container
-tinfoil deployment update myorg/my-repo-container --tag v1.2.4 --staging=true
-tinfoil deployment update myorg/my-repo-container --tag v1.2.4 --instance <container-id>
-tinfoil deployment settings myorg/my-repo-container --default-staging=true
+# Projects (every instance that shares one config repository)
+tinfoil project list
+tinfoil project get myorg/my-repo-container
+tinfoil project update myorg/my-repo-container --tag v1.2.4 --hold=true
+tinfoil project update myorg/my-repo-container --tag v1.2.4 --instance <container-id>
+tinfoil project settings myorg/my-repo-container --hold-by-default=true
 
 # Open a verified proxy to a deployed container
 tinfoil container connect my-container -p 8080
@@ -165,13 +165,13 @@ tinfoil container connect my-container -p 8080
 
 A container is either running or it is not. `deploy` boots an enclave for a container that has none (stopped, failed, or stopping); `update` replaces the version a running container serves. There is no in-place restart: `update` with the same tag restarts a running container without downtime, `stop` then `deploy` restarts it with downtime.
 
-Single-GPU containers without persistent volumes update blue/green: the new version boots next to the current one and traffic switches when it is Running. Multi-GPU containers and containers with persistent volumes cannot run two copies, so `update` stops the current version first; the CLI describes the downtime and asks you to type `yes` (pass `--yes` in scripts). Staging is only available for blue/green updates.
+Single-GPU containers without persistent volumes update blue/green: the new version boots next to the current one and traffic switches when it is Running. Multi-GPU containers and containers with persistent volumes cannot run two copies, so `update` stops the current version first; the CLI describes the downtime and asks you to type `yes` (pass `--yes` in scripts). Holding for review is only available for blue/green updates.
 
-`create`, `deploy`, `update`, and `accept` follow the container's progress and print each boot stage until it is Running, exiting non-zero if it fails. Pass `--no-wait` to return as soon as the request is accepted, or `-o json` for the raw response.
+`create`, `deploy`, `update`, and `promote` follow the instance's progress and print each boot stage until it is Running, exiting non-zero if it fails. Pass `--no-wait` to return as soon as the request is accepted, or `-o json` for the raw response.
 
 `container connect <name>` resolves the container's enclave domain and source repo, then runs a verified proxy locally so you can reach the container at `http://localhost:<port>` without copy-pasting either value.
 
-Container create, deploy, update, and deployment update mark the deployed tag as the repository's latest GitHub release once it is running. Pass `--mark-latest=false` to leave the latest release unchanged, for example when rolling back.
+Container create, deploy, update, and project update mark the deployed tag as the repository's latest GitHub release once it is running. Pass `--mark-latest=false` to leave the latest release unchanged, for example when rolling back.
 
 `--volume <id|name>[:<declared name>]` on `create` and `deploy` attaches an existing unattached volume to a slot the repository's `tinfoil-config.yml` declares, then deploys the container. The declared name is optional when the config declares exactly one volume. On create, the volume's host becomes the container's host (an explicit `--host` must match). On deploy, the container must already be on that host unless `--host` moves it there. Once attached, later deploys reuse the disk; omit `--volume`. When the config declares volumes and `--volume` is omitted, `create` refuses and prints the `volume create` and `container create --volume` commands to run, so a container is never created without the disks it needs.
 

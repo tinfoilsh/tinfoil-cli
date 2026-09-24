@@ -49,8 +49,8 @@ func statusLabel(status string) string {
 func updateLabel(c containerView) string {
 	switch c.UpdateStatus {
 	case updateStatusReady:
-		if c.Staging {
-			return "ready to accept"
+		if c.Held {
+			return "held for review; promote to switch traffic"
 		}
 		return "switching traffic"
 	case statusFailed:
@@ -131,7 +131,7 @@ func failureError(c containerView) error {
 // queued behind a stop), so stopped is not terminal here.
 func isTerminal(c containerView) bool {
 	if c.UpdateTag != "" {
-		return c.UpdateStatus == statusFailed || (c.UpdateStatus == updateStatusReady && c.Staging)
+		return c.UpdateStatus == statusFailed || (c.UpdateStatus == updateStatusReady && c.Held)
 	}
 	switch c.Status {
 	case statusRunning, statusFailed:
