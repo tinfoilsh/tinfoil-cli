@@ -31,7 +31,7 @@ var httpCmd = &cobra.Command{
 	Short: "Make verified HTTP requests",
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 		if enclaveHost == "" || repo == "" {
-			return fmt.Errorf("--host and --repo are required for verified HTTP requests")
+			return fmt.Errorf("--enclave and --repo are required for verified HTTP requests")
 		}
 		return nil
 	},

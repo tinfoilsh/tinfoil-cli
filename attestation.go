@@ -34,7 +34,7 @@ func tlsConnection(enclaveHost string) (*tls.ConnectionState, error) {
 
 func newVerifiedClient(host, source, sealedTo string) (*client.SecureClient, error) {
 	if host == "" {
-		return nil, fmt.Errorf("--host is required")
+		return nil, fmt.Errorf("--enclave is required")
 	}
 	if source == "" {
 		return nil, fmt.Errorf("v3 verification requires an expected workload; pass --repo owner/name[@tag][@sha256:digest]")
