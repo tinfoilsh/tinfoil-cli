@@ -330,6 +330,7 @@ func configureProjectCommandTest(t *testing.T, serverURL string) {
 	previousUpdateHold := projectUpdateHold
 	previousUpdateMarkLatestRelease := projectUpdateMarkLatestRelease
 	previousUpdateInstanceIDs := projectUpdateInstanceIDs
+	previousUpdateYes := projectUpdateYes
 	holdFlag := projectUpdateCmd.Flags().Lookup("hold")
 	markLatestReleaseFlag := projectUpdateCmd.Flags().Lookup("mark-latest")
 	previousHoldChanged := holdFlag.Changed
@@ -341,6 +342,7 @@ func configureProjectCommandTest(t *testing.T, serverURL string) {
 	projectUpdateHold = ""
 	projectUpdateMarkLatestRelease = ""
 	projectUpdateInstanceIDs = nil
+	projectUpdateYes = false
 	holdFlag.Changed = false
 	markLatestReleaseFlag.Changed = false
 
@@ -351,6 +353,7 @@ func configureProjectCommandTest(t *testing.T, serverURL string) {
 		projectUpdateHold = previousUpdateHold
 		projectUpdateMarkLatestRelease = previousUpdateMarkLatestRelease
 		projectUpdateInstanceIDs = previousUpdateInstanceIDs
+		projectUpdateYes = previousUpdateYes
 		holdFlag.Changed = previousHoldChanged
 		markLatestReleaseFlag.Changed = previousMarkLatestReleaseChanged
 	})
