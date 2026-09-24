@@ -213,7 +213,7 @@ func init() {
 	containerUpdateCmd.Flags().Lookup("hold").NoOptDefVal = "true"
 	containerUpdateCmd.Flags().StringVar(&updateMarkLatestRelease, "mark-latest", "", "Mark the deployed tag as the repository's latest GitHub release once it is running (default true; pass false to leave the latest release unchanged)")
 	containerUpdateCmd.Flags().StringVar(&updateCustomDomain, "custom-domain", "", "Replace the custom domain (empty string clears it)")
-	containerUpdateCmd.Flags().BoolVar(&updateYes, "yes", false, "Skip the downtime confirmation for containers that must be replaced")
+	containerUpdateCmd.Flags().BoolVar(&updateYes, "yes", false, "Automatically approve displayed update plans, including changes and downtime")
 
 	containerMetricsCmd.Flags().StringVar(&metricsTime, "time", "24h", "Time window (e.g. 1h, 24h, 7d)")
 
@@ -602,15 +602,10 @@ skip it. Omit --hold to inherit the project's default; --hold is true and
 		if err != nil {
 			return err
 		}
-		plan, err := planContainerUpdate(client, c.ID, body)
-		if err != nil {
-			return err
-		}
-		if err := confirmUpdatePlans([]updatePlan{plan}, body, updateYes, "container update"); err != nil {
-			return err
-		}
 		var updated containerView
-		if err := postLifecycleUpdate(client, pathf("/api/containers/%s/update", c.ID), body, &updated, updateYes, "container update", []string{c.Name}); err != nil {
+		if err := postLifecycleUpdate(client, pathf("/api/containers/%s/update", c.ID), body, &updated, updateYes, "container update", func() (updateReview, error) {
+			return planContainerUpdate(client, c.ID, body)
+		}); err != nil {
 			return err
 		}
 		return followAndRender(client, updated, nil)

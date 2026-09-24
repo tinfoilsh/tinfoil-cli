@@ -93,8 +93,8 @@ func TestUpdatePlanDoesNotEchoSubmittedVariableValues(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(bodies) != 2 {
-		t.Fatalf("expected plan then update, got %d requests", len(bodies))
+	if len(bodies) != 3 {
+		t.Fatalf("expected plan, recheck, then update, got %d requests", len(bodies))
 	}
 	for _, body := range bodies {
 		if body["variables"].(map[string]any)["MODE"] != "private-value-never-print" {
@@ -148,6 +148,10 @@ func TestProjectPlanReportsSkippedAndFailedInstances(t *testing.T) {
 				case r.Method == http.MethodGet:
 					io.WriteString(w, `[{"id":"project-1","repo":"acme/app"}]`)
 				case strings.HasSuffix(r.URL.Path, "/plan"):
+					var body map[string]any
+					if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+						t.Error(err)
+					}
 					var plan map[string]any
 					if err := json.Unmarshal([]byte(updatePlanFixture), &plan); err != nil {
 						t.Error(err)
@@ -156,10 +160,13 @@ func TestProjectPlanReportsSkippedAndFailedInstances(t *testing.T) {
 					if failed {
 						status, failedCount, skippedCount = "failed", 1, 0
 					}
-					json.NewEncoder(w).Encode(map[string]any{"read_only": true, "project_id": "project-1", "latest_release_tag": "release-stable", "eligible_count": 1, "skipped_count": skippedCount, "failed_count": failedCount, "results": []any{
-						map[string]any{"instance_id": testContainerID, "name": "app", "status": "planned", "plan": plan, "error": nil},
-						map[string]any{"instance_id": "other", "name": "other", "status": status, "plan": nil, "error": "instance cannot update"},
-					}})
+					results := []any{map[string]any{"instance_id": testContainerID, "name": "app", "status": "planned", "plan": plan, "error": nil}}
+					if body["instance_ids"] == nil {
+						results = append(results, map[string]any{"instance_id": "other", "name": "other", "status": status, "plan": nil, "error": "instance cannot update"})
+					} else {
+						skippedCount, failedCount = 0, 0
+					}
+					json.NewEncoder(w).Encode(map[string]any{"read_only": true, "project_id": "project-1", "latest_release_tag": "release-stable", "eligible_count": 1, "skipped_count": skippedCount, "failed_count": failedCount, "results": results})
 				case strings.HasSuffix(r.URL.Path, "/update"):
 					updates++
 					io.WriteString(w, `{"results":[{"container_id":"`+testContainerID+`","name":"app","status":"updating"}]}`)
@@ -182,8 +189,8 @@ func TestProjectPlanReportsSkippedAndFailedInstances(t *testing.T) {
 				if err == nil || !strings.Contains(err.Error(), "no update was sent") {
 					t.Fatalf("err %v", err)
 				}
-			} else if err != nil {
-				t.Fatal(err)
+			} else if err == nil || !strings.Contains(err.Error(), "1 skipped") {
+				t.Fatalf("skipped instance must remain incomplete: %v", err)
 			}
 			if updates != wantUpdates {
 				t.Fatalf("updates %d", updates)
@@ -322,7 +329,7 @@ func TestUpdatePlanPrecedesMutationThroughCobra(t *testing.T) {
 						t.Fatalf("used stale container strategy: %v", body)
 					}
 				}
-				if len(paths) != 3 {
+				if len(paths) != 4 {
 					t.Fatalf("requests %v", paths)
 				}
 			})

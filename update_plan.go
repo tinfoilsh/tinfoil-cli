@@ -5,12 +5,15 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"reflect"
+	"slices"
 	"strings"
 )
 
 const (
 	updateStrategyBlueGreen = "blue_green"
 	planStatusPlanned       = "planned"
+	maxUpdatePlanReviews    = 3
 )
 
 type plannedResources struct {
@@ -78,54 +81,80 @@ func (plan updatePlan) validate(id string) error {
 	return nil
 }
 
-func planContainerUpdate(client *cpClient, id string, body map[string]any) (updatePlan, error) {
-	var plan updatePlan
-	if _, err := client.do("POST", pathf("/api/containers/%s/update/plan", id), nil, body, &plan); err != nil {
-		return plan, fmt.Errorf("could not plan update; no update was sent: %w", err)
-	}
-	if err := plan.validate(id); err != nil {
-		return plan, err
-	}
-	if outputFormat == "json" {
-		if err := json.NewEncoder(os.Stderr).Encode(plan); err != nil {
-			return plan, err
-		}
-	} else {
-		renderUpdatePlan(os.Stderr, plan)
-	}
-	return plan, nil
+type updateReview struct {
+	plans   []updatePlan
+	project *projectUpdatePlan
 }
 
-func planProjectUpdate(client *cpClient, id string, body map[string]any) ([]updatePlan, error) {
+func planContainerUpdate(client *cpClient, id string, body map[string]any) (updateReview, error) {
+	var plan updatePlan
+	if _, err := client.do("POST", pathf("/api/containers/%s/update/plan", id), nil, body, &plan); err != nil {
+		return updateReview{}, fmt.Errorf("could not plan update; no update was sent: %w", err)
+	}
+	if err := plan.validate(id); err != nil {
+		return updateReview{}, err
+	}
+	return updateReview{plans: []updatePlan{plan}}, nil
+}
+
+func planProjectUpdate(client *cpClient, id string, body map[string]any) (updateReview, error) {
 	var response projectUpdatePlan
 	if _, err := client.do("POST", pathf("/api/containers/projects/%s/update/plan", id), nil, body, &response); err != nil {
-		return nil, fmt.Errorf("could not plan project update; no update was sent: %w", err)
+		return updateReview{}, fmt.Errorf("could not plan project update; no update was sent: %w", err)
 	}
 	if !response.ReadOnly || response.ProjectID != id {
-		return nil, fmt.Errorf("invalid project update plan response; no update was sent")
+		return updateReview{}, fmt.Errorf("invalid project update plan response; no update was sent")
 	}
 	var plans []updatePlan
+	selected, restricted := body["instance_ids"].([]string)
+	seen := make(map[string]bool)
+	skipped, failed := 0, 0
 	for _, result := range response.Results {
+		if result.InstanceID == "" || seen[result.InstanceID] || restricted && !slices.Contains(selected, result.InstanceID) {
+			return updateReview{}, fmt.Errorf("project plan returned duplicate or unselected instances; no update was sent")
+		}
+		seen[result.InstanceID] = true
 		if result.Status == planStatusPlanned {
 			if result.Plan == nil {
-				return nil, fmt.Errorf("missing instance plan; no update was sent")
+				return updateReview{}, fmt.Errorf("missing instance plan; no update was sent")
 			}
 			if err := result.Plan.validate(result.InstanceID); err != nil {
-				return nil, err
+				return updateReview{}, err
 			}
 			plans = append(plans, *result.Plan)
-		} else if result.Status != projectInstanceStatusSkipped && result.Status != projectInstanceStatusFailed {
-			return nil, fmt.Errorf("invalid project plan result status; no update was sent")
+		} else {
+			if result.Plan != nil {
+				return updateReview{}, fmt.Errorf("noneligible instance has a plan; no update was sent")
+			}
+			switch result.Status {
+			case projectInstanceStatusSkipped:
+				skipped++
+			case projectInstanceStatusFailed:
+				failed++
+			default:
+				return updateReview{}, fmt.Errorf("invalid project plan result status; no update was sent")
+			}
 		}
 	}
-	if len(plans) != response.EligibleCount || len(response.Results) != response.EligibleCount+response.SkippedCount+response.FailedCount {
-		return nil, fmt.Errorf("inconsistent project plan counts; no update was sent")
+	for _, id := range selected {
+		if !seen[id] {
+			return updateReview{}, fmt.Errorf("project plan omitted selected instance %s; no update was sent", id)
+		}
 	}
+	if len(plans) != response.EligibleCount || skipped != response.SkippedCount || failed != response.FailedCount {
+		return updateReview{}, fmt.Errorf("inconsistent project plan counts; no update was sent")
+	}
+	return updateReview{plans: plans, project: &response}, nil
+}
+
+func (review updateReview) render() error {
 	if outputFormat == "json" {
-		if err := json.NewEncoder(os.Stderr).Encode(response); err != nil {
-			return nil, err
+		if review.project != nil {
+			return json.NewEncoder(os.Stderr).Encode(review.project)
 		}
-	} else {
+		return json.NewEncoder(os.Stderr).Encode(review.plans[0])
+	}
+	if response := review.project; response != nil {
 		fmt.Fprintf(os.Stderr, "Project plan (read-only): %d eligible, %d skipped, %d failed\n", response.EligibleCount, response.SkippedCount, response.FailedCount)
 		fmt.Fprintf(os.Stderr, "GitHub latest release: %s\n", displayNames([]string{response.LatestReleaseTag}))
 		for _, result := range response.Results {
@@ -139,11 +168,67 @@ func planProjectUpdate(client *cpClient, id string, body map[string]any) ([]upda
 				fmt.Fprintf(os.Stderr, "%s (%s): %s %s\n", result.Name, result.InstanceID, result.Status, detail)
 			}
 		}
+	} else {
+		renderUpdatePlan(os.Stderr, review.plans[0])
 	}
-	if response.FailedCount > 0 || len(plans) == 0 {
-		return nil, fmt.Errorf("project plan cannot proceed: %d failed, %d eligible; no update was sent", response.FailedCount, len(plans))
+	return nil
+}
+
+func (review updateReview) freezeSelection(body map[string]any) error {
+	if review.project == nil {
+		return nil
 	}
-	return plans, nil
+	if review.project.FailedCount > 0 || len(review.plans) == 0 {
+		return fmt.Errorf("project plan cannot proceed: %d failed, %d eligible; no update was sent", review.project.FailedCount, len(review.plans))
+	}
+	ids := make([]string, 0, len(review.plans))
+	for _, plan := range review.plans {
+		ids = append(ids, plan.InstanceID)
+	}
+	slices.Sort(ids)
+	body["instance_ids"] = ids
+	return nil
+}
+
+func (review updateReview) requiresDowntime() bool {
+	for _, plan := range review.plans {
+		if plan.DowntimeRequired {
+			return true
+		}
+	}
+	return false
+}
+
+func sameUpdateReview(a, b updateReview) bool {
+	if a.project != nil && b.project != nil && a.project.LatestReleaseTag != b.project.LatestReleaseTag {
+		return false
+	}
+	if (a.project == nil) != (b.project == nil) {
+		return false
+	}
+	return reflect.DeepEqual(reviewedPlans(a.plans), reviewedPlans(b.plans))
+}
+
+func reviewedPlans(plans []updatePlan) map[string]updatePlan {
+	result := make(map[string]updatePlan, len(plans))
+	for _, plan := range plans {
+		changes := &plan.ConfigurationChanges
+		for _, names := range []*plannedNameChanges{&changes.Variables, &changes.Secrets, &changes.SSHKeys} {
+			names.Added = sortedPlanNames(names.Added)
+			names.Changed = sortedPlanNames(names.Changed)
+			names.Removed = sortedPlanNames(names.Removed)
+		}
+		changes.Settings = sortedPlanNames(changes.Settings)
+		changes.SecretsRefreshed = sortedPlanNames(changes.SecretsRefreshed)
+		result[plan.InstanceID] = plan
+	}
+	return result
+}
+
+func sortedPlanNames(names []string) []string {
+	result := append([]string{}, names...)
+	slices.Sort(result)
+	return result
 }
 
 func renderUpdatePlan(out io.Writer, plan updatePlan) {
@@ -183,7 +268,7 @@ func plannedMemory(memory *int) string {
 	return fmt.Sprint(*memory)
 }
 
-func confirmUpdatePlans(plans []updatePlan, body map[string]any, yes bool, action string) error {
+func confirmUpdatePlans(plans []updatePlan, yes bool, action string, changed bool) error {
 	var downtime []string
 	for _, plan := range plans {
 		if plan.Hold && !plan.HoldAvailable {
@@ -193,13 +278,18 @@ func confirmUpdatePlans(plans []updatePlan, body map[string]any, yes bool, actio
 			downtime = append(downtime, plan.Name)
 		}
 	}
-	if len(downtime) == 0 {
+	if len(downtime) == 0 && !changed {
 		return nil
 	}
-	fmt.Fprintf(os.Stderr, "This update will cause downtime for: %s. Each instance is unreachable until its replacement is Running.\n", strings.Join(downtime, ", "))
-	if err := confirmYes(yes, action); err != nil {
-		return err
+	if changed {
+		fmt.Fprintln(os.Stderr, "The reviewed update changed; fresh confirmation is required.")
 	}
-	body["confirm_downtime"] = true
-	return nil
+	if len(downtime) > 0 {
+		fmt.Fprintf(os.Stderr, "This update will cause downtime for: %s. Each instance is unreachable until its replacement is Running.\n", strings.Join(downtime, ", "))
+	}
+	if yes {
+		fmt.Fprintln(os.Stderr, "Accepting the displayed update plan automatically (--yes).")
+		return nil
+	}
+	return confirmYes(false, action)
 }
