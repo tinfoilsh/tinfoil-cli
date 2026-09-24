@@ -25,9 +25,9 @@ func TestStatusLabelIsSentenceCaseAPIValue(t *testing.T) {
 }
 
 func TestUpdateLabelDistinguishesHeldFromAutoSwitch(t *testing.T) {
-	staged := containerView{UpdateTag: "v2", UpdateStatus: updateStatusReady, Held: true}
-	if got := updateLabel(staged); got != "held for review; promote to switch traffic" {
-		t.Fatalf("staged label = %q", got)
+	held := containerView{UpdateTag: "v2", UpdateStatus: updateStatusReady, Held: true}
+	if got := updateLabel(held); got != "held for review; promote to switch traffic" {
+		t.Fatalf("held label = %q", got)
 	}
 	auto := containerView{UpdateTag: "v2", UpdateStatus: updateStatusReady}
 	if got := updateLabel(auto); got != "switching traffic" {
@@ -109,7 +109,7 @@ func TestIsTerminalHoldsForStagedCandidateAndStopsForRunning(t *testing.T) {
 		t.Fatal("container with a booting candidate should not be terminal")
 	}
 	if !isTerminal(containerView{Status: statusRunning, UpdateTag: "v2", UpdateStatus: updateStatusReady, Held: true}) {
-		t.Fatal("staged ready candidate should be terminal (waits for accept)")
+		t.Fatal("held ready candidate should be terminal (waits for promote)")
 	}
 	if isTerminal(containerView{Status: statusRunning, UpdateTag: "v2", UpdateStatus: updateStatusReady}) {
 		t.Fatal("auto-switching candidate should not be terminal until promoted")
@@ -141,7 +141,7 @@ func TestContainerUpdateRefusesHoldOnReplaceStrategyLocally(t *testing.T) {
 		t.Fatalf("error = %v", err)
 	}
 	if posts.Load() != 0 {
-		t.Fatal("update must not be sent when staging is refused locally")
+		t.Fatal("update must not be sent when hold is refused locally")
 	}
 }
 

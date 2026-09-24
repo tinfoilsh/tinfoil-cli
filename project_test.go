@@ -105,7 +105,7 @@ func TestProjectSettingsUpdatesDefaultStaging(t *testing.T) {
 				t.Fatalf("decode body: %v", err)
 			}
 			if !body.DefaultStaging {
-				t.Fatal("default_staging = false, want true")
+				t.Fatal("hold_by_default = false, want true")
 			}
 			_, _ = io.WriteString(w, `{"id":"deployment-1","repo":"acme/app","hold_by_default":true}`)
 		default:
@@ -260,7 +260,7 @@ func TestLifecycleCommandSurface(t *testing.T) {
 	}
 	for _, command := range sandboxCmd.Commands() {
 		switch command.Name() {
-		case "destroy", "promote":
+		case "destroy", "accept":
 			t.Fatalf("sandbox %s command is registered", command.Name())
 		}
 	}
@@ -291,10 +291,10 @@ func TestLifecycleCommandSurface(t *testing.T) {
 		t.Fatal("container update does not have --hold")
 	}
 	if projectUpdateCmd.Flags().Lookup("hold") == nil || projectUpdateCmd.Flags().Lookup("mark-latest") == nil {
-		t.Fatal("deployment update is missing staging or mark-latest flags")
+		t.Fatal("project update is missing hold or mark-latest flags")
 	}
 	if projectSettingsCmd.Flags().Lookup("hold-by-default") == nil {
-		t.Fatal("deployment settings does not have --default-staging")
+		t.Fatal("project settings does not have --hold-by-default")
 	}
 }
 
@@ -330,9 +330,9 @@ func configureProjectCommandTest(t *testing.T, serverURL string) {
 	previousUpdateHold := projectUpdateHold
 	previousUpdateMarkLatestRelease := projectUpdateMarkLatestRelease
 	previousUpdateInstanceIDs := projectUpdateInstanceIDs
-	stagingFlag := projectUpdateCmd.Flags().Lookup("hold")
+	holdFlag := projectUpdateCmd.Flags().Lookup("hold")
 	markLatestReleaseFlag := projectUpdateCmd.Flags().Lookup("mark-latest")
-	previousStagingChanged := stagingFlag.Changed
+	previousHoldChanged := holdFlag.Changed
 	previousMarkLatestReleaseChanged := markLatestReleaseFlag.Changed
 
 	outputFormat = "json"
@@ -341,7 +341,7 @@ func configureProjectCommandTest(t *testing.T, serverURL string) {
 	projectUpdateHold = ""
 	projectUpdateMarkLatestRelease = ""
 	projectUpdateInstanceIDs = nil
-	stagingFlag.Changed = false
+	holdFlag.Changed = false
 	markLatestReleaseFlag.Changed = false
 
 	t.Cleanup(func() {
@@ -351,7 +351,7 @@ func configureProjectCommandTest(t *testing.T, serverURL string) {
 		projectUpdateHold = previousUpdateHold
 		projectUpdateMarkLatestRelease = previousUpdateMarkLatestRelease
 		projectUpdateInstanceIDs = previousUpdateInstanceIDs
-		stagingFlag.Changed = previousStagingChanged
+		holdFlag.Changed = previousHoldChanged
 		markLatestReleaseFlag.Changed = previousMarkLatestReleaseChanged
 	})
 }
