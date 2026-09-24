@@ -48,8 +48,9 @@ type updatePlan struct {
 		Settings         []string           `json:"settings"`
 		SecretsRefreshed []string           `json:"secrets_refreshed"`
 	} `json:"configuration_changes"`
-	VolumeData   string `json:"volume_data"`
-	CostEstimate struct {
+	SecretDelivery *plannedSecretDelivery `json:"secret_delivery,omitempty"`
+	VolumeData     string                 `json:"volume_data"`
+	CostEstimate   struct {
 		Available bool   `json:"available"`
 		Reason    string `json:"reason"`
 	} `json:"cost_estimate"`
@@ -77,6 +78,9 @@ func (plan updatePlan) validate(id string) error {
 		(plan.HoldSource != "project" && plan.HoldSource != "request") ||
 		plan.DowntimeRequired != (plan.UpdateStrategy == updateStrategyReplace) {
 		return fmt.Errorf("invalid update plan response; no update was sent")
+	}
+	if plan.SecretDelivery != nil {
+		return plan.SecretDelivery.validate(plan.ConfigurationChanges.SecretsRefreshed)
 	}
 	return nil
 }
@@ -163,7 +167,7 @@ func (review updateReview) render() error {
 			} else {
 				detail := ""
 				if result.Error != nil {
-					detail = *result.Error
+					detail = secretDeliveryMessage(*result.Error)
 				}
 				fmt.Fprintf(os.Stderr, "%s (%s): %s %s\n", result.Name, result.InstanceID, result.Status, detail)
 			}
@@ -220,6 +224,7 @@ func reviewedPlans(plans []updatePlan) map[string]updatePlan {
 		}
 		changes.Settings = sortedPlanNames(changes.Settings)
 		changes.SecretsRefreshed = sortedPlanNames(changes.SecretsRefreshed)
+		plan.SecretDelivery = plan.reviewedSecretDelivery()
 		result[plan.InstanceID] = plan
 	}
 	return result
@@ -235,14 +240,26 @@ func renderUpdatePlan(out io.Writer, plan updatePlan) {
 	fmt.Fprintf(out, "Update plan (read-only): %s (%s)\n", plan.Name, plan.InstanceID)
 	fmt.Fprintf(out, "  Tag: %s -> %s\n  CPU: %d -> %d; RAM (MB): %s -> %s; GPU: %d -> %d\n", plan.Current.Tag, plan.Target.Tag, plan.Current.CPUs, plan.Target.CPUs, plannedMemory(plan.Current.MemoryMB), plannedMemory(plan.Target.MemoryMB), plan.Current.GPUs, plan.Target.GPUs)
 	fmt.Fprintf(out, "  Strategy: %s; downtime: %t\n  Hold: %t (source: %s; available: %t)\n  Volume data: %s\n", plan.UpdateStrategy, plan.DowntimeRequired, plan.Hold, plan.HoldSource, plan.HoldAvailable, plan.VolumeData)
-	fmt.Fprintln(out, "  Uses current settings and current secret values, not a historical snapshot; values are not displayed.")
+	if plan.SecretDelivery != nil && plan.SecretDelivery.Mode == secretDeliveryPrivateKeyserver {
+		fmt.Fprintln(out, "  Uses current settings, not a historical snapshot; private secret values are fetched by the guest and are not displayed.")
+	} else {
+		fmt.Fprintln(out, "  Uses current settings and current secret values, not a historical snapshot; values are not displayed.")
+	}
 	for _, change := range []struct {
 		label string
 		names plannedNameChanges
 	}{{"Variables", plan.ConfigurationChanges.Variables}, {"Secrets", plan.ConfigurationChanges.Secrets}, {"SSH keys", plan.ConfigurationChanges.SSHKeys}} {
+		if change.label == "Secrets" && plan.SecretDelivery != nil {
+			change.label = "Managed secret changes"
+		}
 		fmt.Fprintf(out, "  %s: added [%s], changed [%s], removed [%s]\n", change.label, displayNames(change.names.Added), displayNames(change.names.Changed), displayNames(change.names.Removed))
 	}
-	fmt.Fprintf(out, "  Changed settings: %s\n  Refresh current secret values: %s\n", displayNames(plan.ConfigurationChanges.Settings), displayNames(plan.ConfigurationChanges.SecretsRefreshed))
+	fmt.Fprintf(out, "  Changed settings: %s\n", displayNames(plan.ConfigurationChanges.Settings))
+	if plan.SecretDelivery != nil {
+		plan.SecretDelivery.render(out)
+	} else {
+		fmt.Fprintf(out, "  Refresh current secret values: %s\n", displayNames(plan.ConfigurationChanges.SecretsRefreshed))
+	}
 	fmt.Fprintf(out, "  Mark GitHub latest: %t\n", plan.MarkLatestRelease)
 	if plan.MarkLatestRelease {
 		fmt.Fprintln(out, "  WARNING: marking latest affects the repository-wide latest release and other consumers, even when selecting an earlier release. Use --mark-latest=false to leave it unchanged.")

@@ -256,7 +256,7 @@ func updateProjectInstances(client *cpClient, projectID string, body map[string]
 			}
 			detail := "not executed: excluded by update plan"
 			if result.Error != nil {
-				detail += ": " + *result.Error
+				detail += ": " + secretDeliveryMessage(*result.Error)
 			}
 			excluded = append(excluded, projectInstanceResult{ContainerID: result.InstanceID, Name: result.Name, Status: result.Status, Error: detail})
 			seen[result.InstanceID] = true
@@ -333,7 +333,7 @@ func renderProjectUpdateResults(results []projectInstanceResult) error {
 	failed, skipped := 0, 0
 	for _, result := range results {
 		if outputFormat != "json" {
-			detail := humanVolumeMessage(result.Error)
+			detail := humanVolumeMessage(secretDeliveryMessage(result.Error))
 			if detail == "" {
 				detail = result.ContainerID
 			}
