@@ -18,6 +18,7 @@ func TestFollowDeploymentGeneration(t *testing.T) {
 	const pendingCandidate = `"status":"running","current_tag":"same-tag","tinfoild_deployment_id":"old","update_tag":"same-tag","update_deployment_id":"new","update_status":"pending","update_type":"blue_green"`
 	const readyCandidate = `"status":"running","current_tag":"same-tag","tinfoild_deployment_id":"old","update_tag":"same-tag","update_deployment_id":"new","update_status":"ready","update_type":"blue_green"`
 	const promoted = `"status":"running","current_tag":"same-tag","tinfoild_deployment_id":"new","update_deployment_id":null,"update_tag":null`
+	const subsequent = `"status":"running","current_tag":"same-tag","tinfoild_deployment_id":"new","update_tag":"same-tag","update_deployment_id":"later","update_status":"pending","update_type":"blue_green"`
 	const canceled = `"status":"running","current_tag":"same-tag","tinfoild_deployment_id":"old","update_deployment_id":null,"update_tag":null`
 	const queued = `"status":"stopping","current_tag":"same-tag","tinfoild_deployment_id":"old","update_tag":"same-tag","update_deployment_id":"new","update_status":"pending","update_type":"queued_deploy"`
 	const deploying = `"status":"deploying","current_tag":"same-tag","tinfoild_deployment_id":"new"`
@@ -33,6 +34,13 @@ func TestFollowDeploymentGeneration(t *testing.T) {
 		{"false override follows through promotion", pendingCandidate + `,"held":true,"update_config":{"hold":false}`, []string{readyCandidate + `,"held":true,"update_config":{"hold":false}`, promoted}, "", "switching traffic"},
 		{"same-tag cancel is not promote", pendingCandidate, []string{canceled}, "canceled or superseded", ""},
 		{"same-tag promote succeeds", pendingCandidate, []string{promoted}, "", "Running"},
+		{"promotion followed by another pending candidate succeeds", pendingCandidate, []string{subsequent}, "", "Running"},
+		{"promotion followed by another held candidate succeeds", pendingCandidate, []string{strings.ReplaceAll(subsequent, `"pending"`, `"ready"`) + `,"update_config":{"hold":true}`}, "", "Running"},
+		{"promotion followed by another failed candidate succeeds", pendingCandidate, []string{strings.ReplaceAll(subsequent, `"pending"`, `"failed"`) + `,"error_message":"later candidate failed"`}, "", "Running"},
+		{"fresh deploy followed by another candidate succeeds", deploying, []string{subsequent}, "", "Running"},
+		{"stopped requested generation with later candidate fails", pendingCandidate, []string{strings.ReplaceAll(subsequent, `"status":"running"`, `"status":"stopped"`)}, "canceled or superseded", ""},
+		{"failed requested generation with later candidate fails", pendingCandidate, []string{strings.ReplaceAll(subsequent, `"status":"running"`, `"status":"failed"`)}, "canceled or superseded", ""},
+		{"same-tag later candidate without requested current ID fails", pendingCandidate, []string{strings.ReplaceAll(subsequent, `"tinfoild_deployment_id":"new"`, `"tinfoild_deployment_id":null`)}, "canceled or superseded", ""},
 		{"candidate replaced", pendingCandidate, []string{strings.ReplaceAll(pendingCandidate, `"new"`, `"other"`)}, "canceled or superseded", ""},
 		{"different deployment already running", pendingCandidate, []string{strings.ReplaceAll(promoted, `"new"`, `"other"`)}, "canceled or superseded", ""},
 		{"candidate failed", pendingCandidate, []string{strings.ReplaceAll(pendingCandidate, `"pending"`, `"failed"`) + `,"error_message":"candidate failed"`}, "candidate failed", ""},
@@ -73,12 +81,14 @@ func TestFollowDeploymentGeneration(t *testing.T) {
 				if err := json.Unmarshal([]byte(fixture(tt.initial)), &initial); err != nil {
 					t.Fatal(err)
 				}
+				var final containerView
 				progress, err := captureTestStderr(func() error {
 					if render {
 						_, err := captureTestStdout(func() error { return followAndRender(client, initial, nil) })
 						return err
 					}
-					_, err := followContainer(client, initial.ID, initial)
+					var err error
+					final, err = followContainer(client, initial.ID, initial)
 					return err
 				})
 				if tt.wantErr == "" && err != nil || tt.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tt.wantErr)) {
@@ -86,6 +96,15 @@ func TestFollowDeploymentGeneration(t *testing.T) {
 				}
 				if polls != len(tt.polls) {
 					t.Fatalf("polls = %d, want %d", polls, len(tt.polls))
+				}
+				if !render && tt.wantErr == "" && len(tt.polls) > 0 {
+					var last containerView
+					if err := json.Unmarshal([]byte(fixture(tt.polls[len(tt.polls)-1])), &last); err != nil {
+						t.Fatal(err)
+					}
+					if final.UpdateDeploymentID != last.UpdateDeploymentID || final.UpdateTag != last.UpdateTag {
+						t.Fatalf("follow mutated the final snapshot: %+v", final)
+					}
 				}
 				if tt.wantProgress != "" && !strings.Contains(string(progress), tt.wantProgress) {
 					t.Fatalf("progress lacks %q: %s", tt.wantProgress, progress)
