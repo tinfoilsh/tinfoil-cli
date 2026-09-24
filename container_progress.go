@@ -28,6 +28,7 @@ const (
 	updateStatusReady = "ready"
 
 	updateStrategyReplace        = "replace"
+	updateTypeQueuedDeploy       = "queued_deploy"
 	downtimeConfirmationRequired = "DOWNTIME_CONFIRMATION_REQUIRED"
 
 	followTimeout = 30 * time.Minute
@@ -53,7 +54,7 @@ func statusLabel(status string) string {
 func updateLabel(c containerView) string {
 	switch c.UpdateStatus {
 	case updateStatusReady:
-		if c.candidateHeld() {
+		if heldCandidateReady(c) {
 			return "held for review; promote to switch traffic"
 		}
 		return "switching traffic"
@@ -164,8 +165,8 @@ func failureError(c containerView) error {
 // lifecycle command only returns a stopped container transiently (a deploy
 // queued behind a stop), so stopped is not terminal here.
 func isTerminal(c containerView) bool {
-	if c.UpdateTag != "" {
-		return c.UpdateStatus == statusFailed || (c.UpdateStatus == updateStatusReady && c.candidateHeld())
+	if c.UpdateDeploymentID != "" || c.UpdateTag != "" {
+		return c.UpdateStatus == statusFailed || heldCandidateReady(c)
 	}
 	switch c.Status {
 	case statusRunning, statusFailed:
@@ -174,10 +175,41 @@ func isTerminal(c containerView) bool {
 	return false
 }
 
+func heldCandidateReady(c containerView) bool {
+	return c.UpdateStatus == updateStatusReady && c.candidateHeld() &&
+		c.UpdateType != updateTypeQueuedDeploy && c.UpdateType != updateStrategyReplace
+}
+
+func followedDeploymentState(c containerView, deploymentID string) (bool, error) {
+	if c.UpdateDeploymentID == deploymentID {
+		if c.UpdateStatus == statusFailed {
+			return true, failureError(c)
+		}
+		if c.UpdateStatus == statusStopped || c.UpdateStatus == statusStopping {
+			return true, fmt.Errorf("deployment %s on %s was stopped before completion", deploymentID, c.Name)
+		}
+		return heldCandidateReady(c), nil
+	}
+	if c.TinfoildDeploymentID != deploymentID || c.UpdateDeploymentID != "" {
+		return true, fmt.Errorf("deployment %s on %s was canceled or superseded; check \"tinfoil container get %s\"", deploymentID, c.Name, c.ID)
+	}
+	if c.Status == statusStopped || c.Status == statusStopping {
+		return true, fmt.Errorf("deployment %s on %s was stopped before completion", deploymentID, c.Name)
+	}
+	return isTerminal(c), failureError(c)
+}
+
 // followContainer polls the container until isTerminal, printing one line per
 // observed change. The last line is left in place; intermediate lines are
 // overwritten when stderr is a terminal.
 func followContainer(client *cpClient, id string, initial containerView) (containerView, error) {
+	deploymentID := initial.UpdateDeploymentID
+	if deploymentID == "" {
+		deploymentID = initial.TinfoildDeploymentID
+	}
+	if deploymentID == "" {
+		return initial, fmt.Errorf("cannot follow %s: response has no deployment ID; check \"tinfoil container get %s\"", initial.Name, id)
+	}
 	tty := term.IsTerminal(int(os.Stderr.Fd()))
 	last := ""
 	print := func(line string) {
@@ -198,26 +230,29 @@ func followContainer(client *cpClient, id string, initial containerView) (contai
 			fmt.Fprintln(os.Stderr)
 		}
 	}
+	defer finish()
 
 	current := initial
 	deadline := time.Now().Add(followTimeout)
-	print(progressLine(current))
-	for !isTerminal(current) {
+	for {
+		done, err := followedDeploymentState(current, deploymentID)
+		if err != nil {
+			return current, err
+		}
+		print(progressLine(current))
+		if done {
+			return current, nil
+		}
 		if time.Now().After(deadline) {
-			finish()
 			return current, fmt.Errorf("still %s after %s; check \"tinfoil container get %s\"", strings.ToLower(statusLabel(current.Status)), followTimeout, current.Name)
 		}
 		time.Sleep(followInterval)
 		var next containerView
 		if _, err := client.do("GET", pathf("/api/containers/%s", id), nil, nil, &next); err != nil {
-			finish()
 			return current, err
 		}
 		current = next
-		print(progressLine(current))
 	}
-	finish()
-	return current, nil
 }
 
 // progressLine is the single line shown while following a container.

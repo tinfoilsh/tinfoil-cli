@@ -49,8 +49,8 @@ type containerView struct {
 	UpdateConfig         *candidateConfig `json:"update_config,omitempty"`
 	TinfoildDeploymentID string           `json:"tinfoild_deployment_id,omitempty"`
 	UpdateDeploymentID   string           `json:"update_deployment_id,omitempty"`
-	BootStages           []bootStage      `json:"boot_stages"`
-	UpdateBootStages     []bootStage      `json:"update_boot_stages"`
+	BootStages           bootStages       `json:"boot_stages"`
+	UpdateBootStages     bootStages       `json:"update_boot_stages"`
 	ErrorMessage         string           `json:"error_message"`
 	CreatedAt            string           `json:"created_at"`
 	UpdatedAt            string           `json:"updated_at"`
@@ -79,6 +79,19 @@ type bootStage struct {
 	Name   string      `json:"name"`
 	Status string      `json:"status"`
 	Stages []bootStage `json:"stages,omitempty"`
+}
+
+type bootStages []bootStage
+
+func (stages *bootStages) UnmarshalJSON(raw []byte) error {
+	if strings.HasPrefix(strings.TrimSpace(string(raw)), `"`) {
+		var decoded []byte
+		if err := json.Unmarshal(raw, &decoded); err != nil {
+			return fmt.Errorf("decoding boot stages: %w", err)
+		}
+		raw = decoded
+	}
+	return json.Unmarshal(raw, (*[]bootStage)(stages))
 }
 
 type hostInfo struct {
