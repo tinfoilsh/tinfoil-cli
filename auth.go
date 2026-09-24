@@ -173,9 +173,9 @@ func authenticatedContext(cfg cliConfig) (authContext, error) {
 	if _, err := newCPClient(cfg).do("GET", "/api/auth/context", nil, nil, &identity); err != nil {
 		return identity, err
 	}
-	if identity.ContextType != "personal" && identity.ContextType != "organization" ||
+	if identity.UserID == "" || identity.ContextType != "personal" && identity.ContextType != "organization" ||
 		identity.ContextType == "organization" && (identity.Organization == nil || identity.Organization.ID == "") ||
-		identity.ContextType == "personal" && (identity.Organization != nil || identity.UserID == "") {
+		identity.ContextType == "personal" && identity.Organization != nil {
 		return identity, fmt.Errorf("invalid authenticated context response")
 	}
 	return identity, nil

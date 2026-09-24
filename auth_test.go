@@ -114,7 +114,7 @@ func TestLoginReportsSavedAndEffectiveIdentity(t *testing.T) {
 }
 
 func TestIdentityRejectsInvalidAndUnauthorizedResponses(t *testing.T) {
-	for _, body := range []string{`{}`, `{"context_type":"organization","organization":null}`, `{"context_type":"personal","organization":{"id":"org_wrong"},"user_id":"user_1"}`, `unauthorized`} {
+	for _, body := range []string{`{}`, `{"context_type":"organization","organization":{"id":"org_1"}}`, `{"context_type":"organization","organization":null}`, `{"context_type":"personal","organization":{"id":"org_wrong"},"user_id":"user_1"}`, `unauthorized`} {
 		t.Run(body, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if body == "unauthorized" {
@@ -127,5 +127,43 @@ func TestIdentityRejectsInvalidAndUnauthorizedResponses(t *testing.T) {
 				t.Fatal("invalid identity accepted")
 			}
 		})
+	}
+}
+
+func TestLoginInvalidEnvironmentDoesNotClaimEffectiveIdentity(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/auth/context" {
+			t.Errorf("unexpected path %s", r.URL.Path)
+			w.WriteHeader(403)
+			return
+		}
+		if r.Header.Get("Authorization") != "Bearer admin_saved_secret" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		io.WriteString(w, `{"context_type":"personal","organization":null,"user_id":"user_saved"}`)
+	}))
+	defer server.Close()
+	t.Setenv(envConfigPath, filepath.Join(t.TempDir(), "config.json"))
+	t.Setenv(envCPURL, server.URL)
+	t.Setenv(envAdminKey, "admin_invalid_environment")
+	t.Setenv(envAPIKey, "")
+	flag := loginCmd.Flags().Lookup("api-key")
+	oldValue, oldChanged := flag.Value.String(), flag.Changed
+	t.Cleanup(func() { _ = flag.Value.Set(oldValue); flag.Changed = oldChanged })
+	if err := loginCmd.Flags().Set("api-key", "admin_saved_secret"); err != nil {
+		t.Fatal(err)
+	}
+	out, err := captureTestStdout(func() error { return loginCmd.RunE(loginCmd, nil) })
+	if err == nil || !strings.Contains(err.Error(), "credentials saved, but effective environment login could not be verified") {
+		t.Fatalf("err %v", err)
+	}
+	if strings.Contains(string(out), "Effective login:") || strings.Contains(string(out), "Logged in") || !strings.Contains(string(out), "user_saved") {
+		t.Fatalf("false effective identity: %s", out)
+	}
+	t.Setenv(envAdminKey, "")
+	cfg, _, err := loadConfig()
+	if err != nil || cfg.APIKey != "admin_saved_secret" {
+		t.Fatal("verified saved credential was lost")
 	}
 }
