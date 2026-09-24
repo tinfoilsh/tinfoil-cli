@@ -26,7 +26,7 @@ var loginCmd = &cobra.Command{
 	Long: `Store credentials for managing Tinfoil containers.
 
 Create an admin API key from the Tinfoil dashboard (Settings → API Keys → Admin keys).
-Admin keys are scoped to a single organization. The key is stored at
+Admin keys select an organization or personal context. The key is stored at
 ~/.tinfoil/config.json (mode 0600). The TINFOIL_ADMIN_KEY and
 TINFOIL_CONTROLPLANE_URL environment variables override the saved values.
 TINFOIL_API_KEY is also honored when it holds an admin_ key.`,
@@ -65,7 +65,8 @@ TINFOIL_API_KEY is also honored when it holds an admin_ key.`,
 
 		cfg.APIKey = key
 
-		if err := verifyCredentials(cfg); err != nil {
+		identity, err := authenticatedContext(cfg)
+		if err != nil {
 			return fmt.Errorf("credential check failed: %w", err)
 		}
 
@@ -73,7 +74,20 @@ TINFOIL_API_KEY is also honored when it holds an admin_ key.`,
 		if err != nil {
 			return err
 		}
-		fmt.Printf("Logged in. Credentials saved to %s\n", path)
+		fmt.Printf("Credentials saved to %s\n", path)
+		printAuthContext("Saved credential", cfg, "file: "+path, identity)
+		effective, _, err := loadConfig()
+		if err != nil {
+			return err
+		}
+		if credentialEnvSource() != "" || effective.ControlplaneURL != cfg.ControlplaneURL {
+			fmt.Fprintln(os.Stderr, "WARNING: environment overrides remain active; the saved credential is not necessarily the effective login.")
+			identity, err = authenticatedContext(effective)
+			if err != nil {
+				return fmt.Errorf("credentials saved, but effective environment login could not be verified: %w", err)
+			}
+		}
+		printAuthContext("Effective login", effective, credentialSource(), identity)
 		return nil
 	},
 }
@@ -88,9 +102,12 @@ var logoutCmd = &cobra.Command{
 		}
 		if !removed {
 			fmt.Printf("No credentials to remove (%s did not exist)\n", path)
-			return nil
+		} else {
+			fmt.Printf("Removed %s\n", path)
 		}
-		fmt.Printf("Removed %s\n", path)
+		if source := credentialEnvSource(); source != "" {
+			fmt.Fprintf(os.Stderr, "WARNING: %s is still active; logout removes only the saved file. Unset %s and any admin key in %s to stop using environment credentials.\n", source, envAdminKey, envAPIKey)
+		}
 		return nil
 	},
 }
@@ -104,17 +121,11 @@ var whoamiCmd = &cobra.Command{
 			return err
 		}
 
-		fmt.Printf("Controlplane: %s\n", cfg.ControlplaneURL)
-		fmt.Printf("API key:      %s\n", redactKey(cfg.APIKey))
-
-		// Hit a cheap authenticated endpoint to confirm credentials and reveal
-		// the org-scoped host list (which fails 401 if the key is invalid).
-		client := newCPClient(cfg)
-		var hosts []hostInfo
-		if _, err := client.do("GET", "/api/containers/hosts", nil, nil, &hosts); err != nil {
+		identity, err := authenticatedContext(cfg)
+		if err != nil {
 			return fmt.Errorf("verifying credentials: %w", err)
 		}
-		fmt.Printf("Status:       authenticated (%d host(s) available)\n", len(hosts))
+		printAuthContext("Effective login", cfg, credentialSource(), identity)
 		return nil
 	},
 }
@@ -148,8 +159,58 @@ func redactKey(key string) string {
 	return key[:8] + "…" + key[len(key)-4:]
 }
 
-func verifyCredentials(cfg cliConfig) error {
-	client := newCPClient(cfg)
-	_, err := client.do("GET", "/api/containers/hosts", nil, nil, nil)
-	return err
+type authContext struct {
+	ContextType  string `json:"context_type"`
+	Organization *struct {
+		ID   string `json:"id"`
+		Name string `json:"name,omitempty"`
+	} `json:"organization"`
+	UserID string `json:"user_id"`
+}
+
+func authenticatedContext(cfg cliConfig) (authContext, error) {
+	var identity authContext
+	if _, err := newCPClient(cfg).do("GET", "/api/auth/context", nil, nil, &identity); err != nil {
+		return identity, err
+	}
+	if identity.ContextType != "personal" && identity.ContextType != "organization" ||
+		identity.ContextType == "organization" && (identity.Organization == nil || identity.Organization.ID == "") ||
+		identity.ContextType == "personal" && (identity.Organization != nil || identity.UserID == "") {
+		return identity, fmt.Errorf("invalid authenticated context response")
+	}
+	return identity, nil
+}
+
+func credentialEnvSource() string {
+	if strings.TrimSpace(os.Getenv(envAdminKey)) != "" {
+		return envAdminKey
+	}
+	if strings.HasPrefix(strings.TrimSpace(os.Getenv(envAPIKey)), adminKeyPrefix) {
+		return envAPIKey
+	}
+	return ""
+}
+
+func credentialSource() string {
+	if source := credentialEnvSource(); source != "" {
+		return source
+	}
+	path, err := configPath()
+	if err != nil {
+		return "saved file (path unavailable)"
+	}
+	return "file: " + path
+}
+
+func printAuthContext(label string, cfg cliConfig, source string, identity authContext) {
+	fmt.Printf("%s:\n", label)
+	fmt.Printf("  Controlplane: %s\n  Credential: %s\n  API key: %s\n", cfg.ControlplaneURL, source, redactKey(cfg.APIKey))
+	fmt.Printf("  Context: %s\n", identity.ContextType)
+	if identity.Organization != nil {
+		fmt.Printf("  Organization ID: %s\n", identity.Organization.ID)
+		if identity.Organization.Name != "" {
+			fmt.Printf("  Organization name: %s\n", identity.Organization.Name)
+		}
+	}
+	fmt.Printf("  User ID: %s\n", identity.UserID)
 }
