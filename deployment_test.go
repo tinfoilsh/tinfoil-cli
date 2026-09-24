@@ -12,7 +12,7 @@ import (
 	"testing"
 )
 
-func TestDeploymentOutputLabelsInProgressAndPreservesJSONField(t *testing.T) {
+func TestDeploymentOutputLabelsDeployingAndPreservesJSONField(t *testing.T) {
 	deployment := deploymentView{
 		ID:             "deployment-1",
 		Repo:           "acme/app",
@@ -37,12 +37,12 @@ func TestDeploymentOutputLabelsInProgressAndPreservesJSONField(t *testing.T) {
 			if err != nil {
 				t.Fatalf("render human output: %v", err)
 			}
-			if strings.Contains(string(output), "Deploying") || strings.Contains(string(output), "DEPLOYING") {
-				t.Fatalf("human output uses deploying label:\n%s", output)
+			if strings.Contains(string(output), "In progress") || strings.Contains(string(output), "IN-PROGRESS") || strings.Contains(string(output), "Ready") {
+				t.Fatalf("human output uses a label that is not a container status:\n%s", output)
 			}
-			wantLabel := "In progress:     2"
+			wantLabel := "Deploying:       2"
 			if tt.name == "list" {
-				wantLabel = "IN-PROGRESS"
+				wantLabel = "DEPLOYING"
 			}
 			if !strings.Contains(string(output), wantLabel) {
 				t.Fatalf("human output does not contain %q:\n%s", wantLabel, output)
@@ -133,28 +133,28 @@ func TestDeploymentUpdatePromoteReleaseRequestBodies(t *testing.T) {
 	}{
 		{
 			name:         "omitted",
-			wantRequests: 2,
+			wantRequests: 3,
 			wantBody:     `{"instance_ids":["container-1"],"staging":true,"tag":"v1.2.3"}`,
 		},
 		{
 			name:           "true",
 			promoteRelease: "true",
 			changed:        true,
-			wantRequests:   2,
+			wantRequests:   3,
 			wantBody:       `{"instance_ids":["container-1"],"promote_release":true,"staging":true,"tag":"v1.2.3"}`,
 		},
 		{
 			name:           "false",
 			promoteRelease: "false",
 			changed:        true,
-			wantRequests:   2,
+			wantRequests:   3,
 			wantBody:       `{"instance_ids":["container-1"],"promote_release":false,"staging":true,"tag":"v1.2.3"}`,
 		},
 		{
 			name:           "relaxed",
 			promoteRelease: "no",
 			changed:        true,
-			wantRequests:   2,
+			wantRequests:   3,
 			wantBody:       `{"instance_ids":["container-1"],"promote_release":false,"staging":true,"tag":"v1.2.3"}`,
 		},
 		{
@@ -173,6 +173,8 @@ func TestDeploymentUpdatePromoteReleaseRequestBodies(t *testing.T) {
 				switch {
 				case r.Method == http.MethodGet && r.URL.Path == "/api/deployments":
 					_, _ = io.WriteString(w, `[{"id":"deployment-1","repo":"acme/app"}]`)
+				case r.Method == http.MethodGet && r.URL.Path == "/api/containers":
+					_, _ = io.WriteString(w, `[{"id":"container-1","name":"app-1","repo":"acme/app","status":"running","update_strategy":"blue_green"}]`)
 				case r.Method == http.MethodPost && r.URL.Path == "/api/deployments/deployment-1/update":
 					body, err := io.ReadAll(r.Body)
 					if err != nil {
@@ -213,14 +215,58 @@ func TestDeploymentUpdatePromoteReleaseRequestBodies(t *testing.T) {
 	}
 }
 
-func TestV016CommandSurface(t *testing.T) {
-	if got, want := containerRelaunchCmd.Short, "Redeploy a ready or failed container"; got != want {
-		t.Fatalf("container relaunch help = %q, want %q", got, want)
+func TestLifecycleCommandSurface(t *testing.T) {
+	if got, want := containerDeployCmd.Short, "Deploy a stopped or failed container"; got != want {
+		t.Fatalf("container deploy help = %q, want %q", got, want)
+	}
+	if got, want := containerUpdateCmd.Short, "Update a running container to a new tag or configuration"; got != want {
+		t.Fatalf("container update help = %q, want %q", got, want)
 	}
 
 	for _, command := range containerCmd.Commands() {
-		if command.Name() == "group" {
-			t.Fatal("container group command is registered")
+		switch command.Name() {
+		case "group", "start", "relaunch":
+			t.Fatalf("container %s command is registered", command.Name())
+		}
+		if command.Flags().Lookup("debug-mode") != nil {
+			t.Fatalf("container %s has --debug-mode", command.Name())
+		}
+	}
+	if len(containerUpdateCmd.Commands()) != 0 {
+		t.Fatal("container update is a namespace instead of an action")
+	}
+	for _, name := range []string{"accept", "cancel"} {
+		found := false
+		for _, command := range containerCmd.Commands() {
+			if command.Name() == name {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("container %s is not a top-level command", name)
+		}
+	}
+	if containerUpdateCmd.Flags().Lookup("host") != nil {
+		t.Fatal("container update has --host; hosts change through stop and deploy")
+	}
+	if containerUpdateCmd.Flags().Lookup("yes") == nil || deploymentUpdateCmd.Flags().Lookup("yes") == nil {
+		t.Fatal("update commands are missing --yes for downtime confirmation")
+	}
+	if containerDeleteCmd.Flags().Lookup("yes") == nil {
+		t.Fatal("container delete does not have --yes")
+	}
+	if rootCmd.PersistentFlags().Lookup("host") != nil || rootCmd.PersistentFlags().Lookup("enclave") == nil {
+		t.Fatal("root enclave flag is not --enclave")
+	}
+	for _, command := range sandboxCmd.Commands() {
+		switch command.Name() {
+		case "destroy", "accept":
+			t.Fatalf("sandbox %s command is registered", command.Name())
+		}
+	}
+	for _, command := range volumeCmd.Commands() {
+		if command.Name() == "update" {
+			t.Fatal("volume update command is registered; renames use volume rename")
 		}
 	}
 	for _, command := range deploymentCmd.Commands() {
@@ -232,8 +278,8 @@ func TestV016CommandSurface(t *testing.T) {
 	if containerCreateCmd.Flags().Lookup("staging") != nil {
 		t.Fatal("container create has --staging")
 	}
-	if containerStartCmd.Flags().Lookup("staging") != nil {
-		t.Fatal("container start has --staging")
+	if containerDeployCmd.Flags().Lookup("staging") != nil {
+		t.Fatal("container deploy has --staging")
 	}
 	if containerCreateCmd.Flags().Lookup("group-name") != nil || containerCreateCmd.Flags().Lookup("group-order") != nil {
 		t.Fatal("container create has grouping flags")
@@ -241,8 +287,8 @@ func TestV016CommandSurface(t *testing.T) {
 	if containerCreateCmd.Flags().Lookup("display-order") == nil {
 		t.Fatal("container create does not have --display-order")
 	}
-	if containerRelaunchCmd.Flags().Lookup("staging") == nil {
-		t.Fatal("container relaunch does not have --staging")
+	if containerUpdateCmd.Flags().Lookup("staging") == nil {
+		t.Fatal("container update does not have --staging")
 	}
 	if deploymentUpdateCmd.Flags().Lookup("staging") == nil || deploymentUpdateCmd.Flags().Lookup("promote-release") == nil {
 		t.Fatal("deployment update is missing staging or promotion flags")
@@ -284,7 +330,6 @@ func configureDeploymentCommandTest(t *testing.T, serverURL string) {
 	previousUpdateStaging := deploymentUpdateStaging
 	previousUpdatePromoteRelease := deploymentUpdatePromoteRelease
 	previousUpdateInstanceIDs := deploymentUpdateInstanceIDs
-	previousUseDebugFilter := useDebugFilter
 	stagingFlag := deploymentUpdateCmd.Flags().Lookup("staging")
 	promoteReleaseFlag := deploymentUpdateCmd.Flags().Lookup("promote-release")
 	previousStagingChanged := stagingFlag.Changed
@@ -296,7 +341,6 @@ func configureDeploymentCommandTest(t *testing.T, serverURL string) {
 	deploymentUpdateStaging = ""
 	deploymentUpdatePromoteRelease = ""
 	deploymentUpdateInstanceIDs = nil
-	useDebugFilter = false
 	stagingFlag.Changed = false
 	promoteReleaseFlag.Changed = false
 
@@ -307,7 +351,6 @@ func configureDeploymentCommandTest(t *testing.T, serverURL string) {
 		deploymentUpdateStaging = previousUpdateStaging
 		deploymentUpdatePromoteRelease = previousUpdatePromoteRelease
 		deploymentUpdateInstanceIDs = previousUpdateInstanceIDs
-		useDebugFilter = previousUseDebugFilter
 		stagingFlag.Changed = previousStagingChanged
 		promoteReleaseFlag.Changed = previousPromoteReleaseChanged
 	})
