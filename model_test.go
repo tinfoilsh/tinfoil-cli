@@ -23,6 +23,7 @@ func configureModelCommandTest(t *testing.T, serverURL string) {
 	previousCommit := modelWrapCommit
 	previousToken := modelWrapHFToken
 	previousTokenFile := modelWrapHFTokenFile
+	previousSchema := modelWrapSchema
 	previousWait := modelWrapWait
 	previousLimit := modelListLimit
 	previousStatusWait := modelStatusWait
@@ -31,6 +32,7 @@ func configureModelCommandTest(t *testing.T, serverURL string) {
 	previousUpdateCommit := modelUpdateCommit
 	previousUpdateToken := modelUpdateHFToken
 	previousUpdateTokenFile := modelUpdateHFTokenFile
+	previousUpdateSchema := modelUpdateSchema
 	previousUpdateWait := modelUpdateWait
 	previousInterval := modelWrapPollInterval
 	tokenFlag := modelWrapCmd.Flags().Lookup("hf-token")
@@ -48,6 +50,7 @@ func configureModelCommandTest(t *testing.T, serverURL string) {
 		modelWrapCommit = previousCommit
 		modelWrapHFToken = previousToken
 		modelWrapHFTokenFile = previousTokenFile
+		modelWrapSchema = previousSchema
 		modelWrapWait = previousWait
 		modelListLimit = previousLimit
 		modelStatusWait = previousStatusWait
@@ -56,6 +59,7 @@ func configureModelCommandTest(t *testing.T, serverURL string) {
 		modelUpdateCommit = previousUpdateCommit
 		modelUpdateHFToken = previousUpdateToken
 		modelUpdateHFTokenFile = previousUpdateTokenFile
+		modelUpdateSchema = previousUpdateSchema
 		modelUpdateWait = previousUpdateWait
 		modelWrapPollInterval = previousInterval
 		tokenFlag.Changed = previousTokenChanged
@@ -69,6 +73,7 @@ func configureModelCommandTest(t *testing.T, serverURL string) {
 	modelWrapCommit = ""
 	modelWrapHFToken = ""
 	modelWrapHFTokenFile = ""
+	modelWrapSchema = 0
 	modelWrapWait = false
 	modelListLimit = 0
 	modelStatusWait = false
@@ -77,6 +82,7 @@ func configureModelCommandTest(t *testing.T, serverURL string) {
 	modelUpdateCommit = ""
 	modelUpdateHFToken = ""
 	modelUpdateHFTokenFile = ""
+	modelUpdateSchema = 0
 	modelUpdateWait = false
 	tokenFlag.Changed = false
 	tokenFileFlag.Changed = false
@@ -101,6 +107,7 @@ func TestModelWrapSendsRequestBody(t *testing.T) {
 	configureModelCommandTest(t, server.URL)
 	modelWrapHost = "gpu-1"
 	modelWrapCommit = "419b2efe421994fdfd3394e621983d4cc511cd4f"
+	modelWrapSchema = 2
 
 	output, err := captureTestStdout(func() error {
 		return modelWrapCmd.RunE(modelWrapCmd, []string{"acme/model"})
@@ -113,6 +120,7 @@ func TestModelWrapSendsRequestBody(t *testing.T) {
 		"repo":   "acme/model",
 		"host":   "gpu-1",
 		"commit": "419b2efe421994fdfd3394e621983d4cc511cd4f",
+		"schema": float64(2),
 	}
 	if len(gotBody) != len(want) {
 		t.Fatalf("request body = %v, want %v", gotBody, want)
@@ -133,7 +141,7 @@ func TestModelWrapOmitsEmptyOptionalFields(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			t.Fatalf("decode body: %v", err)
 		}
-		for _, key := range []string{"commit", "hf_token"} {
+		for _, key := range []string{"commit", "hf_token", "schema"} {
 			if _, ok := body[key]; ok {
 				t.Fatalf("request body includes %s for unset flag: %v", key, body)
 			}
@@ -150,6 +158,19 @@ func TestModelWrapOmitsEmptyOptionalFields(t *testing.T) {
 		return modelWrapCmd.RunE(modelWrapCmd, []string{"acme/model"})
 	}); err != nil {
 		t.Fatalf("run model wrap: %v", err)
+	}
+}
+
+func TestModelWrapRejectsNegativeSchema(t *testing.T) {
+	configureModelCommandTest(t, "http://127.0.0.1:1")
+	modelWrapHost = "gpu-1"
+	modelWrapSchema = -1
+
+	_, err := captureTestStdout(func() error {
+		return modelWrapCmd.RunE(modelWrapCmd, []string{"acme/model"})
+	})
+	if err == nil || !strings.Contains(err.Error(), "--schema") {
+		t.Fatalf("error = %v, want a --schema validation error", err)
 	}
 }
 
@@ -284,7 +305,7 @@ func TestModelStatusRendersConfigBlock(t *testing.T) {
 		if r.Method != http.MethodGet || r.URL.Path != "/api/models/wrap/gpu-1/job-1" {
 			t.Fatalf("request = %s %s, want GET /api/models/wrap/gpu-1/job-1", r.Method, r.URL.Path)
 		}
-		_, _ = io.WriteString(w, `{"job_id":"job-1","host":"gpu-1","repo":"google/gemma-4-31B-it","commit":"419b2efe421994fdfd3394e621983d4cc511cd4f","status":"complete","root_hash":"0900ca6b","offset":62578683904,"verity_uuid":"59fe9787-ed93-577a-9fd9-a7804c932a11"}`)
+		_, _ = io.WriteString(w, `{"job_id":"job-1","host":"gpu-1","repo":"google/gemma-4-31B-it","commit":"419b2efe421994fdfd3394e621983d4cc511cd4f","status":"complete","schema_requested":2,"schema":2,"root_hash":"0900ca6b","offset":62578683904,"verity_uuid":"59fe9787-ed93-577a-9fd9-a7804c932a11"}`)
 	}))
 	defer server.Close()
 
@@ -297,9 +318,11 @@ func TestModelStatusRendersConfigBlock(t *testing.T) {
 		t.Fatalf("run model status: %v", err)
 	}
 	for _, want := range []string{
+		"Schema:   2\n",
 		`name: "gemma-4-31b-it"`,
 		`repo: "google/gemma-4-31B-it@419b2efe421994fdfd3394e621983d4cc511cd4f"`,
 		`mpk: "0900ca6b_62578683904_59fe9787-ed93-577a-9fd9-a7804c932a11"`,
+		"    schema: 2\n",
 	} {
 		if !strings.Contains(string(output), want) {
 			t.Fatalf("output does not contain %q:\n%s", want, output)
@@ -354,7 +377,7 @@ func TestModelDeleteSurfacesConflict(t *testing.T) {
 	}
 }
 
-const modelUpdateOldJob = `{"job_id":"old-job","host":"gpu-1","repo":"acme/model","commit":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","status":"complete","root_hash":"11aa","offset":100,"verity_uuid":"59fe9787-ed93-577a-9fd9-a7804c932a11"}`
+const modelUpdateOldJob = `{"job_id":"old-job","host":"gpu-1","repo":"acme/model","commit":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","status":"complete","schema":1,"root_hash":"11aa","offset":100,"verity_uuid":"59fe9787-ed93-577a-9fd9-a7804c932a11"}`
 
 func TestModelUpdateResolvesLatestCommitAndWraps(t *testing.T) {
 	var wrapBody map[string]any
@@ -396,6 +419,9 @@ func TestModelUpdateResolvesLatestCommitAndWraps(t *testing.T) {
 	if got := wrapBody["hf_token"]; got != "hf_secret" {
 		t.Fatalf("wrap hf_token = %v, want hf_secret", got)
 	}
+	if got := wrapBody["schema"]; got != float64(1) {
+		t.Fatalf("wrap schema = %v, want the previous artifact's schema 1", got)
+	}
 	for _, want := range []string{
 		"Updating acme/model on gpu-1: aaaaaaaaaaaa -> bbbbbbbbbbbb",
 		"tinfoil model status gpu-1 new-job",
@@ -403,6 +429,39 @@ func TestModelUpdateResolvesLatestCommitAndWraps(t *testing.T) {
 		if !strings.Contains(string(output), want) {
 			t.Fatalf("output does not contain %q:\n%s", want, output)
 		}
+	}
+}
+
+func TestModelUpdateSchemaOverridesPrevious(t *testing.T) {
+	var wrapBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/models/wrap":
+			_, _ = io.WriteString(w, `[`+modelUpdateOldJob+`]`)
+		case r.Method == http.MethodPost && r.URL.Path == "/api/models/wrap":
+			if err := json.NewDecoder(r.Body).Decode(&wrapBody); err != nil {
+				t.Fatalf("decode body: %v", err)
+			}
+			w.WriteHeader(http.StatusAccepted)
+			_, _ = io.WriteString(w, `{"job_id":"new-job","host":"gpu-1","repo":"acme/model","status":"pending"}`)
+		default:
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	configureModelCommandTest(t, server.URL)
+	modelUpdateHost = "gpu-1"
+	modelUpdateCommit = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	modelUpdateSchema = 2
+
+	if _, err := captureTestStdout(func() error {
+		return modelUpdateCmd.RunE(modelUpdateCmd, []string{"acme/model"})
+	}); err != nil {
+		t.Fatalf("run model update: %v", err)
+	}
+	if got := wrapBody["schema"]; got != float64(2) {
+		t.Fatalf("wrap schema = %v, want the --schema override 2", got)
 	}
 }
 

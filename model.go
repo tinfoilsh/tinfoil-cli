@@ -13,20 +13,24 @@ import (
 )
 
 // modelWrapJobView mirrors the controlplane's modelwrap job response. Only
-// the fields the CLI displays or forwards are modeled.
+// the fields the CLI displays or forwards are modeled. A zero schema means
+// the server default (requested) or not yet resolved (built).
 type modelWrapJobView struct {
-	JobID      string  `json:"job_id"`
-	Host       string  `json:"host"`
-	Repo       string  `json:"repo"`
-	Commit     string  `json:"commit"`
-	Status     string  `json:"status"`
-	Error      string  `json:"error,omitempty"`
-	RootHash   string  `json:"root_hash,omitempty"`
-	Offset     int64   `json:"offset,omitempty"`
-	VerityUUID string  `json:"verity_uuid,omitempty"`
-	StartedAt  string  `json:"started_at,omitempty"`
-	EndedAt    *string `json:"ended_at,omitempty"`
-	Logs       string  `json:"logs,omitempty"`
+	JobID           string  `json:"job_id"`
+	Host            string  `json:"host"`
+	Repo            string  `json:"repo"`
+	Commit          string  `json:"commit"`
+	Status          string  `json:"status"`
+	Error           string  `json:"error,omitempty"`
+	SchemaRequested int     `json:"schema_requested,omitempty"`
+	Schema          int     `json:"schema,omitempty"`
+	ImageDigest     string  `json:"image_digest,omitempty"`
+	RootHash        string  `json:"root_hash,omitempty"`
+	Offset          int64   `json:"offset,omitempty"`
+	VerityUUID      string  `json:"verity_uuid,omitempty"`
+	StartedAt       string  `json:"started_at,omitempty"`
+	EndedAt         *string `json:"ended_at,omitempty"`
+	Logs            string  `json:"logs,omitempty"`
 }
 
 var (
@@ -34,6 +38,7 @@ var (
 	modelWrapCommit      string
 	modelWrapHFToken     string
 	modelWrapHFTokenFile string
+	modelWrapSchema      int
 	modelWrapWait        bool
 
 	modelListLimit int
@@ -45,6 +50,7 @@ var (
 	modelUpdateCommit      string
 	modelUpdateHFToken     string
 	modelUpdateHFTokenFile string
+	modelUpdateSchema      int
 	modelUpdateWait        bool
 
 	// modelWrapPollInterval is shortened by tests.
@@ -61,6 +67,7 @@ func init() {
 	modelWrapCmd.Flags().StringVar(&modelWrapCommit, "commit", "", "Hugging Face commit SHA to pin (defaults to the repo's latest commit)")
 	modelWrapCmd.Flags().StringVar(&modelWrapHFToken, "hf-token", "", "Hugging Face token for gated or private repos (use --hf-token-file or stdin to avoid leaking via process listing)")
 	modelWrapCmd.Flags().StringVar(&modelWrapHFTokenFile, "hf-token-file", "", "Read the Hugging Face token from this file (use - for stdin)")
+	modelWrapCmd.Flags().IntVar(&modelWrapSchema, "schema", 0, "Model pack schema to build with (defaults to the host's modelwrap default)")
 	modelWrapCmd.Flags().BoolVar(&modelWrapWait, "wait", false, "Poll until the wrap job finishes and print the config block")
 	_ = modelWrapCmd.MarkFlagRequired("host")
 
@@ -68,6 +75,7 @@ func init() {
 	modelUpdateCmd.Flags().StringVar(&modelUpdateCommit, "commit", "", "Hugging Face commit SHA to update to (defaults to the repo's latest commit)")
 	modelUpdateCmd.Flags().StringVar(&modelUpdateHFToken, "hf-token", "", "Hugging Face token for gated or private repos (use --hf-token-file or stdin to avoid leaking via process listing)")
 	modelUpdateCmd.Flags().StringVar(&modelUpdateHFTokenFile, "hf-token-file", "", "Read the Hugging Face token from this file (use - for stdin)")
+	modelUpdateCmd.Flags().IntVar(&modelUpdateSchema, "schema", 0, "Model pack schema to build with (defaults to the previous artifact's schema)")
 	modelUpdateCmd.Flags().BoolVar(&modelUpdateWait, "wait", false, "Poll until the wrap job finishes and print the config block")
 	_ = modelUpdateCmd.MarkFlagRequired("host")
 
@@ -91,6 +99,9 @@ var modelWrapCmd = &cobra.Command{
 	Short: "Wrap Hugging Face model weights into a verified artifact on a host",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
+		if err := validateModelSchema(modelWrapSchema); err != nil {
+			return err
+		}
 		client, err := authedClient()
 		if err != nil {
 			return err
@@ -109,6 +120,9 @@ var modelWrapCmd = &cobra.Command{
 		if token != "" {
 			body["hf_token"] = token
 		}
+		if modelWrapSchema > 0 {
+			body["schema"] = modelWrapSchema
+		}
 		return runModelWrapJob(client, body, modelWrapWait, nil)
 	},
 }
@@ -117,11 +131,15 @@ var modelUpdateCmd = &cobra.Command{
 	Use:   "update [owner/model]",
 	Short: "Wrap a newer revision of a previously wrapped model",
 	Long: `Wrap a newer Hugging Face revision of a model that already has a completed
-wrap job on the host. The previous artifact is left in place: point your
-tinfoil-config.yml at the new repo/mpk values, release, then delete the old
-wrap job to reclaim its disk.`,
+wrap job on the host. The new artifact is packed under the previous one's
+schema unless --schema says otherwise. The previous artifact is left in
+place: point your tinfoil-config.yml at the new repo/mpk values, release,
+then delete the old wrap job to reclaim its disk.`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
+		if err := validateModelSchema(modelUpdateSchema); err != nil {
+			return err
+		}
 		client, err := authedClient()
 		if err != nil {
 			return err
@@ -161,6 +179,13 @@ wrap job to reclaim its disk.`,
 		}
 		if token != "" {
 			body["hf_token"] = token
+		}
+		schema := modelUpdateSchema
+		if schema == 0 {
+			schema = previous.Schema
+		}
+		if schema > 0 {
+			body["schema"] = schema
 		}
 		if outputFormat != "json" {
 			fmt.Printf("Updating %s on %s: %s -> %s\n\n", repo, previous.Host, shortCommit(previous.Commit), shortCommit(target))
@@ -257,6 +282,13 @@ func readHFToken(cmd *cobra.Command) (string, error) {
 		return strings.TrimSpace(string(data)), nil
 	}
 	return cmd.Flags().GetString("hf-token")
+}
+
+func validateModelSchema(schema int) error {
+	if schema < 0 {
+		return fmt.Errorf("--schema must be a positive integer")
+	}
+	return nil
 }
 
 func modelWrapFinished(status string) bool {
@@ -426,6 +458,12 @@ func renderModelWrapJob(job modelWrapJobView, showLogs bool) error {
 	if job.Commit != "" {
 		fmt.Printf("Commit:   %s\n", job.Commit)
 	}
+	switch {
+	case job.Schema != 0:
+		fmt.Printf("Schema:   %d\n", job.Schema)
+	case job.SchemaRequested != 0:
+		fmt.Printf("Schema:   %d (requested)\n", job.SchemaRequested)
+	}
 	fmt.Printf("Status:   %s\n", job.Status)
 	if job.StartedAt != "" {
 		fmt.Printf("Started:  %s\n", job.StartedAt)
@@ -444,6 +482,9 @@ func renderModelWrapJob(job modelWrapJobView, showLogs bool) error {
 		fmt.Printf("  - name: %q\n", modelNameFromRepo(job.Repo))
 		fmt.Printf("    repo: %q\n", job.Repo+"@"+job.Commit)
 		fmt.Printf("    mpk: %q\n", modelMPK(job))
+		if job.Schema > 1 { // 1 is the config's implicit default
+			fmt.Printf("    schema: %d\n", job.Schema)
+		}
 		fmt.Printf("\nThe verified weights are mounted in the enclave at:\n")
 		fmt.Printf("  /tinfoil/mpk/mpk-%s\n", job.RootHash)
 	case !modelWrapFinished(job.Status):
