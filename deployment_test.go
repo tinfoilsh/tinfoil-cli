@@ -122,7 +122,7 @@ func TestDeploymentSettingsUpdatesDefaultStaging(t *testing.T) {
 	}
 }
 
-func TestDeploymentUpdatePromoteReleaseRequestBodies(t *testing.T) {
+func TestDeploymentUpdateMarkLatestReleaseRequestBodies(t *testing.T) {
 	tests := []struct {
 		name              string
 		markLatestRelease string
@@ -291,7 +291,7 @@ func TestLifecycleCommandSurface(t *testing.T) {
 		t.Fatal("container update does not have --staging")
 	}
 	if deploymentUpdateCmd.Flags().Lookup("staging") == nil || deploymentUpdateCmd.Flags().Lookup("mark-latest") == nil {
-		t.Fatal("deployment update is missing staging or promotion flags")
+		t.Fatal("deployment update is missing staging or mark-latest flags")
 	}
 	if deploymentSettingsCmd.Flags().Lookup("default-staging") == nil {
 		t.Fatal("deployment settings does not have --default-staging")
@@ -331,9 +331,9 @@ func configureDeploymentCommandTest(t *testing.T, serverURL string) {
 	previousUpdateMarkLatestRelease := deploymentUpdateMarkLatestRelease
 	previousUpdateInstanceIDs := deploymentUpdateInstanceIDs
 	stagingFlag := deploymentUpdateCmd.Flags().Lookup("staging")
-	promoteReleaseFlag := deploymentUpdateCmd.Flags().Lookup("mark-latest")
+	markLatestReleaseFlag := deploymentUpdateCmd.Flags().Lookup("mark-latest")
 	previousStagingChanged := stagingFlag.Changed
-	previousPromoteReleaseChanged := promoteReleaseFlag.Changed
+	previousMarkLatestReleaseChanged := markLatestReleaseFlag.Changed
 
 	outputFormat = "json"
 	deploymentSettingsDefaultStaging = ""
@@ -342,7 +342,7 @@ func configureDeploymentCommandTest(t *testing.T, serverURL string) {
 	deploymentUpdateMarkLatestRelease = ""
 	deploymentUpdateInstanceIDs = nil
 	stagingFlag.Changed = false
-	promoteReleaseFlag.Changed = false
+	markLatestReleaseFlag.Changed = false
 
 	t.Cleanup(func() {
 		outputFormat = previousOutput
@@ -352,7 +352,7 @@ func configureDeploymentCommandTest(t *testing.T, serverURL string) {
 		deploymentUpdateMarkLatestRelease = previousUpdateMarkLatestRelease
 		deploymentUpdateInstanceIDs = previousUpdateInstanceIDs
 		stagingFlag.Changed = previousStagingChanged
-		promoteReleaseFlag.Changed = previousPromoteReleaseChanged
+		markLatestReleaseFlag.Changed = previousMarkLatestReleaseChanged
 	})
 }
 

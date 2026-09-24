@@ -280,16 +280,17 @@ var containerCreateCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		// A config that declares volumes cannot run until each slot has a disk,
-		// so refuse up front with the commands to run rather than creating a
-		// container that sits stopped.
+		// A slot with a key secret cannot run without a disk, so refuse up front
+		// with the commands to run rather than creating a container that sits
+		// stopped. Slots without one are optional and the container deploys
+		// with them empty.
 		if len(requests) == 0 {
 			slots, err := declaredVolumeSlots(client, createRepo, createTag)
 			if err != nil {
 				return err
 			}
-			if len(slots) > 0 {
-				return errVolumesRequired(args[0], slots, createHost)
+			if required := requiredVolumeSlots(slots); len(required) > 0 {
+				return errVolumesRequired(args[0], required, createHost)
 			}
 		}
 		var volumes []volumeView
@@ -346,12 +347,16 @@ var containerCreateCmd = &cobra.Command{
 			}
 			return followAndRender(client, created, nil)
 		}
-		if err := attachVolumes(client, &created, requests, volumes); err != nil {
-			return fmt.Errorf("created %s but %w", created.Name, err)
+		if len(requests) > 0 {
+			if err := attachVolumes(client, &created, requests, volumes); err != nil {
+				return fmt.Errorf("created %s but %w", created.Name, err)
+			}
 		}
+		// The controlplane leaves any volume-declaring container stopped after
+		// create; deploy it now so optional slots do not strand it.
 		var deployed containerView
 		if _, err := client.do("POST", pathf("/api/containers/%s/deploy", created.ID), nil, map[string]any{}, &deployed); err != nil {
-			return fmt.Errorf("created %s and attached its volumes but could not deploy it: %s. Run: tinfoil container deploy %s", created.Name, errMessage(err), created.Name)
+			return fmt.Errorf("created %s but could not deploy it: %s. Run: tinfoil container deploy %s", created.Name, errMessage(err), created.Name)
 		}
 		attached, err := loadContainerVolumes(client, deployed)
 		if err != nil {

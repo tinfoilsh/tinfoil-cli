@@ -267,6 +267,17 @@ func TestContainerCreateWithVolume(t *testing.T) {
 			wantOut:   []string{"Status:       Stopped"},
 			wantPaths: []string{"POST /api/containers/validate", "POST /api/containers"},
 		},
+		{
+			name:    "without --volume an optional slot creates and deploys",
+			slots:   `[{"name":"scratch"}]`,
+			wantOut: []string{"Status:       Deploying"},
+			wantPaths: []string{
+				"POST /api/containers/validate",
+				"POST /api/containers",
+				"POST /api/containers/" + testContainerID + "/deploy",
+				"GET /api/volumes",
+			},
+		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			slots := tt.slots

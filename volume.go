@@ -536,6 +536,19 @@ func declaredVolumeSlots(client *cpClient, repo, tag string) ([]volumeSlot, erro
 	return result.Config.Volumes, nil
 }
 
+// requiredVolumeSlots returns the declared slots the controlplane refuses to
+// deploy without a disk: those with a key secret. Slots without one may stay
+// empty.
+func requiredVolumeSlots(slots []volumeSlot) []volumeSlot {
+	var required []volumeSlot
+	for _, s := range slots {
+		if s.KeySecret != "" {
+			required = append(required, s)
+		}
+	}
+	return required
+}
+
 // errVolumesRequired explains that the config needs a disk per declared slot
 // and lists the commands that create and attach one, so the user never ends
 // up with a container that exists but cannot run.
