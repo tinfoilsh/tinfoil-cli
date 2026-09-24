@@ -64,6 +64,12 @@ func TestHoldFlagsSendOmittedTrueAndFalse(t *testing.T) {
 						io.WriteString(w, `[]`)
 					case r.Method == http.MethodGet:
 						io.WriteString(w, `{"id":"`+testContainerID+`","status":"running"}`)
+					case strings.HasSuffix(r.URL.Path, "/update/plan"):
+						projectID := ""
+						if command == projectUpdateCmd {
+							projectID = "project-1"
+						}
+						writeTestUpdatePlan(t, w, r, testContainerID, projectID, updateStrategyBlueGreen)
 					default:
 						if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 							t.Error(err)
@@ -74,6 +80,7 @@ func TestHoldFlagsSendOmittedTrueAndFalse(t *testing.T) {
 				defer server.Close()
 				configureContainerPromotionTest(t, server.URL)
 				configureProjectCommandTest(t, server.URL)
+				projectUpdateTag = "v2"
 				flagName, wireName := "hold", "hold"
 				identifier := testContainerID
 				if command != containerUpdateCmd {
@@ -156,6 +163,12 @@ func TestUpdateTargetDowntimeConfirmation(t *testing.T) {
 						}
 					case r.Method == http.MethodGet:
 						io.WriteString(w, `{"id":"`+testContainerID+`","name":"app","status":"running","gpus":1,"update_strategy":"blue_green"}`)
+					case strings.HasSuffix(r.URL.Path, "/update/plan"):
+						projectID := ""
+						if project {
+							projectID = "project-1"
+						}
+						writeTestUpdatePlan(t, w, r, testContainerID, projectID, updateStrategyBlueGreen)
 					case r.Method == http.MethodPost:
 						posts++
 						var body map[string]any
@@ -266,6 +279,12 @@ func TestChangedTagCanAllowHeldBlueGreenUpdate(t *testing.T) {
 					io.WriteString(w, `[`+current+`]`)
 				case r.Method == http.MethodGet:
 					io.WriteString(w, current)
+				case strings.HasSuffix(r.URL.Path, "/update/plan"):
+					projectID := ""
+					if project {
+						projectID = "project-1"
+					}
+					writeTestUpdatePlan(t, w, r, testContainerID, projectID, updateStrategyBlueGreen)
 				case r.Method == http.MethodPost:
 					posts++
 					var body map[string]any
@@ -312,6 +331,10 @@ func TestKnownReplaceConfirmationDoesNotRetryAgain(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.Method == http.MethodGet {
 					io.WriteString(w, `{"id":"`+testContainerID+`","name":"app","gpus":8,"update_strategy":"replace"}`)
+					return
+				}
+				if strings.HasSuffix(r.URL.Path, "/update/plan") {
+					writeTestUpdatePlan(t, w, r, testContainerID, "", updateStrategyReplace)
 					return
 				}
 				posts++

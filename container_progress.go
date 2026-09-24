@@ -75,17 +75,6 @@ func replaceReason(c containerView) string {
 	return "it has persistent volumes"
 }
 
-// confirmDowntime explains that an update will take the container offline and
-// requires the user to type yes, unless --yes was given.
-func confirmDowntime(c containerView) error {
-	fmt.Fprintf(os.Stderr, "Updating %s will cause downtime.\n\n", c.Name)
-	fmt.Fprintf(os.Stderr, "This container %s, so the new version cannot run alongside the current one.\n", replaceReason(c))
-	fmt.Fprintln(os.Stderr, "The running instance is stopped first and the new version deploys in its place.")
-	fmt.Fprintln(os.Stderr, "It will be unreachable until the new version is Running.")
-	fmt.Fprintln(os.Stderr)
-	return confirmYes(updateYes, "container update")
-}
-
 func postLifecycleUpdate(client *cpClient, path string, body map[string]any, out any, yes bool, action string, instances []string) error {
 	_, err := client.do("POST", path, nil, body, out)
 	var cp *cpError
@@ -138,7 +127,10 @@ func followAndRender(client *cpClient, c containerView, attached map[string]volu
 		return err
 	}
 	if outputFormat != "json" && !noWait && !isTerminal(c) {
-		_, err := followContainer(client, c.ID, c)
+		final, err := followContainer(client, c.ID, c)
+		if err == nil {
+			printContainerConnections(os.Stdout, final)
+		}
 		return err
 	}
 	return failureError(c)

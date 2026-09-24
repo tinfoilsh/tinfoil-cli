@@ -162,7 +162,11 @@ var projectUpdateCmd = &cobra.Command{
 --instance. Instances that must be replaced (multi-GPU or
 persistent volumes) go down while they redeploy; the command lists them and
 asks for confirmation unless --yes is given. Stopped and failed instances are
-skipped; bring those up with "tinfoil container deploy".`,
+skipped; bring those up with "tinfoil container deploy".
+
+The read-only server plan is printed before execution, even with --yes. Omit
+--hold to inherit the project's default; --hold is true and --hold=false
+explicitly disables it (use equals, not --hold false).`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		body := map[string]any{
@@ -191,16 +195,12 @@ skipped; bring those up with "tinfoil container deploy".`,
 			return err
 		}
 
-		replaced, err := replaceStrategyInstances(client, project.Repo, projectUpdateInstanceIDs)
+		plans, err := planProjectUpdate(client, project.ID, body)
 		if err != nil {
 			return err
 		}
-		if hold, ok := body["hold"].(bool); ok && hold {
-			for _, c := range replaced {
-				if c.GPUs > 1 || c.CurrentTag == projectUpdateTag {
-					return fmt.Errorf("holding for review is not available for %s: %s, so the update replaces the running enclave instead of starting the new version alongside it; pass --hold=false or select other instances with --instance", c.Name, replaceReason(c))
-				}
-			}
+		if err := confirmUpdatePlans(plans, body, projectUpdateYes, "project update"); err != nil {
+			return err
 		}
 
 		response, err := updateProjectInstances(client, project.ID, body)
@@ -209,31 +209,6 @@ skipped; bring those up with "tinfoil container deploy".`,
 		}
 		return renderProjectUpdateResults(response.Results)
 	},
-}
-
-// replaceStrategyInstances lists the running instances of repo (or the
-// selected ones) whose update replaces the running enclave and so causes
-// downtime.
-func replaceStrategyInstances(client *cpClient, repo string, selected []string) ([]containerView, error) {
-	var list []containerView
-	if _, err := client.do("GET", "/api/containers", nil, nil, &list); err != nil {
-		return nil, err
-	}
-	wanted := map[string]bool{}
-	for _, id := range selected {
-		wanted[id] = true
-	}
-	var out []containerView
-	for _, c := range list {
-		if !strings.EqualFold(c.Repo, repo) || c.Status != statusRunning || c.UpdateDeploymentID != "" || c.UpdateStrategy != updateStrategyReplace {
-			continue
-		}
-		if len(wanted) > 0 && !wanted[c.ID] {
-			continue
-		}
-		out = append(out, c)
-	}
-	return out, nil
 }
 
 func listProjects(client *cpClient) ([]projectView, error) {

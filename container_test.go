@@ -106,7 +106,7 @@ func TestContainerCommandsMarkLatestReleaseRequestBodies(t *testing.T) {
 			name:         "update",
 			command:      containerUpdateCmd,
 			path:         "/api/containers/" + containerID + "/update",
-			wantRequests: 2,
+			wantRequests: 3,
 			wantBody: func(promote string) string {
 				return `{` + strings.TrimSuffix(promote, ",") + `}`
 			},
@@ -148,6 +148,8 @@ func TestContainerCommandsMarkLatestReleaseRequestBodies(t *testing.T) {
 						_, _ = io.WriteString(w, `{"valid":true,"config":{}}`)
 					case r.Method == http.MethodGet && r.URL.Path == "/api/containers/"+containerID:
 						_, _ = io.WriteString(w, `{"id":"`+containerID+`","name":"app"}`)
+					case r.Method == http.MethodPost && r.URL.Path == "/api/containers/"+containerID+"/update/plan":
+						writeTestUpdatePlan(t, w, r, containerID, "", updateStrategyBlueGreen)
 					case r.Method == http.MethodPost && r.URL.Path == command.path:
 						body, err := io.ReadAll(r.Body)
 						if err != nil {

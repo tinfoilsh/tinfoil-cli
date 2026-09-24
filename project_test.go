@@ -173,8 +173,8 @@ func TestProjectUpdateMarkLatestReleaseRequestBodies(t *testing.T) {
 				switch {
 				case r.Method == http.MethodGet && r.URL.Path == "/api/containers/projects":
 					_, _ = io.WriteString(w, `[{"id":"deployment-1","repo":"acme/app"}]`)
-				case r.Method == http.MethodGet && r.URL.Path == "/api/containers":
-					_, _ = io.WriteString(w, `[{"id":"container-1","name":"app-1","repo":"acme/app","status":"running","update_strategy":"blue_green"}]`)
+				case r.Method == http.MethodPost && r.URL.Path == "/api/containers/projects/deployment-1/update/plan":
+					writeTestUpdatePlan(t, w, r, "container-1", "deployment-1", updateStrategyBlueGreen)
 				case r.Method == http.MethodPost && r.URL.Path == "/api/containers/projects/deployment-1/update":
 					body, err := io.ReadAll(r.Body)
 					if err != nil {
@@ -410,8 +410,8 @@ func TestProjectUpdateRefusesHoldForReplaceInstances(t *testing.T) {
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/containers/projects":
 			_, _ = io.WriteString(w, `[{"id":"deployment-1","repo":"acme/app"}]`)
-		case r.Method == http.MethodGet && r.URL.Path == "/api/containers":
-			_, _ = io.WriteString(w, `[{"id":"gpu-1","name":"big","repo":"acme/app","status":"running","gpus":8,"update_strategy":"replace"}]`)
+		case r.Method == http.MethodPost && r.URL.Path == "/api/containers/projects/deployment-1/update/plan":
+			writeTestUpdatePlan(t, w, r, "gpu-1", "deployment-1", updateStrategyReplace)
 		case r.Method == http.MethodPost:
 			posts.Add(1)
 			_, _ = io.WriteString(w, `{"results":[]}`)
@@ -429,7 +429,7 @@ func TestProjectUpdateRefusesHoldForReplaceInstances(t *testing.T) {
 	_, err := captureTestStdout(func() error {
 		return projectUpdateCmd.RunE(projectUpdateCmd, []string{"acme/app"})
 	})
-	if err == nil || !strings.Contains(err.Error(), "holding for review is not available for big: it uses 8 GPUs") {
+	if err == nil || !strings.Contains(err.Error(), "holding for review is not available for app (strategy: replace") {
 		t.Fatalf("error = %v", err)
 	}
 	if posts.Load() != 0 {

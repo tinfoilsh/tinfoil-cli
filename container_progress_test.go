@@ -122,6 +122,8 @@ func TestContainerUpdateRefusesHoldOnReplaceStrategyLocally(t *testing.T) {
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/containers/"+testContainerID:
 			_, _ = io.WriteString(w, `{"id":"`+testContainerID+`","name":"app","status":"running","gpus":8,"update_strategy":"replace"}`)
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/update/plan"):
+			writeTestUpdatePlan(t, w, r, testContainerID, "", updateStrategyReplace)
 		case r.Method == http.MethodPost:
 			posts.Add(1)
 			_, _ = io.WriteString(w, `{}`)
@@ -137,7 +139,7 @@ func TestContainerUpdateRefusesHoldOnReplaceStrategyLocally(t *testing.T) {
 	_, err := captureTestStdout(func() error {
 		return containerUpdateCmd.RunE(containerUpdateCmd, []string{testContainerID})
 	})
-	if err == nil || !strings.Contains(err.Error(), "holding for review is not available for app: it uses 8 GPUs") {
+	if err == nil || !strings.Contains(err.Error(), "holding for review is not available for app (strategy: replace") {
 		t.Fatalf("error = %v", err)
 	}
 	if posts.Load() != 0 {
@@ -151,6 +153,8 @@ func TestContainerUpdateSendsDowntimeConfirmationForReplaceStrategy(t *testing.T
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/containers/"+testContainerID:
 			_, _ = io.WriteString(w, `{"id":"`+testContainerID+`","name":"app","status":"running","gpus":8,"update_strategy":"replace"}`)
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/update/plan"):
+			writeTestUpdatePlan(t, w, r, testContainerID, "", updateStrategyReplace)
 		case r.Method == http.MethodPost && r.URL.Path == "/api/containers/"+testContainerID+"/update":
 			raw, _ := io.ReadAll(r.Body)
 			body = string(raw)

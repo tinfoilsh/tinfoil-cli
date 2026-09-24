@@ -66,7 +66,11 @@ var proxyCmd = &cobra.Command{
 				repo = tinfoilClient.Repo()
 			}
 		} else {
-			tinfoilClient, err = tinfoil.NewClientWithOptions(tinfoil.WithEnclave(enclaveHost), tinfoil.WithRepo(repo))
+			expected, parseErr := newVerifiedClient(enclaveHost, repo, "")
+			if parseErr != nil {
+				return parseErr
+			}
+			tinfoilClient, err = tinfoil.NewClientWithOptions(tinfoil.WithEnclave(expected.Enclave()), tinfoil.WithRepo(expected.Repo()))
 		}
 		if err != nil {
 			log.WithError(err).Error("failed to create HTTP client")
