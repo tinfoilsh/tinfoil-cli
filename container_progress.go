@@ -137,14 +137,11 @@ func followAndRender(client *cpClient, c containerView, attached map[string]volu
 	if err := renderContainerDetail(c, attached); err != nil {
 		return err
 	}
-	final := c
 	if outputFormat != "json" && !noWait && !isTerminal(c) {
-		var err error
-		if final, err = followContainer(client, c.ID, c); err != nil {
-			return err
-		}
+		_, err := followContainer(client, c.ID, c)
+		return err
 	}
-	return failureError(final)
+	return failureError(c)
 }
 
 // failureError turns a failed container or update candidate into a non-zero
@@ -181,6 +178,9 @@ func heldCandidateReady(c containerView) bool {
 }
 
 func followedDeploymentState(c containerView, deploymentID string) (bool, error) {
+	if c.TinfoildDeploymentID == deploymentID && c.Status == statusRunning {
+		return true, nil
+	}
 	if c.UpdateDeploymentID == deploymentID {
 		if c.UpdateStatus == statusFailed {
 			return true, failureError(c)
@@ -239,7 +239,11 @@ func followContainer(client *cpClient, id string, initial containerView) (contai
 		if err != nil {
 			return current, err
 		}
-		print(progressLine(current))
+		display := current
+		if current.TinfoildDeploymentID == deploymentID {
+			display.UpdateTag = ""
+		}
+		print(progressLine(display))
 		if done {
 			return current, nil
 		}
