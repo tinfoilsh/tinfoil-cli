@@ -61,6 +61,7 @@ type createFlowFixture struct {
 	mounts            []volumeSlot
 	volumes           []volumeView
 	replaceStatus     int
+	replaceResponseID string
 	attachFailureAt   int
 	deployStatus      int
 	loadFailure       bool
@@ -104,7 +105,11 @@ func (f *createFlowFixture) serve(t *testing.T) *httptest.Server {
 				write(map[string]any{"error": "replacement access denied"})
 				return
 			}
-			write(containerView{ID: testReplacedContainerID, Name: "old-app", Status: statusRunning, HostID: "h1", HostName: "inf13"})
+			replaceID := testReplacedContainerID
+			if f.replaceResponseID != "" {
+				replaceID = f.replaceResponseID
+			}
+			write(containerView{ID: replaceID, Name: "old-app", Status: statusRunning, HostID: "h1", HostName: "inf13"})
 		case path == "POST /api/containers/validate":
 			write(map[string]any{"valid": true, "config": map[string]any{"volumes": f.mounts}})
 		case path == "GET /api/volumes":
@@ -235,6 +240,7 @@ func TestCreateRejectsUnsafeDiskAssignmentsBeforeReplacement(t *testing.T) {
 			f.volumes = append(f.volumes, volumeView{ID: "other-id", Name: "other", HostID: "h2", HostName: "inf14"})
 		}, want: "are on different hosts"},
 		{name: "replacement permission denied", requests: []string{"data-vol"}, setup: func(f *createFlowFixture) { f.replaceStatus = http.StatusForbidden }, want: "resolve --replace target"},
+		{name: "replacement response mismatch", requests: []string{"data-vol"}, setup: func(f *createFlowFixture) { f.replaceResponseID = testContainerID }, want: "unexpected container ID; refusing to replace"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			f := newCreateFlowFixture()

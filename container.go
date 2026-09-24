@@ -318,6 +318,9 @@ var containerCreateCmd = &cobra.Command{
 			if err != nil {
 				return fmt.Errorf("resolve --replace target: %w", err)
 			}
+			if !strings.EqualFold(replacement.ID, replaceID) {
+				return fmt.Errorf("resolve --replace target: unexpected container ID; refusing to replace")
+			}
 			replaceID = replacement.ID
 		}
 		// A slot with a key secret cannot run without a disk, so refuse up front
@@ -587,7 +590,8 @@ command asks you to confirm the downtime unless --yes is given.`,
 		if err != nil {
 			return err
 		}
-		if c.UpdateStrategy == updateStrategyReplace {
+		currentStrategyApplies := !cmd.Flags().Changed("tag") || updateTag == c.CurrentTag || c.GPUs > 1 || len(c.Volumes) > 0
+		if c.UpdateStrategy == updateStrategyReplace && currentStrategyApplies {
 			if hold {
 				return fmt.Errorf("holding for review is not available for %s: %s, so the update replaces the running enclave instead of starting the new version alongside it", c.Name, replaceReason(*c))
 			}

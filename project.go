@@ -195,9 +195,11 @@ skipped; bring those up with "tinfoil container deploy".`,
 		if err != nil {
 			return err
 		}
-		if len(replaced) > 0 {
-			if hold, ok := body["hold"].(bool); ok && hold {
-				return fmt.Errorf("holding for review is not available for %s: %s, so the update replaces the running enclave instead of starting the new version alongside it; pass --hold=false or select other instances with --instance", replaced[0].Name, replaceReason(replaced[0]))
+		if hold, ok := body["hold"].(bool); ok && hold {
+			for _, c := range replaced {
+				if c.GPUs > 1 || c.CurrentTag == projectUpdateTag {
+					return fmt.Errorf("holding for review is not available for %s: %s, so the update replaces the running enclave instead of starting the new version alongside it; pass --hold=false or select other instances with --instance", c.Name, replaceReason(c))
+				}
 			}
 		}
 
@@ -223,7 +225,7 @@ func replaceStrategyInstances(client *cpClient, repo string, selected []string) 
 	}
 	var out []containerView
 	for _, c := range list {
-		if !strings.EqualFold(c.Repo, repo) || c.Status != statusRunning || c.UpdateStrategy != updateStrategyReplace {
+		if !strings.EqualFold(c.Repo, repo) || c.Status != statusRunning || c.UpdateDeploymentID != "" || c.UpdateStrategy != updateStrategyReplace {
 			continue
 		}
 		if len(wanted) > 0 && !wanted[c.ID] {
@@ -341,7 +343,7 @@ func renderProjectUpdateResults(results []projectInstanceResult) error {
 	failed, skipped := 0, 0
 	for _, result := range results {
 		if outputFormat != "json" {
-			detail := result.Error
+			detail := humanVolumeMessage(result.Error)
 			if detail == "" {
 				detail = result.ContainerID
 			}

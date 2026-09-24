@@ -49,6 +49,7 @@ func TestFollowDeploymentGeneration(t *testing.T) {
 		{"deploy superseded", deploying, []string{strings.ReplaceAll(promoted, `"new"`, `"other"`)}, "canceled or superseded", ""},
 		{"deploy failed", deploying, []string{failed}, "workload failed", ""},
 		{"missing generation refuses to guess", `"status":"deploying"`, nil, "no deployment ID", ""},
+		{"missing candidate ID cannot follow old generation", strings.ReplaceAll(pendingCandidate, `,"update_deployment_id":"new"`, ""), nil, "no deployment ID", ""},
 	} {
 		for _, render := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/render=%t", tt.name, render), func(t *testing.T) {

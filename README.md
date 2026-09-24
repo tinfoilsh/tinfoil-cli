@@ -144,7 +144,7 @@ tinfoil container deploy my-container --tag v1.2.4 --host gpu-host-2
 
 # Update a running container (blue/green when possible; asks before causing downtime)
 tinfoil container update my-container --tag v1.2.4
-tinfoil container update my-container --tag v1.2.4 --hold=true         # hold for review
+tinfoil container update my-container --tag v1.2.4 --hold              # hold for review
 tinfoil container update my-container --tag v1.2.2 --mark-latest=false   # roll back without changing the latest release
 tinfoil container promote my-container                                 # switch traffic to the held version
 tinfoil container cancel my-container
@@ -155,25 +155,27 @@ tinfoil container delete my-container                                  # prompts
 # Projects (every instance that shares one config repository)
 tinfoil project list
 tinfoil project get myorg/my-repo-container
-tinfoil project update myorg/my-repo-container --tag v1.2.4 --hold=true
+tinfoil project update myorg/my-repo-container --tag v1.2.4 --hold
 tinfoil project update myorg/my-repo-container --tag v1.2.4 --instance <container-id>
-tinfoil project settings myorg/my-repo-container --hold-by-default=true
+tinfoil project settings myorg/my-repo-container --hold-by-default
 
 # Open a verified proxy to a deployed container
 tinfoil container connect my-container -p 8080
 ```
 
-A container is either running or it is not. `deploy` boots an enclave for a container that has none (stopped, failed, or stopping); `update` replaces the version a running container serves. There is no in-place restart: `update` with the same tag restarts a running container without downtime, `stop` then `deploy` restarts it with downtime.
+A container is either running or it is not. `deploy` boots an enclave for a container that has none (stopped, failed, or stopping); `update` replaces the version a running container serves. There is no in-place restart: `update` with the same tag uses the same update strategy as a version change, while `stop` then `deploy` restarts it with downtime.
 
-Single-GPU containers without persistent volumes update blue/green: the new version boots next to the current one and traffic switches when it is Running. Multi-GPU containers and containers with persistent volumes cannot run two copies, so `update` stops the current version first; the CLI describes the downtime and asks you to type `yes` (pass `--yes` in scripts). Holding for review is only available for blue/green updates.
+Single-GPU containers without persistent volumes update blue/green: the new version boots next to the current one and traffic switches when it is Running. Multi-GPU containers and containers with persistent volumes cannot run two copies, so `update` stops the current version first; the CLI describes the downtime and asks you to type `yes` (pass `--yes` in scripts). A target tag can also require replacement even when the current version supports blue/green. Project updates preflight the entire batch and list all affected instances before asking for confirmation. Holding for review is only available for blue/green updates. `--hold` is equivalent to `--hold=true`; `--hold=false` explicitly disables holding, including a project's default. `--hold-by-default=false` clears that project setting.
 
-`create`, `deploy`, `update`, and `promote` follow the instance's progress and print each boot stage until it is Running, exiting non-zero if it fails. Pass `--no-wait` to return as soon as the request is accepted, or `-o json` for the raw response.
+`create`, `deploy`, `update`, and `promote` follow the requested deployment and print each boot stage until it is Running or held for review, exiting non-zero if it fails, is stopped, is canceled, or is superseded. A queued deployment continues to be followed while the previous version stops. Pass `--no-wait` to return as soon as the request is accepted, or `-o json` for the initial response.
 
 `container connect <name>` resolves the container's enclave domain and source repo, then runs a verified proxy locally so you can reach the container at `http://localhost:<port>` without copy-pasting either value.
 
 Container create, deploy, update, and project update mark the deployed tag as the repository's latest GitHub release once it is running. Pass `--mark-latest=false` to leave the latest release unchanged, for example when rolling back.
 
-`--volume <id|name>[:<declared name>]` on `create` and `deploy` attaches an existing unattached volume to a slot the repository's `tinfoil-config.yml` declares, then deploys the container. The declared name is optional when the config declares exactly one volume. On create, the volume's host becomes the container's host (an explicit `--host` must match). On deploy, the container must already be on that host unless `--host` moves it there. Once attached, later deploys reuse the disk; omit `--volume`. When the config declares volumes and `--volume` is omitted, `create` refuses and prints the `volume create` and `container create --volume` commands to run, so a container is never created without the disks it needs.
+`--volume <id|name>[:<mount name>]` on `create` and `deploy` attaches an existing unattached volume to a mount the repository's `tinfoil-config.yml` declares, then deploys the container. The mount name is optional when the config declares exactly one mount. On create, the volume's host becomes the container's host (an explicit `--host` must match). On deploy, the container must already be on that host unless `--host` moves it there. Once attached, later deploys reuse the disk; omit `--volume`.
+
+Create validates the configuration and disk assignments before creating or replacing a container. Mounts with a `key_secret` require a disk; optional mounts may remain empty. With `--replace <container-id>`, selected disks may also be attached to that exact replacement target, never another workload. After replacement, the CLI attaches them to the new container and deploys it, preserving an explicit `--mark-latest` choice. If a follow-up step fails, the new container and successful attachments are not rolled back; the error identifies the retained container and recovery commands. A validation permission error requires an admin key authorized for `containers.validate`; the CLI does not bypass validation.
 
 A name shared by a debug and a production container is ambiguous; the CLI lists both and asks for the ID.
 
@@ -258,7 +260,7 @@ Pass `-o json` on any list/get to emit machine-readable JSON.
 
 ## Volume management
 
-Volumes are encrypted persistent disks that live on one container host and attach to a volume declared in a repository's `tinfoil-config.yml`. A volume can be attached to one stopped container at a time and keeps its data across stops, deploys, and updates.
+Volumes are encrypted persistent disks that live on one container host and attach to a mount declared in a repository's `tinfoil-config.yml`. A volume can be attached to one stopped container at a time and keeps its data across stops, deploys, and updates.
 
 ```bash
 # Inspect
@@ -269,7 +271,7 @@ tinfoil volume get my-db-data
 tinfoil volume create my-db-data --size 16TiB --host gpu-host-1
 
 # Attach to a stopped container, then deploy it
-tinfoil volume attach my-db-data my-db          # --as <declared name> when the config declares several
+tinfoil volume attach my-db-data my-db          # --as <mount name> when the config declares several
 tinfoil container deploy my-db
 
 # Move a volume between containers
