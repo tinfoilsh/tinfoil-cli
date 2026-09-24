@@ -2,14 +2,15 @@ package main
 
 import (
 	"encoding/json"
-	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
-	"strings"
 	"sync/atomic"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestContainerUpdateCancelRollbackLatest(t *testing.T) {
@@ -21,6 +22,19 @@ func TestContainerUpdateCancelRollbackLatest(t *testing.T) {
 		rollbackBody  = `{"rollback_latest":true}`
 		unconfirmed   = "update cancellation may have completed, but the controlplane did not confirm latest release restoration"
 	)
+	t.Setenv(envAdminKey, "admin_test")
+	t.Setenv(envConfigPath, filepath.Join(t.TempDir(), "missing-config.json"))
+	flag := containerUpdateCancelCmd.Flags().Lookup("rollback-latest")
+	previousValue, previousChanged := cancelRollbackLatest, flag.Changed
+	previousDebugFilter, previousStderr := useDebugFilter, rootCmd.ErrOrStderr()
+	rootCmd.SetErr(io.Discard)
+	t.Cleanup(func() {
+		cancelRollbackLatest, flag.Changed = previousValue, previousChanged
+		useDebugFilter = previousDebugFilter
+		rootCmd.SetArgs(nil)
+		rootCmd.SetErr(previousStderr)
+	})
+
 	tests := []struct {
 		name         string
 		args         []string
@@ -47,12 +61,12 @@ func TestContainerUpdateCancelRollbackLatest(t *testing.T) {
 		{
 			name: "cancel rejected", args: []string{containerID, "--rollback-latest"},
 			wantBody: rollbackBody, status: http.StatusConflict,
-			responseBody: `{"error":"update cannot be canceled"}`,
+			responseBody: `{"error":"update cannot be canceled"}`, wantErr: "update cannot be canceled",
 		},
 		{
 			name: "restoration failed", args: []string{containerName, "--rollback-latest"},
 			wantBody: rollbackBody, status: http.StatusInternalServerError,
-			responseBody: `{"error":"latest restoration failed"}`,
+			responseBody: `{"error":"latest restoration failed"}`, wantErr: "latest restoration failed",
 		},
 		{
 			name: "old server ignored rollback", args: []string{containerID, "--rollback-latest"},
@@ -86,9 +100,22 @@ func TestContainerUpdateCancelRollbackLatest(t *testing.T) {
 			name: "invalid JSON", args: []string{containerID, "--rollback-latest"},
 			wantBody: rollbackBody, status: http.StatusOK, responseBody: `{`, wantErr: unconfirmed,
 		},
+		{
+			name: "tag as flag value", args: []string{containerName, "--rollback-latest=v1.2.3"},
+			wantErr: "invalid argument",
+		},
+		{
+			name: "tag as positional argument", args: []string{containerName, "--rollback-latest", "v1.2.3"},
+			wantErr: "accepts 1 arg(s), received 2",
+		},
+		{
+			name: "tag flag", args: []string{containerName, "--rollback-latest", "--tag", "v1.2.3"},
+			wantErr: "unknown flag: --tag",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			cancelRollbackLatest, flag.Changed = false, false
 			var lookups, cancellations atomic.Int32
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				container := containerView{ID: containerID, Name: containerName, CurrentTag: "v1.2.3", UpdateTag: "v1.2.4"}
@@ -102,19 +129,13 @@ func TestContainerUpdateCancelRollbackLatest(t *testing.T) {
 				case r.Method == http.MethodPost && r.URL.Path == cancelPath:
 					cancellations.Add(1)
 					body, err := io.ReadAll(r.Body)
-					if err != nil {
-						t.Errorf("read cancel body: %v", err)
-					}
-					if string(body) != tt.wantBody {
-						t.Errorf("cancel body = %q, want %q", body, tt.wantBody)
-					}
+					assert.NoError(t, err)
+					assert.Equal(t, tt.wantBody, string(body), "cancel body")
 					wantContentType := ""
 					if tt.wantBody != "" {
 						wantContentType = "application/json"
 					}
-					if got := r.Header.Get("Content-Type"); got != wantContentType {
-						t.Errorf("Content-Type = %q, want %q", got, wantContentType)
-					}
+					assert.Equal(t, wantContentType, r.Header.Get("Content-Type"))
 					w.WriteHeader(tt.status)
 					_, _ = io.WriteString(w, tt.responseBody)
 				default:
@@ -123,81 +144,22 @@ func TestContainerUpdateCancelRollbackLatest(t *testing.T) {
 				}
 			}))
 			defer server.Close()
-			configureCancelCommandTest(t, server.URL)
+			t.Setenv(envCPURL, server.URL)
 
-			output, err := runCancelCommandTest(tt.args)
+			rootCmd.SetArgs(append([]string{"container", "update", "cancel"}, tt.args...))
+			output, err := captureTestStdout(rootCmd.Execute)
 			if tt.wantErr != "" {
-				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
-					t.Fatalf("error = %v, want %q", err, tt.wantErr)
-				}
-			} else if tt.status == http.StatusNoContent || tt.status == http.StatusOK {
-				if err != nil {
-					t.Fatalf("cancel command: %v", err)
-				}
+				require.ErrorContains(t, err, tt.wantErr)
 			} else {
-				var apiErr *cpError
-				if !errors.As(err, &apiErr) || apiErr.Status != tt.status || apiErr.Message == "" {
-					t.Fatalf("error = %v, want API error with status %d and message", err, tt.status)
-				}
+				require.NoError(t, err)
 			}
-			if string(output) != tt.wantOutput {
-				t.Fatalf("output = %q, want %q", output, tt.wantOutput)
+			assert.Equal(t, tt.wantOutput, string(output))
+			wantRequests := int32(1)
+			if tt.status == 0 {
+				wantRequests = 0
 			}
-			if lookups.Load() != 1 || cancellations.Load() != 1 {
-				t.Fatalf("requests: %d lookups, %d cancellations; want one each", lookups.Load(), cancellations.Load())
-			}
+			assert.Equal(t, wantRequests, lookups.Load(), "lookups")
+			assert.Equal(t, wantRequests, cancellations.Load(), "cancellations")
 		})
 	}
-}
-
-func TestContainerUpdateCancelRejectsTagArguments(t *testing.T) {
-	for _, args := range [][]string{
-		{"app", "--rollback-latest=v1.2.3"},
-		{"app", "--rollback-latest", "v1.2.3"},
-		{"app", "--rollback-latest", "--tag", "v1.2.3"},
-	} {
-		t.Run(strings.Join(args, " "), func(t *testing.T) {
-			var requests atomic.Int32
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-				requests.Add(1)
-				w.WriteHeader(http.StatusInternalServerError)
-			}))
-			defer server.Close()
-			configureCancelCommandTest(t, server.URL)
-			output, err := runCancelCommandTest(args)
-			if err == nil || len(output) != 0 || requests.Load() != 0 {
-				t.Fatalf("invalid arguments reached cancel: error=%v output=%q requests=%d", err, output, requests.Load())
-			}
-		})
-	}
-}
-
-func configureCancelCommandTest(t *testing.T, serverURL string) {
-	t.Helper()
-	t.Setenv(envCPURL, serverURL)
-	t.Setenv(envAdminKey, "admin_test")
-	t.Setenv(envConfigPath, filepath.Join(t.TempDir(), "missing-config.json"))
-	flag := containerUpdateCancelCmd.Flags().Lookup("rollback-latest")
-	previousValue, previousChanged := cancelRollbackLatest, flag.Changed
-	previousDebugFilter := useDebugFilter
-	cancelRollbackLatest, flag.Changed = false, false
-	t.Cleanup(func() {
-		cancelRollbackLatest, flag.Changed = previousValue, previousChanged
-		useDebugFilter = previousDebugFilter
-	})
-}
-
-func runCancelCommandTest(args []string) ([]byte, error) {
-	cmd := containerUpdateCancelCmd
-	if err := cmd.ParseFlags(args); err != nil {
-		return nil, err
-	}
-	args = cmd.Flags().Args()
-	if err := cmd.Args(cmd, args); err != nil {
-		return nil, err
-	}
-	if err := cmd.PreRunE(cmd, args); err != nil {
-		return nil, err
-	}
-	return captureTestStdout(func() error { return cmd.RunE(cmd, args) })
 }
