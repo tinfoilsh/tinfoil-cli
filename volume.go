@@ -548,7 +548,7 @@ func containerVolumes(c containerView, volumes []volumeView) map[string]volumeVi
 
 // declaredVolumeSlots asks the controlplane to validate repo@tag and returns
 // the volume slots its tinfoil-config.yml declares.
-func declaredVolumeSlots(client *cpClient, repo, tag, replaceID string) ([]volumeSlot, error) {
+func declaredVolumeSlots(client *cpClient, repo, tag, instanceName, replaceID string) ([]volumeSlot, error) {
 	var result struct {
 		Valid  bool `json:"valid"`
 		Errors []struct {
@@ -560,7 +560,7 @@ func declaredVolumeSlots(client *cpClient, repo, tag, replaceID string) ([]volum
 			Volumes []volumeSlot `json:"volumes"`
 		} `json:"config"`
 	}
-	body := map[string]any{"repo": repo, "tag": tag}
+	body := map[string]any{"repo": repo, "tag": tag, "instance_name": instanceName}
 	if replaceID != "" {
 		body["replace_container_id"] = replaceID
 	}
