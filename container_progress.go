@@ -163,7 +163,7 @@ func followAndRender(client *cpClient, c containerView, attached map[string]volu
 	if outputFormat != "json" && !noWait && !isTerminal(c) {
 		final, err := followContainer(client, c.ID, c)
 		if err == nil {
-			printContainerConnections(os.Stdout, final)
+			printChangedContainerConnections(os.Stdout, c, final)
 		}
 		return err
 	}

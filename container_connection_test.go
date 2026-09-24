@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -223,5 +224,122 @@ func TestContainerGetAndReadyOutputShowVerifiedNextSteps(t *testing.T) {
 		if held && (!strings.Contains(string(out), "Review URL: https://review.example.com:4443") || !strings.Contains(string(out), "--enclave review.example.com:4443 --repo acme/app@v2") || !strings.Contains(string(out), "--review")) {
 			t.Fatalf("missing review guidance: %s", out)
 		}
+	}
+}
+
+func TestFollowConnectionGuidancePreservesChangesWithoutDuplicates(t *testing.T) {
+	for _, tc := range []struct {
+		name                   string
+		change                 func(*containerView, *containerView)
+		production, review     int
+		want                   []string
+		wantErr                string
+		noWait, json, terminal bool
+	}{
+		{name: "identical endpoints and pins", production: 1, review: 1},
+		{name: "production endpoint changes", production: 2, review: 1, change: func(_, final *containerView) {
+			final.Connections.Production.URL = "https://new-production.example.com"
+		}, want: []string{"Production URL: https://production.example.com", "Production URL: https://new-production.example.com"}},
+		{name: "production repository changes", production: 2, review: 1, change: func(_, final *containerView) {
+			final.Connections.Production.Repo = "acme/other"
+		}, want: []string{"--repo acme/app@v1", "--repo acme/other@v1"}},
+		{name: "promotion changes pin at same URL", production: 2, review: 1, change: func(_, final *containerView) {
+			final.CurrentTag, final.Connections.Production.Tag = "v2", "v2"
+			final.TinfoildDeploymentID = final.UpdateDeploymentID
+			final.UpdateDeploymentID, final.UpdateTag, final.UpdateType, final.UpdateStatus = "", "", "", ""
+			final.Connections.Review = nil
+		}, want: []string{
+			"tinfoil http get https://production.example.com --enclave production.example.com --repo acme/app@v1",
+			"tinfoil http get https://production.example.com --enclave production.example.com --repo acme/app@v2",
+		}},
+		{name: "same-tag replacement", production: 1, review: 0, change: func(initial, final *containerView) {
+			initial.UpdateType, initial.UpdateTag = updateStrategyReplace, "v1"
+			initial.Connections.Review, final.Connections.Review = nil, nil
+			final.TinfoildDeploymentID = initial.UpdateDeploymentID
+			final.UpdateDeploymentID, final.UpdateTag, final.UpdateType, final.UpdateStatus = "", "", "", ""
+		}},
+		{name: "review becomes available", production: 1, review: 1, change: func(initial, _ *containerView) {
+			initial.UpdateStatus, initial.Connections.Review = statusDeploying, nil
+		}, want: []string{"Review URL: https://review.example.com:4443", "--repo acme/app@v2"}},
+		{name: "unchanged descriptor becomes usable", production: 1, review: 1, change: func(initial, _ *containerView) {
+			initial.UpdateStatus = statusDeploying
+		}, want: []string{"Review unavailable:", "Review URL: https://review.example.com:4443"}},
+		{name: "review endpoint changes", production: 1, review: 2, change: func(_, final *containerView) {
+			final.Connections.Review.URL = "https://new-review.example.com:4443"
+		}, want: []string{"Review URL: https://review.example.com:4443", "Review URL: https://new-review.example.com:4443"}},
+		{name: "review pin changes", production: 1, review: 2, change: func(_, final *containerView) {
+			final.UpdateTag, final.Connections.Review.Tag = "v3", "v3"
+		}, want: []string{"--repo acme/app@v2", "--repo acme/app@v3"}},
+		{name: "review repository changes", production: 1, review: 2, change: func(_, final *containerView) {
+			final.Connections.Review.Repo = "acme/other"
+		}, want: []string{"--repo acme/app@v2", "--repo acme/other@v2"}},
+		{name: "no-wait keeps initial guidance", production: 1, review: 1, noWait: true},
+		{name: "already terminal keeps initial guidance", production: 1, review: 1, terminal: true},
+		{name: "JSON remains initial response", json: true},
+		{name: "failed follow keeps initial guidance", production: 1, review: 1, change: func(_, final *containerView) {
+			final.UpdateStatus, final.ErrorMessage = statusFailed, "workload failed"
+		}, wantErr: "workload failed"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			previousInterval, previousOutput, previousNoWait := followInterval, outputFormat, noWait
+			followInterval, outputFormat, noWait = 0, "table", tc.noWait
+			if tc.json {
+				outputFormat = "json"
+			}
+			t.Cleanup(func() { followInterval, outputFormat, noWait = previousInterval, previousOutput, previousNoWait })
+			initial, final := reviewContainer(t), reviewContainer(t)
+			if !tc.terminal {
+				initial.UpdateStatus = statusStarted
+			}
+			if tc.change != nil {
+				tc.change(&initial, &final)
+			}
+			body, err := json.Marshal(final)
+			if err != nil {
+				t.Fatal(err)
+			}
+			polls := 0
+			client := &cpClient{baseURL: "https://controlplane.example", http: &http.Client{Transport: lifecycleTransport(func(r *http.Request) (*http.Response, error) {
+				polls++
+				if polls > 1 || r.Method != http.MethodGet || r.URL.Path != "/api/containers/"+testContainerID {
+					return nil, fmt.Errorf("unexpected follow request: %s %s (poll %d)", r.Method, r.URL.Path, polls)
+				}
+				return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(string(body))), Header: make(http.Header)}, nil
+			})}}
+			var stdout []byte
+			_, err = captureTestStderr(func() error {
+				var runErr error
+				stdout, runErr = captureTestStdout(func() error { return followAndRender(client, initial, nil) })
+				return runErr
+			})
+			if tc.wantErr == "" && err != nil || tc.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tc.wantErr)) {
+				t.Fatalf("follow error=%v, want %q", err, tc.wantErr)
+			}
+			wantPolls := 1
+			if tc.noWait || tc.json || tc.terminal {
+				wantPolls = 0
+			}
+			if polls != wantPolls {
+				t.Fatalf("polls=%d, want %d", polls, wantPolls)
+			}
+			out := string(stdout)
+			if strings.Count(out, "Production URL:") != tc.production || strings.Count(out, "Review URL:") != tc.review {
+				t.Fatalf("incorrect connection block counts, want production=%d review=%d:\n%s", tc.production, tc.review, out)
+			}
+			last := -1
+			for _, want := range tc.want {
+				index := strings.Index(out, want)
+				if index < 0 || index <= last {
+					t.Fatalf("missing or out-of-order guidance %q:\n%s", want, out)
+				}
+				last = index
+			}
+			if tc.json {
+				var decoded containerView
+				if err := json.Unmarshal(stdout, &decoded); err != nil || decoded.UpdateStatus != initial.UpdateStatus {
+					t.Fatalf("initial JSON changed: %s (%v)", stdout, err)
+				}
+			}
+		})
 	}
 }
