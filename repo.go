@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -39,9 +40,34 @@ type repoPullResponse struct {
 }
 
 type repoBuildInfoResponse struct {
-	Success              bool   `json:"success"`
-	LatestTag            string `json:"latest_tag"`
-	SuggestedNextVersion string `json:"suggested_next_version"`
+	Success              bool          `json:"success"`
+	LatestTag            string        `json:"latest_tag"`
+	SuggestedNextVersion string        `json:"suggested_next_version"`
+	LatestReleaseTag     string        `json:"latest_release_tag"`
+	HasNewCommits        bool          `json:"has_new_commits"`
+	Releases             []repoRelease `json:"releases"`
+}
+
+type repoRelease struct {
+	TagName     string `json:"tag_name"`
+	Name        string `json:"name"`
+	HTMLURL     string `json:"html_url"`
+	PublishedAt string `json:"published_at"`
+	Prerelease  bool   `json:"prerelease"`
+}
+
+type repoBuildStatusResponse struct {
+	Success bool   `json:"success"`
+	Version string `json:"version"`
+	Run     *struct {
+		ID           int64  `json:"id"`
+		Status       string `json:"status"`
+		Conclusion   string `json:"conclusion"`
+		HTMLURL      string `json:"html_url"`
+		DisplayTitle string `json:"display_title"`
+		CreatedAt    string `json:"created_at"`
+		UpdatedAt    string `json:"updated_at"`
+	} `json:"run"`
 }
 
 type repoBuildResponse struct {
@@ -51,10 +77,11 @@ type repoBuildResponse struct {
 }
 
 var (
-	repoConfigRaw  bool
-	repoConfigFile string
-	repoPRBody     string
-	repoVersion    string
+	repoConfigRaw     bool
+	repoConfigFile    string
+	repoPRBody        string
+	repoVersion       string
+	repoStatusVersion string
 )
 
 func init() {
@@ -63,12 +90,14 @@ func init() {
 	repoCmd.AddCommand(repoConfigCmd, repoPRCmd, repoBuildCmd)
 	repoConfigCmd.AddCommand(repoConfigGetCmd, repoConfigPRCmd)
 	repoPRCmd.AddCommand(repoPRStatusCmd)
-	repoBuildCmd.AddCommand(repoBuildInfoCmd, repoBuildRunCmd)
+	repoBuildCmd.AddCommand(repoBuildInfoCmd, repoBuildRunCmd, repoBuildStatusCmd)
 
 	repoConfigGetCmd.Flags().BoolVar(&repoConfigRaw, "raw", false, "Print only the raw tinfoil-config.yml")
 	repoConfigPRCmd.Flags().StringVar(&repoConfigFile, "file", "", "Path to tinfoil-config.yml; use - for stdin")
 	repoConfigPRCmd.Flags().StringVar(&repoPRBody, "body", "", "Optional pull request description")
 	repoBuildRunCmd.Flags().StringVar(&repoVersion, "version", "", "Release version (for example v1.2.3)")
+	repoBuildStatusCmd.Flags().StringVar(&repoStatusVersion, "version", "", "Dispatched release version [required]")
+	_ = repoBuildStatusCmd.MarkFlagRequired("version")
 	_ = repoConfigPRCmd.MarkFlagRequired("file")
 	_ = repoBuildRunCmd.MarkFlagRequired("version")
 
@@ -148,6 +177,8 @@ var repoConfigPRCmd = &cobra.Command{
 		}
 		fmt.Printf("Opened pull request #%d: %s\n", response.PRNumber, response.PRURL)
 		fmt.Printf("Branch: %s\n", response.Branch)
+		fmt.Println("Merge this pull request before publishing a release; opening it does not change the default branch.")
+		fmt.Printf("Check merge status: tinfoil repo pr status %s/%s %d\n", repository.owner, repository.name, response.PRNumber)
 		return nil
 	},
 }
@@ -193,7 +224,7 @@ var repoBuildCmd = &cobra.Command{
 
 var repoBuildInfoCmd = &cobra.Command{
 	Use:   "info [owner/repo]",
-	Short: "Show the latest tag and suggested next version",
+	Short: "Show tags, published releases, and the suggested next version",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		repository, client, err := repositoryCommand(args[0])
@@ -213,6 +244,15 @@ var repoBuildInfoCmd = &cobra.Command{
 		}
 		fmt.Printf("Latest tag:             %s\n", latest)
 		fmt.Printf("Suggested next version: %s\n", response.SuggestedNextVersion)
+		if response.LatestReleaseTag == "" {
+			fmt.Println("Latest GitHub release:  none published")
+		} else {
+			fmt.Printf("Latest GitHub release:  %s\n", response.LatestReleaseTag)
+		}
+		for _, release := range response.Releases {
+			fmt.Printf("Published release:     %s at %s (prerelease=%t) %s\n", release.TagName, release.PublishedAt, release.Prerelease, release.HTMLURL)
+		}
+		fmt.Println("A tag alone is not deployable. Wait for both Tinfoil Release and Build & Publish to succeed and for the same tag's release to be published.")
 		return nil
 	},
 }
@@ -234,8 +274,36 @@ var repoBuildRunCmd = &cobra.Command{
 		if outputFormat == "json" {
 			return printJSON(response)
 		}
-		fmt.Printf("Triggered release %s\n", response.Version)
+		fmt.Printf("Queued release %s; not yet deployable.\n", response.Version)
 		fmt.Printf("GitHub Actions: %s\n", response.WorkflowRunURL)
+		fmt.Printf("Check status (read-only): tinfoil repo build status %s/%s --version %s\n", repository.owner, repository.name, shellQuote(response.Version))
+		fmt.Println("Wait for both Tinfoil Release and Build & Publish to succeed, then confirm the same tag is published with repo build info before creating a container.")
+		return nil
+	},
+}
+
+var repoBuildStatusCmd = &cobra.Command{
+	Use:   "status [owner/repo]",
+	Short: "Check a queued release workflow without starting a build",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		repository, client, err := repositoryCommand(args[0])
+		if err != nil {
+			return err
+		}
+		var response repoBuildStatusResponse
+		if _, err := client.do("GET", repository.apiPath()+"/build/status", url.Values{"version": {repoStatusVersion}}, nil, &response); err != nil {
+			return err
+		}
+		if outputFormat == "json" {
+			return printJSON(response)
+		}
+		if response.Run == nil {
+			fmt.Printf("Release %s: waiting for workflow visibility; not yet deployable.\n", response.Version)
+		} else {
+			fmt.Printf("Release %s: %s (conclusion: %s)\nGitHub Actions: %s\n", response.Version, response.Run.Status, response.Run.Conclusion, response.Run.HTMLURL)
+		}
+		fmt.Printf("Confirm Build & Publish also succeeds, then check the published tag: tinfoil repo build info %s/%s\n", repository.owner, repository.name)
 		return nil
 	},
 }

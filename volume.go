@@ -202,6 +202,7 @@ var volumeAttachCmd = &cobra.Command{
 			return err
 		}
 		fmt.Printf("Attached %s to %s as %q\n", v.Name, c.Name, slot)
+		printVolumeUnlockGuidance(os.Stdout, c.VolumeSlots)
 		return nil
 	},
 }
@@ -626,6 +627,8 @@ func errVolumesRequired(name string, slots []volumeSlot, host string) error {
 		volumeFlags = append(volumeFlags, "--volume "+disk+":"+s.Name)
 	}
 	fmt.Fprintf(&b, "  tinfoil container create %s ... %s", name, strings.Join(volumeFlags, " "))
+	fmt.Fprintln(&b)
+	printVolumeUnlockGuidance(&b, slots)
 	return fmt.Errorf("%s", b.String())
 }
 
