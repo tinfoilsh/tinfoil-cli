@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -62,9 +61,11 @@ func init() {
 		"",
 		"Hold new versions for review by default instead of switching traffic automatically (true/false)",
 	)
+	projectSettingsCmd.Flags().Lookup("hold-by-default").NoOptDefVal = "true"
 
 	projectUpdateCmd.Flags().StringVar(&projectUpdateTag, "tag", "", "Release tag to update to")
 	projectUpdateCmd.Flags().StringVar(&projectUpdateHold, "hold", "", "Hold the new version for review instead of switching traffic automatically (true/false)")
+	projectUpdateCmd.Flags().Lookup("hold").NoOptDefVal = "true"
 	projectUpdateCmd.Flags().StringVar(&projectUpdateMarkLatestRelease, "mark-latest", "", "Mark the deployed tag as the repository's latest GitHub release once it is running (default true; pass false to leave the latest release unchanged)")
 	projectUpdateCmd.Flags().StringArrayVar(
 		&projectUpdateInstanceIDs,
@@ -198,10 +199,6 @@ skipped; bring those up with "tinfoil container deploy".`,
 			if hold, ok := body["hold"].(bool); ok && hold {
 				return fmt.Errorf("holding for review is not available for %s: %s, so the update replaces the running enclave instead of starting the new version alongside it; pass --hold=false or select other instances with --instance", replaced[0].Name, replaceReason(replaced[0]))
 			}
-			if err := confirmProjectDowntime(replaced); err != nil {
-				return err
-			}
-			body["confirm_downtime"] = true
 		}
 
 		response, err := updateProjectInstances(client, project.ID, body)
@@ -235,18 +232,6 @@ func replaceStrategyInstances(client *cpClient, repo string, selected []string) 
 		out = append(out, c)
 	}
 	return out, nil
-}
-
-func confirmProjectDowntime(instances []containerView) error {
-	fmt.Fprintln(os.Stderr, "This update will cause downtime for:")
-	for _, c := range instances {
-		fmt.Fprintf(os.Stderr, "  %-24s %s\n", c.Name, replaceReason(c))
-	}
-	fmt.Fprintln(os.Stderr)
-	fmt.Fprintln(os.Stderr, "These instances cannot run two versions at once. Each running enclave stops first and the")
-	fmt.Fprintln(os.Stderr, "new version deploys in its place; each is unreachable until it is Running.")
-	fmt.Fprintln(os.Stderr)
-	return confirmYes(projectUpdateYes, "project update")
 }
 
 func listProjects(client *cpClient) ([]projectView, error) {
@@ -285,7 +270,7 @@ func patchProject(client *cpClient, projectID string, body map[string]any) (proj
 
 func updateProjectInstances(client *cpClient, projectID string, body map[string]any) (projectUpdateResponse, error) {
 	var response projectUpdateResponse
-	if _, err := client.do("POST", pathf("/api/containers/projects/%s/update", projectID), nil, body, &response); err != nil {
+	if err := postLifecycleUpdate(client, pathf("/api/containers/projects/%s/update", projectID), body, &response, projectUpdateYes, "project update", []string{"selected project instances"}); err != nil {
 		return projectUpdateResponse{}, err
 	}
 	return response, nil

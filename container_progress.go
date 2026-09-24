@@ -1,7 +1,10 @@
 package main
 
 import (
+	"encoding/json"
+	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"strings"
 	"time"
@@ -24,7 +27,8 @@ const (
 	// passed its boot checks is "ready".
 	updateStatusReady = "ready"
 
-	updateStrategyReplace = "replace"
+	updateStrategyReplace        = "replace"
+	downtimeConfirmationRequired = "DOWNTIME_CONFIRMATION_REQUIRED"
 
 	followTimeout = 30 * time.Minute
 )
@@ -49,7 +53,7 @@ func statusLabel(status string) string {
 func updateLabel(c containerView) string {
 	switch c.UpdateStatus {
 	case updateStatusReady:
-		if c.Held {
+		if c.candidateHeld() {
 			return "held for review; promote to switch traffic"
 		}
 		return "switching traffic"
@@ -79,6 +83,36 @@ func confirmDowntime(c containerView) error {
 	fmt.Fprintln(os.Stderr, "It will be unreachable until the new version is Running.")
 	fmt.Fprintln(os.Stderr)
 	return confirmYes(updateYes, "container update")
+}
+
+func postLifecycleUpdate(client *cpClient, path string, body map[string]any, out any, yes bool, action string, instances []string) error {
+	_, err := client.do("POST", path, nil, body, out)
+	var cp *cpError
+	if !errors.As(err, &cp) || cp.Status != http.StatusConflict || body["confirm_downtime"] == true {
+		return err
+	}
+	var detail struct {
+		Code      string   `json:"code"`
+		Instances []string `json:"instances"`
+	}
+	if json.Unmarshal(cp.Body, &detail) != nil || detail.Code != downtimeConfirmationRequired {
+		return err
+	}
+	if len(detail.Instances) > 0 {
+		instances = detail.Instances
+	}
+	fmt.Fprintln(os.Stderr, "This update will cause downtime for:")
+	for _, name := range instances {
+		fmt.Fprintf(os.Stderr, "  %s\n", name)
+	}
+	fmt.Fprintln(os.Stderr, "The target configuration requires replacement: each running instance stops first and")
+	fmt.Fprintln(os.Stderr, "is unreachable until its new version is Running.")
+	if err := confirmYes(yes, action); err != nil {
+		return err
+	}
+	body["confirm_downtime"] = true
+	_, err = client.do("POST", path, nil, body, out)
+	return err
 }
 
 // activeBootStage returns the name of the first stage still in progress.
@@ -131,7 +165,7 @@ func failureError(c containerView) error {
 // queued behind a stop), so stopped is not terminal here.
 func isTerminal(c containerView) bool {
 	if c.UpdateTag != "" {
-		return c.UpdateStatus == statusFailed || (c.UpdateStatus == updateStatusReady && c.Held)
+		return c.UpdateStatus == statusFailed || (c.UpdateStatus == updateStatusReady && c.candidateHeld())
 	}
 	switch c.Status {
 	case statusRunning, statusFailed:

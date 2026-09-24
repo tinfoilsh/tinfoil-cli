@@ -19,44 +19,58 @@ import (
 // the fields the CLI actually displays or forwards; everything else stays in
 // RawMessage form so updates to the API don't break decoding here.
 type containerView struct {
-	ID                 string          `json:"id"`
-	Name               string          `json:"name"`
-	Repo               string          `json:"repo"`
-	ProjectID          string          `json:"project_id"`
-	Status             string          `json:"status"`
-	CurrentTag         string          `json:"current_tag"`
-	Domain             string          `json:"domain"`
-	InternalDomain     string          `json:"internal_domain"`
-	HostName           string          `json:"host_name"`
-	HostGpuType        string          `json:"host_gpu_type"`
-	HostCpuType        string          `json:"host_cpu_type"`
-	CPUs               int             `json:"cpus"`
-	GPUs               int             `json:"gpus"`
-	MemoryMB           int             `json:"memory_mb"`
-	Variables          json.RawMessage `json:"variables"`
-	Secrets            []string        `json:"secrets"`
-	SSHKeys            []string        `json:"ssh_keys"`
-	Debug              bool            `json:"debug"`
-	Held               bool            `json:"held"`
-	MarkLatestRelease  *bool           `json:"mark_latest_release,omitempty"`
-	DisableCCMode      bool            `json:"disable_cc_mode"`
-	GithubAppConnected bool            `json:"github_app_connected"`
-	DisplayOrder       int32           `json:"display_order"`
-	UpdateTag          string          `json:"update_tag"`
-	UpdateStatus       string          `json:"update_status"`
-	UpdateType         string          `json:"update_type"`
-	UpdateStrategy     string          `json:"update_strategy"`
-	BootStages         []bootStage     `json:"boot_stages"`
-	UpdateBootStages   []bootStage     `json:"update_boot_stages"`
-	ErrorMessage       string          `json:"error_message"`
-	CreatedAt          string          `json:"created_at"`
-	UpdatedAt          string          `json:"updated_at"`
-	SSHPort            int             `json:"ssh_port"`
-	HostID             string          `json:"host_id,omitempty"`
+	ID                   string           `json:"id"`
+	Name                 string           `json:"name"`
+	Repo                 string           `json:"repo"`
+	ProjectID            string           `json:"project_id"`
+	Status               string           `json:"status"`
+	CurrentTag           string           `json:"current_tag"`
+	Domain               string           `json:"domain"`
+	InternalDomain       string           `json:"internal_domain"`
+	HostName             string           `json:"host_name"`
+	HostGpuType          string           `json:"host_gpu_type"`
+	HostCpuType          string           `json:"host_cpu_type"`
+	CPUs                 int              `json:"cpus"`
+	GPUs                 int              `json:"gpus"`
+	MemoryMB             int              `json:"memory_mb"`
+	Variables            json.RawMessage  `json:"variables"`
+	Secrets              []string         `json:"secrets"`
+	SSHKeys              []string         `json:"ssh_keys"`
+	Debug                bool             `json:"debug"`
+	Held                 bool             `json:"held"`
+	MarkLatestRelease    *bool            `json:"mark_latest_release,omitempty"`
+	DisableCCMode        bool             `json:"disable_cc_mode"`
+	GithubAppConnected   bool             `json:"github_app_connected"`
+	DisplayOrder         int32            `json:"display_order"`
+	UpdateTag            string           `json:"update_tag"`
+	UpdateStatus         string           `json:"update_status"`
+	UpdateType           string           `json:"update_type"`
+	UpdateStrategy       string           `json:"update_strategy"`
+	UpdateConfig         *candidateConfig `json:"update_config,omitempty"`
+	TinfoildDeploymentID string           `json:"tinfoild_deployment_id,omitempty"`
+	UpdateDeploymentID   string           `json:"update_deployment_id,omitempty"`
+	BootStages           []bootStage      `json:"boot_stages"`
+	UpdateBootStages     []bootStage      `json:"update_boot_stages"`
+	ErrorMessage         string           `json:"error_message"`
+	CreatedAt            string           `json:"created_at"`
+	UpdatedAt            string           `json:"updated_at"`
+	SSHPort              int              `json:"ssh_port"`
+	HostID               string           `json:"host_id,omitempty"`
 	// VolumeSlots are the volumes tinfoil-config.yml declares; Volumes maps a
 	// slot to the attached volume ID. Only the single-container view has them.
 	VolumeSlots []volumeSlot      `json:"volume_slots,omitempty"`
 	Volumes     map[string]string `json:"volumes,omitempty"`
+}
+
+type candidateConfig struct {
+	Hold *bool `json:"hold,omitempty"`
+}
+
+func (c containerView) candidateHeld() bool {
+	if c.UpdateConfig != nil && c.UpdateConfig.Hold != nil {
+		return *c.UpdateConfig.Hold
+	}
+	return c.Held
 }
 
 // bootStage mirrors one entry of the boot progress tinfoild reports while a
@@ -180,6 +194,7 @@ func init() {
 	containerUpdateCmd.Flags().StringArrayVar(&updateSSHKeys, "ssh-key", nil, "Replace the saved SSH keys list")
 	containerUpdateCmd.Flags().StringVar(&updateDebug, "debug", "", "Switch debug mode on or off (true/false)")
 	containerUpdateCmd.Flags().StringVar(&updateHold, "hold", "", "Hold the new version for review instead of switching traffic automatically (true/false)")
+	containerUpdateCmd.Flags().Lookup("hold").NoOptDefVal = "true"
 	containerUpdateCmd.Flags().StringVar(&updateMarkLatestRelease, "mark-latest", "", "Mark the deployed tag as the repository's latest GitHub release once it is running (default true; pass false to leave the latest release unchanged)")
 	containerUpdateCmd.Flags().StringVar(&updateCustomDomain, "custom-domain", "", "Replace the custom domain (empty string clears it)")
 	containerUpdateCmd.Flags().BoolVar(&updateYes, "yes", false, "Skip the downtime confirmation for containers that must be replaced")
@@ -528,7 +543,7 @@ command asks you to confirm the downtime unless --yes is given.`,
 			body["confirm_downtime"] = true
 		}
 		var updated containerView
-		if _, err := client.do("POST", pathf("/api/containers/%s/update", c.ID), nil, body, &updated); err != nil {
+		if err := postLifecycleUpdate(client, pathf("/api/containers/%s/update", c.ID), body, &updated, updateYes, "container update", []string{c.Name}); err != nil {
 			return err
 		}
 		return followAndRender(client, updated, nil)
@@ -959,7 +974,7 @@ func renderContainerDetail(c containerView, attached map[string]volumeView) erro
 	if c.Debug {
 		fmt.Printf("Debug:        yes (SSH enabled, does not pass attestation)\n")
 	}
-	if c.Held {
+	if c.UpdateTag != "" && c.candidateHeld() {
 		fmt.Printf("Held:         yes (this version is waiting for review; promote to switch traffic)\n")
 	}
 	if c.DisableCCMode {
