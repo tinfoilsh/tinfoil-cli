@@ -148,9 +148,9 @@ func TestVolumeAttachSlotSelection(t *testing.T) {
 	}{
 		{name: "defaults to the only declared volume", slots: `[{"name":"data"}]`, wantOut: `Attached data-vol to app as "data"`, wantPut: true},
 		{name: "explicit --as", as: "cache", slots: `[{"name":"data"},{"name":"cache"}]`, wantOut: `Attached data-vol to app as "cache"`, wantPut: true},
-		{name: "several declared without --as", slots: `[{"name":"data"},{"name":"cache"}]`, wantErr: "declares several volumes (data, cache); pick one with --as"},
-		{name: "undeclared --as", as: "logs", slots: `[{"name":"data"}]`, wantErr: `does not declare volume "logs" (declared: data)`},
-		{name: "none declared", slots: `[]`, wantErr: "declares no volumes in tinfoil-config.yml"},
+		{name: "several declared without --as", slots: `[{"name":"data"},{"name":"cache"}]`, wantErr: "declares several mounts (data, cache); pick one with --as"},
+		{name: "undeclared --as", as: "logs", slots: `[{"name":"data"}]`, wantErr: `does not declare mount "logs" (declared: data)`},
+		{name: "none declared", slots: `[]`, wantErr: "declares no mounts in tinfoil-config.yml"},
 		{name: "server refusal passes through", slots: `[{"name":"data"}]`, putStatus: http.StatusConflict, wantErr: "409: stop the container before changing volume assignments", wantPut: true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -219,6 +219,7 @@ func TestContainerCreateWithVolume(t *testing.T) {
 			volumes: []string{"data-vol"},
 			wantOut: []string{"Status:       Deploying", "Volumes:      data ← data-vol (16 TiB)"},
 			wantPaths: []string{
+				"POST /api/containers/validate",
 				"GET /api/volumes",
 				"POST /api/containers",
 				"PUT /api/containers/" + testContainerID + "/volumes/data",
@@ -230,10 +231,11 @@ func TestContainerCreateWithVolume(t *testing.T) {
 			name:         "attach failure leaves the container stopped",
 			volumes:      []string{"data-vol"},
 			attachStatus: http.StatusConflict,
-			wantErr: "created app but could not attach data-vol: stop the container before changing volume assignments. The container is stopped; run:\n" +
-				"  tinfoil volume attach data-vol app\n" +
-				"  tinfoil container deploy app",
+			wantErr: "created app (" + testContainerID + "), but follow-up failed: could not attach data-vol: stop the container before changing volume assignments. Successful attachments were kept; check container " + testContainerID + "'s state before retrying:\n" +
+				"  tinfoil volume attach data-vol " + testContainerID + "\n" +
+				"  tinfoil container deploy " + testContainerID + ". The new container and any successful disk attachments were retained; inspect with: tinfoil container get " + testContainerID,
 			wantPaths: []string{
+				"POST /api/containers/validate",
 				"GET /api/volumes",
 				"POST /api/containers",
 				"PUT /api/containers/" + testContainerID + "/volumes/data",
@@ -244,19 +246,19 @@ func TestContainerCreateWithVolume(t *testing.T) {
 			volumes:   []string{"data-vol"},
 			host:      "inf14",
 			wantErr:   "--host inf14 does not match volume data-vol on host inf13",
-			wantPaths: []string{"GET /api/volumes"},
+			wantPaths: []string{"POST /api/containers/validate", "GET /api/volumes"},
 		},
 		{
-			name:      "--volume is not applied when the config declares no slots",
+			name:      "--volume is refused before create when no mounts are declared",
 			volumes:   []string{"data-vol"},
 			slots:     `[]`,
-			wantErr:   "created app but it declares no volumes in tinfoil-config.yml; --volume was not applied",
-			wantPaths: []string{"GET /api/volumes", "POST /api/containers"},
+			wantErr:   "container app declares no mounts in tinfoil-config.yml",
+			wantPaths: []string{"POST /api/containers/validate"},
 		},
 		{
 			name: "without --volume refuses before creating anything",
 			host: "inf13",
-			wantErr: "the config declares volume \"data\"; create a disk for it and pass --volume:\n" +
+			wantErr: "required mount \"data\" has no disk; select an existing disk with --volume or create one:\n" +
 				"  tinfoil volume create app-data --size <SIZE> --host inf13\n" +
 				"  tinfoil container create app ... --volume app-data:data",
 			wantPaths: []string{"POST /api/containers/validate"},
