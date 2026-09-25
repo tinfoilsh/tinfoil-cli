@@ -38,7 +38,7 @@ type cpError struct {
 
 func (e *cpError) Error() string {
 	if e.Message != "" {
-		return fmt.Sprintf("%s %s: %d: %s", e.Method, e.Path, e.Status, e.Message)
+		return fmt.Sprintf("%s %s: %d: %s", e.Method, e.Path, e.Status, humanVolumeMessage(secretDeliveryMessage(e.Message)))
 	}
 	return fmt.Sprintf("%s %s: %d", e.Method, e.Path, e.Status)
 }

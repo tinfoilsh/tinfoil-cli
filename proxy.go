@@ -46,7 +46,7 @@ var proxyCmd = &cobra.Command{
 	Deprecated: "the proxy has moved to github.com/tinfoilsh/tinfoil-proxy. Install the Tinfoil Tray app for a menu-bar UI, or run `go install github.com/tinfoilsh/tinfoil-proxy@latest` for the standalone `tinfoil-proxy` binary.",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if (enclaveHost == "") != (repo == "") {
-			return fmt.Errorf("--host and --repo must be supplied together for a custom proxy target")
+			return fmt.Errorf("--enclave and --repo must be supplied together for a custom proxy target")
 		}
 		verbose, _ := cmd.Flags().GetBool("verbose")
 		trace, _ := cmd.Flags().GetBool("trace")
@@ -66,7 +66,11 @@ var proxyCmd = &cobra.Command{
 				repo = tinfoilClient.Repo()
 			}
 		} else {
-			tinfoilClient, err = tinfoil.NewClientWithOptions(tinfoil.WithEnclave(enclaveHost), tinfoil.WithRepo(repo))
+			expected, parseErr := newVerifiedClient(enclaveHost, repo, "")
+			if parseErr != nil {
+				return parseErr
+			}
+			tinfoilClient, err = tinfoil.NewClientWithOptions(tinfoil.WithEnclave(expected.Enclave()), tinfoil.WithRepo(expected.Repo()))
 		}
 		if err != nil {
 			log.WithError(err).Error("failed to create HTTP client")

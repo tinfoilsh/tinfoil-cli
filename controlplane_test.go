@@ -29,9 +29,9 @@ func TestPathfEscapesSegments(t *testing.T) {
 		},
 		{
 			name:   "uuid is unchanged",
-			format: "/api/containers/%s/start",
+			format: "/api/containers/%s/deploy",
 			segs:   []string{"61bd4a3e-5b48-4320-9215-0c7a7f974979"},
-			want:   "/api/containers/61bd4a3e-5b48-4320-9215-0c7a7f974979/start",
+			want:   "/api/containers/61bd4a3e-5b48-4320-9215-0c7a7f974979/deploy",
 		},
 		{
 			name:   "slash in name does not split segment",

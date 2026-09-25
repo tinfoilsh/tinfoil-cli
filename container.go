@@ -19,41 +19,81 @@ import (
 // the fields the CLI actually displays or forwards; everything else stays in
 // RawMessage form so updates to the API don't break decoding here.
 type containerView struct {
-	ID                 string          `json:"id"`
-	Name               string          `json:"name"`
-	Repo               string          `json:"repo"`
-	DeploymentID       string          `json:"deployment_id"`
-	Status             string          `json:"status"`
-	CurrentTag         string          `json:"current_tag"`
-	Domain             string          `json:"domain"`
-	InternalDomain     string          `json:"internal_domain"`
-	HostName           string          `json:"host_name"`
-	HostGpuType        string          `json:"host_gpu_type"`
-	HostCpuType        string          `json:"host_cpu_type"`
-	CPUs               int             `json:"cpus"`
-	GPUs               int             `json:"gpus"`
-	MemoryMB           int             `json:"memory_mb"`
-	Variables          json.RawMessage `json:"variables"`
-	Secrets            []string        `json:"secrets"`
-	SSHKeys            []string        `json:"ssh_keys"`
-	Debug              bool            `json:"debug"`
-	Staging            bool            `json:"staging"`
-	PromoteRelease     *bool           `json:"promote_release,omitempty"`
-	DisableCCMode      bool            `json:"disable_cc_mode"`
-	GithubAppConnected bool            `json:"github_app_connected"`
-	DisplayOrder       int32           `json:"display_order"`
-	UpdateTag          string          `json:"update_tag"`
-	UpdateStatus       string          `json:"update_status"`
-	UpdateType         string          `json:"update_type"`
-	ErrorMessage       string          `json:"error_message"`
-	CreatedAt          string          `json:"created_at"`
-	UpdatedAt          string          `json:"updated_at"`
-	SSHPort            int             `json:"ssh_port"`
-	HostID             string          `json:"host_id,omitempty"`
+	ID                   string           `json:"id"`
+	Name                 string           `json:"name"`
+	Repo                 string           `json:"repo"`
+	ProjectID            string           `json:"project_id"`
+	Status               string           `json:"status"`
+	CurrentTag           string           `json:"current_tag"`
+	Domain               string           `json:"domain"`
+	InternalDomain       string           `json:"internal_domain"`
+	HostName             string           `json:"host_name"`
+	HostGpuType          string           `json:"host_gpu_type"`
+	HostCpuType          string           `json:"host_cpu_type"`
+	CPUs                 int              `json:"cpus"`
+	GPUs                 int              `json:"gpus"`
+	MemoryMB             int              `json:"memory_mb"`
+	Variables            json.RawMessage  `json:"variables"`
+	Secrets              []string         `json:"secrets"`
+	SSHKeys              []string         `json:"ssh_keys"`
+	Debug                bool             `json:"debug"`
+	Held                 bool             `json:"held"`
+	MarkLatestRelease    *bool            `json:"mark_latest_release,omitempty"`
+	DisableCCMode        bool             `json:"disable_cc_mode"`
+	GithubAppConnected   bool             `json:"github_app_connected"`
+	DisplayOrder         int32            `json:"display_order"`
+	UpdateTag            string           `json:"update_tag"`
+	UpdateStatus         string           `json:"update_status"`
+	UpdateType           string           `json:"update_type"`
+	UpdateStrategy       string           `json:"update_strategy"`
+	UpdateConfig         *candidateConfig `json:"update_config,omitempty"`
+	TinfoildDeploymentID string           `json:"tinfoild_deployment_id,omitempty"`
+	UpdateDeploymentID   string           `json:"update_deployment_id,omitempty"`
+	BootStages           bootStages       `json:"boot_stages"`
+	UpdateBootStages     bootStages       `json:"update_boot_stages"`
+	ErrorMessage         string           `json:"error_message"`
+	CreatedAt            string           `json:"created_at"`
+	UpdatedAt            string           `json:"updated_at"`
+	SSHPort              int              `json:"ssh_port"`
+	HostID               string           `json:"host_id,omitempty"`
+
+	Connections *containerConnections `json:"connections,omitempty"`
 	// VolumeSlots are the volumes tinfoil-config.yml declares; Volumes maps a
 	// slot to the attached volume ID. Only the single-container view has them.
 	VolumeSlots []volumeSlot      `json:"volume_slots,omitempty"`
 	Volumes     map[string]string `json:"volumes,omitempty"`
+}
+
+type candidateConfig struct {
+	Hold *bool `json:"hold,omitempty"`
+}
+
+func (c containerView) candidateHeld() bool {
+	if c.UpdateConfig != nil && c.UpdateConfig.Hold != nil {
+		return *c.UpdateConfig.Hold
+	}
+	return c.Held
+}
+
+// bootStage mirrors one entry of the boot progress tinfoild reports while a
+// deployment comes up. Stages nest.
+type bootStage struct {
+	Name   string      `json:"name"`
+	Status string      `json:"status"`
+	Stages []bootStage `json:"stages,omitempty"`
+}
+
+type bootStages []bootStage
+
+func (stages *bootStages) UnmarshalJSON(raw []byte) error {
+	if strings.HasPrefix(strings.TrimSpace(string(raw)), `"`) {
+		var decoded []byte
+		if err := json.Unmarshal(raw, &decoded); err != nil {
+			return fmt.Errorf("decoding boot stages: %w", err)
+		}
+		raw = decoded
+	}
+	return json.Unmarshal(raw, (*[]bootStage)(stages))
 }
 
 type hostInfo struct {
@@ -66,40 +106,43 @@ type hostInfo struct {
 var (
 	outputFormat string
 
-	createRepo           string
-	createTag            string
-	createDebug          bool
-	createPromoteRelease string
-	createDisableCC      bool
-	createYes            bool
-	createCustomDomain   string
-	createHost           string
-	createReplaceID      string
-	createVariables      []string
-	createSecrets        []string
-	createSSHKeys        []string
-	createVolumes        []string
-	createDisplayOrder   int32
+	createRepo              string
+	createTag               string
+	createDebug             bool
+	createMarkLatestRelease string
+	createDisableCC         bool
+	createYes               bool
+	createCustomDomain      string
+	createHost              string
+	createReplaceID         string
+	createVariables         []string
+	createSecrets           []string
+	createSSHKeys           []string
+	createVolumes           []string
+	createDisplayOrder      int32
 
-	relaunchTag            string
-	relaunchVariables      []string
-	relaunchSecrets        []string
-	relaunchSSHKeys        []string
-	relaunchDebug          string
-	relaunchStaging        string
-	relaunchPromoteRelease string
-	relaunchCustomDomain   string
-	relaunchHost           string
+	updateTag               string
+	updateVariables         []string
+	updateSecrets           []string
+	updateSSHKeys           []string
+	updateDebug             string
+	updateHold              string
+	updateMarkLatestRelease string
+	updateCustomDomain      string
+	updateYes               bool
 
-	startTag            string
-	startVariables      []string
-	startSecrets        []string
-	startSSHKeys        []string
-	startDebug          string
-	startPromoteRelease string
-	startCustomDomain   string
-	startHost           string
-	startVolumes        []string
+	deployTag               string
+	deployVariables         []string
+	deploySecrets           []string
+	deploySSHKeys           []string
+	deployDebug             string
+	deployMarkLatestRelease string
+	deployCustomDomain      string
+	deployHost              string
+	deployVolumes           []string
+
+	deleteYes bool
+	noWait    bool
 
 	metricsTime string
 
@@ -107,9 +150,7 @@ var (
 
 	connectPort     uint
 	connectBindAddr string
-
-	containerDebugSelector bool
-	useDebugFilter         bool
+	connectReview   bool
 )
 
 func init() {
@@ -120,71 +161,65 @@ func init() {
 	containerCmd.AddCommand(containerGetCmd)
 	containerCmd.AddCommand(containerCreateCmd)
 	containerCmd.AddCommand(containerDeleteCmd)
-	containerCmd.AddCommand(containerStartCmd)
+	containerCmd.AddCommand(containerDeployCmd)
 	containerCmd.AddCommand(containerStopCmd)
-	containerCmd.AddCommand(containerRelaunchCmd)
+	containerCmd.AddCommand(containerUpdateCmd)
+	containerCmd.AddCommand(containerPromoteCmd)
+	containerCmd.AddCommand(containerCancelCmd)
 	containerCmd.AddCommand(containerMetricsCmd)
 	containerCmd.AddCommand(containerHostsCmd)
-	containerCmd.AddCommand(containerUpdateCmd)
 	containerCmd.AddCommand(containerConnectCmd)
 
-	containerUpdateCmd.AddCommand(containerUpdateStatusCmd)
-	containerUpdateCmd.AddCommand(containerUpdateAcceptCmd)
-	containerUpdateCmd.AddCommand(containerUpdateCancelCmd)
-	containerUpdateCancelCmd.Flags().BoolVar(&cancelRollbackLatest, "rollback-latest", false, "Request restoring the repository's latest release to the current production tag")
+	for _, c := range []*cobra.Command{containerCreateCmd, containerDeployCmd, containerUpdateCmd, containerPromoteCmd} {
+		c.Flags().BoolVar(&noWait, "no-wait", false, "Return as soon as the request is accepted instead of following progress")
+	}
+	containerCancelCmd.Flags().BoolVar(&cancelRollbackLatest, "rollback-latest", false, "Request restoring the repository's latest release to the current production tag")
 
 	containerCreateCmd.Flags().StringVar(&createRepo, "repo", "", "GitHub repo (owner/repo) holding tinfoil-config.yml [required]")
 	containerCreateCmd.Flags().StringVar(&createTag, "tag", "", "Repository release tag to deploy [required]")
 	containerCreateCmd.Flags().BoolVar(&createDebug, "debug", false, "Enable debug mode (allows SSH into the enclave)")
-	containerCreateCmd.Flags().StringVar(&createPromoteRelease, "promote-release", "", "Promote the deployed tag to the repository's latest release when it goes live (default true; pass false to decline)")
+	containerCreateCmd.Flags().StringVar(&createMarkLatestRelease, "mark-latest", "", "Mark the deployed tag as the repository's latest GitHub release once it is running (default true; pass false to leave the latest release unchanged)")
 	containerCreateCmd.Flags().BoolVar(&createDisableCC, "disable-cc-mode", false, "EXPERIMENTAL: disable confidential computing (benchmarks only; requires org entitlement)")
 	containerCreateCmd.Flags().BoolVar(&createYes, "yes", false, "Skip interactive confirmation for --disable-cc-mode")
 	containerCreateCmd.Flags().StringVar(&createCustomDomain, "custom-domain", "", "Verified custom domain to expose the container on")
 	containerCreateCmd.Flags().StringVar(&createHost, "host", "", "Target host name (see 'tinfoil container hosts')")
-	containerCreateCmd.Flags().StringVar(&createReplaceID, "replace", "", "ID of an existing container to atomically replace")
+	containerCreateCmd.Flags().StringVar(&createReplaceID, "replace", "", "ID of the existing container to replace; its disks may be reused with --volume")
 	containerCreateCmd.Flags().StringArrayVar(&createVariables, "variable", nil, "Environment variable in KEY=VALUE form; may be repeated")
-	containerCreateCmd.Flags().StringArrayVar(&createSecrets, "secret", nil, "Org secret name to mount; may be repeated")
+	containerCreateCmd.Flags().StringArrayVar(&createSecrets, "secret", nil, "Tinfoil-managed secret name; may be repeated (use --secret=\"\" for none)")
 	containerCreateCmd.Flags().StringArrayVar(&createSSHKeys, "ssh-key", nil, "Org SSH key name (debug only); may be repeated")
-	containerCreateCmd.Flags().StringArrayVar(&createVolumes, "volume", nil, "Volume to attach before the first start, as <id|name>[:<declared name>]; may be repeated")
-	containerCreateCmd.Flags().Int32Var(&createDisplayOrder, "display-order", 0, "Sort order of this container within its repository deployment")
+	containerCreateCmd.Flags().StringArrayVar(&createVolumes, "volume", nil, "Volume to attach before the first deploy, as <id|name>[:<mount name>]; may be repeated")
+	containerCreateCmd.Flags().Int32Var(&createDisplayOrder, "display-order", 0, "Sort order of this instance within its project")
 	_ = containerCreateCmd.MarkFlagRequired("repo")
 	_ = containerCreateCmd.MarkFlagRequired("tag")
 
-	addDebugSelector(containerGetCmd)
-	addDebugSelector(containerDeleteCmd)
-	addDebugSelector(containerStartCmd)
-	addDebugSelector(containerStopCmd)
-	addDebugSelector(containerRelaunchCmd)
-	addDebugSelector(containerMetricsCmd)
-	addDebugSelector(containerUpdateStatusCmd)
-	addDebugSelector(containerUpdateAcceptCmd)
-	addDebugSelector(containerUpdateCancelCmd)
-	addDebugSelector(containerConnectCmd)
+	containerDeleteCmd.Flags().BoolVar(&deleteYes, "yes", false, "Skip interactive confirmation")
 
-	containerStartCmd.Flags().StringVar(&startTag, "tag", "", "Override the deployed tag")
-	containerStartCmd.Flags().StringArrayVar(&startVariables, "variable", nil, "Override environment variable in KEY=VALUE form")
-	containerStartCmd.Flags().StringArrayVar(&startSecrets, "secret", nil, "Override secrets list (specify all)")
-	containerStartCmd.Flags().StringArrayVar(&startSSHKeys, "ssh-key", nil, "Override SSH keys list")
-	containerStartCmd.Flags().StringVar(&startDebug, "debug", "", "Override debug mode (true/false)")
-	containerStartCmd.Flags().StringVar(&startPromoteRelease, "promote-release", "", "Promote the deployed tag to the repository's latest release when it goes live (default true; pass false to decline)")
-	containerStartCmd.Flags().StringVar(&startCustomDomain, "custom-domain", "", "Override custom domain (empty string clears it)")
-	containerStartCmd.Flags().StringVar(&startHost, "host", "", "Move stopped container to a different host")
-	containerStartCmd.Flags().StringArrayVar(&startVolumes, "volume", nil, "Volume to attach before starting, as <id|name>[:<declared name>]; may be repeated")
+	containerDeployCmd.Flags().StringVar(&deployTag, "tag", "", "Deploy a different release tag than the saved one")
+	containerDeployCmd.Flags().StringArrayVar(&deployVariables, "variable", nil, "Replace the saved environment variables with KEY=VALUE pairs; may be repeated")
+	containerDeployCmd.Flags().StringArrayVar(&deploySecrets, "secret", nil, "Replace the saved Tinfoil-managed secrets list (specify all; --secret=\"\" clears it)")
+	containerDeployCmd.Flags().StringArrayVar(&deploySSHKeys, "ssh-key", nil, "Replace the saved SSH keys list")
+	containerDeployCmd.Flags().StringVar(&deployDebug, "debug", "", "Deploy in debug mode (true/false)")
+	containerDeployCmd.Flags().StringVar(&deployMarkLatestRelease, "mark-latest", "", "Mark the deployed tag as the repository's latest GitHub release once it is running (default true; pass false to leave the latest release unchanged)")
+	containerDeployCmd.Flags().StringVar(&deployCustomDomain, "custom-domain", "", "Replace the custom domain (empty string clears it)")
+	containerDeployCmd.Flags().StringVar(&deployHost, "host", "", "Deploy on a different host (see 'tinfoil container hosts')")
+	containerDeployCmd.Flags().StringArrayVar(&deployVolumes, "volume", nil, "Volume to attach before deploying, as <id|name>[:<mount name>]; may be repeated")
 
-	containerRelaunchCmd.Flags().StringVar(&relaunchTag, "tag", "", "Override the deployed tag")
-	containerRelaunchCmd.Flags().StringArrayVar(&relaunchVariables, "variable", nil, "Override environment variable in KEY=VALUE form")
-	containerRelaunchCmd.Flags().StringArrayVar(&relaunchSecrets, "secret", nil, "Override secrets list (specify all)")
-	containerRelaunchCmd.Flags().StringArrayVar(&relaunchSSHKeys, "ssh-key", nil, "Override SSH keys list")
-	containerRelaunchCmd.Flags().StringVar(&relaunchDebug, "debug", "", "Override debug mode (true/false)")
-	containerRelaunchCmd.Flags().StringVar(&relaunchStaging, "staging", "", "Hold an eligible ready update candidate for manual acceptance (true/false)")
-	containerRelaunchCmd.Flags().StringVar(&relaunchPromoteRelease, "promote-release", "", "Promote the deployed tag to the repository's latest release when it goes live (default true; pass false to decline)")
-	containerRelaunchCmd.Flags().StringVar(&relaunchCustomDomain, "custom-domain", "", "Override custom domain (empty string clears it)")
-	containerRelaunchCmd.Flags().StringVar(&relaunchHost, "host", "", "Move failed container to a different host")
+	containerUpdateCmd.Flags().StringVar(&updateTag, "tag", "", "Release tag to update to")
+	containerUpdateCmd.Flags().StringArrayVar(&updateVariables, "variable", nil, "Replace the saved environment variables with KEY=VALUE pairs; may be repeated")
+	containerUpdateCmd.Flags().StringArrayVar(&updateSecrets, "secret", nil, "Replace the saved Tinfoil-managed secrets list (specify all; --secret=\"\" clears it)")
+	containerUpdateCmd.Flags().StringArrayVar(&updateSSHKeys, "ssh-key", nil, "Replace the saved SSH keys list")
+	containerUpdateCmd.Flags().StringVar(&updateDebug, "debug", "", "Switch debug mode on or off (true/false)")
+	containerUpdateCmd.Flags().StringVar(&updateHold, "hold", "", "Hold the new version for review instead of switching traffic automatically (true/false)")
+	containerUpdateCmd.Flags().Lookup("hold").NoOptDefVal = "true"
+	containerUpdateCmd.Flags().StringVar(&updateMarkLatestRelease, "mark-latest", "", "Mark the deployed tag as the repository's latest GitHub release once it is running (default true; pass false to leave the latest release unchanged)")
+	containerUpdateCmd.Flags().StringVar(&updateCustomDomain, "custom-domain", "", "Replace the custom domain (empty string clears it)")
+	containerUpdateCmd.Flags().BoolVar(&updateYes, "yes", false, "Automatically approve displayed update plans, including changes and downtime")
 
 	containerMetricsCmd.Flags().StringVar(&metricsTime, "time", "24h", "Time window (e.g. 1h, 24h, 7d)")
 
 	containerConnectCmd.Flags().UintVarP(&connectPort, "port", "p", 8080, "Local port for the verified proxy")
 	containerConnectCmd.Flags().StringVarP(&connectBindAddr, "bind", "b", "127.0.0.1", "Address to bind to")
+	containerConnectCmd.Flags().BoolVar(&connectReview, "review", false, "Connect to the available blue/green review candidate, pinned to its release (never production)")
 
 	silenceUsageRecursive(containerCmd)
 }
@@ -195,14 +230,6 @@ func silenceUsageRecursive(cmd *cobra.Command) {
 	cmd.SilenceUsage = true
 	for _, c := range cmd.Commands() {
 		silenceUsageRecursive(c)
-	}
-}
-
-func addDebugSelector(cmd *cobra.Command) {
-	cmd.Flags().BoolVar(&containerDebugSelector, "debug-mode", false, "Match containers in debug mode when resolving by name")
-	cmd.PreRunE = func(cmd *cobra.Command, args []string) error {
-		useDebugFilter = cmd.Flags().Changed("debug-mode")
-		return nil
 	}
 }
 
@@ -261,7 +288,11 @@ var containerCreateCmd = &cobra.Command{
 			"repo": createRepo,
 			"tag":  createTag,
 		}
-		if err := setPromoteRelease(cmd, body, createPromoteRelease); err != nil {
+		if err := setMarkLatestRelease(cmd, body, createMarkLatestRelease); err != nil {
+			return err
+		}
+		secrets, err := parseSecretSelection(createSecrets)
+		if err != nil {
 			return err
 		}
 
@@ -285,13 +316,54 @@ var containerCreateCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
+		var replacement *containerView
+		replaceID := strings.TrimSpace(createReplaceID)
+		if replaceID != "" {
+			if !looksLikeUUID(replaceID) {
+				return fmt.Errorf("--replace requires a container ID")
+			}
+			replacement, err = resolveContainerDetail(client, replaceID)
+			if err != nil {
+				return fmt.Errorf("resolve --replace target: %w", err)
+			}
+			if !strings.EqualFold(replacement.ID, replaceID) {
+				return fmt.Errorf("resolve --replace target: unexpected container ID; refusing to replace")
+			}
+			replaceID = replacement.ID
+		}
+		// A slot with a key secret cannot run without a disk, so refuse up front
+		// with the commands to run rather than creating a container that sits
+		// stopped. Slots without one are optional and the container deploys
+		// with them empty.
+		slots, err := declaredVolumeSlots(client, createRepo, createTag, args[0], replaceID)
+		if err != nil {
+			return err
+		}
+		planned := containerView{Name: args[0], VolumeSlots: slots}
+		assignments, err := volumeAssignments(&planned, requests)
+		if err != nil {
+			return err
+		}
+		assigned := map[string]bool{}
+		for _, name := range assignments {
+			assigned[name] = true
+		}
+		var missing []volumeSlot
+		for _, mount := range requiredVolumeSlots(slots) {
+			if !assigned[mount.Name] {
+				missing = append(missing, mount)
+			}
+		}
+		if len(missing) > 0 {
+			return errVolumesRequired(args[0], missing, createHost)
+		}
 		var volumes []volumeView
 		if len(requests) > 0 {
 			list, err := listVolumes(client)
 			if err != nil {
 				return err
 			}
-			if volumes, err = resolveVolumeRequests(list.Volumes, requests); err != nil {
+			if volumes, err = resolveVolumeRequests(list.Volumes, requests, replacement); err != nil {
 				return err
 			}
 			host, err := volumesHost(volumes, createHost)
@@ -308,7 +380,7 @@ var containerCreateCmd = &cobra.Command{
 			body["variables"] = vars
 		}
 		if len(createSecrets) > 0 {
-			body["secrets"] = createSecrets
+			body["secrets"] = secrets
 		}
 		if len(createSSHKeys) > 0 {
 			body["ssh_keys"] = createSSHKeys
@@ -325,42 +397,53 @@ var containerCreateCmd = &cobra.Command{
 		if createHost != "" && len(requests) == 0 {
 			body["host_name"] = createHost
 		}
-		if createReplaceID != "" {
-			body["replace_container_id"] = createReplaceID
+		if replaceID != "" {
+			body["replace_container_id"] = replaceID
 		}
 
 		var created containerView
 		if _, err := client.do("POST", "/api/containers", nil, body, &created); err != nil {
 			return err
 		}
+		deployBody := map[string]any{}
+		if value, ok := body["mark_latest_release"].(bool); ok {
+			deployBody["mark_latest_release"] = value
+			created.MarkLatestRelease = &value
+		}
 		if len(created.VolumeSlots) == 0 {
 			if len(requests) > 0 {
-				return fmt.Errorf("Created %s but it declares no volumes in tinfoil-config.yml; --volume was not applied", created.Name)
+				return createFollowupError(created, replaceID, fmt.Errorf("the returned configuration declares no mounts; --volume was not applied"))
 			}
-			return renderContainer(created)
+			return createFollowupError(created, replaceID, followAndRender(client, created, nil))
 		}
-		if len(requests) == 0 {
-			if err := renderContainer(created); err != nil {
-				return err
+		if len(requests) > 0 {
+			if err := attachVolumes(client, &created, requests, volumes); err != nil {
+				return createFollowupError(created, replaceID, err)
 			}
-			if outputFormat != "json" {
-				printVolumeHint(created)
-			}
-			return nil
 		}
-		if err := attachVolumes(client, &created, requests, volumes); err != nil {
-			return fmt.Errorf("Created %s but %w", created.Name, err)
+		// The controlplane leaves any volume-declaring container stopped after
+		// create; deploy it now so optional slots do not strand it.
+		var deployed containerView
+		if _, err := client.do("POST", pathf("/api/containers/%s/deploy", created.ID), nil, deployBody, &deployed); err != nil {
+			return createFollowupError(created, replaceID, fmt.Errorf("deploy request failed: %w. Check its state before retrying: %s", err, deployRecoveryCommand(&created)))
 		}
-		var started containerView
-		if _, err := client.do("POST", pathf("/api/containers/%s/start", created.ID), nil, map[string]any{}, &started); err != nil {
-			return fmt.Errorf("Created %s and attached its volumes but could not start it: %s. Run: tinfoil container start %s", created.Name, errMessage(err), created.Name)
-		}
-		attached, err := loadContainerVolumes(client, started)
+		attached, err := loadContainerVolumes(client, deployed)
 		if err != nil {
-			return err
+			return createFollowupError(created, replaceID, fmt.Errorf("deploy was accepted (status %s), but could not load attached volumes: %w", deployed.Status, err))
 		}
-		return renderContainerDetail(started, attached)
+		return createFollowupError(created, replaceID, followAndRender(client, deployed, attached))
 	},
+}
+
+func createFollowupError(created containerView, replaceID string, err error) error {
+	if err == nil {
+		return nil
+	}
+	replaced := ""
+	if replaceID != "" {
+		replaced = fmt.Sprintf("; replaced container %s was removed", replaceID)
+	}
+	return fmt.Errorf("created %s (%s)%s, but follow-up failed: %w. The new container and any successful disk attachments were retained; inspect with: tinfoil container get %s", created.Name, created.ID, replaced, err, created.ID)
 }
 
 var containerDeleteCmd = &cobra.Command{
@@ -377,6 +460,11 @@ var containerDeleteCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
+		fmt.Fprintf(os.Stderr, "Deleting %s (%s).\n", c.Name, c.ID)
+		fmt.Fprintln(os.Stderr, "This removes the container, its saved configuration, and its DNS records. Attached volumes are kept.")
+		if err := confirmYes(deleteYes, "container delete"); err != nil {
+			return err
+		}
 		if _, err := client.do("DELETE", pathf("/api/containers/%s", c.ID), nil, nil, nil); err != nil {
 			return err
 		}
@@ -385,20 +473,24 @@ var containerDeleteCmd = &cobra.Command{
 	},
 }
 
-var containerStartCmd = &cobra.Command{
-	Use:   "start [id|name]",
-	Short: "Start a stopped container",
-	Args:  cobra.ExactArgs(1),
+var containerDeployCmd = &cobra.Command{
+	Use:   "deploy [id|name]",
+	Short: "Deploy a stopped or failed container",
+	Long: `Boot a new enclave for a container that has none. Works on stopped and
+failed containers, and on a stopping container (the deploy runs once the stop
+finishes). Without flags the saved configuration is used; flags replace parts
+of it. To change a running container, use "tinfoil container update".`,
+	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		body, err := buildLifecycleBody(cmd,
-			startTag, startVariables, startSecrets, startSSHKeys,
-			startDebug, startPromoteRelease, startCustomDomain, startHost,
+			deployTag, deployVariables, deploySecrets, deploySSHKeys,
+			deployDebug, deployMarkLatestRelease, deployCustomDomain, deployHost,
 		)
 		if err != nil {
 			return err
 		}
 
-		requests, err := parseVolumeRequests(startVolumes)
+		requests, err := parseVolumeRequests(deployVolumes)
 		if err != nil {
 			return err
 		}
@@ -411,35 +503,44 @@ var containerStartCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
+		if c.Status == statusFailed && c.ErrorMessage != "" && outputFormat != "json" {
+			fmt.Fprintf(os.Stderr, "Last attempt failed: %s\n", humanVolumeMessage(c.ErrorMessage))
+			fmt.Fprintln(os.Stderr, "Deploying again with the same settings; pass flags to change them.")
+		}
 		if len(requests) > 0 {
 			list, err := listVolumes(client)
 			if err != nil {
 				return err
 			}
-			volumes, err := resolveVolumeRequests(list.Volumes, requests)
+			volumes, err := resolveVolumeRequests(list.Volumes, requests, nil)
 			if err != nil {
 				return err
 			}
-			host, err := volumesHost(volumes, startHost)
+			host, err := volumesHost(volumes, deployHost)
 			if err != nil {
 				return err
 			}
-			if startHost == "" && c.HostName != host {
+			if deployHost == "" && c.HostName != host {
 				return fmt.Errorf("container %s is on host %s but volume %s is on %s; volumes must be on the container's host", c.Name, c.HostName, volumes[0].Name, host)
 			}
-			if err := attachVolumes(client, c, requests, volumes); err != nil {
+			attachTarget := *c
+			attachTarget.MarkLatestRelease = nil
+			if value, ok := body["mark_latest_release"].(bool); ok {
+				attachTarget.MarkLatestRelease = &value
+			}
+			if err := attachVolumes(client, &attachTarget, requests, volumes); err != nil {
 				return err
 			}
 		}
-		var updated containerView
-		if _, err := client.do("POST", pathf("/api/containers/%s/start", c.ID), nil, body, &updated); err != nil {
+		var deployed containerView
+		if _, err := client.do("POST", pathf("/api/containers/%s/deploy", c.ID), nil, body, &deployed); err != nil {
 			return withAttachHint(err, c)
 		}
-		attached, err := loadContainerVolumes(client, updated)
+		attached, err := loadContainerVolumes(client, deployed)
 		if err != nil {
 			return err
 		}
-		return renderContainerDetail(updated, attached)
+		return followAndRender(client, deployed, attached)
 	},
 }
 
@@ -456,47 +557,62 @@ var containerStopCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		var updated containerView
-		if _, err := client.do("POST", pathf("/api/containers/%s/stop", c.ID), nil, nil, &updated); err != nil {
+		var stopped containerView
+		if _, err := client.do("POST", pathf("/api/containers/%s/stop", c.ID), nil, nil, &stopped); err != nil {
 			return err
 		}
-		return renderContainer(updated)
+		if outputFormat != "json" {
+			fmt.Printf("Stopping %s. Its configuration and volumes are kept; run \"tinfoil container deploy %s\" to bring it back.\n", c.Name, c.Name)
+		}
+		return renderContainer(stopped)
 	},
 }
 
-var containerRelaunchCmd = &cobra.Command{
-	Use:   "relaunch [id|name]",
-	Short: "Redeploy a ready or failed container",
-	Args:  cobra.ExactArgs(1),
+var containerUpdateCmd = &cobra.Command{
+	Use:   "update [id|name]",
+	Short: "Update a running container to a new tag or configuration",
+	Long: `Replace the running version of a container. Single-GPU containers without
+persistent volumes boot the new version alongside the current one and switch
+traffic when it is running (no downtime); pass --hold=true to hold the new
+version for review until "tinfoil container promote". Multi-GPU containers and
+containers with persistent volumes must stop the current version first, so the
+command asks you to confirm the downtime unless --yes is given.
+
+Every update first prints a read-only server plan. --yes and --no-wait do not
+skip it. Omit --hold to inherit the project's default; --hold is true and
+--hold=false explicitly disables it (use equals, not --hold false).`,
+	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		body, err := buildLifecycleBody(cmd,
-			relaunchTag, relaunchVariables, relaunchSecrets, relaunchSSHKeys,
-			relaunchDebug, relaunchPromoteRelease, relaunchCustomDomain, relaunchHost,
+			updateTag, updateVariables, updateSecrets, updateSSHKeys,
+			updateDebug, updateMarkLatestRelease, updateCustomDomain, "",
 		)
 		if err != nil {
 			return err
 		}
-		if cmd.Flags().Changed("staging") {
-			staging, err := parseTriBool(relaunchStaging)
+		if cmd.Flags().Changed("hold") {
+			hold, err := parseTriBool(updateHold)
 			if err != nil {
-				return fmt.Errorf("--staging: %w", err)
+				return fmt.Errorf("--hold: %w", err)
 			}
-			body["staging"] = staging
+			body["hold"] = hold
 		}
 
 		client, err := authedClient()
 		if err != nil {
 			return err
 		}
-		c, err := resolveContainer(client, args[0])
+		c, err := resolveContainerDetail(client, args[0])
 		if err != nil {
 			return err
 		}
 		var updated containerView
-		if _, err := client.do("POST", pathf("/api/containers/%s/relaunch", c.ID), nil, body, &updated); err != nil {
+		if err := postLifecycleUpdate(client, pathf("/api/containers/%s/update", c.ID), body, &updated, updateYes, "container update", func() (updateReview, error) {
+			return planContainerUpdate(client, c.ID, body)
+		}); err != nil {
 			return err
 		}
-		return renderContainer(updated)
+		return followAndRender(client, updated, nil)
 	},
 }
 
@@ -553,14 +669,9 @@ var containerHostsCmd = &cobra.Command{
 	},
 }
 
-var containerUpdateCmd = &cobra.Command{
-	Use:   "update",
-	Short: "Manage in-progress container updates",
-}
-
-var containerUpdateStatusCmd = &cobra.Command{
-	Use:   "status [id|name]",
-	Short: "Show the status of an in-progress update",
+var containerPromoteCmd = &cobra.Command{
+	Use:   "promote [id|name]",
+	Short: "Switch traffic to an update that was held for review",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client, err := authedClient()
@@ -571,40 +682,20 @@ var containerUpdateStatusCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		var raw json.RawMessage
-		if _, err := client.do("GET", pathf("/api/containers/%s/update", c.ID), nil, nil, &raw); err != nil {
+		var promoted containerView
+		if _, err := client.do("POST", pathf("/api/containers/%s/update/promote", c.ID), nil, nil, &promoted); err != nil {
 			return err
 		}
-		os.Stdout.Write(prettyJSON(raw))
-		fmt.Println()
-		return nil
+		if outputFormat != "json" {
+			fmt.Printf("Promoted update on %s; traffic is switching to %s.\n", c.Name, promoted.CurrentTag)
+		}
+		return followAndRender(client, promoted, nil)
 	},
 }
 
-var containerUpdateAcceptCmd = &cobra.Command{
-	Use:   "accept [id|name]",
-	Short: "Promote a ready staged update",
-	Args:  cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		client, err := authedClient()
-		if err != nil {
-			return err
-		}
-		c, err := resolveContainer(client, args[0])
-		if err != nil {
-			return err
-		}
-		var updated containerView
-		if _, err := client.do("POST", pathf("/api/containers/%s/update/accept", c.ID), nil, nil, &updated); err != nil {
-			return err
-		}
-		return renderContainer(updated)
-	},
-}
-
-var containerUpdateCancelCmd = &cobra.Command{
+var containerCancelCmd = &cobra.Command{
 	Use:   "cancel [id|name]",
-	Short: "Cancel an in-progress update",
+	Short: "Cancel an update and keep the current version",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client, err := authedClient()
@@ -639,7 +730,7 @@ var containerUpdateCancelCmd = &cobra.Command{
 			fmt.Printf("Canceled in-progress update on %s; latest release restoration to %s requested\n", c.Name, acknowledgment.Tag)
 			return nil
 		}
-		fmt.Printf("Cancelled in-progress update on %s\n", c.Name)
+		fmt.Printf("Canceled update on %s; %s keeps running.\n", c.Name, c.CurrentTag)
 		return nil
 	},
 }
@@ -649,32 +740,31 @@ var containerConnectCmd = &cobra.Command{
 	Short: "Run a verified proxy to a deployed container",
 	Long: `Resolve a deployed container by name (or ID), look up its enclave domain
 and source repository, then start a local proxy that verifies the enclave's
-attestation and forwards HTTP requests to it. This is a convenience around
-` + "`tinfoil proxy -e <domain> -r <repo>`" + `.`,
+attestation and forwards HTTP requests to it. Pass --review to select the real
+blue/green candidate instead of production. Verification is pinned to the selected
+release. An explicit --repo retains its verification pins; in review mode it must
+match the candidate's repository and tag.
+
+  tinfoil container connect my-container
+  tinfoil container connect my-container --review`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client, err := authedClient()
 		if err != nil {
 			return err
 		}
-		c, err := resolveContainer(client, args[0])
+		c, err := resolveContainerDetail(client, args[0])
 		if err != nil {
 			return err
 		}
-		host := strings.TrimSpace(c.Domain)
-		if host == "" {
-			host = strings.TrimSpace(c.InternalDomain)
+		target, err := containerConnection(*c, connectReview, repo)
+		if err != nil {
+			return err
 		}
-		if host == "" {
-			return fmt.Errorf("container %s has no domain (status=%s) — cannot connect", c.Name, c.Status)
-		}
-		if c.Repo == "" {
-			return fmt.Errorf("container %s has no repo recorded — cannot connect", c.Name)
-		}
-		fmt.Printf("Connecting verified proxy to %s (%s) for repo %s\n", c.Name, host, c.Repo)
+		fmt.Printf("Connecting verified proxy to %s: %s (expected %s)\n", c.Name, target.URL, target.source)
 
-		enclaveHost = host
-		repo = c.Repo
+		enclaveHost = target.host
+		repo = target.source
 		listenAddr = connectBindAddr
 		listenPort = connectPort
 		return proxyCmd.RunE(proxyCmd, nil)
@@ -689,9 +779,9 @@ func authedClient() (*cpClient, error) {
 	return newCPClient(cfg), nil
 }
 
-// resolveContainer accepts either a UUID or a name. When given a name,
-// list containers and pick the one with a matching name. If both a debug
-// and a non-debug container share the name, --debug-mode disambiguates.
+// resolveContainer accepts either a UUID or a name. When given a name, list
+// containers and pick the one with a matching name. A name shared by a debug
+// and a production container is ambiguous; the caller must use the ID.
 func resolveContainer(client *cpClient, identifier string) (*containerView, error) {
 	id := strings.TrimSpace(identifier)
 	if id == "" {
@@ -711,13 +801,9 @@ func resolveContainer(client *cpClient, identifier string) (*containerView, erro
 	}
 	matches := make([]containerView, 0, 2)
 	for _, c := range list {
-		if c.Name != id {
-			continue
+		if c.Name == id {
+			matches = append(matches, c)
 		}
-		if useDebugFilter && c.Debug != containerDebugSelector {
-			continue
-		}
-		matches = append(matches, c)
 	}
 	switch len(matches) {
 	case 0:
@@ -726,7 +812,16 @@ func resolveContainer(client *cpClient, identifier string) (*containerView, erro
 		c := matches[0]
 		return &c, nil
 	default:
-		return nil, fmt.Errorf("multiple containers named %q (debug + non-debug); pass --debug-mode or use the container ID", id)
+		var b strings.Builder
+		fmt.Fprintf(&b, "%q names more than one container; use the ID:\n", id)
+		for _, c := range matches {
+			mode := "production"
+			if c.Debug {
+				mode = "debug"
+			}
+			fmt.Fprintf(&b, "  %s  %-10s  %s\n", c.ID, mode, c.Domain)
+		}
+		return nil, fmt.Errorf("%s", strings.TrimRight(b.String(), "\n"))
 	}
 }
 
@@ -786,13 +881,13 @@ func parseKeyValues(in []string) (map[string]string, error) {
 	return out, nil
 }
 
-// buildLifecycleBody assembles the request body shared by /start and
-// /relaunch. Only fields whose flag was set on the command line are included
+// buildLifecycleBody assembles the request body shared by /deploy and
+// /update. Only fields whose flag was set on the command line are included
 // so the controlplane keeps the existing values for the rest.
 func buildLifecycleBody(cmd *cobra.Command,
 	tag string,
 	variables, secrets, sshKeys []string,
-	debug, promoteRelease, customDomain, host string,
+	debug, markLatestRelease, customDomain, host string,
 ) (map[string]any, error) {
 	body := map[string]any{}
 	if cmd.Flags().Changed("tag") && tag != "" {
@@ -809,10 +904,11 @@ func buildLifecycleBody(cmd *cobra.Command,
 		body["variables"] = vars
 	}
 	if cmd.Flags().Changed("secret") {
-		if secrets == nil {
-			secrets = []string{}
+		selection, err := parseSecretSelection(secrets)
+		if err != nil {
+			return nil, err
 		}
-		body["secrets"] = secrets
+		body["secrets"] = selection
 	}
 	if cmd.Flags().Changed("ssh-key") {
 		if sshKeys == nil {
@@ -827,29 +923,29 @@ func buildLifecycleBody(cmd *cobra.Command,
 		}
 		body["debug"] = v
 	}
-	if err := setPromoteRelease(cmd, body, promoteRelease); err != nil {
+	if err := setMarkLatestRelease(cmd, body, markLatestRelease); err != nil {
 		return nil, err
 	}
 	if cmd.Flags().Changed("custom-domain") {
 		body["custom_domain"] = customDomain
 	}
-	if cmd.Flags().Changed("host") {
+	if cmd.Flags().Lookup("host") != nil && cmd.Flags().Changed("host") {
 		body["host_name"] = host
 	}
 	return body, nil
 }
 
-// setPromoteRelease adds promote_release to body only when the flag was set,
+// setMarkLatestRelease adds mark_latest_release to body only when the flag was set,
 // so an omitted flag defers to the controlplane default.
-func setPromoteRelease(cmd *cobra.Command, body map[string]any, value string) error {
-	if !cmd.Flags().Changed("promote-release") {
+func setMarkLatestRelease(cmd *cobra.Command, body map[string]any, value string) error {
+	if !cmd.Flags().Changed("mark-latest") {
 		return nil
 	}
 	v, err := parseTriBool(value)
 	if err != nil {
-		return fmt.Errorf("--promote-release: %w", err)
+		return fmt.Errorf("--mark-latest: %w", err)
 	}
-	body["promote_release"] = v
+	body["mark_latest_release"] = v
 	return nil
 }
 
@@ -923,10 +1019,10 @@ func renderContainerDetail(c containerView, attached map[string]volumeView) erro
 	}
 	fmt.Printf("ID:           %s\n", c.ID)
 	fmt.Printf("Name:         %s\n", c.Name)
-	fmt.Printf("Status:       %s\n", c.Status)
+	fmt.Printf("Status:       %s\n", statusLabel(c.Status))
 	fmt.Printf("Repo:         %s@%s\n", c.Repo, c.CurrentTag)
-	if c.DeploymentID != "" {
-		fmt.Printf("Deployment:   %s\n", c.DeploymentID)
+	if c.ProjectID != "" {
+		fmt.Printf("Project:      %s\n", c.ProjectID)
 	}
 	if c.Domain != "" {
 		fmt.Printf("Domain:       %s\n", c.Domain)
@@ -938,17 +1034,20 @@ func renderContainerDetail(c containerView, attached map[string]volumeView) erro
 		fmt.Printf("Host:         %s (cpu=%s gpu=%s)\n", c.HostName, c.HostCpuType, c.HostGpuType)
 	}
 	fmt.Printf("Resources:    cpus=%d gpus=%d mem=%dMB\n", c.CPUs, c.GPUs, c.MemoryMB)
-	if c.PromoteRelease != nil {
-		fmt.Printf("Promote:      %t\n", *c.PromoteRelease)
+	if c.MarkLatestRelease != nil {
+		fmt.Printf("Mark latest:  %t\n", *c.MarkLatestRelease)
 	}
 	if c.Debug {
-		fmt.Printf("Mode:         debug\n")
+		fmt.Printf("Debug:        yes (SSH enabled, does not pass attestation)\n")
 	}
-	if c.Staging {
-		fmt.Printf("Mode:         staging\n")
+	if c.UpdateTag != "" && c.candidateHeld() {
+		fmt.Printf("Held:         yes (this version is waiting for review; promote to switch traffic)\n")
 	}
 	if c.DisableCCMode {
-		fmt.Printf("Mode:         non-cc (confidential computing disabled)\n")
+		fmt.Printf("Confidential: disabled\n")
+	}
+	if c.UpdateStrategy == updateStrategyReplace {
+		fmt.Printf("Updates:      replace (%s; updates cause downtime)\n", replaceReason(c))
 	}
 	if c.SSHPort > 0 {
 		fmt.Printf("SSH port:     %d\n", c.SSHPort)
@@ -979,16 +1078,14 @@ func renderContainerDetail(c containerView, attached map[string]volumeView) erro
 		}
 		label = strings.Repeat(" ", len(label))
 	}
+	printVolumeUnlockGuidance(os.Stdout, c.VolumeSlots)
 	if c.UpdateTag != "" {
-		state := c.UpdateStatus
-		if c.UpdateType != "" {
-			state = state + "/" + c.UpdateType
-		}
-		fmt.Printf("In-progress:  %s (%s)\n", c.UpdateTag, state)
+		fmt.Printf("Updating to:  %s (%s)\n", c.UpdateTag, updateLabel(c))
 	}
 	if c.ErrorMessage != "" {
-		fmt.Printf("Error:        %s\n", c.ErrorMessage)
+		fmt.Printf("Error:        %s\n", humanVolumeMessage(c.ErrorMessage))
 	}
+	printContainerConnections(os.Stdout, c)
 	return nil
 }
 
@@ -1011,7 +1108,7 @@ func renderContainers(list []containerView) error {
 			tag = "-"
 		}
 		fmt.Printf("%-24s  %-10s  %-30s  %-10s  %s\n",
-			truncate(c.Name, 24), c.Status, truncate(domain, 30), truncate(tag, 10), c.Repo,
+			truncate(c.Name, 24), statusLabel(c.Status), truncate(domain, 30), truncate(tag, 10), c.Repo,
 		)
 	}
 	return nil

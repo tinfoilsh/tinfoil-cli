@@ -148,9 +148,9 @@ func TestVolumeAttachSlotSelection(t *testing.T) {
 	}{
 		{name: "defaults to the only declared volume", slots: `[{"name":"data"}]`, wantOut: `Attached data-vol to app as "data"`, wantPut: true},
 		{name: "explicit --as", as: "cache", slots: `[{"name":"data"},{"name":"cache"}]`, wantOut: `Attached data-vol to app as "cache"`, wantPut: true},
-		{name: "several declared without --as", slots: `[{"name":"data"},{"name":"cache"}]`, wantErr: "declares several volumes (data, cache); pick one with --as"},
-		{name: "undeclared --as", as: "logs", slots: `[{"name":"data"}]`, wantErr: `does not declare volume "logs" (declared: data)`},
-		{name: "none declared", slots: `[]`, wantErr: "declares no volumes in tinfoil-config.yml"},
+		{name: "several declared without --as", slots: `[{"name":"data"},{"name":"cache"}]`, wantErr: "declares several mounts (data, cache); pick one with --as"},
+		{name: "undeclared --as", as: "logs", slots: `[{"name":"data"}]`, wantErr: `does not declare mount "logs" (declared: data)`},
+		{name: "none declared", slots: `[]`, wantErr: "declares no mounts in tinfoil-config.yml"},
 		{name: "server refusal passes through", slots: `[{"name":"data"}]`, putStatus: http.StatusConflict, wantErr: "409: stop the container before changing volume assignments", wantPut: true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -217,12 +217,13 @@ func TestContainerCreateWithVolume(t *testing.T) {
 		{
 			name:    "attaches then starts",
 			volumes: []string{"data-vol"},
-			wantOut: []string{"Status:       deploying", "Volumes:      data ← data-vol (16 TiB)"},
+			wantOut: []string{"Status:       Deploying", "Volumes:      data ← data-vol (16 TiB)"},
 			wantPaths: []string{
+				"POST /api/containers/validate",
 				"GET /api/volumes",
 				"POST /api/containers",
 				"PUT /api/containers/" + testContainerID + "/volumes/data",
-				"POST /api/containers/" + testContainerID + "/start",
+				"POST /api/containers/" + testContainerID + "/deploy",
 				"GET /api/volumes",
 			},
 		},
@@ -230,10 +231,11 @@ func TestContainerCreateWithVolume(t *testing.T) {
 			name:         "attach failure leaves the container stopped",
 			volumes:      []string{"data-vol"},
 			attachStatus: http.StatusConflict,
-			wantErr: "Created app but could not attach data-vol: stop the container before changing volume assignments. The container is stopped; run:\n" +
-				"  tinfoil volume attach data-vol app\n" +
-				"  tinfoil container start app",
+			wantErr: "created app (" + testContainerID + "), but follow-up failed: could not attach data-vol: stop the container before changing volume assignments. Successful attachments were kept; check container " + testContainerID + "'s state before retrying:\n" +
+				"  tinfoil volume attach data-vol " + testContainerID + "\n" +
+				"  tinfoil container deploy " + testContainerID + ". The new container and any successful disk attachments were retained; inspect with: tinfoil container get " + testContainerID,
 			wantPaths: []string{
+				"POST /api/containers/validate",
 				"GET /api/volumes",
 				"POST /api/containers",
 				"PUT /api/containers/" + testContainerID + "/volumes/data",
@@ -244,26 +246,40 @@ func TestContainerCreateWithVolume(t *testing.T) {
 			volumes:   []string{"data-vol"},
 			host:      "inf14",
 			wantErr:   "--host inf14 does not match volume data-vol on host inf13",
-			wantPaths: []string{"GET /api/volumes"},
+			wantPaths: []string{"POST /api/containers/validate", "GET /api/volumes"},
 		},
 		{
-			name:      "--volume is not applied when the config declares no slots",
+			name:      "--volume is refused before create when no mounts are declared",
 			volumes:   []string{"data-vol"},
 			slots:     `[]`,
-			wantErr:   "Created app but it declares no volumes in tinfoil-config.yml; --volume was not applied",
-			wantPaths: []string{"GET /api/volumes", "POST /api/containers"},
+			wantErr:   "container app declares no mounts in tinfoil-config.yml",
+			wantPaths: []string{"POST /api/containers/validate"},
 		},
 		{
-			name: "without --volume prints the attach hint",
-			wantOut: []string{
-				"Status:       stopped",
-				"Volumes:      data (none attached)",
-				"\nThe config declares volume \"data\"; attach one before starting:\n" +
-					"  tinfoil volume create app-data --size <SIZE> --host inf13\n" +
-					"  tinfoil volume attach app-data app\n" +
-					"  tinfoil container start app\n",
+			name: "without --volume refuses before creating anything",
+			host: "inf13",
+			wantErr: "required mount \"data\" has no disk; select an existing disk with --volume or create one:\n" +
+				"  tinfoil volume create app-data --size <SIZE> --host inf13\n" +
+				"  tinfoil container create app ... --volume app-data:data\n" +
+				"Mount data: automatic unlock requires keyserver configuration and secret DATA_KEY outside Tinfoil; attaching a disk does not establish unlock readiness.\n",
+			wantPaths: []string{"POST /api/containers/validate"},
+		},
+		{
+			name:      "without --volume and a config with no slots creates normally",
+			slots:     `[]`,
+			wantOut:   []string{"Status:       Stopped"},
+			wantPaths: []string{"POST /api/containers/validate", "POST /api/containers"},
+		},
+		{
+			name:    "without --volume an optional slot creates and deploys",
+			slots:   `[{"name":"scratch"}]`,
+			wantOut: []string{"Status:       Deploying"},
+			wantPaths: []string{
+				"POST /api/containers/validate",
+				"POST /api/containers",
+				"POST /api/containers/" + testContainerID + "/deploy",
+				"GET /api/volumes",
 			},
-			wantPaths: []string{"POST /api/containers"},
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -279,6 +295,8 @@ func TestContainerCreateWithVolume(t *testing.T) {
 				paths = append(paths, r.Method+" "+r.URL.Path)
 				mu.Unlock()
 				switch {
+				case r.Method == http.MethodPost && r.URL.Path == "/api/containers/validate":
+					_, _ = io.WriteString(w, `{"valid":true,"config":{"volumes":`+slots+`}}`)
 				case r.Method == http.MethodGet && r.URL.Path == "/api/volumes":
 					_, _ = io.WriteString(w, testVolumeList(attached.Load()))
 				case r.Method == http.MethodPost && r.URL.Path == "/api/containers":
@@ -295,7 +313,7 @@ func TestContainerCreateWithVolume(t *testing.T) {
 					}
 					attached.Store(true)
 					w.WriteHeader(http.StatusNoContent)
-				case r.Method == http.MethodPost && r.URL.Path == "/api/containers/"+testContainerID+"/start":
+				case r.Method == http.MethodPost && r.URL.Path == "/api/containers/"+testContainerID+"/deploy":
 					_, _ = io.WriteString(w, `{"id":"`+testContainerID+`","name":"app","status":"deploying","host_name":"inf13","volume_slots":`+slots+`}`)
 				default:
 					t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
@@ -356,7 +374,7 @@ func TestContainerStartWithVolume(t *testing.T) {
 				"GET /api/containers/" + testContainerID,
 				"GET /api/volumes",
 				"PUT /api/containers/" + testContainerID + "/volumes/data",
-				"POST /api/containers/" + testContainerID + "/start",
+				"POST /api/containers/" + testContainerID + "/deploy",
 				"GET /api/volumes",
 			},
 		},
@@ -379,7 +397,7 @@ func TestContainerStartWithVolume(t *testing.T) {
 				case r.Method == http.MethodPut && r.URL.Path == "/api/containers/"+testContainerID+"/volumes/data":
 					attached.Store(true)
 					w.WriteHeader(http.StatusNoContent)
-				case r.Method == http.MethodPost && r.URL.Path == "/api/containers/"+testContainerID+"/start":
+				case r.Method == http.MethodPost && r.URL.Path == "/api/containers/"+testContainerID+"/deploy":
 					body, _ := io.ReadAll(r.Body)
 					if tt.host != "" && !strings.Contains(string(body), `"host_name":"`+tt.host+`"`) {
 						t.Errorf("start body %s lacks host_name %s", body, tt.host)
@@ -393,12 +411,12 @@ func TestContainerStartWithVolume(t *testing.T) {
 
 			configureContainerPromotionTest(t, server.URL)
 			outputFormat = "table"
-			startVolumes, startHost = []string{"data-vol"}, tt.host
+			deployVolumes, deployHost = []string{"data-vol"}, tt.host
 			if tt.host != "" {
-				containerStartCmd.Flags().Lookup("host").Changed = true
+				containerDeployCmd.Flags().Lookup("host").Changed = true
 			}
 			_, err := captureTestStdout(func() error {
-				return containerStartCmd.RunE(containerStartCmd, []string{"app"})
+				return containerDeployCmd.RunE(containerDeployCmd, []string{"app"})
 			})
 			if tt.wantErr != "" {
 				if err == nil || err.Error() != tt.wantErr {

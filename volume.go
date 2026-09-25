@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"net/http"
 	"os"
 	"strings"
 
@@ -33,7 +34,7 @@ type volumeList struct {
 }
 
 // volumeSlot is a volume declared in tinfoil-config.yml. A key secret marks
-// the slot as required at start.
+// the slot as required at deploy.
 type volumeSlot struct {
 	Name      string `json:"name"`
 	KeySecret string `json:"key_secret,omitempty"`
@@ -49,7 +50,7 @@ type volumeRequest struct {
 var (
 	volumeCreateSize string
 	volumeCreateHost string
-	volumeUpdateName string
+	volumeRenameName string
 	volumeAttachAs   string
 	volumeYes        bool
 )
@@ -58,14 +59,14 @@ func init() {
 	rootCmd.AddCommand(volumeCmd)
 	volumeCmd.PersistentFlags().StringVarP(&outputFormat, "output", "o", "table", "Output format: table or json")
 
-	volumeCmd.AddCommand(volumeListCmd, volumeGetCmd, volumeCreateCmd, volumeUpdateCmd, volumeAttachCmd, volumeDetachCmd, volumeDeleteCmd)
+	volumeCmd.AddCommand(volumeListCmd, volumeGetCmd, volumeCreateCmd, volumeRenameCmd, volumeAttachCmd, volumeDetachCmd, volumeDeleteCmd)
 
 	volumeCreateCmd.Flags().StringVar(&volumeCreateSize, "size", "", "Volume size, e.g. 16TiB or 30GiB [required]")
 	volumeCreateCmd.Flags().StringVar(&volumeCreateHost, "host", "", "Host to store the volume on (see 'tinfoil container hosts'); required unless only one host is available")
 	_ = volumeCreateCmd.MarkFlagRequired("size")
-	volumeUpdateCmd.Flags().StringVar(&volumeUpdateName, "name", "", "New volume name [required]")
-	_ = volumeUpdateCmd.MarkFlagRequired("name")
-	volumeAttachCmd.Flags().StringVar(&volumeAttachAs, "as", "", "volume name declared in tinfoil-config.yml (defaults to the only declared volume)")
+	volumeRenameCmd.Flags().StringVar(&volumeRenameName, "name", "", "New volume name [required]")
+	_ = volumeRenameCmd.MarkFlagRequired("name")
+	volumeAttachCmd.Flags().StringVar(&volumeAttachAs, "as", "", "Mount name declared in tinfoil-config.yml (defaults to the only declared mount)")
 	volumeDeleteCmd.Flags().BoolVar(&volumeYes, "yes", false, "Skip interactive confirmation")
 	silenceUsageRecursive(volumeCmd)
 }
@@ -154,8 +155,8 @@ var volumeCreateCmd = &cobra.Command{
 	},
 }
 
-var volumeUpdateCmd = &cobra.Command{
-	Use:   "update [id|name]",
+var volumeRenameCmd = &cobra.Command{
+	Use:   "rename [id|name]",
 	Short: "Rename a volume",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -167,18 +168,18 @@ var volumeUpdateCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		body := map[string]any{"name": volumeUpdateName}
+		body := map[string]any{"name": volumeRenameName}
 		if _, err := client.do("PATCH", pathf("/api/volumes/%s", v.ID), nil, body, nil); err != nil {
 			return err
 		}
-		fmt.Printf("Updated volume %s → %s\n", v.Name, volumeUpdateName)
+		fmt.Printf("Renamed volume %s to %s\n", v.Name, volumeRenameName)
 		return nil
 	},
 }
 
 var volumeAttachCmd = &cobra.Command{
 	Use:   "attach [volume] [container]",
-	Short: "Attach a volume to a stopped container's declared volume",
+	Short: "Attach a volume to a stopped container's declared mount",
 	Args:  cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client, err := authedClient()
@@ -201,6 +202,7 @@ var volumeAttachCmd = &cobra.Command{
 			return err
 		}
 		fmt.Printf("Attached %s to %s as %q\n", v.Name, c.Name, slot)
+		printVolumeUnlockGuidance(os.Stdout, c.VolumeSlots)
 		return nil
 	},
 }
@@ -363,10 +365,10 @@ func parseVolumeRequests(values []string) ([]volumeRequest, error) {
 			r.identifier, r.slot = strings.TrimSpace(raw[:i]), strings.TrimSpace(raw[i+1:])
 		}
 		if r.identifier == "" {
-			return nil, fmt.Errorf("invalid --volume %q: expected <id|name>[:<declared name>]", raw)
+			return nil, fmt.Errorf("invalid --volume %q: expected <id|name>[:<mount name>]", raw)
 		}
 		if len(values) > 1 && r.slot == "" {
-			return nil, fmt.Errorf("--volume %q: use <id|name>:<declared name> when attaching several volumes", raw)
+			return nil, fmt.Errorf("--volume %q: use <id|name>:<mount name> when attaching several volumes", raw)
 		}
 		requests = append(requests, r)
 	}
@@ -374,16 +376,26 @@ func parseVolumeRequests(values []string) ([]volumeRequest, error) {
 }
 
 // resolveVolumeRequests resolves each request to an unattached volume.
-func resolveVolumeRequests(all []volumeView, requests []volumeRequest) ([]volumeView, error) {
+func resolveVolumeRequests(all []volumeView, requests []volumeRequest, replacement *containerView) ([]volumeView, error) {
 	volumes := make([]volumeView, len(requests))
+	seen := map[string]bool{}
 	for i, r := range requests {
 		v, err := resolveVolume(all, r.identifier)
 		if err != nil {
 			return nil, err
 		}
 		if v.ContainerID != "" {
-			return nil, fmt.Errorf("volume %s is already attached to %s", v.Name, volumeContainerLabel(*v))
+			if replacement == nil || !strings.EqualFold(v.ContainerID, replacement.ID) {
+				return nil, fmt.Errorf("volume %s is already attached to %s; only disks attached to the explicit --replace target may be reused", v.Name, volumeContainerLabel(*v))
+			}
+			if v.HostName != replacement.HostName || v.HostID != replacement.HostID {
+				return nil, fmt.Errorf("volume %s does not match replacement target %s's host", v.Name, replacement.ID)
+			}
 		}
+		if seen[v.ID] {
+			return nil, fmt.Errorf("volume %s was selected more than once; each mount needs its own disk", v.Name)
+		}
+		seen[v.ID] = true
 		volumes[i] = *v
 	}
 	return volumes, nil
@@ -394,7 +406,7 @@ func resolveVolumeRequests(all []volumeView, requests []volumeRequest) ([]volume
 func volumesHost(volumes []volumeView, flagHost string) (string, error) {
 	host := volumes[0].HostName
 	for _, v := range volumes[1:] {
-		if v.HostName != host {
+		if v.HostName != host || v.HostID != volumes[0].HostID {
 			return "", fmt.Errorf("volumes %s (%s) and %s (%s) are on different hosts", volumes[0].Name, host, v.Name, v.HostName)
 		}
 	}
@@ -412,38 +424,46 @@ func declaredSlot(c *containerView, want, how string) (string, error) {
 		names[i] = s.Name
 	}
 	if len(names) == 0 {
-		return "", fmt.Errorf("container %s declares no volumes in tinfoil-config.yml", c.Name)
+		return "", fmt.Errorf("container %s declares no mounts in tinfoil-config.yml", c.Name)
 	}
 	if want == "" {
 		if len(names) == 1 {
 			return names[0], nil
 		}
-		return "", fmt.Errorf("container %s declares several volumes (%s); pick one with %s", c.Name, strings.Join(names, ", "), how)
+		return "", fmt.Errorf("container %s declares several mounts (%s); pick one with %s", c.Name, strings.Join(names, ", "), how)
 	}
 	for _, n := range names {
 		if n == want {
 			return n, nil
 		}
 	}
-	return "", fmt.Errorf("container %s does not declare volume %q (declared: %s)", c.Name, want, strings.Join(names, ", "))
+	return "", fmt.Errorf("container %s does not declare mount %q (declared: %s)", c.Name, want, strings.Join(names, ", "))
+}
+
+func volumeAssignments(c *containerView, requests []volumeRequest) ([]string, error) {
+	mounts := make([]string, len(requests))
+	seen := map[string]bool{}
+	for i, r := range requests {
+		mount, err := declaredSlot(c, r.slot, "<volume>:<mount name>")
+		if err != nil {
+			return nil, err
+		}
+		if seen[mount] {
+			return nil, fmt.Errorf("mount %q was given twice", mount)
+		}
+		seen[mount] = true
+		mounts[i] = mount
+	}
+	return mounts, nil
 }
 
 // attachVolumes assigns each requested volume to its declared slot on c. It
 // stops at the first failure, and the error carries the commands that finish
 // the job by hand.
 func attachVolumes(client *cpClient, c *containerView, requests []volumeRequest, volumes []volumeView) error {
-	slots := make([]string, len(requests))
-	seen := map[string]bool{}
-	for i, r := range requests {
-		slot, err := declaredSlot(c, r.slot, "<volume>:<declared name>")
-		if err != nil {
-			return attachRecovery(c, requests[i:], volumes[i].Name, err)
-		}
-		if seen[slot] {
-			return attachRecovery(c, requests[i:], volumes[i].Name, fmt.Errorf("volume %q was given twice", slot))
-		}
-		seen[slot] = true
-		slots[i] = slot
+	slots, err := volumeAssignments(c, requests)
+	if err != nil {
+		return err
 	}
 	for i := range requests {
 		if err := attachVolume(client, c.ID, slots[i], volumes[i].ID); err != nil {
@@ -455,25 +475,33 @@ func attachVolumes(client *cpClient, c *containerView, requests []volumeRequest,
 
 func attachRecovery(c *containerView, remaining []volumeRequest, volume string, cause error) error {
 	var b strings.Builder
-	fmt.Fprintf(&b, "could not attach %s: %s. The container is stopped; run:", volume, errMessage(cause))
+	fmt.Fprintf(&b, "could not attach %s: %s. Successful attachments were kept; check container %s's state before retrying:", volume, errMessage(cause), c.ID)
 	for _, r := range remaining {
 		as := ""
 		if r.slot != "" {
 			as = " --as " + r.slot
 		} else if len(c.VolumeSlots) > 1 {
-			as = " --as <declared name>"
+			as = " --as <mount name>"
 		}
-		fmt.Fprintf(&b, "\n  tinfoil volume attach %s %s%s", r.identifier, c.Name, as)
+		fmt.Fprintf(&b, "\n  tinfoil volume attach %s %s%s", r.identifier, c.ID, as)
 	}
-	fmt.Fprintf(&b, "\n  tinfoil container start %s", c.Name)
+	fmt.Fprintf(&b, "\n  %s", deployRecoveryCommand(c))
 	return errors.New(b.String())
 }
 
+func deployRecoveryCommand(c *containerView) string {
+	command := "tinfoil container deploy " + c.ID
+	if c.MarkLatestRelease != nil {
+		command += fmt.Sprintf(" --mark-latest=%t", *c.MarkLatestRelease)
+	}
+	return command
+}
+
 // withAttachHint appends the attach command when the controlplane refused a
-// start because a required volume is unattached.
+// deploy because a required volume is unattached.
 func withAttachHint(err error, c *containerView) error {
 	msg := errMessage(err)
-	const prefix = "select a volume for required slot "
+	const prefix = "select a volume for required mount "
 	if !strings.Contains(msg, prefix) {
 		return err
 	}
@@ -519,29 +547,89 @@ func containerVolumes(c containerView, volumes []volumeView) map[string]volumeVi
 	return attached
 }
 
-// printVolumeHint follows a create that left the container stopped because
-// its config declares volumes and none were attached.
-func printVolumeHint(c containerView) {
-	names := make([]string, len(c.VolumeSlots))
-	for i, s := range c.VolumeSlots {
+// declaredVolumeSlots asks the controlplane to validate repo@tag and returns
+// the volume slots its tinfoil-config.yml declares.
+func declaredVolumeSlots(client *cpClient, repo, tag, instanceName, replaceID string) ([]volumeSlot, error) {
+	var result struct {
+		Valid  bool `json:"valid"`
+		Errors []struct {
+			Field   string `json:"field"`
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"errors"`
+		Config *struct {
+			Volumes []volumeSlot `json:"volumes"`
+		} `json:"config"`
+	}
+	body := map[string]any{"repo": repo, "tag": tag, "instance_name": instanceName}
+	if replaceID != "" {
+		body["replace_container_id"] = replaceID
+	}
+	if _, err := client.do("POST", "/api/containers/validate", nil, body, &result); err != nil {
+		var cp *cpError
+		if errors.As(err, &cp) && cp.Status == http.StatusForbidden {
+			return nil, fmt.Errorf("config validation denied; check the admin key's containers.validate permission for %s: %w", repo, err)
+		}
+		return nil, fmt.Errorf("validate %s@%s: %w", repo, tag, err)
+	}
+	if !result.Valid || len(result.Errors) > 0 {
+		var message strings.Builder
+		fmt.Fprintf(&message, "config validation failed for %s@%s", repo, tag)
+		for _, issue := range result.Errors {
+			fmt.Fprintf(&message, "\n  %s", issue.Field)
+			if issue.Code != "" {
+				fmt.Fprintf(&message, " [%s]", issue.Code)
+			}
+			fmt.Fprintf(&message, ": %s", humanVolumeMessage(issue.Message))
+		}
+		return nil, errors.New(message.String())
+	}
+	if result.Config == nil {
+		return nil, fmt.Errorf("config validation returned no configuration for %s@%s", repo, tag)
+	}
+	return result.Config.Volumes, nil
+}
+
+// requiredVolumeSlots returns the declared slots the controlplane refuses to
+// deploy without a disk: those with a key secret. Slots without one may stay
+// empty.
+func requiredVolumeSlots(slots []volumeSlot) []volumeSlot {
+	var required []volumeSlot
+	for _, s := range slots {
+		if s.KeySecret != "" {
+			required = append(required, s)
+		}
+	}
+	return required
+}
+
+// errVolumesRequired explains that the config needs a disk per declared slot
+// and lists the commands that create and attach one, so the user never ends
+// up with a container that exists but cannot run.
+func errVolumesRequired(name string, slots []volumeSlot, host string) error {
+	if host == "" {
+		host = "<HOST>"
+	}
+	names := make([]string, len(slots))
+	for i, s := range slots {
 		names[i] = fmt.Sprintf("%q", s.Name)
 	}
-	fmt.Println()
+	var b strings.Builder
 	if len(names) == 1 {
-		fmt.Printf("The config declares volume %s; attach one before starting:\n", names[0])
+		fmt.Fprintf(&b, "required mount %s has no disk; select an existing disk with --volume or create one:\n", names[0])
 	} else {
-		fmt.Printf("The config declares volumes %s; attach them before starting:\n", strings.Join(names, ", "))
+		fmt.Fprintf(&b, "required mounts %s have no disks; select existing disks with --volume or create them:\n", strings.Join(names, ", "))
 	}
-	for _, s := range c.VolumeSlots {
-		name := c.Name + "-" + s.Name
-		as := ""
-		if len(c.VolumeSlots) > 1 {
-			as = " --as " + s.Name
-		}
-		fmt.Printf("  tinfoil volume create %s --size <SIZE> --host %s\n", name, c.HostName)
-		fmt.Printf("  tinfoil volume attach %s %s%s\n", name, c.Name, as)
+	var volumeFlags []string
+	for _, s := range slots {
+		disk := name + "-" + s.Name
+		fmt.Fprintf(&b, "  tinfoil volume create %s --size <SIZE> --host %s\n", disk, host)
+		volumeFlags = append(volumeFlags, "--volume "+disk+":"+s.Name)
 	}
-	fmt.Printf("  tinfoil container start %s\n", c.Name)
+	fmt.Fprintf(&b, "  tinfoil container create %s ... %s", name, strings.Join(volumeFlags, " "))
+	fmt.Fprintln(&b)
+	printVolumeUnlockGuidance(&b, slots)
+	return fmt.Errorf("%s", b.String())
 }
 
 // errMessage is the controlplane's message when err came from it, else the
@@ -549,9 +637,21 @@ func printVolumeHint(c containerView) {
 func errMessage(err error) string {
 	var cp *cpError
 	if errors.As(err, &cp) && cp.Message != "" {
-		return cp.Message
+		return humanVolumeMessage(cp.Message)
 	}
-	return err.Error()
+	return humanVolumeMessage(err.Error())
+}
+
+var volumeMessageTerms = strings.NewReplacer(
+	"required slot ", "required mount ",
+	"config slot", "config mount",
+	"volume slot", "volume mount",
+	"this slot", "this mount",
+	"volume or slot", "volume or mount",
+)
+
+func humanVolumeMessage(message string) string {
+	return volumeMessageTerms.Replace(message)
 }
 
 func volumeContainerLabel(v volumeView) string {
