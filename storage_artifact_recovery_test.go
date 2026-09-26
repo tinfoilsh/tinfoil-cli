@@ -49,7 +49,7 @@ type readOnlyArtifactSnapshot struct {
 func makeStorageArtifactsReadOnly(t *testing.T, flags []string) (string, map[string]readOnlyArtifactSnapshot) {
 	t.Helper()
 	snapshots := map[string]readOnlyArtifactSnapshot{}
-	for _, path := range []string{flags[9], flags[11]} {
+	for _, path := range []string{storageTestFlag(t, flags, "--config-out"), storageTestFlag(t, flags, "--policy-out")} {
 		data, err := os.ReadFile(path)
 		if os.IsNotExist(err) {
 			snapshots[path] = readOnlyArtifactSnapshot{}
@@ -61,7 +61,7 @@ func makeStorageArtifactsReadOnly(t *testing.T, flags []string) (string, map[str
 		require.NoError(t, err)
 		snapshots[path] = readOnlyArtifactSnapshot{data: data, info: info}
 	}
-	dir := filepath.Dir(flags[9])
+	dir := filepath.Dir(storageTestFlag(t, flags, "--config-out"))
 	require.NoError(t, os.Chtimes(dir, time.Unix(0, 0), time.Unix(0, 0)))
 	require.NoError(t, os.Chmod(dir, storageReadOnlyDirMode))
 	t.Cleanup(func() { require.NoError(t, os.Chmod(dir, storageDirMode)) })
@@ -118,18 +118,20 @@ func TestStorageReadOnlyConflictingOrMissingArtifactsDoNotMutateReceipt(t *testi
 			f := prepareStorageArtifactRecovery(t)
 			before, err := os.ReadFile(f.receiptPath)
 			require.NoError(t, err)
+			configOut := storageTestFlag(t, f.flags, "--config-out")
+			policyOut := storageTestFlag(t, f.flags, "--policy-out")
 			switch variant {
 			case "different-config":
-				require.NoError(t, os.WriteFile(f.flags[9], []byte("different config\n"), storageFileMode))
+				require.NoError(t, os.WriteFile(configOut, []byte("different config\n"), storageFileMode))
 			case "different-policy":
-				require.NoError(t, os.WriteFile(f.flags[11], []byte("different policy\n"), storageFileMode))
+				require.NoError(t, os.WriteFile(policyOut, []byte("different policy\n"), storageFileMode))
 			case "missing-config-different-policy":
-				require.NoError(t, os.Remove(f.flags[9]))
-				require.NoError(t, os.WriteFile(f.flags[11], []byte("different policy\n"), storageFileMode))
+				require.NoError(t, os.Remove(configOut))
+				require.NoError(t, os.WriteFile(policyOut, []byte("different policy\n"), storageFileMode))
 			case "missing-config":
-				require.NoError(t, os.Remove(f.flags[9]))
+				require.NoError(t, os.Remove(configOut))
 			case "missing-policy":
-				require.NoError(t, os.Remove(f.flags[11]))
+				require.NoError(t, os.Remove(policyOut))
 			}
 			dir, snapshots := makeStorageArtifactsReadOnly(t, f.flags)
 			_, err = executeStorageCLI(t, fakeStorageFactory(f.aws, f.random), f.args...)
@@ -171,13 +173,14 @@ func TestStorageMatchingArtifactsStillRequireReceiptLock(t *testing.T) {
 
 func TestStorageMatchingReadOnlyOutputAllowsOtherWritableOutput(t *testing.T) {
 	f := prepareStorageArtifactRecovery(t)
-	f.flags[11] = filepath.Join(t.TempDir(), "new-policy.yml")
+	policyOut := filepath.Join(t.TempDir(), "new-policy.yml")
+	setStorageTestFlag(t, f.flags, "--policy-out", policyOut)
 	f.args = append([]string{"volume", "auto-unlock", "configure", testVolumeID, "--existing-secret", f.aws.secret.arn}, f.flags...)
 	dir, snapshots := makeStorageArtifactsReadOnly(t, f.flags)
 	_, err := executeStorageCLI(t, fakeStorageFactory(f.aws, f.random), f.args...)
 	require.NoError(t, err)
-	require.FileExists(t, f.flags[11])
-	delete(snapshots, f.flags[11])
+	require.FileExists(t, policyOut)
+	delete(snapshots, policyOut)
 	assertStorageArtifactsUntouched(t, dir, snapshots)
 	require.Zero(t, f.aws.creates)
 	require.Zero(t, f.random.calls)
