@@ -262,9 +262,9 @@ func storagePreflight(client *cpClient, o *storageArtifactOptions, existing bool
 			} else if !errors.Is(err, os.ErrNotExist) {
 				return p, nil, nil, err
 			}
-		}
-		if err := probeStorageDirectory(filepath.Dir(out)); err != nil {
-			return p, nil, nil, fmt.Errorf("artifact output directory is not writable: %w", err)
+			if err := probeStorageDirectory(filepath.Dir(out)); err != nil {
+				return p, nil, nil, fmt.Errorf("artifact output directory is not writable: %w", err)
+			}
 		}
 	}
 	dir, err := storageDirectory()
@@ -372,7 +372,7 @@ func configureVolumeStorage(cmd *cobra.Command, store *volumeKeyStore, v volumeV
 	if !fresh {
 		r.Phase = storagePhaseVerifying
 	}
-	if fresh || hasReceipt {
+	if fresh {
 		if err := writeStorageJSON(path, r, fresh); err != nil {
 			return err
 		}
@@ -387,12 +387,19 @@ func configureVolumeStorage(cmd *cobra.Command, store *volumeKeyStore, v volumeV
 		stored, err = store.read(cmd.Context(), o.ExistingSecret, &r)
 	}
 	if err != nil {
+		if !fresh && hasReceipt {
+			if saveErr := writeStorageJSON(path, r, false); saveErr != nil {
+				return errors.Join(err, fmt.Errorf("recording secret verification failure: %w", saveErr))
+			}
+		}
 		return err
 	}
 	r.SecretName, r.SecretARN, r.SecretVersion = stored.Name, stored.ARN, stored.Version
 	r.Phase = storagePhaseStored
-	if err := writeStorageJSON(path, r, false); err != nil {
-		return err
+	if fresh {
+		if err := writeStorageJSON(path, r, false); err != nil {
+			return err
+		}
 	}
 	secretPath, err := storagePolicyPath(p, stored.Name)
 	if err != nil {
@@ -401,6 +408,14 @@ func configureVolumeStorage(cmd *cobra.Command, store *volumeKeyStore, v volumeV
 	preparedPolicy, err := prepareVolumePolicy(policy, r, secretPath)
 	if err != nil {
 		return err
+	}
+	if !fresh {
+		if err := preflightStorageArtifacts([]storageArtifact{{path: o.ConfigOut, data: preparedConfig}, {path: o.PolicyOut, data: preparedPolicy}}); err != nil {
+			return err
+		}
+		if err := writeStorageJSON(path, r, false); err != nil {
+			return err
+		}
 	}
 	if err := writeStorageArtifact(o.ConfigOut, preparedConfig); err != nil {
 		return err
