@@ -331,8 +331,13 @@ func TestStorageUncertainAllocationDoesNotRetry(t *testing.T) {
 	f.allocationFails = true
 	configureStorageCLI(t)
 	args := append([]string{"volume", "create", "app-data", "--size", "30GiB", "--auto-unlock"}, storageCLIArtifactFlags(t)...)
-	_, err := executeStorageCLI(t, forbiddenStorageFactory(t), args...)
+	fake := &fakeStorageAWS{}
+	random := &rejectingRandom{}
+	_, err := executeStorageCLI(t, fakeStorageFactory(fake, random), args...)
 	require.ErrorContains(t, err, "inspect tinfoil volume list before retrying")
+	require.Empty(t, fake.secretIDs)
+	require.Zero(t, fake.creates)
+	require.Zero(t, random.calls)
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	require.Equal(t, 1, f.allocations)

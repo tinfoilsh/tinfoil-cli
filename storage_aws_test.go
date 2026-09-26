@@ -302,7 +302,7 @@ func TestStorageOfficialSDKWire(t *testing.T) {
 		req.URL.Scheme, req.URL.Host = target.Scheme, target.Host
 		return server.Client().Do(req)
 	})
-	store, err := volumeKeyStoreFromAWSConfig(aws.Config{Region: "us-east-2", Credentials: credentials.NewStaticCredentialsProvider("test-access", "test-secret", ""), Logger: logging.Nop{}, HTTPClient: transport, RetryMaxAttempts: 1})
+	store, err := volumeKeyStoreFromAWSConfig(context.Background(), aws.Config{Region: "us-east-2", Credentials: credentials.NewStaticCredentialsProvider("test-access", "test-secret", ""), Logger: logging.Nop{}, HTTPClient: transport, RetryMaxAttempts: 1})
 	require.NoError(t, err)
 	store.random = bytes.NewReader(storageTestKey)
 	stored, err := store.create(context.Background(), testStorageReceipt(), func() error { return nil })
@@ -320,6 +320,6 @@ type storageWireHTTP func(*http.Request) (*http.Response, error)
 func (f storageWireHTTP) Do(req *http.Request) (*http.Response, error) { return f(req) }
 
 func TestStorageRejectsCustomAWSEndpoints(t *testing.T) {
-	_, err := volumeKeyStoreFromAWSConfig(aws.Config{Region: "us-east-2", BaseEndpoint: aws.String("https://not-aws.example.com"), Credentials: credentials.NewStaticCredentialsProvider("test-access", "test-secret", "")})
+	_, err := volumeKeyStoreFromAWSConfig(context.Background(), aws.Config{Region: "us-east-2", BaseEndpoint: aws.String("https://not-aws.example.com"), Credentials: credentials.NewStaticCredentialsProvider("test-access", "test-secret", "")})
 	require.ErrorContains(t, err, "custom AWS service endpoints are unsupported")
 }

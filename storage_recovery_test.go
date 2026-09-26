@@ -103,6 +103,9 @@ func TestStorageCustodyRecordsAreExclusiveAndMalformedDataFailsClosed(t *testing
 	require.ErrorContains(t, err, "invalid storage metadata")
 	require.NotContains(t, err.Error(), storageTestEncoded)
 	args := append([]string{"volume", "auto-unlock", "configure", testVolumeID, "--existing-secret", r.SecretName}, storageCLIArtifactFlags(t)...)
-	_, err = executeStorageCLI(t, forbiddenStorageFactory(t), args...)
+	fake := &fakeStorageAWS{}
+	_, err = executeStorageCLI(t, fakeStorageFactory(fake, &rejectingRandom{}), args...)
 	require.ErrorContains(t, err, "invalid storage metadata")
+	require.Empty(t, fake.secretIDs)
+	require.Zero(t, fake.creates)
 }
