@@ -17,6 +17,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/secretsmanager"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -33,8 +34,10 @@ func newStorageCPFixture(t *testing.T) *storageCPFixture {
 	f := &storageCPFixture{}
 	f.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
-		require.NoError(t, err)
-		require.NotContains(t, string(body), storageTestEncoded)
+		if !assert.NoError(t, err) || !assert.NotContains(t, string(body), storageTestEncoded) {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
 		f.mu.Lock()
 		defer f.mu.Unlock()
 		f.requests = append(f.requests, r.Method+" "+r.URL.Path)
@@ -54,9 +57,10 @@ func newStorageCPFixture(t *testing.T) *storageCPFixture {
 		case "POST /api/volumes":
 			f.allocations++
 			var allocation map[string]any
-			require.NoError(t, json.Unmarshal(body, &allocation))
-			require.Len(t, allocation, 3)
-			require.Equal(t, "h1", allocation["host_id"])
+			if !assert.NoError(t, json.Unmarshal(body, &allocation)) || !assert.Len(t, allocation, 3) || !assert.Equal(t, "h1", allocation["host_id"]) {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
 			if f.allocationFails {
 				w.WriteHeader(http.StatusGatewayTimeout)
 				return

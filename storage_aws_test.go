@@ -20,6 +20,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/secretsmanager"
 	"github.com/aws/aws-sdk-go-v2/service/secretsmanager/types"
 	"github.com/aws/smithy-go/logging"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -264,22 +265,37 @@ func TestStorageOfficialSDKWire(t *testing.T) {
 		targets = append(targets, target)
 		mu.Unlock()
 		body, err := io.ReadAll(req.Body)
-		require.NoError(t, err)
-		require.Contains(t, req.Header.Get("Authorization"), "AWS4-HMAC-SHA256")
+		if !assert.NoError(t, err) || !assert.Contains(t, req.Header.Get("Authorization"), "AWS4-HMAC-SHA256") {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
 		w.Header().Set("Content-Type", "application/x-amz-json-1.1")
+		decode := func(in any) bool {
+			if !assert.NoError(t, json.Unmarshal(body, in)) {
+				w.WriteHeader(http.StatusBadRequest)
+				return false
+			}
+			return true
+		}
 		var result any
 		switch {
 		case strings.HasSuffix(target, ".DescribeSecret"):
 			var in secretsmanager.DescribeSecretInput
-			require.NoError(t, json.Unmarshal(body, &in))
+			if !decode(&in) {
+				return
+			}
 			result, err = fake.DescribeSecret(req.Context(), &in)
 		case strings.HasSuffix(target, ".CreateSecret"):
 			var in secretsmanager.CreateSecretInput
-			require.NoError(t, json.Unmarshal(body, &in))
+			if !decode(&in) {
+				return
+			}
 			result, err = fake.CreateSecret(req.Context(), &in)
 		case strings.HasSuffix(target, ".GetSecretValue"):
 			var in secretsmanager.GetSecretValueInput
-			require.NoError(t, json.Unmarshal(body, &in))
+			if !decode(&in) {
+				return
+			}
 			result, err = fake.GetSecretValue(req.Context(), &in)
 		default:
 			t.Errorf("unexpected write operation %s", target)
@@ -288,16 +304,18 @@ func TestStorageOfficialSDKWire(t *testing.T) {
 		}
 		if err != nil {
 			w.WriteHeader(http.StatusBadRequest)
-			require.NoError(t, json.NewEncoder(w).Encode(map[string]string{"__type": "ResourceNotFoundException", "message": "not found"}))
+			assert.NoError(t, json.NewEncoder(w).Encode(map[string]string{"__type": "ResourceNotFoundException", "message": "not found"}))
 			return
 		}
-		require.NoError(t, json.NewEncoder(w).Encode(result))
+		assert.NoError(t, json.NewEncoder(w).Encode(result))
 	}))
 	defer server.Close()
 	target, err := url.Parse(server.URL)
 	require.NoError(t, err)
 	transport := storageWireHTTP(func(req *http.Request) (*http.Response, error) {
-		require.Equal(t, "secretsmanager.us-east-2.amazonaws.com", req.URL.Host)
+		if !assert.Equal(t, "secretsmanager.us-east-2.amazonaws.com", req.URL.Host) {
+			return nil, errors.New("unexpected AWS endpoint")
+		}
 		req = req.Clone(req.Context())
 		req.URL.Scheme, req.URL.Host = target.Scheme, target.Host
 		return server.Client().Do(req)
