@@ -153,6 +153,9 @@ func newVolumeAutoUnlockCommand(factory storageStoreFactory) *cobra.Command {
 		if o.ExistingSecret == "" {
 			return fmt.Errorf("--existing-secret is required: existing volumes always reuse the original key, even when local configuration is missing")
 		}
+		if err := validateExistingSecretReference(o.ExistingSecret); err != nil {
+			return err
+		}
 		client, err := authedClient()
 		if err != nil {
 			return err
@@ -290,13 +293,18 @@ func runAutoUnlockVolumeCreate(cmd *cobra.Command, name string, factory storageS
 }
 
 func configureVolumeStorage(cmd *cobra.Command, factory storageStoreFactory, v volumeView, p storageProfile, o storageArtifactOptions, config, policy []byte, fresh bool) (resultErr error) {
-	r := storageReceipt{Version: storageSchemaVersion, Profile: p, VolumeID: strings.ToLower(v.ID), Mount: o.Mount, Tag: o.Tag, Domain: o.Domain, Generated: fresh, Phase: storagePhaseAllocated, SecretName: o.ExistingSecret}
+	if !fresh {
+		if err := validateExistingSecretReference(o.ExistingSecret); err != nil {
+			return err
+		}
+	}
+	r := storageReceipt{Version: storageSchemaVersion, Profile: p, VolumeID: strings.ToLower(v.ID), Mount: o.Mount, Tag: o.Tag, Domain: o.Domain, Generated: fresh, Phase: storagePhaseAllocated}
 	if fresh {
 		r.SecretName = volumeSecretName(p, r.VolumeID)
 	}
 	defer func() {
 		if resultErr != nil {
-			resultErr = fmt.Errorf("volume %s retained; auto-unlock phase %s: %w. Recover with tinfoil volume auto-unlock configure %s --project %s --mount %s --existing-secret %s and reviewed artifact/release flags; never recreate or format for recovery", v.ID, r.Phase, resultErr, shellQuote(v.ID), shellQuote(p.Scope.Repo), shellQuote(o.Mount), shellQuote(r.SecretName))
+			resultErr = fmt.Errorf("volume %s retained; auto-unlock phase %s: %w. Recover with tinfoil volume auto-unlock configure %s --project %s --mount %s --existing-secret %s and reviewed artifact/release flags; never recreate or format for recovery", v.ID, r.Phase, resultErr, shellQuote(v.ID), shellQuote(p.Scope.Repo), shellQuote(o.Mount), shellQuote(storageRecoveryReference(r)))
 		}
 	}()
 	if v.OrgID != "" && v.OrgID != p.Scope.OrgID {
@@ -312,6 +320,7 @@ func configureVolumeStorage(cmd *cobra.Command, factory storageStoreFactory, v v
 	}
 	defer unlock()
 	previous, err := loadStorageReceipt(p.Scope, r.VolumeID)
+	hasReceipt := err == nil
 	if err == nil {
 		if fresh {
 			return fmt.Errorf("allocated volume ID already has a custody receipt; refusing new key")
@@ -321,6 +330,9 @@ func configureVolumeStorage(cmd *cobra.Command, factory storageStoreFactory, v v
 		}
 		r = previous
 		r.Tag, r.Domain = o.Tag, o.Domain
+		if !r.Generated && (r.SecretARN == "" || r.SecretVersion == "") {
+			r.SecretName = ""
+		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
@@ -339,8 +351,10 @@ func configureVolumeStorage(cmd *cobra.Command, factory storageStoreFactory, v v
 	if !fresh {
 		r.Phase = storagePhaseVerifying
 	}
-	if err := writeStorageJSON(path, r, fresh); err != nil {
-		return err
+	if fresh || hasReceipt {
+		if err := writeStorageJSON(path, r, fresh); err != nil {
+			return err
+		}
 	}
 	store, err := factory(cmd.Context(), p)
 	if err != nil {
@@ -391,6 +405,16 @@ func configureVolumeStorage(cmd *cobra.Command, factory storageStoreFactory, v v
 		return err
 	}
 	return printStoragePrepared(cmd.OutOrStdout(), r)
+}
+
+func storageRecoveryReference(r storageReceipt) string {
+	if r.Generated {
+		return volumeSecretName(r.Profile, r.VolumeID)
+	}
+	if r.SecretARN != "" && r.SecretVersion != "" {
+		return r.SecretARN
+	}
+	return "<original-secret-name-or-arn>"
 }
 
 func printStoragePrepared(out io.Writer, r storageReceipt) error {

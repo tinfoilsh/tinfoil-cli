@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -79,8 +80,33 @@ func volumeSecretRef(id string) string {
 
 type storedVolumeKey struct{ Name, ARN, Version string }
 
+func validateExistingSecretReference(reference string) error {
+	candidate := strings.TrimSpace(reference)
+	if len(candidate) == base64.StdEncoding.EncodedLen(volumeKeyBytes) {
+		decoded, err := base64.StdEncoding.Strict().DecodeString(candidate)
+		defer clear(decoded)
+		if err == nil && len(decoded) == volumeKeyBytes && base64.StdEncoding.EncodeToString(decoded) == candidate {
+			return fmt.Errorf("--existing-secret looks like raw key material; provide the original AWS secret name or ARN, never its value")
+		}
+	}
+	if len(candidate) == hex.EncodedLen(volumeKeyBytes) {
+		decoded, err := hex.DecodeString(candidate)
+		defer clear(decoded)
+		if err == nil {
+			return fmt.Errorf("--existing-secret looks like raw key material; provide the original AWS secret name or ARN, never its value")
+		}
+	}
+	if reference == "" || candidate != reference {
+		return fmt.Errorf("--existing-secret requires an AWS secret name or ARN without surrounding whitespace")
+	}
+	return nil
+}
+
 // No secret-bearing value or provider error crosses this adapter's boundary.
 func (s *volumeKeyStore) read(ctx context.Context, reference string, provenance *storageReceipt) (storedVolumeKey, error) {
+	if err := validateExistingSecretReference(reference); err != nil {
+		return storedVolumeKey{}, err
+	}
 	desc, err := s.client.DescribeSecret(ctx, &secretsmanager.DescribeSecretInput{SecretId: aws.String(reference)})
 	if err != nil {
 		return storedVolumeKey{}, fmt.Errorf("AWS secret metadata read failed; verify the original reference and permissions")

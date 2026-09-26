@@ -37,6 +37,7 @@ type fakeStorageAWS struct {
 	secret         *fakeVolumeSecret
 	creates        int
 	gets           int
+	secretIDs      []string
 	describeErr    error
 	getErr         error
 	createErr      error
@@ -47,6 +48,7 @@ type fakeStorageAWS struct {
 func (f *fakeStorageAWS) DescribeSecret(_ context.Context, in *secretsmanager.DescribeSecretInput, _ ...func(*secretsmanager.Options)) (*secretsmanager.DescribeSecretOutput, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.secretIDs = append(f.secretIDs, aws.ToString(in.SecretId))
 	if f.describeErr != nil {
 		return nil, f.describeErr
 	}
@@ -60,6 +62,7 @@ func (f *fakeStorageAWS) DescribeSecret(_ context.Context, in *secretsmanager.De
 func (f *fakeStorageAWS) GetSecretValue(_ context.Context, in *secretsmanager.GetSecretValueInput, _ ...func(*secretsmanager.Options)) (*secretsmanager.GetSecretValueOutput, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.secretIDs = append(f.secretIDs, aws.ToString(in.SecretId))
 	f.gets++
 	if f.getErr != nil {
 		return nil, f.getErr
