@@ -47,6 +47,11 @@ Use a known deployment/custom domain if an instance does not yet exist.
 copy. Without it the output is a standalone fragment for manual review/merge,
 not a replacement for the keyserver's full policy. Outputs must be different
 from input files and cannot overwrite different existing contents.
+Setting `keyserver-url` selects private delivery for the workload's other
+measured secret references too. Those container/model secrets must already
+exist in the customer store and be mapped in the reviewed full policy; this
+feature provisions only the selected volume key. Missing mappings fail closed
+at boot rather than falling back to Tinfoil-managed secret custody.
 
 ## Measured configuration and policy
 
@@ -83,6 +88,9 @@ The keyserver must run with `BACKEND=aws`, the profile's `AWS_REGION`, and
 `<prefix>/volumes/<UUID>/key`. Explicit existing names must be under that
 prefix; an ARN is resolved to its actual name before deriving the policy
 path. With an empty prefix, the full secret name is the policy path.
+The CLI and keyserver must use the same customer AWS account and region.
+An explicit ARN is validated through a name lookup as well; cross-account
+ARNs that cannot resolve to that same secret by name are refused.
 Same repo/tag entries cannot authorize multiple domains on this keyserver.
 When merging a policy, reuse the one matching workload only if its exact
 domain matches; duplicate pins, missing domain, changed mappings, and
@@ -104,6 +112,17 @@ exactly `{"value":"<base64>"}`. No key values go to the controlplane, GitHub,
 config, policy, receipt, CLI output/logs, or command arguments. AWS SDK v2
 authentication is loaded only during an explicit provisioning command.
 Errors are sanitized; AWS request/response logging is disabled.
+Custom AWS service endpoint overrides are rejected; this is not a local
+Secrets Manager emulator provisioning path.
+
+The provisioning identity needs `secretsmanager:CreateSecret`,
+`secretsmanager:TagResource`, `secretsmanager:DescribeSecret`, and
+`secretsmanager:GetSecretValue` scoped to the customer prefix. Existing-only
+setup needs Describe/Get, not Create/Tag. The keyserver needs read-only
+`secretsmanager:GetSecretValue` for the selected secret ARNs. Existing secrets
+encrypted with a customer-managed KMS key also require `kms:Decrypt`.
+New secrets use AWS's default Secrets Manager encryption key; custom KMS key
+selection and IAM/keyserver infrastructure provisioning are outside this CLI.
 
 Writes use `CreateSecret`, never Put/Update/upsert. A deterministic per-volume
 name, volume UUID version token, and scope/volume provenance tags support
@@ -122,6 +141,20 @@ CLI config path (directory 0700, JSON files 0600). Profiles are scoped by
 normalized controlplane URL, authenticated organization ID, and canonical
 repository; receipts additionally bind the volume UUID. Login/logout does
 not rewrite this directory or extend the credential JSON schema.
+
+Schema version 1 uses `profile-<scope-sha256>.json` and
+`volume-<scope-sha256>-<volume-uuid>.json`. The scope hash is SHA-256 of the
+JSON object with `controlplane_url`, `org_id`, `repo` in that order. A profile
+contains `version`, `scope`, `keyserver_url`, `aws_region`, `aws_prefix`, and
+optional `aws_profile`/`domain`. A receipt contains `version`, `profile`,
+`volume_id`, `mount`, `key_secret`, `secret_name`, `secret_arn`,
+`secret_version`, `generated`, `phase`, `tag`, `domain`, `config_path`,
+`config_sha256`, `policy_path`, and `policy_sha256`. No values or credentials
+are part of either schema. Phases are `allocated`, `secret_create_attempted`,
+`verifying_existing_secret`, `secret_stored`, and `prepared`. A failed
+reconfiguration is incomplete, not a claim that the new release is ready.
+An interrupted process may leave a `.lock` beside a receipt; remove it only
+after verifying no setup command for that volume is running.
 
 ## Review, publish, authorize, deploy
 
