@@ -288,16 +288,51 @@ func readStorageInput(path string) ([]byte, error) {
 	return []byte(raw), nil
 }
 
-func writeStorageArtifact(path string, data []byte) error {
+type storageArtifact struct {
+	path string
+	data []byte
+}
+
+func preflightStorageArtifacts(artifacts []storageArtifact) error {
+	var missing []string
+	for _, artifact := range artifacts {
+		matches, err := storageArtifactMatches(artifact.path, artifact.data)
+		if err != nil {
+			return err
+		}
+		if !matches {
+			missing = append(missing, artifact.path)
+		}
+	}
+	for _, path := range missing {
+		if err := probeStorageDirectory(filepath.Dir(path)); err != nil {
+			return fmt.Errorf("artifact output directory is not writable: %w", err)
+		}
+	}
+	return nil
+}
+
+func storageArtifactMatches(path string, data []byte) (bool, error) {
 	old, err := os.ReadFile(path)
 	if err == nil {
 		if bytes.Equal(old, data) {
-			return nil
+			return true, nil
 		}
-		return fmt.Errorf("output already exists with different contents; choose a new output path")
+		return false, fmt.Errorf("output already exists with different contents; choose a new output path")
 	}
 	if !os.IsNotExist(err) {
-		return fmt.Errorf("cannot inspect output path")
+		return false, fmt.Errorf("cannot inspect output path")
+	}
+	return false, nil
+}
+
+func writeStorageArtifact(path string, data []byte) error {
+	matches, err := storageArtifactMatches(path, data)
+	if err != nil {
+		return err
+	}
+	if matches {
+		return nil
 	}
 	if err := writeStorageFile(path, data, true); err != nil {
 		return fmt.Errorf("writing prepared artifact: %w", err)

@@ -143,6 +143,14 @@ writes, and loads AWS configuration and credentials. These checks do not prove
 AWS write IAM permissions, reserve filesystem capacity, or guarantee that a
 later request succeeds. No dummy secret is created to test permissions.
 
+Existing-volume recovery first derives the exact config/policy bytes using a
+read-only lookup of the original key. Matching output files are reused without
+write probes or mode changes, even in read-only directories. Conflicting
+outputs are rejected before updating the receipt or writing either artifact;
+missing outputs still require writable parent directories. The separate
+metadata directory always requires locking and writes. New-volume creation
+still checks output-directory writes and AWS credentials before allocation.
+
 Writes use `CreateSecret`, never Put/Update/upsert. A deterministic per-volume
 name, volume UUID version token, and scope/volume provenance tags support
 read-only recovery after an uncertain create response. A durable receipt is
@@ -173,7 +181,8 @@ optional `aws_profile`/`domain`. A receipt contains `version`, `profile`,
 `config_sha256`, `policy_path`, and `policy_sha256`. No values or credentials
 are part of either schema. Phases are `allocated`, `secret_create_attempted`,
 `verifying_existing_secret`, `secret_stored`, and `prepared`. A failed
-reconfiguration is incomplete, not a claim that the new release is ready.
+secret verification marks reconfiguration incomplete; artifact conflicts leave
+the prior receipt unchanged and do not claim the new release is ready.
 An interrupted process may leave a `.lock` beside a receipt; remove it only
 after verifying no setup command for that volume is running.
 
