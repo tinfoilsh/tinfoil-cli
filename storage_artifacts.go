@@ -32,9 +32,6 @@ func (o storageArtifactOptions) validate(p storageProfile) error {
 	if o.Project == "" || o.Mount == "" || o.Tag == "" || o.ConfigFile == "" || o.ConfigOut == "" || o.PolicyOut == "" {
 		return fmt.Errorf("--project, --mount, --tag, --config-file, --config-out, and --policy-out are required")
 	}
-	if !plannedSecretName.MatchString(o.Mount) {
-		return fmt.Errorf("--mount must name a declared volume")
-	}
 	if !storageTagPattern.MatchString(o.Tag) || strings.Contains(o.Tag, "..") {
 		return fmt.Errorf("--tag must be an exact release tag, not a wildcard")
 	}
@@ -160,7 +157,7 @@ func prepareVolumeConfig(raw []byte, endpoint, mount, ref string, existing bool)
 	if err := ensureStorageString(root, "keyserver-url", endpoint); err != nil {
 		return nil, "", err
 	}
-	if debug := storageYAMLField(root, "debug"); debug != nil && (debug.Kind != yaml.ScalarNode || debug.Value != "false") {
+	if debug := storageYAMLField(root, "debug"); debug != nil && (debug.Kind != yaml.ScalarNode || debug.Tag != "!!bool" || !strings.EqualFold(debug.Value, "false")) {
 		return nil, "", fmt.Errorf("private auto-unlock requires debug: false")
 	}
 	volumes := storageYAMLField(root, "volumes")

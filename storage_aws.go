@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/base64"
@@ -111,6 +112,10 @@ func validateExistingSecretReference(reference string) error {
 
 // No secret-bearing value or provider error crosses this adapter's boundary.
 func (s *volumeKeyStore) read(ctx context.Context, reference string, provenance *storageReceipt) (storedVolumeKey, error) {
+	return s.readMatching(ctx, reference, provenance, nil)
+}
+
+func (s *volumeKeyStore) readMatching(ctx context.Context, reference string, provenance *storageReceipt, expectedKey []byte) (storedVolumeKey, error) {
 	if err := validateExistingSecretReference(reference); err != nil {
 		return storedVolumeKey{}, err
 	}
@@ -122,6 +127,9 @@ func (s *volumeKeyStore) read(ctx context.Context, reference string, provenance 
 		return storedVolumeKey{}, fmt.Errorf("volume secret must exist, have a stable identity, and have rotation disabled")
 	}
 	if provenance != nil {
+		if _, err := storagePolicyPath(provenance.Profile, aws.ToString(desc.Name)); err != nil {
+			return storedVolumeKey{}, err
+		}
 		tags := map[string]string{}
 		for _, tag := range desc.Tags {
 			tags[aws.ToString(tag.Key)] = aws.ToString(tag.Value)
@@ -149,20 +157,44 @@ func (s *volumeKeyStore) read(ctx context.Context, reference string, provenance 
 	if provenance != nil && (provenance.Generated && aws.ToString(result.VersionId) != provenance.VolumeID || provenance.SecretVersion != "" && aws.ToString(result.VersionId) != provenance.SecretVersion || provenance.SecretARN != "" && aws.ToString(result.ARN) != provenance.SecretARN) {
 		return storedVolumeKey{}, fmt.Errorf("original volume secret identity/version changed; refusing rotation")
 	}
-	var values map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(*result.SecretString), &values); err != nil || len(values) != 1 {
-		return storedVolumeKey{}, fmt.Errorf("volume secret must contain exactly one JSON string field named value")
-	}
-	var encoded string
-	if err := json.Unmarshal(values[storageSecretField], &encoded); err != nil {
-		return storedVolumeKey{}, fmt.Errorf("volume secret value must be a base64 string")
+	encoded, err := decodeVolumeSecretString(*result.SecretString)
+	if err != nil {
+		return storedVolumeKey{}, err
 	}
 	key, err := base64.StdEncoding.Strict().DecodeString(encoded)
 	defer clear(key)
 	if err != nil || len(key) != volumeKeyBytes || base64.StdEncoding.EncodeToString(key) != encoded {
 		return storedVolumeKey{}, fmt.Errorf("volume secret value must be canonical standard base64 encoding of 64 bytes")
 	}
+	if expectedKey != nil && !bytes.Equal(key, expectedKey) {
+		return storedVolumeKey{}, fmt.Errorf("stored volume key differs from this creation attempt; refusing reconciliation")
+	}
 	return storedVolumeKey{Name: aws.ToString(desc.Name), ARN: aws.ToString(desc.ARN), Version: aws.ToString(result.VersionId)}, nil
+}
+
+func decodeVolumeSecretString(raw string) (string, error) {
+	invalid := fmt.Errorf("volume secret must contain exactly one JSON string field named value")
+	decoder := json.NewDecoder(strings.NewReader(raw))
+	token, err := decoder.Token()
+	if err != nil || token != json.Delim('{') {
+		return "", invalid
+	}
+	token, err = decoder.Token()
+	if err != nil || token != storageSecretField {
+		return "", invalid
+	}
+	var encoded string
+	if err := decoder.Decode(&encoded); err != nil {
+		return "", invalid
+	}
+	token, err = decoder.Token()
+	if err != nil || token != json.Delim('}') {
+		return "", invalid
+	}
+	if _, err := decoder.Token(); err != io.EOF {
+		return "", invalid
+	}
+	return encoded, nil
 }
 
 func (s *volumeKeyStore) create(ctx context.Context, r storageReceipt, beforeGenerate func() error) (storedVolumeKey, error) {
@@ -199,7 +231,7 @@ func (s *volumeKeyStore) create(ctx context.Context, r storageReceipt, beforeGen
 	})
 	// Both a successful response and an uncertain response are reconciled by
 	// reading the original version; never resend a newly generated value.
-	stored, readErr := s.read(ctx, r.SecretName, &r)
+	stored, readErr := s.readMatching(ctx, r.SecretName, &r, key)
 	if readErr != nil {
 		if createErr != nil {
 			return storedVolumeKey{}, fmt.Errorf("AWS CreateSecret outcome is unconfirmed; retain the volume and recover by reading its deterministic secret (no rotation)")

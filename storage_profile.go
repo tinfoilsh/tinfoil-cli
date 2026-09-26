@@ -236,6 +236,13 @@ func validateStorageDomain(domain string) error {
 }
 
 func resolveStorageScope(client *cpClient, identifier string) (storageScope, error) {
+	u, err := url.Parse(client.baseURL)
+	if err != nil {
+		return storageScope{}, fmt.Errorf("invalid controlplane URL")
+	}
+	if u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" {
+		return storageScope{}, fmt.Errorf("storage controlplane URL must not contain credentials, query, or fragment")
+	}
 	var identity authContext
 	if _, err := client.do("GET", "/api/auth/context", nil, nil, &identity); err != nil {
 		return storageScope{}, err
@@ -261,10 +268,6 @@ func resolveStorageScope(client *cpClient, identifier string) (storageScope, err
 	}
 	if !response.Success {
 		return storageScope{}, fmt.Errorf("repository access was not confirmed")
-	}
-	u, err := url.Parse(client.baseURL)
-	if err != nil {
-		return storageScope{}, fmt.Errorf("invalid controlplane URL")
 	}
 	u.Host = strings.ToLower(u.Host)
 	u.Scheme = strings.ToLower(u.Scheme)

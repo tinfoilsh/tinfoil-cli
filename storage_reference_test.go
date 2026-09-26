@@ -81,6 +81,7 @@ func TestStorageReferenceReadBoundaryRejectsRawKeysButAcceptsNames(t *testing.T)
 	}
 	for _, reference := range []string{"customer/original-key", strings.Repeat("ab", 32)} {
 		r := testStorageReceipt()
+		r.Profile.AWSPrefix = ""
 		r.SecretName, r.Generated = reference, false
 		fake := &fakeStorageAWS{secret: testStoredSecret(r)}
 		fake.secret.tags = nil
