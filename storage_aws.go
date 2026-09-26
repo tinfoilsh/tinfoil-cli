@@ -114,12 +114,18 @@ func (s *volumeKeyStore) read(ctx context.Context, reference string, provenance 
 	if desc == nil || aws.ToString(desc.Name) == "" || aws.ToString(desc.ARN) == "" || desc.DeletedDate != nil || aws.ToBool(desc.RotationEnabled) {
 		return storedVolumeKey{}, fmt.Errorf("volume secret must exist, have a stable identity, and have rotation disabled")
 	}
-	if provenance != nil && provenance.Generated {
+	if provenance != nil {
 		tags := map[string]string{}
 		for _, tag := range desc.Tags {
 			tags[aws.ToString(tag.Key)] = aws.ToString(tag.Value)
 		}
-		if aws.ToString(desc.Name) != provenance.SecretName || tags[storageScopeTag] != provenance.Profile.Scope.key() || tags[storageVolumeTag] != provenance.VolumeID {
+		if volume, present := tags[storageVolumeTag]; present && volume != provenance.VolumeID {
+			return storedVolumeKey{}, fmt.Errorf("existing secret volume provenance does not match this volume; refusing import")
+		}
+		if scope, present := tags[storageScopeTag]; present && scope != provenance.Profile.Scope.key() {
+			return storedVolumeKey{}, fmt.Errorf("existing secret scope provenance does not match this project; refusing import")
+		}
+		if provenance.Generated && (aws.ToString(desc.Name) != provenance.SecretName || tags[storageScopeTag] != provenance.Profile.Scope.key() || tags[storageVolumeTag] != provenance.VolumeID) {
 			return storedVolumeKey{}, fmt.Errorf("existing secret provenance does not match this volume; refusing replacement")
 		}
 	}

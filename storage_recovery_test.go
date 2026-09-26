@@ -11,9 +11,11 @@ import (
 )
 
 func TestStorageFailedReleasePreparationCannotKeepConfiguredStatus(t *testing.T) {
-	newStorageCPFixture(t)
+	cp := newStorageCPFixture(t)
 	configureStorageCLI(t)
-	fake := &fakeStorageAWS{secret: testStoredSecret(testStorageReceipt())}
+	r := testStorageReceipt()
+	r.Profile.Scope.ControlplaneURL = cp.server.URL
+	fake := &fakeStorageAWS{secret: testStoredSecret(r)}
 	reject := &rejectingRandom{}
 	flags := storageCLIArtifactFlags(t)
 	args := append([]string{"volume", "auto-unlock", "configure", testVolumeID, "--existing-secret", fake.secret.name}, flags...)
