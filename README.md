@@ -313,6 +313,8 @@ tinfoil volume delete archive-data              # prompts; pass --yes to skip
 
 Volume names are not unique within an organization; when several volumes share a name, the commands ask for the volume ID.
 
+Auto-unlock provisioning supports **AWS Secrets Manager only**. Each new disk gets a unique `<prefix>/volumes/<volume-uuid>/key` reference; existing disks must reuse their original key, never another disk's key. Setup checks local writes and AWS credential loading before allocation, but cannot prove secret-write permissions without a write. A later failure retains the disk and reports recovery instructions rather than deleting, recreating, or rotating it.
+
 ## Sandboxes
 
 Sandboxes are user-owned confidential VMs with persistent encrypted disks.
