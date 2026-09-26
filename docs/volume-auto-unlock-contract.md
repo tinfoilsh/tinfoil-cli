@@ -118,8 +118,8 @@ exactly `{"value":"<base64>"}`. No key values go to the controlplane, GitHub,
 config, policy, receipt, CLI output/logs, or command arguments. AWS SDK v2
 authentication is loaded only during an explicit provisioning command.
 Errors are sanitized; AWS request/response logging is disabled.
-`--existing-secret` rejects recognizable 64-byte raw keys in canonical standard
-base64 or 128-character hex before requests or persistence. A genuine secret
+`--existing-secret` rejects recognizable 64-byte raw keys in standard or URL-safe
+base64 (padded or unpadded), or 128-character hex, before requests or persistence. A genuine secret
 name resembling those encodings can be selected by its full ARN. Unresolved
 input is neither saved nor echoed; a failed first import does not bind a
 receipt. Correct the reference and retry. Supplying a key as an argument may

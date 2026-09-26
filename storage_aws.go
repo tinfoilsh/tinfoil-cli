@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"unicode"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
@@ -90,10 +91,11 @@ type storedVolumeKey struct{ Name, ARN, Version string }
 
 func validateExistingSecretReference(reference string) error {
 	candidate := strings.TrimSpace(reference)
-	if len(candidate) == base64.StdEncoding.EncodedLen(volumeKeyBytes) {
-		decoded, err := base64.StdEncoding.Strict().DecodeString(candidate)
-		defer clear(decoded)
-		if err == nil && len(decoded) == volumeKeyBytes && base64.StdEncoding.EncodeToString(decoded) == candidate {
+	for _, encoding := range []*base64.Encoding{base64.StdEncoding, base64.RawStdEncoding, base64.URLEncoding, base64.RawURLEncoding} {
+		decoded, err := encoding.DecodeString(candidate)
+		isKey := err == nil && len(decoded) == volumeKeyBytes
+		clear(decoded)
+		if isKey {
 			return fmt.Errorf("--existing-secret looks like raw key material; provide the original AWS secret name or ARN, never its value")
 		}
 	}
@@ -104,8 +106,8 @@ func validateExistingSecretReference(reference string) error {
 			return fmt.Errorf("--existing-secret looks like raw key material; provide the original AWS secret name or ARN, never its value")
 		}
 	}
-	if reference == "" || candidate != reference {
-		return fmt.Errorf("--existing-secret requires an AWS secret name or ARN without surrounding whitespace")
+	if reference == "" || strings.IndexFunc(reference, unicode.IsSpace) >= 0 {
+		return fmt.Errorf("--existing-secret requires an AWS secret name or ARN without whitespace")
 	}
 	return nil
 }
