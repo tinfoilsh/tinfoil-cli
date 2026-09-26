@@ -133,6 +133,29 @@ func writeStorageJSON(path string, value any, exclusive bool) error {
 	return writeStorageFile(path, append(data, '\n'), exclusive)
 }
 
+func probeStorageDirectory(dir string) error {
+	f, err := os.CreateTemp(dir, ".storage-probe-*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(f.Name())
+	if err := f.Close(); err != nil {
+		return err
+	}
+	path := f.Name() + ".json"
+	defer os.Remove(path)
+	if err := writeStorageFile(path, []byte("{}\n"), true); err != nil {
+		return err
+	}
+	if err := writeStorageFile(path, []byte("{}\n"), false); err != nil {
+		return err
+	}
+	if err := os.Remove(path); err != nil {
+		return err
+	}
+	return os.Remove(f.Name())
+}
+
 // The temporary file is synced before publication; exclusive publication
 // prevents concurrent commands from replacing an existing custody record.
 func writeStorageFile(path string, data []byte, exclusive bool) error {

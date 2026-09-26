@@ -52,16 +52,23 @@ func newVolumeKeyStore(ctx context.Context, p storageProfile) (*volumeKeyStore, 
 	if err != nil {
 		return nil, fmt.Errorf("loading customer AWS configuration failed; check region/profile and credentials")
 	}
-	return volumeKeyStoreFromAWSConfig(cfg)
+	return volumeKeyStoreFromAWSConfig(ctx, cfg)
 }
 
-func volumeKeyStoreFromAWSConfig(cfg aws.Config) (*volumeKeyStore, error) {
+func volumeKeyStoreFromAWSConfig(ctx context.Context, cfg aws.Config) (*volumeKeyStore, error) {
 	client := secretsmanager.NewFromConfig(cfg, func(o *secretsmanager.Options) {
 		o.Logger = logging.Nop{}
 		o.ClientLogMode = 0
 	})
 	if client.Options().BaseEndpoint != nil {
 		return nil, fmt.Errorf("custom AWS service endpoints are unsupported for volume key custody; remove endpoint overrides")
+	}
+	if cfg.Credentials == nil {
+		return nil, fmt.Errorf("customer AWS credentials are not configured")
+	}
+	credentials, err := cfg.Credentials.Retrieve(ctx)
+	if err != nil || credentials.AccessKeyID == "" || credentials.SecretAccessKey == "" {
+		return nil, fmt.Errorf("loading customer AWS credentials failed; renew credentials or check the selected profile")
 	}
 	return &volumeKeyStore{client: client, random: rand.Reader}, nil
 }
