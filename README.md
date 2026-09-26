@@ -315,6 +315,8 @@ Volume names are not unique within an organization; when several volumes share a
 
 Auto-unlock provisioning supports **AWS Secrets Manager only**. Each new disk gets a unique `<prefix>/volumes/<volume-uuid>/key` reference; existing disks must reuse their original key, never another disk's key. Setup checks local writes and AWS credential loading before allocation, but cannot prove secret-write permissions without a write. A later failure retains the disk and reports recovery instructions rather than deleting, recreating, or rotating it.
 
+For the next release, run `volume auto-unlock configure` with the same disk and original secret ARN, the new `--tag`, the previous `--policy-file`, and fresh output paths. The prepared policy adds the new exact release approval while retaining the old one and reusing the same key; repeating it is idempotent. **The operator must explicitly remove obsolete approvals and reload the keyserver to revoke them.** No per-stop/deploy key generation or manual decrypt is required, and the CLI does not claim the external policy is loaded or the disk is unlocked.
+
 ## Sandboxes
 
 Sandboxes are user-owned confidential VMs with persistent encrypted disks.

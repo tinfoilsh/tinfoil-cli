@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -12,7 +13,10 @@ import (
 	"go.yaml.in/yaml/v3"
 )
 
-const storageYAMLIndent = 2
+const (
+	storageYAMLIndent           = 2
+	storageVolumeWorkloadPrefix = "volume-"
+)
 
 var storageTagPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/-]*$`)
 
@@ -197,6 +201,18 @@ func prepareVolumeConfig(raw []byte, endpoint, mount, ref string, existing bool)
 	return out, ref, err
 }
 
+func storageReleaseWorkloadName(r storageReceipt) (string, error) {
+	identity, err := json.Marshal(struct {
+		Repo   string `json:"repo"`
+		Tag    string `json:"tag"`
+		Domain string `json:"domain"`
+	}{Repo: r.Profile.Scope.Repo, Tag: r.Tag, Domain: r.Domain})
+	if err != nil {
+		return "", fmt.Errorf("encoding release policy identity: %w", err)
+	}
+	return storageVolumeWorkloadPrefix + r.VolumeID + "-" + storageHash(identity), nil
+}
+
 func prepareVolumePolicy(raw []byte, r storageReceipt, secretPath string) ([]byte, error) {
 	if !storageRepoPattern.MatchString(r.Profile.Scope.Repo) || !storageTagPattern.MatchString(r.Tag) || !plannedSecretName.MatchString(r.KeySecret) || !looksLikeUUID(r.VolumeID) || !storageNamePattern.MatchString(secretPath) {
 		return nil, fmt.Errorf("policy requires exact repository, release, volume, and secret identities")
@@ -252,9 +268,15 @@ func prepareVolumePolicy(raw []byte, r storageReceipt, secretPath string) ([]byt
 		}
 	}
 	if selected == nil {
-		name := "volume-" + r.VolumeID
+		name := storageVolumeWorkloadPrefix + r.VolumeID
 		if storageYAMLField(workloads, name) != nil {
-			return nil, fmt.Errorf("workload name already exists with another release; prepare a reviewed standalone fragment")
+			name, err = storageReleaseWorkloadName(r)
+			if err != nil {
+				return nil, err
+			}
+			if storageYAMLField(workloads, name) != nil {
+				return nil, fmt.Errorf("release-specific workload name already exists with a different approval; refusing to overwrite")
+			}
 		}
 		selected = &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
 		addStorageField(selected, "repo", storageScalar(r.Profile.Scope.Repo))

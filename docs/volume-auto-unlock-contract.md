@@ -103,6 +103,42 @@ domain matches; duplicate pins, missing domain, changed mappings, and
 wildcards are refused. Distinct deployment domains need distinct released
 config tags (or independently operated keyservers), not duplicate entries.
 
+### Preparing the next release
+
+Keep the same volume and original secret ARN. Prepare fresh outputs using the
+previous config/policy as inputs and the exact next release tag:
+
+```sh
+tinfoil volume auto-unlock configure VOLUME_ID \
+  --project owner/repo --mount data --existing-secret ORIGINAL_SECRET_ARN \
+  --tag v2.0.0 --domain app.example.com \
+  --config-file v1-config.yml --config-out v2-config.yml \
+  --policy-file v1-policy.yml --policy-out v2-policy.yml
+```
+
+An existing matching repo/tag/domain workload is reused, regardless of its
+name. Otherwise the CLI uses `volume-<UUID>` if that name is free. If another
+approval occupies it, the new name is `volume-<UUID>-<release-sha256>`.
+The suffix is the full 64-character lowercase SHA-256 of UTF-8 compact JSON
+with fields in `repo`, `tag`, `domain` order and no trailing newline, for example
+`{"repo":"owner/repo","tag":"v2.0.0","domain":"app.example.com"}`.
+This hash only names an entry; authorization still requires the exact pins.
+A conflicting derived name is refused, never overwritten or randomly renamed.
+
+The original key reference, AWS secret path/ARN, version, and provenance stay
+unchanged; this operation reads the original key and never creates or updates
+a secret. A new workload entry grants only the selected volume reference, not
+additional application secrets from another release. Existing mappings,
+comments, and older approvals are preserved. Repeating v2 preparation is
+idempotent and does not add another entry.
+
+**Adding v2 does not revoke v1.** After reviewing and publishing the new
+release and installing the reviewed policy, the operator must separately
+remove any obsolete workload approval and reload/restart the keyserver to
+revoke it. Do not delete or rotate the volume key. A stop/deploy on an already
+approved release needs no new key or policy preparation. The CLI still reports
+external policy loading and guest unlock as unobserved.
+
 ## Custody and failure recovery
 
 AWS Secrets Manager is the only provisioning backend in this version.
