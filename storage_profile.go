@@ -6,10 +6,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -208,8 +210,24 @@ func loadStorageProfile(scope storageScope) (storageProfile, error) {
 
 func (p storageProfile) validate() error {
 	u, err := url.Parse(p.KeyserverURL)
-	if err != nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.Path != "" && u.Path != "/" {
+	if err != nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.ForceQuery || strings.Contains(p.KeyserverURL, "#") || u.Path != "" && u.Path != "/" {
 		return fmt.Errorf("--keyserver-url must be an HTTPS origin without credentials, query, or path")
+	}
+	if strings.HasPrefix(u.Host, "[") {
+		address, err := netip.ParseAddr(u.Hostname())
+		if err != nil || !address.Is6() {
+			return fmt.Errorf("--keyserver-url has an invalid IPv6 host")
+		}
+	} else if strings.ContainsAny(u.Hostname(), "[]:") {
+		return fmt.Errorf("--keyserver-url has an invalid host")
+	}
+	if port := u.Port(); port != "" {
+		value, err := strconv.Atoi(port)
+		if err != nil || value < 1 || value > maxConnectionPort {
+			return fmt.Errorf("--keyserver-url has an invalid port")
+		}
+	} else if strings.HasSuffix(u.Host, ":") {
+		return fmt.Errorf("--keyserver-url has an invalid port")
 	}
 	if !storageRegionPattern.MatchString(p.AWSRegion) {
 		return fmt.Errorf("--aws-region must be an explicit AWS region")
