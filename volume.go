@@ -246,7 +246,7 @@ var volumeDeleteCmd = &cobra.Command{
 			return err
 		}
 		if v.ContainerID != "" {
-			return fmt.Errorf("volume %s is attached to %s; detach it first: tinfoil volume detach %s", v.Name, volumeContainerLabel(*v), args[0])
+			return fmt.Errorf("volume %s is attached to %s; detach it first: tinfoil volume detach %s", v.Name, volumeContainerLabel(*v), v.ID)
 		}
 		fmt.Fprintf(os.Stderr, "Deleting volume %s (%s on %s).\n", v.Name, formatSize(v.SizeBytes), v.HostName)
 		fmt.Fprintln(os.Stderr, "This permanently destroys the volume and its data.")
@@ -479,11 +479,11 @@ func attachRecovery(c *containerView, remaining []volumeRequest, volume string, 
 	for _, r := range remaining {
 		as := ""
 		if r.slot != "" {
-			as = " --as " + r.slot
+			as = " --as " + shellQuote(r.slot)
 		} else if len(c.VolumeSlots) > 1 {
 			as = " --as <mount name>"
 		}
-		fmt.Fprintf(&b, "\n  tinfoil volume attach %s %s%s", r.identifier, c.ID, as)
+		fmt.Fprintf(&b, "\n  tinfoil volume attach%s -- %s %s", as, shellQuote(r.identifier), shellQuote(c.ID))
 	}
 	fmt.Fprintf(&b, "\n  %s", deployRecoveryCommand(c))
 	return errors.New(b.String())
@@ -509,11 +509,11 @@ func withAttachHint(err error, c *containerView) error {
 	if len(c.VolumeSlots) > 1 {
 		if _, rest, ok := strings.Cut(msg, prefix+`"`); ok {
 			if slot, _, ok := strings.Cut(rest, `"`); ok {
-				as = " --as " + slot
+				as = " --as " + shellQuote(slot)
 			}
 		}
 	}
-	return fmt.Errorf("%w\nAttach one first: tinfoil volume attach <volume> %s%s", err, c.Name, as)
+	return fmt.Errorf("%w\nAttach one first: tinfoil volume attach <volume> %s%s", err, c.ID, as)
 }
 
 // loadContainerVolumes returns the volumes attached to c by declared slot,

@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os/exec"
 	"strings"
 	"testing"
 )
@@ -66,5 +67,64 @@ func TestDeployAttachRecoveryPreservesRequestedReleaseChoice(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestDeployAttachRecoveryPreservesVolumeArgument(t *testing.T) {
+	for _, name := range []string{"customer data", "équipe's data", "data$(printf injected)", "data;printf injected", "--help"} {
+		t.Run(name, func(t *testing.T) {
+			attachments := 0
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.Method + " " + r.URL.Path {
+				case "GET /api/containers/" + testContainerID:
+					json.NewEncoder(w).Encode(containerView{ID: testContainerID, Name: "app", Status: statusStopped, HostName: "inf13", HostID: "h1", VolumeSlots: []volumeSlot{{Name: "data"}}})
+				case "GET /api/volumes":
+					json.NewEncoder(w).Encode(volumeList{Volumes: []volumeView{{ID: testVolumeID, Name: name, HostName: "inf13", HostID: "h1"}}})
+				case "PUT /api/containers/" + testContainerID + "/volumes/data":
+					attachments++
+					w.WriteHeader(http.StatusConflict)
+					io.WriteString(w, `{"error":"volume is already in use"}`)
+				default:
+					t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+					w.WriteHeader(http.StatusBadRequest)
+				}
+			}))
+			defer server.Close()
+			configureContainerPromotionTest(t, server.URL)
+			_, err := captureTestStdout(func() error {
+				return executeLifecycleCLI(t, "container", "deploy", testContainerID, "--volume", name+":data", "--mark-latest=false")
+			})
+			if err == nil || attachments != 1 {
+				t.Fatalf("expected one failed attachment, got %d: %v", attachments, err)
+			}
+			var recovery string
+			for _, line := range strings.Split(err.Error(), "\n") {
+				if strings.HasPrefix(strings.TrimSpace(line), "tinfoil volume attach ") {
+					recovery = strings.TrimSpace(line)
+				}
+			}
+			if recovery == "" {
+				t.Fatal("missing attachment recovery command")
+			}
+			for _, shell := range []string{"sh", "bash", "zsh"} {
+				path, err := exec.LookPath(shell)
+				if err != nil {
+					t.Logf("%s is not installed", shell)
+					continue
+				}
+				script := `tinfoil() { printf '%s\n' "$#" "$@"; }; ` + recovery
+				out, err := exec.Command(path, "-c", script).CombinedOutput()
+				want := "7\nvolume\nattach\n--as\ndata\n--\n" + name + "\n" + testContainerID + "\n"
+				if err != nil || string(out) != want {
+					t.Errorf("%s changed recovery arguments: got %q, want %q: %v", shell, out, want, err)
+					continue
+				}
+				args := strings.Split(strings.TrimSuffix(string(out), "\n"), "\n")[1:]
+				_, err = captureTestStdout(func() error { return executeLifecycleCLI(t, args...) })
+				if err == nil || !strings.Contains(err.Error(), "volume is already in use") {
+					t.Errorf("%s recovery did not reach the original volume attachment: %v", shell, err)
+				}
+			}
+		})
 	}
 }

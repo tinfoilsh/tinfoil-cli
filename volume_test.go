@@ -232,7 +232,7 @@ func TestContainerCreateWithVolume(t *testing.T) {
 			volumes:      []string{"data-vol"},
 			attachStatus: http.StatusConflict,
 			wantErr: "created app (" + testContainerID + "), but follow-up failed: could not attach data-vol: stop the container before changing volume assignments. Successful attachments were kept; check container " + testContainerID + "'s state before retrying:\n" +
-				"  tinfoil volume attach data-vol " + testContainerID + "\n" +
+				"  tinfoil volume attach -- data-vol " + testContainerID + "\n" +
 				"  tinfoil container deploy " + testContainerID + ". The new container and any successful disk attachments were retained; inspect with: tinfoil container get " + testContainerID,
 			wantPaths: []string{
 				"POST /api/containers/validate",
@@ -444,7 +444,7 @@ func TestVolumeDeleteConfirmation(t *testing.T) {
 		wantOut    string
 		wantDelete bool
 	}{
-		{name: "attached volume is refused before the prompt", attached: true, yes: true, wantErr: "volume data-vol is attached to app; detach it first: tinfoil volume detach data-vol"},
+		{name: "attached volume is refused before the prompt", attached: true, yes: true, wantErr: "volume data-vol is attached to app; detach it first: tinfoil volume detach " + testVolumeID},
 		{name: "prompt cannot be answered without a terminal", wantErr: "deleting a volume requires interactive confirmation; pass --yes to skip the prompt"},
 		{name: "--yes deletes", yes: true, wantOut: "Deleted volume data-vol", wantDelete: true},
 	} {
