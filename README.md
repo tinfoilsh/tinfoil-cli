@@ -14,7 +14,13 @@ Or download a binary from the [Releases](https://github.com/tinfoilsh/tinfoil-cl
 
 ### Updating
 
-Re-run the install script to update to the latest release. The CLI checks for new releases at most once a day and prints a warning with the update command when one is available. Set `TINFOIL_NO_UPDATE_CHECK=1` to disable the check.
+Run `tinfoil update` to install the latest stable release, or `tinfoil update --check` to check fresh release metadata without downloading or changing any files. Neither requires login or an API key. Use `-o json` for machine-readable status. Equal or older releases are never installed.
+
+Self-update supports the published Linux and macOS architectures. It resolves the running executable (including symlinks), verifies the archive against the SHA-256 checksum from the same GitHub release, and replaces the executable with a single same-directory rename while preserving its ordinary permission bits. Checksums detect corruption but are not independent signatures: this trusts GitHub HTTPS and the release publisher. Downloads are bounded to 1 MiB each for metadata/checksums, 64 MiB compressed, 128 MiB expanded, and 96 MiB for the executable; each HTTP request has a two-minute timeout. Replacement is atomic on supported local Unix filesystems, not a guarantee of durability after power loss.
+
+The installation directory must permit replacement; the CLI never invokes sudo. If permission is denied, use the installer or an account with the appropriate permissions. Homebrew Cellar/Caskroom installations must be updated through the package manager. Source/dev builds with an unknown version must be rebuilt or installed using the installer. Older CLIs without `update` need the install script once first.
+
+The CLI also checks for new releases at most once a day and prints a warning. Set `TINFOIL_NO_UPDATE_CHECK=1` to disable only this passive check; explicit `tinfoil update` and `--check` still work.
 
 ## Proxy
 

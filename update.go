@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -17,7 +18,7 @@ const (
 	envNoUpdateCheck = "TINFOIL_NO_UPDATE_CHECK"
 
 	latestReleaseURL    = "https://api.github.com/repos/tinfoilsh/tinfoil-cli/releases/latest"
-	updateCommand       = "curl -fsSL https://github.com/tinfoilsh/tinfoil-cli/raw/main/install.sh | sh"
+	updateCommand       = "tinfoil update"
 	updateCacheFileName = "update-check.json"
 	updateCheckInterval = 24 * time.Hour
 	updateCheckTimeout  = 2 * time.Second
@@ -50,7 +51,7 @@ func newUpdateChecker() (*updateChecker, error) {
 		current:    version,
 		releaseURL: latestReleaseURL,
 		cachePath:  filepath.Join(filepath.Dir(cfgPath), updateCacheFileName),
-		http:       &http.Client{Timeout: updateCheckTimeout},
+		http:       updateHTTPClient(updateCheckTimeout),
 		now:        time.Now,
 	}, nil
 }
@@ -157,33 +158,11 @@ func (c *updateChecker) writeCache(cached updateCache) {
 }
 
 func (c *updateChecker) fetchLatestVersion() (string, error) {
-	req, err := http.NewRequest(http.MethodGet, c.releaseURL, nil)
+	release, err := fetchUpdateRelease(context.Background(), c.http, c.releaseURL, c.current)
 	if err != nil {
 		return "", err
 	}
-	req.Header.Set("Accept", "application/vnd.github+json")
-	req.Header.Set("User-Agent", controlplaneUserAgentPrefix+c.current)
-
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("unexpected status %d from %s", resp.StatusCode, c.releaseURL)
-	}
-
-	var release struct {
-		TagName string `json:"tag_name"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
-		return "", err
-	}
-	tag := strings.TrimPrefix(strings.TrimSpace(release.TagName), "v")
-	if tag == "" {
-		return "", fmt.Errorf("release from %s has no tag name", c.releaseURL)
-	}
-	return tag, nil
+	return strings.TrimPrefix(release.TagName, "v"), nil
 }
 
 // isNewerVersion compares two release versions such as "0.16.3". Anything that

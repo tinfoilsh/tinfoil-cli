@@ -41,7 +41,10 @@ func main() {
 		log.SetLevel(log.InfoLevel)
 	}
 
-	waitForUpdateCheck := startUpdateCheck()
+	waitForUpdateCheck := func() (string, bool) { return "", false }
+	if !isSelfUpdateCommand(rootCmd, os.Args[1:]) {
+		waitForUpdateCheck = startUpdateCheck()
+	}
 
 	err := rootCmd.Execute()
 
