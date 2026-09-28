@@ -52,6 +52,18 @@ const (
 	updateStatusInstalled = "installed"
 )
 
+const (
+	homebrewCellar        = "Cellar"
+	homebrewCaskroom      = "Caskroom"
+	homebrewReceipt       = "INSTALL_RECEIPT.json"
+	homebrewCaskMetadata  = ".metadata"
+	homebrewARM64Prefix   = "/opt/homebrew"
+	homebrewIntelPrefix   = "/usr/local"
+	homebrewLinuxPrefix   = "/home/linuxbrew/.linuxbrew"
+	homebrewHeadVersion   = "HEAD-"
+	homebrewLatestVersion = "latest"
+)
+
 type updateRelease struct {
 	TagName    string        `json:"tag_name"`
 	Draft      bool          `json:"draft"`
@@ -69,6 +81,8 @@ type selfUpdater struct {
 	http                  *http.Client
 	executable            func() (string, error)
 	validateExecutable    func(string) error
+	inspectExecutable     func(context.Context, string) (executableSnapshot, error)
+	chown                 func(*os.File, int, int) error
 	rename                func(string, string) error
 }
 
@@ -76,6 +90,7 @@ type selfUpdateResult struct {
 	Current string `json:"current_version"`
 	Latest  string `json:"latest_version"`
 	Status  string `json:"status"`
+	Path    string `json:"path,omitempty"`
 }
 
 func init() {
@@ -84,6 +99,7 @@ func init() {
 			current: version, goos: runtime.GOOS, goarch: runtime.GOARCH,
 			http: updateHTTPClient(updateTimeout), executable: os.Executable, rename: os.Rename,
 			validateExecutable: verifyRunningExecutable,
+			inspectExecutable:  snapshotExecutable, chown: (*os.File).Chown,
 		}
 	}))
 }
@@ -105,15 +121,22 @@ func newSelfUpdateCommand(newUpdater func() *selfUpdater) *cobra.Command {
 				return err
 			}
 			if output == "json" {
-				return json.NewEncoder(cmd.OutOrStdout()).Encode(result)
+				err = json.NewEncoder(cmd.OutOrStdout()).Encode(result)
+			} else {
+				switch result.Status {
+				case updateStatusInstalled:
+					_, err = fmt.Fprintf(cmd.OutOrStdout(), "Updated tinfoil from %s to %s.\n", result.Current, result.Latest)
+				case updateStatusAvailable:
+					_, err = fmt.Fprintf(cmd.OutOrStdout(), "Update available: %s -> %s. Run: %s\n", result.Current, result.Latest, updateCommand)
+				default:
+					_, err = fmt.Fprintf(cmd.OutOrStdout(), "tinfoil %s is up to date (latest stable: %s); no downgrade performed.\n", result.Current, result.Latest)
+				}
 			}
-			switch result.Status {
-			case updateStatusInstalled:
-				cmd.Printf("Updated tinfoil from %s to %s.\n", result.Current, result.Latest)
-			case updateStatusAvailable:
-				cmd.Printf("Update available: %s -> %s. Run: %s\n", result.Current, result.Latest, updateCommand)
-			default:
-				cmd.Printf("tinfoil %s is up to date (latest stable: %s); no downgrade performed.\n", result.Current, result.Latest)
+			if err != nil {
+				if result.Status == updateStatusInstalled {
+					return fmt.Errorf("tinfoil %s is installed at %s; writing result failed: %w", result.Latest, result.Path, err)
+				}
+				return fmt.Errorf("no executable was changed; writing result failed: %w", err)
 			}
 			return nil
 		},
@@ -157,7 +180,7 @@ func fetchUpdateRelease(ctx context.Context, client *http.Client, endpoint, curr
 	return release, nil
 }
 
-func fetchUpdateData(ctx context.Context, client *http.Client, endpoint, current string, limit int64) ([]byte, error) {
+func fetchUpdateData(ctx context.Context, client *http.Client, endpoint, current string, limit int64) (data []byte, err error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return nil, err
@@ -167,14 +190,18 @@ func fetchUpdateData(ctx context.Context, client *http.Client, endpoint, current
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			err = errors.Join(err, fmt.Errorf("closing update response: %w", closeErr))
+		}
+	}()
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("unexpected HTTP status %d", resp.StatusCode)
 	}
 	if resp.ContentLength > limit {
 		return nil, fmt.Errorf("download exceeds %d bytes", limit)
 	}
-	data, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
+	data, err = io.ReadAll(io.LimitReader(resp.Body, limit+1))
 	if err != nil {
 		return nil, err
 	}
@@ -261,6 +288,7 @@ func (u *selfUpdater) run(ctx context.Context, check bool) (selfUpdateResult, er
 		return result, fmt.Errorf("cannot replace %s: %w; use your installer or an account with permission to replace this executable", target, err)
 	}
 	result.Status = updateStatusInstalled
+	result.Path = target
 	return result, nil
 }
 
@@ -274,10 +302,14 @@ func (u *selfUpdater) snapshot(ctx context.Context) (string, executableSnapshot,
 	if err != nil {
 		return "", snapshot, fmt.Errorf("resolving running executable: %w", err)
 	}
-	if strings.Contains(target, "/Cellar/") || strings.Contains(target, "/Caskroom/") {
+	managed, err := homebrewManagedExecutable(target)
+	if err != nil {
+		return target, snapshot, err
+	}
+	if managed {
 		return target, snapshot, fmt.Errorf("%s is managed by Homebrew; update it with your package manager", target)
 	}
-	snapshot, err = snapshotExecutable(ctx, target)
+	snapshot, err = u.inspectExecutable(ctx, target)
 	if err != nil {
 		return target, snapshot, fmt.Errorf("inspecting %s: %w; use your installer or an account with permission to read this executable", target, err)
 	}
@@ -285,6 +317,39 @@ func (u *selfUpdater) snapshot(ctx context.Context) (string, executableSnapshot,
 		return target, snapshot, err
 	}
 	return target, snapshot, nil
+}
+
+func homebrewManagedExecutable(target string) (bool, error) {
+	for keg := filepath.Dir(target); keg != filepath.Dir(keg); keg = filepath.Dir(keg) {
+		rack := filepath.Dir(keg)
+		storage := filepath.Dir(rack)
+		kind := filepath.Base(storage)
+		if kind != homebrewCellar && kind != homebrewCaskroom {
+			continue
+		}
+		version := filepath.Base(keg)
+		switch filepath.Dir(storage) {
+		case homebrewARM64Prefix, homebrewIntelPrefix, homebrewLinuxPrefix:
+			if (version[0] >= '0' && version[0] <= '9') || strings.HasPrefix(version, homebrewHeadVersion) || version == homebrewLatestVersion {
+				return true, nil
+			}
+		}
+		metadata := filepath.Join(keg, homebrewReceipt)
+		if kind == homebrewCaskroom {
+			metadata = filepath.Join(rack, homebrewCaskMetadata, version)
+		}
+		info, err := os.Stat(metadata)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return false, fmt.Errorf("inspecting Homebrew metadata at %s: %w", metadata, err)
+		}
+		if (kind == homebrewCellar && info.Mode().IsRegular()) || (kind == homebrewCaskroom && info.IsDir()) {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func verifyRunningExecutable(target string) error {
@@ -334,8 +399,21 @@ func archiveChecksum(data []byte, name string) ([sha256.Size]byte, error) {
 }
 
 type executableSnapshot struct {
-	info os.FileInfo
-	hash [sha256.Size]byte
+	info  os.FileInfo
+	hash  [sha256.Size]byte
+	owner executableOwner
+}
+
+type executableOwner struct {
+	uid, gid uint32
+}
+
+func updateFileOwner(info os.FileInfo) (executableOwner, error) {
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return executableOwner{}, errors.New("executable ownership is unavailable")
+	}
+	return executableOwner{uid: stat.Uid, gid: stat.Gid}, nil
 }
 
 func snapshotExecutable(ctx context.Context, target string) (snapshot executableSnapshot, err error) {
@@ -345,6 +423,10 @@ func snapshotExecutable(ctx context.Context, target string) (snapshot executable
 	}
 	if !info.Mode().IsRegular() || info.Mode()&(os.ModeSetuid|os.ModeSetgid|os.ModeSticky) != 0 || info.Mode().Perm()&updateExecutableBits == 0 {
 		return snapshot, errors.New("target must be a regular executable without special permission bits")
+	}
+	snapshot.owner, err = updateFileOwner(info)
+	if err != nil {
+		return snapshot, err
 	}
 	f, err := os.Open(target)
 	if err != nil {
@@ -414,6 +496,9 @@ func (u *selfUpdater) install(ctx context.Context, target string, original execu
 	if err := extractUpdate(ctx, archive, temp, updateExpandedLimit); err != nil {
 		return fmt.Errorf("extracting update: %w", err)
 	}
+	if err := u.preserveOwner(temp, original.owner); err != nil {
+		return err
+	}
 	if err := temp.Chmod(original.info.Mode().Perm()); err != nil {
 		return err
 	}
@@ -425,11 +510,11 @@ func (u *selfUpdater) install(ctx context.Context, target string, original execu
 	if err != nil {
 		return err
 	}
-	current, err := snapshotExecutable(ctx, target)
+	current, err := u.inspectExecutable(ctx, target)
 	if err != nil {
 		return err
 	}
-	if !os.SameFile(original.info, current.info) || original.hash != current.hash || original.info.Mode() != current.info.Mode() {
+	if !os.SameFile(original.info, current.info) || original.hash != current.hash || original.info.Mode() != current.info.Mode() || original.owner != current.owner {
 		return errors.New("executable changed during update; retry from the installed CLI")
 	}
 	if err := ctx.Err(); err != nil {
@@ -439,6 +524,23 @@ func (u *selfUpdater) install(ctx context.Context, target string, original execu
 		return err
 	}
 	installed = true
+	return nil
+}
+
+func (u *selfUpdater) preserveOwner(temp *os.File, owner executableOwner) error {
+	info, err := temp.Stat()
+	if err != nil {
+		return err
+	}
+	current, err := updateFileOwner(info)
+	if err != nil {
+		return err
+	}
+	if current != owner {
+		if err := u.chown(temp, int(owner.uid), int(owner.gid)); err != nil {
+			return fmt.Errorf("preserving executable ownership (uid %d, gid %d): %w", owner.uid, owner.gid, err)
+		}
+	}
 	return nil
 }
 

@@ -40,7 +40,7 @@ type updateTestTransport struct {
 }
 
 func (t updateTestTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	if req.URL.Scheme != "https" || (req.URL.Host != "api.github.com" && req.URL.Host != "github.com") {
+	if req.URL.Scheme != "https" || (req.URL.Host != "api.github.com" && req.URL.Host != "github.com" && req.URL.Host != "release-assets.githubusercontent.com") {
 		return nil, fmt.Errorf("unexpected public update URL %s", req.URL)
 	}
 	clone := req.Clone(req.Context())
@@ -129,6 +129,7 @@ func newSelfUpdateFixture(t *testing.T) *selfUpdateFixture {
 		current: "0.18.9", goos: "linux", goarch: "amd64", http: client,
 		executable: func() (string, error) { return f.target, nil }, rename: os.Rename,
 		validateExecutable: func(string) error { return nil },
+		inspectExecutable:  snapshotExecutable, chown: (*os.File).Chown,
 	}
 	return f
 }
@@ -161,7 +162,9 @@ func TestSelfUpdateInstallsVerifiedArchive(t *testing.T) {
 	require.NoError(t, err)
 	result, err := f.u.run(context.Background(), false)
 	require.NoError(t, err)
-	require.Equal(t, selfUpdateResult{Current: "0.18.9", Latest: testUpdateVersion, Status: updateStatusInstalled}, result)
+	resolved, err := filepath.EvalSymlinks(f.target)
+	require.NoError(t, err)
+	require.Equal(t, selfUpdateResult{Current: "0.18.9", Latest: testUpdateVersion, Status: updateStatusInstalled, Path: resolved}, result)
 	f.assertTarget(t, testUpdatedCLI)
 	after, err := os.Stat(f.target)
 	require.NoError(t, err)
@@ -446,10 +449,19 @@ func TestSelfUpdateResolvesSymlinksAndRejectsManagedInstalls(t *testing.T) {
 	for _, component := range []string{"Cellar", "Caskroom"} {
 		t.Run(component, func(t *testing.T) {
 			f := newSelfUpdateFixture(t)
-			target := filepath.Join(t.TempDir(), component, updateBinaryName)
+			rack := filepath.Join(t.TempDir(), component, updateBinaryName)
+			keg := filepath.Join(rack, "0.18.9")
+			target := filepath.Join(keg, "bin", updateBinaryName)
 			require.NoError(t, os.MkdirAll(filepath.Dir(target), 0o700))
 			require.NoError(t, os.WriteFile(target, []byte(testOriginalCLI), testCLIFileMode))
-			f.u.executable = func() (string, error) { return target, nil }
+			if component == "Cellar" {
+				require.NoError(t, os.WriteFile(filepath.Join(keg, "INSTALL_RECEIPT.json"), []byte(`{"homebrew_version":"5.0.0"}`), 0o600))
+			} else {
+				require.NoError(t, os.MkdirAll(filepath.Join(rack, ".metadata", "0.18.9"), 0o700))
+			}
+			link := filepath.Join(t.TempDir(), updateBinaryName)
+			require.NoError(t, os.Symlink(target, link))
+			f.u.executable = func() (string, error) { return link, nil }
 			_, err := f.u.run(context.Background(), false)
 			require.ErrorContains(t, err, "package manager")
 			f.assertTarget(t, testOriginalCLI)
