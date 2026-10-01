@@ -126,6 +126,15 @@ var volumeCreateCmd = &cobra.Command{
 	Short: "Create an empty volume on a host",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
+		autoUnlock, _ := cmd.Flags().GetBool("auto-unlock")
+		if autoUnlock {
+			return runAutoUnlockVolumeCreate(cmd, args[0], volumeStorageFactory)
+		}
+		for _, flag := range []string{"project", "mount", "tag", "domain", "config-file", "config-out", "policy-file", "policy-out"} {
+			if cmd.Flags().Changed(flag) {
+				return fmt.Errorf("--%s requires --auto-unlock", flag)
+			}
+		}
 		size, err := parseSize(volumeCreateSize)
 		if err != nil {
 			return fmt.Errorf("--size: %w", err)

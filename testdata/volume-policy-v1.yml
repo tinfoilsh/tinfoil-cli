@@ -1,0 +1,9 @@
+workloads:
+  volume-0f0e0d0c-0b0a-4908-8706-050403020100:
+    repo: owner/repo
+    tag: v1.0.0
+    domain: app.example.com
+    secrets:
+      VOLUME_0F0E0D0C_0B0A_4908_8706_050403020100_KEY:
+        path: volumes/0f0e0d0c-0b0a-4908-8706-050403020100/key
+        field: value
