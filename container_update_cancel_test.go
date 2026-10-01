@@ -18,19 +18,18 @@ func TestContainerUpdateCancelRollbackLatest(t *testing.T) {
 		containerID   = "61bd4a3e-5b48-4320-9215-0c7a7f974979"
 		containerName = "app"
 		cancelPath    = "/api/containers/" + containerID + "/update/cancel"
-		plainOutput   = "Cancelled in-progress update on app\n"
+		plainOutput   = "Canceled update on app; v1.2.3 keeps running.\n"
 		rollbackBody  = `{"rollback_latest":true}`
 		unconfirmed   = "update cancellation may have completed, but the controlplane did not confirm latest release restoration"
 	)
 	t.Setenv(envAdminKey, "admin_test")
 	t.Setenv(envConfigPath, filepath.Join(t.TempDir(), "missing-config.json"))
-	flag := containerUpdateCancelCmd.Flags().Lookup("rollback-latest")
+	flag := containerCancelCmd.Flags().Lookup("rollback-latest")
 	previousValue, previousChanged := cancelRollbackLatest, flag.Changed
-	previousDebugFilter, previousStderr := useDebugFilter, rootCmd.ErrOrStderr()
+	previousStderr := rootCmd.ErrOrStderr()
 	rootCmd.SetErr(io.Discard)
 	t.Cleanup(func() {
 		cancelRollbackLatest, flag.Changed = previousValue, previousChanged
-		useDebugFilter = previousDebugFilter
 		rootCmd.SetArgs(nil)
 		rootCmd.SetErr(previousStderr)
 	})
@@ -146,7 +145,7 @@ func TestContainerUpdateCancelRollbackLatest(t *testing.T) {
 			defer server.Close()
 			t.Setenv(envCPURL, server.URL)
 
-			rootCmd.SetArgs(append([]string{"container", "update", "cancel"}, tt.args...))
+			rootCmd.SetArgs(append([]string{"container", "cancel"}, tt.args...))
 			output, err := captureTestStdout(rootCmd.Execute)
 			if tt.wantErr != "" {
 				require.ErrorContains(t, err, tt.wantErr)

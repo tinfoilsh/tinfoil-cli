@@ -92,11 +92,11 @@ func init() {
 		sandboxStartCmd,
 		sandboxRestartCmd,
 		sandboxStopCmd,
-		sandboxDestroyCmd,
-		sandboxAcceptCmd,
+		sandboxDeleteCmd,
+		sandboxEnrollCmd,
 		sandboxSSHCmd,
 	)
-	sandboxDestroyCmd.Flags().BoolVar(&sandboxYes, "yes", false, "Skip the confirmation prompt")
+	sandboxDeleteCmd.Flags().BoolVar(&sandboxYes, "yes", false, "Skip the confirmation prompt")
 	sandboxSSHCmd.Flags().BoolVar(&sandboxSSHStart, "start", false, "Start the sandbox first if it is stopped")
 	sandboxSSHCmd.Flags().BoolVar(&sandboxSSHStop, "stop", false, "Stop the sandbox once the session ends")
 
@@ -186,20 +186,19 @@ var sandboxStopCmd = &cobra.Command{
 	},
 }
 
-var sandboxDestroyCmd = &cobra.Command{
-	Use:     "destroy [name]",
-	Aliases: []string{"delete", "rm"},
-	Short:   "Destroy a sandbox and erase its workspace",
-	Args:    cobra.ExactArgs(1),
+var sandboxDeleteCmd = &cobra.Command{
+	Use:   "delete [name]",
+	Short: "Delete a sandbox and erase its workspace",
+	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		name, err := sandboxName(args[0])
 		if err != nil {
 			return err
 		}
-		fmt.Fprintf(os.Stderr, "Destroying %s erases the encrypted disk behind this workspace.\n", name)
+		fmt.Fprintf(os.Stderr, "Deleting %s erases the encrypted disk behind this workspace.\n", name)
 		fmt.Fprintln(os.Stderr, "Everything on it is lost for good and the name becomes free to reuse.")
 		fmt.Fprintln(os.Stderr)
-		if err := confirmYes(sandboxYes, "destroying a sandbox"); err != nil {
+		if err := confirmYes(sandboxYes, "sandbox delete"); err != nil {
 			return err
 		}
 		client, err := authedClient()
@@ -213,13 +212,13 @@ var sandboxDestroyCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		fmt.Printf("Destroyed %s. The keys in %s open nothing now and can be deleted.\n", name, dir)
+		fmt.Printf("Deleted %s. The keys in %s open nothing now and can be deleted.\n", name, dir)
 		return nil
 	},
 }
 
-var sandboxAcceptCmd = &cobra.Command{
-	Use:   "accept [name]",
+var sandboxEnrollCmd = &cobra.Command{
+	Use:   "enroll [name]",
 	Short: "Enroll this machine's keys into a sandbox with a permit",
 	Long: `Spend a permit that was minted somewhere else, such as by the dashboard.
 
@@ -288,7 +287,7 @@ including anything another session left behind.`,
 		}
 		keyPath := filepath.Join(dir, sandboxSSHKeyName)
 		if _, err := os.Stat(keyPath); err != nil {
-			return fmt.Errorf("no SSH key for %s in %s: enroll one with `tinfoil sandbox accept %s`", name, dir, name)
+			return fmt.Errorf("no SSH key for %s in %s: enroll one with `tinfoil sandbox enroll %s`", name, dir, name)
 		}
 
 		options, command := splitSSHArgs(sshArgs)
@@ -442,7 +441,7 @@ func loadDiskKey(name string) ([]byte, error) {
 	path := filepath.Join(dir, sandboxDiskKeyName)
 	saved, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
-		return nil, fmt.Errorf("no disk key for %s in %s: enroll one with `tinfoil sandbox accept %s`", name, dir, name)
+		return nil, fmt.Errorf("no disk key for %s in %s: enroll one with `tinfoil sandbox enroll %s`", name, dir, name)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("reading %s: %w", path, err)
