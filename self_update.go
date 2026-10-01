@@ -195,6 +195,9 @@ func fetchUpdateData(ctx context.Context, client *http.Client, endpoint, current
 			err = errors.Join(err, fmt.Errorf("closing update response: %w", closeErr))
 		}
 	}()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("unexpected HTTP status %d", resp.StatusCode)
 	}
@@ -203,6 +206,9 @@ func fetchUpdateData(ctx context.Context, client *http.Client, endpoint, current
 	}
 	data, err = io.ReadAll(io.LimitReader(resp.Body, limit+1))
 	if err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	if int64(len(data)) > limit {

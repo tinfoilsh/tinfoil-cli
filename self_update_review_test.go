@@ -215,6 +215,62 @@ type selfUpdateRoundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f selfUpdateRoundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
 
+type selfUpdateCancelingBody struct {
+	io.ReadCloser
+	cancel context.CancelFunc
+}
+
+func (b selfUpdateCancelingBody) Read(p []byte) (int, error) {
+	n, err := b.ReadCloser.Read(p)
+	if err == io.EOF {
+		b.cancel()
+	}
+	return n, err
+}
+
+func TestFetchUpdateDataRejectsCanceledCompletedResponse(t *testing.T) {
+	for _, stage := range []string{"headers", "body"} {
+		t.Run(stage, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			body := &selfUpdateClosingBody{ReadCloser: io.NopCloser(strings.NewReader(testUpdatedCLI))}
+			client := updateHTTPClient(updateTimeout)
+			client.Transport = selfUpdateRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+				var responseBody io.ReadCloser = body
+				if stage == "headers" {
+					cancel()
+				} else {
+					responseBody = selfUpdateCancelingBody{ReadCloser: body, cancel: cancel}
+				}
+				return &http.Response{StatusCode: http.StatusOK, Body: responseBody, Header: make(http.Header)}, nil
+			})
+			data, err := fetchUpdateData(ctx, client, latestReleaseURL, testUpdateVersion, updateMetadataLimit)
+			require.ErrorIs(t, err, context.Canceled)
+			require.Nil(t, data)
+			require.True(t, body.closed)
+		})
+	}
+}
+
+func TestSelfUpdateCheckRejectsCancellationAtResponseEOF(t *testing.T) {
+	f := newSelfUpdateFixture(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	transport := f.u.http.Transport
+	f.u.http.Transport = selfUpdateRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		resp, err := transport.RoundTrip(req)
+		if err == nil {
+			resp.Body = selfUpdateCancelingBody{ReadCloser: resp.Body, cancel: cancel}
+		}
+		return resp, err
+	})
+	result, err := f.u.run(ctx, true)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Empty(t, result.Status)
+	require.Equal(t, 1, f.requestCount())
+	f.assertTarget(t, testOriginalCLI)
+}
+
 func TestSelfUpdateHTTPSRedirectToCDN(t *testing.T) {
 	f := newSelfUpdateFixture(t)
 	f.intercept = func(w http.ResponseWriter, r *http.Request) bool {
