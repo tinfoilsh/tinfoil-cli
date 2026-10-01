@@ -135,6 +135,7 @@ tinfoil container deploy my-db
 # Move a volume between containers
 tinfoil container stop my-db
 tinfoil volume detach my-db-data
+tinfoil container stop my-other-db
 tinfoil volume attach my-db-data my-other-db
 
 # Rename or delete (delete erases the data and requires the volume to be detached)
