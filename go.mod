@@ -12,7 +12,7 @@ require (
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/pflag v1.0.10
 	github.com/stretchr/testify v1.11.1
-	github.com/tinfoilsh/tinfoil-go v0.17.0-rc.1.0.20261009012920-31c57af7d7b4
+	github.com/tinfoilsh/tinfoil-go v0.17.0-rc.2
 	go.yaml.in/yaml/v3 v3.0.4
 	golang.org/x/crypto v0.57.0
 	golang.org/x/mod v0.41.0
