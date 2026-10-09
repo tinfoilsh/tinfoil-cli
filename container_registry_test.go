@@ -76,6 +76,7 @@ func TestCreateRejectsInvalidSourceSelection(t *testing.T) {
 	}{
 		{[]string{"--source", "unknown", "--revision", "v1"}, "--source must be"},
 		{[]string{"--source", "registry", "--tag", "v1"}, "use --revision"},
+		{[]string{"--source", "registry", "--revision", "v1", "--replace", testContainerID}, "registry configs do not support --replace"},
 		{[]string{"--source", "registry"}, "at least one of the flags"},
 		{[]string{"--tag", "v1", "--revision", "v2"}, "none of the others can be"},
 	} {

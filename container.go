@@ -298,8 +298,9 @@ var containerCreateCmd = &cobra.Command{
   tinfoil container create app --source registry --repo org/project --revision v1.2.3
 
 Registry revisions also accept sha256:<config digest>. The organization must
-have registry access enabled. A new registry revision requires a new container
-or --replace; deploy without revision flags restarts the saved config.`,
+have registry access enabled. Registry configs do not support --replace.
+A new revision requires a new container; deploy without revision flags
+restarts the saved config.`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if createSource != containerSourceGitHub && createSource != containerSourceRegistry {
@@ -307,6 +308,9 @@ or --replace; deploy without revision flags restarts the saved config.`,
 		}
 		if createSource == containerSourceRegistry && createTag != "" {
 			return fmt.Errorf("use --revision instead of --tag for registry configs")
+		}
+		if createSource == containerSourceRegistry && createReplaceID != "" {
+			return fmt.Errorf("registry configs do not support --replace; create a new container before removing the old one")
 		}
 		revision := createRevision
 		if revision == "" {
