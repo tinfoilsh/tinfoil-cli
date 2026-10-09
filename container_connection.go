@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/tinfoilsh/tinfoil-go/verifier/provenance"
+	"github.com/tinfoilsh/tinfoil-go/verify"
 )
 
 const (
@@ -61,7 +61,7 @@ func containerConnection(c containerView, review bool, sourceOverride string) (v
 		return target, fmt.Errorf("review release does not match the current candidate; refresh with: tinfoil container get %s", shellQuote(c.ID))
 	}
 	if sourceOverride != "" {
-		ownerRepo, tag, _, err := provenance.ParseReference(sourceOverride)
+		ownerRepo, tag, _, err := verify.ParseReference(sourceOverride)
 		if err != nil {
 			return target, fmt.Errorf("--repo: %w", err)
 		}
@@ -91,7 +91,7 @@ func parseConnectionDescriptor(descriptor connectionDescriptor) (verifiedConnect
 	}
 	target.host = u.Host
 	target.source = descriptor.Repo + "@" + descriptor.Tag
-	parsedRepo, parsedTag, digest, err := provenance.ParseReference(target.source)
+	parsedRepo, parsedTag, digest, err := verify.ParseReference(target.source)
 	if err != nil || parsedRepo != descriptor.Repo || parsedTag != descriptor.Tag || parsedTag == "" || digest != "" {
 		return target, fmt.Errorf("invalid expected repository/tag %q", target.source)
 	}
