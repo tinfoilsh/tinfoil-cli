@@ -8,9 +8,9 @@ import (
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 
-	"github.com/tinfoilsh/tinfoil-go/verifier/client"
-	"github.com/tinfoilsh/tinfoil-go/verifier/envelope"
-	"github.com/tinfoilsh/tinfoil-go/verifier/measurement"
+	"github.com/tinfoilsh/tinfoil-go/document"
+	"github.com/tinfoilsh/tinfoil-go/enclave"
+	"github.com/tinfoilsh/tinfoil-go/verify/measurement"
 )
 
 func init() {
@@ -32,21 +32,21 @@ func tlsConnection(enclaveHost string) (*tls.ConnectionState, error) {
 	return &cs, nil
 }
 
-func newVerifiedClient(host, source, sealedTo string) (*client.SecureClient, error) {
+func newVerifiedClient(host, source, sealedTo string) (*enclave.Handle, error) {
 	if host == "" {
 		return nil, fmt.Errorf("--enclave is required")
 	}
 	if source == "" {
 		return nil, fmt.Errorf("v3 verification requires an expected workload; pass --repo owner/name[@tag][@sha256:digest]")
 	}
-	var opts *client.VerificationOptions
+	var opts *enclave.Options
 	if sealedTo != "" {
-		opts = &client.VerificationOptions{PinnedRegisters: &measurement.Measurement{
+		opts = &enclave.Options{PinnedRegisters: &measurement.Measurement{
 			Type:      measurement.TdxGuestV2,
 			Registers: []string{"", "", "", "", sealedTo},
 		}}
 	}
-	return client.NewSecureClient(host, source, opts)
+	return enclave.NewHandle(host, source, opts)
 }
 
 type auditRecord struct {
@@ -66,7 +66,7 @@ type auditRecord struct {
 		Connection string `json:"connection,omitempty"` // Public key from connection
 	} `json:"keys"`
 
-	CryptoMaterial     []envelope.CryptoMaterialItem `json:"crypto_material"`
+	CryptoMaterial     []document.CryptoMaterialItem `json:"crypto_material"`
 	FreshnessExpiresAt time.Time                     `json:"freshness_expires_at"`
 
 	Status string `json:"status"`
@@ -85,7 +85,7 @@ func (r *auditRecord) verificationError() error {
 func verifyAttestation(l *log.Logger) (*auditRecord, error) {
 	host, source := enclaveHost, repo
 	if host == "" {
-		router, err := client.NewDefaultClient(nil)
+		router, err := enclave.NewDefaultHandle(nil)
 		if err != nil {
 			return nil, fmt.Errorf("getting router: %w", err)
 		}
@@ -120,7 +120,7 @@ func verifyAttestation(l *log.Logger) (*auditRecord, error) {
 	if err != nil {
 		return nil, fmt.Errorf("fetching remote public key fingerprint: %w", err)
 	}
-	record.Keys.Connection, err = client.ConnectionCertFP(*cs)
+	record.Keys.Connection, err = enclave.ConnectionCertFP(*cs)
 	if err != nil {
 		return nil, fmt.Errorf("fetching remote public key fingerprint: %w", err)
 	}

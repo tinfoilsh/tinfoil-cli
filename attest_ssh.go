@@ -15,7 +15,7 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
-	"github.com/tinfoilsh/tinfoil-go/verifier/envelope"
+	"github.com/tinfoilsh/tinfoil-go/document"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/knownhosts"
 	"golang.org/x/term"
@@ -118,7 +118,7 @@ func attestedHostKey(host, source, sealedTo string) (ssh.PublicKey, error) {
 	if err != nil {
 		return nil, fmt.Errorf("verifying %s: %w", host, err)
 	}
-	data, err := verified.CryptoMaterialData(attestedHostKeyID, envelope.KeySPKIV1Format)
+	data, err := verified.CryptoMaterialData(attestedHostKeyID, document.KeySPKIV1Format)
 	if err != nil {
 		return nil, fmt.Errorf("%s endorses no attested %q key: %w", host, attestedHostKeyID, err)
 	}
