@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -20,11 +21,13 @@ func TestCreateRegistryRevision(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				paths = append(paths, r.Method+" "+r.URL.Path)
 				var body map[string]any
-				require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
-				require.Equal(t, containerSourceRegistry, body["source"])
-				require.Equal(t, "acme/app", body["repo"])
-				require.Equal(t, revision, body["revision"])
-				require.NotContains(t, body, "tag")
+				if !assert.NoError(t, json.NewDecoder(r.Body).Decode(&body)) {
+					return
+				}
+				assert.Equal(t, containerSourceRegistry, body["source"])
+				assert.Equal(t, "acme/app", body["repo"])
+				assert.Equal(t, revision, body["revision"])
+				assert.NotContains(t, body, "tag")
 				io.WriteString(w, `{"id":"`+testContainerID+`","name":"app","config_name":"/acme/app/v1.2.3","status":"deploying"}`)
 			}))
 			defer server.Close()
@@ -45,15 +48,17 @@ func TestCreateGitHubRevision(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		paths = append(paths, r.URL.Path)
 		var body map[string]any
-		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+		if !assert.NoError(t, json.NewDecoder(r.Body).Decode(&body)) {
+			return
+		}
 		if r.URL.Path == "/api/containers/validate" {
-			require.Equal(t, "v1.2.3", body["tag"])
+			assert.Equal(t, "v1.2.3", body["tag"])
 			io.WriteString(w, `{"valid":true,"config":{"volumes":[]}}`)
 			return
 		}
-		require.NotContains(t, body, "source")
-		require.Equal(t, "v1.2.3", body["revision"])
-		require.NotContains(t, body, "tag")
+		assert.NotContains(t, body, "source")
+		assert.Equal(t, "v1.2.3", body["revision"])
+		assert.NotContains(t, body, "tag")
 		io.WriteString(w, `{"id":"`+testContainerID+`","name":"app","status":"deploying"}`)
 	}))
 	defer server.Close()
@@ -130,7 +135,7 @@ func TestRegistryConnectionPinsNameAndDigest(t *testing.T) {
 
 	c := containerView{ID: testContainerID, Name: "app", ConfigName: descriptor.ConfigName, Domain: "app.example.com", Connections: &containerConnections{Production: &descriptor}}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		require.Equal(t, "/api/containers/"+testContainerID, r.URL.Path)
+		assert.Equal(t, "/api/containers/"+testContainerID, r.URL.Path)
 		json.NewEncoder(w).Encode(c)
 	}))
 	defer server.Close()
