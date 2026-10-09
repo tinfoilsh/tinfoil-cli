@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	configendorsement "github.com/tinfoilsh/tinfoil-go/endorsement/config"
 	"github.com/tinfoilsh/tinfoil-go/verify"
 )
 
@@ -19,9 +20,11 @@ const (
 )
 
 type connectionDescriptor struct {
-	URL  string `json:"url"`
-	Repo string `json:"repo"`
-	Tag  string `json:"tag"`
+	URL          string `json:"url"`
+	Repo         string `json:"repo"`
+	Tag          string `json:"tag"`
+	ConfigName   string `json:"config_name,omitempty"`
+	ConfigDigest string `json:"config_digest,omitempty"`
 }
 
 type containerConnections struct {
@@ -52,6 +55,9 @@ func containerConnection(c containerView, review bool, sourceOverride string) (v
 	}
 	if descriptor == nil {
 		return verifiedConnection{}, fmt.Errorf("container %s has no available %s connection; inspect with: tinfoil container get %s", c.Name, label, shellQuote(c.ID))
+	}
+	if descriptor.ConfigName != c.ConfigName {
+		return verifiedConnection{}, fmt.Errorf("connection config does not match container %s", c.Name)
 	}
 	target, err := parseConnectionDescriptor(*descriptor)
 	if err != nil {
@@ -90,6 +96,17 @@ func parseConnectionDescriptor(descriptor connectionDescriptor) (verifiedConnect
 		return target, fmt.Errorf("invalid HTTPS port in %q", descriptor.URL)
 	}
 	target.host = u.Host
+	if descriptor.ConfigName != "" || descriptor.ConfigDigest != "" {
+		identity, revision, err := configendorsement.ParseName(descriptor.ConfigName)
+		if err != nil || descriptor.Repo != "" || descriptor.ConfigDigest == "" {
+			return target, fmt.Errorf("invalid registry config reference %q", descriptor.ConfigName)
+		}
+		target.source = strings.TrimPrefix(identity, "/") + "@" + revision + "@sha256:" + descriptor.ConfigDigest
+		if _, _, _, err := verify.ParseReference(target.source); err != nil {
+			return target, fmt.Errorf("invalid registry config reference: %w", err)
+		}
+		return target, nil
+	}
 	target.source = descriptor.Repo + "@" + descriptor.Tag
 	parsedRepo, parsedTag, digest, err := verify.ParseReference(target.source)
 	if err != nil || parsedRepo != descriptor.Repo || parsedTag != descriptor.Tag || parsedTag == "" || digest != "" {

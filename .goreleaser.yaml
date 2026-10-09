@@ -1,5 +1,8 @@
 version: 2
 
+release:
+  prerelease: auto
+
 builds:
   - binary: tinfoil
     ldflags:
@@ -15,7 +18,7 @@ dockers_v2:
       - "ghcr.io/tinfoilsh/tinfoil-cli"
     tags:
       - "{{ .Version }}"
-      - "latest"
+      - "{{ if not .Prerelease }}latest{{ end }}"
     platforms:
       - linux/amd64
       - linux/arm64
