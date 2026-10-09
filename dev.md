@@ -39,6 +39,19 @@ Use a public config repository connected to the Tinfoil GitHub App, with `tinfoi
 5. Create using that exact release: `tinfoil container create my-container --repo myorg/my-repo-container --tag v1.2.3`. **`--tag` is required**, not implicitly `latest`.
 6. Once Running, use the printed verified HTTP request or `tinfoil container connect my-container`. `tinfoil container get my-container` shows connection guidance again.
 
+## Local configs
+
+Local configs are sent to the controlplane for deployment without registry publication. Pin `cvm-version` to a runtime version and manifest digest (`version@sha256:digest`) and keep the exact YAML bytes for verification.
+
+```bash
+tinfoil container create my-container --config ./tinfoil-config.yml --host box2
+tinfoil container connect my-container --config ./tinfoil-config.yml
+tinfoil attestation verify --enclave <hostname> --config ./tinfoil-config.yml
+tinfoil http get https://<hostname>/ --enclave <hostname> --config ./tinfoil-config.yml
+```
+
+The same `--config` flag works with forwarding, SSH, and SCP. Verification uses the local file, checks runtime and platform endorsements, and compares its exact-byte hash with the hardware report. Container connections also check the selected container's config digest. `--repo`, `--tag`, and `--revision` cannot select a source alongside a local file; local configs do not support `--replace`. Deploying a stopped local container reuses its saved config.
+
 ## Containers
 
 ```bash

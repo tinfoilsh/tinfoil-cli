@@ -36,15 +36,9 @@ func newVerifiedClient(host, source, sealedTo string) (*enclave.Handle, error) {
 	if host == "" {
 		return nil, fmt.Errorf("--enclave is required")
 	}
-	if source == "" {
-		return nil, fmt.Errorf("v3 verification requires an expected workload; pass --repo owner/name[@tag][@sha256:digest]")
-	}
-	var opts *enclave.Options
-	if sealedTo != "" {
-		opts = &enclave.Options{PinnedRegisters: &measurement.Measurement{
-			Type:      measurement.TdxGuestV2,
-			Registers: []string{"", "", "", "", sealedTo},
-		}}
+	opts, err := verificationOptions(source, sealedTo)
+	if err != nil {
+		return nil, err
 	}
 	return enclave.NewHandle(host, source, opts)
 }
@@ -84,6 +78,9 @@ func (r *auditRecord) verificationError() error {
 
 func verifyAttestation(l *log.Logger) (*auditRecord, error) {
 	host, source := enclaveHost, repo
+	if host == "" && localConfigFile != "" {
+		return nil, fmt.Errorf("--enclave is required with --config")
+	}
 	if host == "" {
 		router, err := enclave.NewDefaultHandle(nil)
 		if err != nil {
