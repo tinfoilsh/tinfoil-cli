@@ -9,7 +9,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -155,4 +157,26 @@ func TestLocalConfigFileValidation(t *testing.T) {
 	require.NoError(t, os.WriteFile(localConfigFile, nil, 0600))
 	_, err = readLocalConfig()
 	require.ErrorContains(t, err, "config must contain")
+}
+
+func TestSSHProxyPreservesLocalConfigPath(t *testing.T) {
+	configureContainerPromotionTest(t, "https://unused.example")
+	path, data, _ := localConfigFixture(t)
+	localConfigFile = filepath.Join(filepath.Dir(path), "local config 'quoted'.yaml")
+	require.NoError(t, os.Rename(path, localConfigFile))
+	proxy, err := proxyCommand(&tunnelTarget{host: "app.example.com"}, defaultSSHPort)
+	require.NoError(t, err)
+	command := exec.Command("sh", "-c", "set -- "+proxy+"; printf '%s\\n' \"$@\"")
+	command.Dir = t.TempDir()
+	out, err := command.Output()
+	require.NoError(t, err)
+	args := strings.Split(strings.TrimSpace(string(out)), "\n")
+	flag := slices.Index(args, "--config")
+	require.GreaterOrEqual(t, flag, 0)
+	require.Less(t, flag+1, len(args))
+	require.Equal(t, localConfigFile, args[flag+1])
+	forwarded, err := os.ReadFile(args[flag+1])
+	require.NoError(t, err)
+	require.Equal(t, data, forwarded)
+	require.NotContains(t, args, "--repo")
 }

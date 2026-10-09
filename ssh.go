@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -163,6 +164,13 @@ func proxyCommand(target *tunnelTarget, port int) (string, error) {
 	argv := []string{self, "forward", "--stdio", strconv.Itoa(port), "--enclave", target.host}
 	if target.repo != "" {
 		argv = append(argv, "--repo", target.repo)
+	}
+	if localConfigFile != "" {
+		path, err := filepath.Abs(localConfigFile)
+		if err != nil {
+			return "", fmt.Errorf("locating local config: %w", err)
+		}
+		argv = append(argv, "--config", path)
 	}
 	if target.sealedTo != "" {
 		argv = append(argv, "--sealed-to", target.sealedTo)
