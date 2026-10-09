@@ -52,6 +52,7 @@ var (
 	volumeCreateHost string
 	volumeRenameName string
 	volumeAttachAs   string
+	volumeAttachTag  string
 	volumeYes        bool
 )
 
@@ -67,6 +68,7 @@ func init() {
 	volumeRenameCmd.Flags().StringVar(&volumeRenameName, "name", "", "New volume name [required]")
 	_ = volumeRenameCmd.MarkFlagRequired("name")
 	volumeAttachCmd.Flags().StringVar(&volumeAttachAs, "as", "", "Mount name declared in tinfoil-config.yml (defaults to the only declared mount)")
+	volumeAttachCmd.Flags().StringVar(&volumeAttachTag, "tag", "", "Release whose tinfoil-config.yml declares the mount (defaults to the container's current tag)")
 	volumeDeleteCmd.Flags().BoolVar(&volumeYes, "yes", false, "Skip interactive confirmation")
 	silenceUsageRecursive(volumeCmd)
 }
@@ -203,11 +205,14 @@ var volumeAttachCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
+		if err := useTagSlots(client, c, volumeAttachTag); err != nil {
+			return err
+		}
 		slot, err := declaredSlot(c, volumeAttachAs, "--as")
 		if err != nil {
 			return err
 		}
-		if err := attachVolume(client, c.ID, slot, v.ID); err != nil {
+		if err := attachVolume(client, c.ID, slot, v.ID, volumeAttachTag); err != nil {
 			return err
 		}
 		fmt.Printf("Attached %s to %s as %q\n", v.Name, c.Name, slot)
@@ -286,8 +291,11 @@ func listHosts(client *cpClient) ([]hostInfo, error) {
 	return hosts, nil
 }
 
-func attachVolume(client *cpClient, containerID, slot, volumeID string) error {
+func attachVolume(client *cpClient, containerID, slot, volumeID, tag string) error {
 	body := map[string]any{"volume_id": volumeID}
+	if tag != "" {
+		body["tag"] = tag
+	}
 	_, err := client.do("PUT", pathf("/api/containers/%s/volumes/%s", containerID, slot), nil, body, nil)
 	return err
 }
@@ -469,20 +477,20 @@ func volumeAssignments(c *containerView, requests []volumeRequest) ([]string, er
 // attachVolumes assigns each requested volume to its declared slot on c. It
 // stops at the first failure, and the error carries the commands that finish
 // the job by hand.
-func attachVolumes(client *cpClient, c *containerView, requests []volumeRequest, volumes []volumeView) error {
+func attachVolumes(client *cpClient, c *containerView, requests []volumeRequest, volumes []volumeView, tag string) error {
 	slots, err := volumeAssignments(c, requests)
 	if err != nil {
 		return err
 	}
 	for i := range requests {
-		if err := attachVolume(client, c.ID, slots[i], volumes[i].ID); err != nil {
-			return attachRecovery(c, requests[i:], volumes[i].Name, err)
+		if err := attachVolume(client, c.ID, slots[i], volumes[i].ID, tag); err != nil {
+			return attachRecovery(c, requests[i:], volumes[i].Name, tag, err)
 		}
 	}
 	return nil
 }
 
-func attachRecovery(c *containerView, remaining []volumeRequest, volume string, cause error) error {
+func attachRecovery(c *containerView, remaining []volumeRequest, volume, tag string, cause error) error {
 	var b strings.Builder
 	fmt.Fprintf(&b, "could not attach %s: %s. Successful attachments were kept; check container %s's state before retrying:", volume, errMessage(cause), c.ID)
 	for _, r := range remaining {
@@ -492,9 +500,16 @@ func attachRecovery(c *containerView, remaining []volumeRequest, volume string, 
 		} else if len(c.VolumeSlots) > 1 {
 			as = " --as <mount name>"
 		}
+		if tag != "" {
+			as += " --tag " + shellQuote(tag)
+		}
 		fmt.Fprintf(&b, "\n  tinfoil volume attach%s -- %s %s", as, shellQuote(r.identifier), shellQuote(c.ID))
 	}
-	fmt.Fprintf(&b, "\n  %s", deployRecoveryCommand(c))
+	deploy := deployRecoveryCommand(c)
+	if tag != "" {
+		deploy += " --tag " + shellQuote(tag)
+	}
+	fmt.Fprintf(&b, "\n  %s", deploy)
 	return errors.New(b.String())
 }
 
@@ -554,6 +569,18 @@ func containerVolumes(c containerView, volumes []volumeView) map[string]volumeVi
 		}
 	}
 	return attached
+}
+
+func useTagSlots(client *cpClient, c *containerView, tag string) error {
+	if tag == "" || tag == c.CurrentTag {
+		return nil
+	}
+	slots, err := declaredVolumeSlots(client, c.Repo, tag, c.Name, c.ID)
+	if err != nil {
+		return err
+	}
+	c.VolumeSlots = slots
+	return nil
 }
 
 // declaredVolumeSlots asks the controlplane to validate repo@tag and returns
