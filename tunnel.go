@@ -19,7 +19,8 @@ import (
 	"github.com/spf13/cobra"
 	"golang.org/x/net/http2"
 
-	"github.com/tinfoilsh/tinfoil-go/verifier/client"
+	"github.com/tinfoilsh/tinfoil-go/enclave"
+	"github.com/tinfoilsh/tinfoil-go/verify"
 )
 
 // debugToolboxContainer is the container tinfoild injects for debug mode
@@ -276,7 +277,7 @@ func newTunnel(target *tunnelTarget) (*tunnel, error) {
 		host, port = target.host, "443"
 	}
 	address := net.JoinHostPort(host, port)
-	transport, err := secure.NewTransport(func(verified *client.VerifiedDocumentV3) (http.RoundTripper, error) {
+	transport, err := secure.NewTransport(func(verified *verify.Verification) (http.RoundTripper, error) {
 		fingerprint, err := verified.TLSPublicKeyFP()
 		if err != nil {
 			return nil, err
@@ -285,7 +286,7 @@ func newTunnel(target *tunnelTarget) (*tunnel, error) {
 			ReadIdleTimeout: tunnelReadIdleTimeout,
 			TLSClientConfig: &tls.Config{
 				VerifyConnection: func(state tls.ConnectionState) error {
-					certFP, err := client.ConnectionCertFP(state)
+					certFP, err := enclave.ConnectionCertFP(state)
 					if err != nil {
 						return err
 					}

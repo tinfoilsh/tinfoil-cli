@@ -7,16 +7,16 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/tinfoilsh/tinfoil-go/verifier/client"
+	"github.com/tinfoilsh/tinfoil-go/enclave"
 )
 
 var requestHeaders []string
 
-func secureClient() (*client.SecureClient, error) {
+func secureClient() (*enclave.Handle, error) {
 	return newVerifiedClient(enclaveHost, repo, "")
 }
 
-func requestWithHeaders(sc *client.SecureClient, method, url string, headers map[string]string, body []byte) (*client.Response, error) {
+func requestWithHeaders(sc *enclave.Handle, method, url string, headers map[string]string, body []byte) (*enclave.Response, error) {
 	encoded, _ := json.Marshal(headers) // A map of strings always marshals.
 	return sc.Request(method, url, string(encoded), body)
 }
