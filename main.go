@@ -11,6 +11,7 @@ const defaultVersion = "dev"
 
 var (
 	enclaveHost, repo string
+	localConfigFile   string
 	verbose, trace    bool
 	version           = defaultVersion
 	// exitCode is the status a command wants the process to end with, for the
@@ -19,10 +20,12 @@ var (
 )
 
 func newRootCommand() *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:     "tinfoil",
 		Version: version,
 	}
+	cmd.PersistentFlags().StringVar(&localConfigFile, "config", "", "Local config file to launch or trust for verification")
+	return cmd
 }
 
 var rootCmd = newRootCommand()

@@ -126,7 +126,6 @@ func TestRegistryConnectionPinsNameAndDigest(t *testing.T) {
 	for _, invalid := range []connectionDescriptor{
 		{URL: descriptor.URL, ConfigName: "/acme/app", ConfigDigest: registryConfigDigest},
 		{URL: descriptor.URL, ConfigName: descriptor.ConfigName},
-		{URL: descriptor.URL, ConfigDigest: registryConfigDigest},
 		{URL: descriptor.URL, ConfigName: descriptor.ConfigName, ConfigDigest: "bad"},
 		{URL: descriptor.URL, ConfigName: descriptor.ConfigName, ConfigDigest: registryConfigDigest, Repo: "acme/other"},
 	} {

@@ -229,6 +229,7 @@ func configureContainerPromotionTest(t *testing.T, serverURL string) {
 	previousOutput, previousNoWait := outputFormat, noWait
 	previousCreateRepo, previousCreateTag := createRepo, createTag
 	previousCreateSource, previousCreateRevision := createSource, createRevision
+	previousLocalConfigFile, previousLocalConfigBytes := localConfigFile, localConfigBytes
 	previousCreateMarkLatestRelease := createMarkLatestRelease
 	previousCreateDebug, previousCreateDisableCC := createDebug, createDisableCC
 	previousCreateVariables, previousCreateSecrets, previousCreateSSHKeys := createVariables, createSecrets, createSSHKeys
@@ -246,6 +247,7 @@ func configureContainerPromotionTest(t *testing.T, serverURL string) {
 	outputFormat, noWait = "json", true
 	createRepo, createTag, createMarkLatestRelease = "acme/app", "v1.2.3", ""
 	createSource, createRevision = containerSourceGitHub, ""
+	localConfigFile, localConfigBytes = "", nil
 	createDebug, createDisableCC = false, false
 	createVariables, createSecrets, createSSHKeys = nil, nil, nil
 	createCustomDomain, createHost, createReplaceID = "", "", ""
@@ -261,6 +263,7 @@ func configureContainerPromotionTest(t *testing.T, serverURL string) {
 		outputFormat, noWait = previousOutput, previousNoWait
 		createRepo, createTag = previousCreateRepo, previousCreateTag
 		createSource, createRevision = previousCreateSource, previousCreateRevision
+		localConfigFile, localConfigBytes = previousLocalConfigFile, previousLocalConfigBytes
 		createMarkLatestRelease = previousCreateMarkLatestRelease
 		createDebug, createDisableCC = previousCreateDebug, previousCreateDisableCC
 		createVariables, createSecrets, createSSHKeys = previousCreateVariables, previousCreateSecrets, previousCreateSSHKeys

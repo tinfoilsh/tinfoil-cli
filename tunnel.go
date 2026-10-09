@@ -244,14 +244,20 @@ func resolveTunnelTarget(identifier string) (*tunnelTarget, error) {
 	if repo != "" {
 		container.Repo = repo
 	}
-	if container.ConfigName != "" {
+	if container.ConfigName != "" || container.Source == containerSourceLocal {
 		connection, err := containerConnection(*container, false, repo)
 		if err != nil {
 			return nil, err
 		}
 		container.Repo = connection.source
+		host = connection.host
+		if container.Source == containerSourceLocal {
+			if err := checkLocalConfigDigest(connection.ConfigDigest); err != nil {
+				return nil, err
+			}
+		}
 	}
-	if container.Repo == "" {
+	if container.Repo == "" && container.Source != containerSourceLocal {
 		return nil, fmt.Errorf("container %s has no repo recorded — cannot tunnel", container.Name)
 	}
 	return &tunnelTarget{
