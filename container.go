@@ -1058,7 +1058,11 @@ func renderContainerDetail(c containerView, attached map[string]volumeView) erro
 	fmt.Printf("ID:           %s\n", c.ID)
 	fmt.Printf("Name:         %s\n", c.Name)
 	fmt.Printf("Status:       %s\n", statusLabel(c.Status))
-	fmt.Printf("Repo:         %s@%s\n", c.Repo, c.CurrentTag)
+	if c.ConfigName != "" {
+		fmt.Printf("Config:       %s\n", c.ConfigName)
+	} else {
+		fmt.Printf("Repo:         %s@%s\n", c.Repo, c.CurrentTag)
+	}
 	if c.ProjectID != "" {
 		fmt.Printf("Project:      %s\n", c.ProjectID)
 	}
@@ -1135,7 +1139,7 @@ func renderContainers(list []containerView) error {
 		fmt.Println("No containers.")
 		return nil
 	}
-	fmt.Printf("%-24s  %-10s  %-30s  %-10s  %s\n", "NAME", "STATUS", "DOMAIN", "TAG", "REPO")
+	fmt.Printf("%-24s  %-10s  %-30s  %-10s  %s\n", "NAME", "STATUS", "DOMAIN", "TAG", "SOURCE")
 	for _, c := range list {
 		domain := c.Domain
 		if domain == "" {
@@ -1145,8 +1149,12 @@ func renderContainers(list []containerView) error {
 		if tag == "" {
 			tag = "-"
 		}
+		source := c.Repo
+		if c.ConfigName != "" {
+			source = c.ConfigName
+		}
 		fmt.Printf("%-24s  %-10s  %-30s  %-10s  %s\n",
-			truncate(c.Name, 24), statusLabel(c.Status), truncate(domain, 30), truncate(tag, 10), c.Repo,
+			truncate(c.Name, 24), statusLabel(c.Status), truncate(domain, 30), truncate(tag, 10), source,
 		)
 	}
 	return nil
