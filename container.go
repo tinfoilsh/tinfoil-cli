@@ -22,6 +22,7 @@ type containerView struct {
 	ID                   string           `json:"id"`
 	Name                 string           `json:"name"`
 	Repo                 string           `json:"repo"`
+	ConfigName           string           `json:"config_name,omitempty"`
 	ProjectID            string           `json:"project_id"`
 	Status               string           `json:"status"`
 	CurrentTag           string           `json:"current_tag"`
@@ -103,11 +104,18 @@ type hostInfo struct {
 	AvailableGpuValues []int  `json:"available_gpu_values"`
 }
 
+const (
+	containerSourceGitHub   = "github"
+	containerSourceRegistry = "registry"
+)
+
 var (
 	outputFormat string
 
 	createRepo              string
 	createTag               string
+	createSource            string
+	createRevision          string
 	createDebug             bool
 	createMarkLatestRelease string
 	createDisableCC         bool
@@ -175,8 +183,10 @@ func init() {
 	}
 	containerCancelCmd.Flags().BoolVar(&cancelRollbackLatest, "rollback-latest", false, "Request restoring the repository's latest release to the current production tag")
 
-	containerCreateCmd.Flags().StringVar(&createRepo, "repo", "", "GitHub repo (owner/repo) holding tinfoil-config.yml [required]")
-	containerCreateCmd.Flags().StringVar(&createTag, "tag", "", "Repository release tag to deploy [required]")
+	containerCreateCmd.Flags().StringVar(&createRepo, "repo", "", "GitHub repository or registry project (org/project) [required]")
+	containerCreateCmd.Flags().StringVar(&createTag, "tag", "", "GitHub release tag (alias for --revision with --source github)")
+	containerCreateCmd.Flags().StringVar(&createSource, "source", containerSourceGitHub, "Config source: github or registry")
+	containerCreateCmd.Flags().StringVar(&createRevision, "revision", "", "GitHub release tag, or registry version or sha256:<config digest>")
 	containerCreateCmd.Flags().BoolVar(&createDebug, "debug", false, "Enable debug mode (allows SSH into the enclave)")
 	containerCreateCmd.Flags().StringVar(&createMarkLatestRelease, "mark-latest", "", "Mark the deployed tag as the repository's latest GitHub release once it is running (default true; pass false to leave the latest release unchanged)")
 	containerCreateCmd.Flags().BoolVar(&createDisableCC, "disable-cc-mode", false, "EXPERIMENTAL: disable confidential computing (benchmarks only; requires org entitlement)")
@@ -190,7 +200,8 @@ func init() {
 	containerCreateCmd.Flags().StringArrayVar(&createVolumes, "volume", nil, "Volume to attach before the first deploy, as <id|name>[:<mount name>]; may be repeated")
 	containerCreateCmd.Flags().Int32Var(&createDisplayOrder, "display-order", 0, "Sort order of this instance within its project")
 	_ = containerCreateCmd.MarkFlagRequired("repo")
-	_ = containerCreateCmd.MarkFlagRequired("tag")
+	containerCreateCmd.MarkFlagsMutuallyExclusive("tag", "revision")
+	containerCreateCmd.MarkFlagsOneRequired("tag", "revision")
 
 	containerDeleteCmd.Flags().BoolVar(&deleteYes, "yes", false, "Skip interactive confirmation")
 
@@ -281,12 +292,43 @@ var containerGetCmd = &cobra.Command{
 var containerCreateCmd = &cobra.Command{
 	Use:   "create [name]",
 	Short: "Create a new container",
-	Args:  cobra.ExactArgs(1),
+	Long: `Create and launch a container from a GitHub release or an approved registry config.
+
+  tinfoil container create app --repo org/repo --tag v1.2.3
+  tinfoil container create app --source registry --repo org/project --revision v1.2.3
+
+Registry revisions also accept sha256:<config digest>. The organization must
+have registry access enabled. A new registry revision requires a new container
+or --replace; deploy without revision flags restarts the saved config.`,
+	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
+		if createSource != containerSourceGitHub && createSource != containerSourceRegistry {
+			return fmt.Errorf("--source must be github or registry")
+		}
+		if createTag != "" && createRevision != "" {
+			return fmt.Errorf("--tag and --revision cannot be supplied together")
+		}
+		if createSource == containerSourceRegistry && createTag != "" {
+			return fmt.Errorf("use --revision instead of --tag for registry configs")
+		}
+		revision := createRevision
+		if revision == "" {
+			revision = createTag
+		}
+		if revision == "" {
+			return fmt.Errorf("--revision is required (--tag is accepted for GitHub releases)")
+		}
 		body := map[string]any{
 			"name": args[0],
 			"repo": createRepo,
-			"tag":  createTag,
+		}
+		if createSource == containerSourceRegistry {
+			body["source"] = createSource
+		}
+		if createRevision != "" {
+			body["revision"] = revision
+		} else {
+			body["tag"] = revision
 		}
 		if err := setMarkLatestRelease(cmd, body, createMarkLatestRelease); err != nil {
 			return err
@@ -335,27 +377,29 @@ var containerCreateCmd = &cobra.Command{
 		// with the commands to run rather than creating a container that sits
 		// stopped. Slots without one are optional and the container deploys
 		// with them empty.
-		slots, err := declaredVolumeSlots(client, createRepo, createTag, args[0], replaceID)
-		if err != nil {
-			return err
-		}
-		planned := containerView{Name: args[0], VolumeSlots: slots}
-		assignments, err := volumeAssignments(&planned, requests)
-		if err != nil {
-			return err
-		}
-		assigned := map[string]bool{}
-		for _, name := range assignments {
-			assigned[name] = true
-		}
-		var missing []volumeSlot
-		for _, mount := range requiredVolumeSlots(slots) {
-			if !assigned[mount.Name] {
-				missing = append(missing, mount)
+		if createSource == containerSourceGitHub {
+			slots, err := declaredVolumeSlots(client, createRepo, revision, args[0], replaceID)
+			if err != nil {
+				return err
 			}
-		}
-		if len(missing) > 0 {
-			return errVolumesRequired(args[0], missing, createHost)
+			planned := containerView{Name: args[0], VolumeSlots: slots}
+			assignments, err := volumeAssignments(&planned, requests)
+			if err != nil {
+				return err
+			}
+			assigned := map[string]bool{}
+			for _, name := range assignments {
+				assigned[name] = true
+			}
+			var missing []volumeSlot
+			for _, mount := range requiredVolumeSlots(slots) {
+				if !assigned[mount.Name] {
+					missing = append(missing, mount)
+				}
+			}
+			if len(missing) > 0 {
+				return errVolumesRequired(args[0], missing, createHost)
+			}
 		}
 		var volumes []volumeView
 		if len(requests) > 0 {
@@ -425,7 +469,7 @@ var containerCreateCmd = &cobra.Command{
 		// create; deploy it now so optional slots do not strand it.
 		var deployed containerView
 		if _, err := client.do("POST", pathf("/api/containers/%s/deploy", created.ID), nil, deployBody, &deployed); err != nil {
-			return createFollowupError(created, replaceID, fmt.Errorf("deploy request failed: %w. Check its state before retrying: %s", err, deployRecoveryCommand(&created)))
+			return createFollowupError(created, replaceID, fmt.Errorf("deploy request failed: %w. Check its state before retrying: %s", withAttachHint(err, &created), deployRecoveryCommand(&created)))
 		}
 		attached, err := loadContainerVolumes(client, deployed)
 		if err != nil {
