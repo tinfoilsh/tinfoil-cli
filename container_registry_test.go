@@ -65,11 +65,14 @@ func TestCreateGitHubRevision(t *testing.T) {
 }
 
 func TestCreateRejectsInvalidSourceSelection(t *testing.T) {
-	for _, test := range []struct{ source, tag, revision, message string }{
-		{"unknown", "", "v1", "--source must be"},
-		{containerSourceRegistry, "v1", "", "use --revision"},
-		{containerSourceRegistry, "", "", "--revision is required"},
-		{containerSourceGitHub, "v1", "v2", "cannot be supplied together"},
+	for _, test := range []struct {
+		args    []string
+		message string
+	}{
+		{[]string{"--source", "unknown", "--revision", "v1"}, "--source must be"},
+		{[]string{"--source", "registry", "--tag", "v1"}, "use --revision"},
+		{[]string{"--source", "registry"}, "at least one of the flags"},
+		{[]string{"--tag", "v1", "--revision", "v2"}, "none of the others can be"},
 	} {
 		t.Run(test.message, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -78,8 +81,8 @@ func TestCreateRejectsInvalidSourceSelection(t *testing.T) {
 			}))
 			defer server.Close()
 			configureContainerPromotionTest(t, server.URL)
-			createSource, createTag, createRevision = test.source, test.tag, test.revision
-			err := containerCreateCmd.RunE(containerCreateCmd, []string{"app"})
+			createTag = ""
+			err := executeLifecycleCLI(t, append([]string{"container", "create", "app", "--repo", "acme/app"}, test.args...)...)
 			require.ErrorContains(t, err, test.message)
 		})
 	}
@@ -145,4 +148,15 @@ func TestRegistryConnectionPinsNameAndDigest(t *testing.T) {
 	tunnel, err = resolveTunnelTarget(testContainerID)
 	require.NoError(t, err)
 	require.Equal(t, repo, tunnel.repo)
+
+	for _, name := range []string{"", "/acme/other/v1.2.3"} {
+		invalid := descriptor
+		invalid.ConfigName = name
+		if name == "" {
+			invalid.Repo, invalid.Tag, invalid.ConfigDigest = "acme/app", "v1.2.3", ""
+		}
+		c.Connections.Production = &invalid
+		_, err := containerConnection(c, false, "")
+		require.ErrorContains(t, err, "connection config does not match")
+	}
 }

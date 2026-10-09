@@ -305,18 +305,12 @@ or --replace; deploy without revision flags restarts the saved config.`,
 		if createSource != containerSourceGitHub && createSource != containerSourceRegistry {
 			return fmt.Errorf("--source must be github or registry")
 		}
-		if createTag != "" && createRevision != "" {
-			return fmt.Errorf("--tag and --revision cannot be supplied together")
-		}
 		if createSource == containerSourceRegistry && createTag != "" {
 			return fmt.Errorf("use --revision instead of --tag for registry configs")
 		}
 		revision := createRevision
 		if revision == "" {
 			revision = createTag
-		}
-		if revision == "" {
-			return fmt.Errorf("--revision is required (--tag is accepted for GitHub releases)")
 		}
 		body := map[string]any{
 			"name": args[0],

@@ -56,6 +56,9 @@ func containerConnection(c containerView, review bool, sourceOverride string) (v
 	if descriptor == nil {
 		return verifiedConnection{}, fmt.Errorf("container %s has no available %s connection; inspect with: tinfoil container get %s", c.Name, label, shellQuote(c.ID))
 	}
+	if descriptor.ConfigName != c.ConfigName {
+		return verifiedConnection{}, fmt.Errorf("connection config does not match container %s", c.Name)
+	}
 	target, err := parseConnectionDescriptor(*descriptor)
 	if err != nil {
 		return target, fmt.Errorf("invalid %s connection for %s: %w", label, c.Name, err)
