@@ -151,9 +151,8 @@ For the next release, run `volume auto-unlock configure` with the same disk and 
 
 ## Sandboxes
 
-Create a Monitor, then a sandbox, in the dashboard. Each form requires a compatible
-release tag and an Ed25519 SSH public key. The sandbox form selects a running
-Monitor and defaults to its owner key. Your private SSH key stays on your computer.
+Create a Monitor and sandbox in the dashboard with compatible release tags and
+your Ed25519 SSH public key.
 
 ```sh
 tinfoil attest-ssh work --install
@@ -161,44 +160,7 @@ ssh work
 tinfoil monitor open personal
 ```
 
-`attest-ssh` prepares Monitor automatically, verifies the sandbox's current boot,
-and initializes or unlocks its encrypted workspace. `--identity PATH` selects an
-existing Ed25519 key; ssh-agent and encrypted identity files also work. If the two
-resources have different owners, both owner keys must be available. First use
-saves random encryption and agent keys locally. Back up the printed directory:
-the SSH key alone cannot recover encrypted storage. New records are scoped by
-account, controlplane and container UUID under `~/.tinfoil/resources/`.
-Legacy credential files remain readable and are never overwritten with new keys.
-
-The reverse SSH connection uses only the sandbox boot key and publishes fixed
-SSH and attestation ports. Its Monitor host is untrusted. The CLI checks fresh
-sandbox attestation, then requires its endorsed key during SSH authentication
-before sending any secrets. Attestation uses HTTP over the relay and carries only
-a public nonce and signed evidence; it needs no TLS certificate or trusted relay.
-Application networking and native SSH strictly pin the current Monitor boot key.
-Both use Monitor's existing public SSH listener; this flow needs no CONNECT,
-WebSocket, private-connect API, persistent host key, or extra listener.
-
-After either VM reboots, rerun `attest-ssh work --install`. It updates the authorized
-application pin and the native SSH profile. If Monitor's endpoint or host grant
-changed, explicitly restart the sandbox in the dashboard or with
-`tinfoil sandbox restart work` first. Attestation never starts or restarts VMs.
-Native SSH, SCP and SFTP then work without a running CLI process. `--name ALIAS`
-selects another local alias when the name is already used by another account.
-
-Use `monitor open personal` for API keys, service sign-in and sandbox access grants.
-Keep that command running while using its local URL. Enrollment grants the device
-route access and gives the sandbox no provider permissions. Reconnecting preserves
-existing policy and refuses to recreate revoked identities.
-
-Sandbox start, restart, stop, delete and enroll commands remain available. The
-dashboard also provides lifecycle actions for both resource types. Stopped storage
-remains billable; deleting a sandbox retains its volume and local credentials.
-Remove obsolete access grants in Monitor separately. Automatic undelete and volume
-reattachment are not part of this flow.
-
-The controlplane supplies the deployed configuration; tinfoil-go verifies its exact
-digest, registry endorsement and attested measurements. Owner keys, the sandbox
-logical ID and Monitor binding are measured. Only `MONITOR_ENDPOINT` is a runtime
-locator, supplied during deploy rather than create. Compatible workload releases
-and this CLI must be published before users can run the new browser flow.
+Rerun `attest-ssh` after either VM reboots. If Monitor's address or network grant
+changes, use `tinfoil sandbox restart work`. Keep `monitor open` running for its UI.
+Back up the CLI's encryption credentials; the SSH key alone cannot recover storage.
+Deleting a sandbox retains its billable volume. Moving it to another Monitor is unsupported.
