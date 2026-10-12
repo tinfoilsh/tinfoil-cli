@@ -16,6 +16,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/tinfoilsh/tinfoil-go/document"
+	"github.com/tinfoilsh/tinfoil-go/verify"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/knownhosts"
 	"golang.org/x/term"
@@ -34,6 +35,7 @@ const sshIncludeGlob = "tinfoil/*.conf"
 var sshProfileNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,254}$`)
 
 var (
+	attestSSHSandbox  string
 	attestSSHName     string
 	attestSSHHost     string
 	attestSSHUser     string
@@ -46,6 +48,7 @@ var (
 func init() {
 	rootCmd.AddCommand(attestSSHCmd)
 	flags := attestSSHCmd.Flags()
+	flags.StringVar(&attestSSHSandbox, "sandbox", "", "Verify this sandbox and its Monitor, for ssh through the Monitor")
 	flags.StringVar(&attestSSHName, "name", "", "Host alias for the profile (default: HOST)")
 	flags.StringVar(&attestSSHHost, "ssh-host", "", "Hostname ssh dials (default: console.tinfoil.sh for a container with a published SSH port, else HOST)")
 	flags.StringVar(&attestSSHUser, "user", "root", "Login user written to the profile")
@@ -56,7 +59,7 @@ func init() {
 }
 
 var attestSSHCmd = &cobra.Command{
-	Use:   "attest-ssh [container|hostname]",
+	Use:   "attest-ssh [container|hostname] | --sandbox NAME",
 	Short: "Print or install a native ssh profile pinned to an enclave's attested host key",
 	Long: `Resolve a container name or enclave hostname, verify it against its recorded
 repo or --repo, read the attested "host-ssh" key its quote endorses, and print an
@@ -67,10 +70,21 @@ rotates the key, so rerun this command after one.
 
 Containers with a published SSH port connect through console.tinfoil.sh.
 Bare hostname targets connect directly. --ssh-host overrides the SSH endpoint;
-attestation always uses the enclave hostname.`,
-	Args:         cobra.ExactArgs(1),
+attestation always uses the enclave hostname.
+
+--sandbox NAME verifies a sandbox bound to a Monitor and that Monitor, then
+prints the profile that reaches the sandbox through the Monitor. With --install,
+plain ` + "`ssh NAME`" + ` then works. It repairs the profile of the boot this
+device enrolled; the sandbox commands that enroll a new boot rewrite it.`,
+	Args:         cobra.MaximumNArgs(1),
 	SilenceUsage: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		if (attestSSHSandbox == "") != (len(args) == 1) {
+			return errors.New("name a container or hostname, or pass --sandbox NAME")
+		}
+		if attestSSHSandbox != "" {
+			return attestSandboxSSH(cmd)
+		}
 		target, err := resolveTunnelTarget(args[0])
 		if err != nil {
 			return err
@@ -118,6 +132,10 @@ func attestedHostKey(host, source, sealedTo string) (ssh.PublicKey, error) {
 	if err != nil {
 		return nil, fmt.Errorf("verifying %s: %w", host, err)
 	}
+	return endorsedHostKey(host, verified)
+}
+
+func endorsedHostKey(host string, verified *verify.Verification) (ssh.PublicKey, error) {
 	data, err := verified.CryptoMaterialData(attestedHostKeyID, document.KeySPKIV1Format)
 	if err != nil {
 		return nil, fmt.Errorf("%s endorses no attested %q key: %w", host, attestedHostKeyID, err)
@@ -140,22 +158,47 @@ type sshProfile struct {
 	user         string
 	identityFile string
 	hostKey      ssh.PublicKey
+	// hostKeyAlias pins hostKey under a name instead of the dialed address, and
+	// jump is the host this one is reached through.
+	hostKeyAlias string
+	jump         *sshProfile
 }
 
 func (p sshProfile) render() string {
+	if p.jump == nil {
+		return p.block(p.name)
+	}
+	return p.jump.block(p.name) + "\n" + p.block(p.name)
+}
+
+// block renders one Host whose pins are in pins.known_hosts.
+func (p sshProfile) block(pins string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Host %s\n  HostName %s\n  Port %d\n  User %s\n", p.name, p.hostName, p.port, p.user)
+	if p.jump != nil {
+		fmt.Fprintf(&b, "  ProxyJump %s\n", p.jump.name)
+	}
+	if p.hostKeyAlias != "" {
+		fmt.Fprintf(&b, "  HostKeyAlias %s\n", p.hostKeyAlias)
+	}
 	if p.identityFile != "" {
 		fmt.Fprintf(&b, "  IdentityFile %s\n  IdentitiesOnly yes\n", p.identityFile)
 	}
-	fmt.Fprintf(&b, "  HostKeyAlgorithms %s\n  UserKnownHostsFile ~/.ssh/tinfoil/%s.known_hosts\n", p.hostKey.Type(), p.name)
+	fmt.Fprintf(&b, "  HostKeyAlgorithms %s\n  UserKnownHostsFile ~/.ssh/tinfoil/%s.known_hosts\n", p.hostKey.Type(), pins)
 	b.WriteString("  GlobalKnownHostsFile /dev/null\n  StrictHostKeyChecking yes\n  UpdateHostKeys no\n  CheckHostIP no\n")
 	return b.String()
 }
 
 func (p sshProfile) pin() string {
-	address := knownhosts.Normalize(net.JoinHostPort(p.hostName, strconv.Itoa(p.port)))
-	return knownhosts.Line([]string{address}, p.hostKey) + "\n"
+	address := p.hostKeyAlias
+	if address == "" {
+		address = knownhosts.Normalize(net.JoinHostPort(p.hostName, strconv.Itoa(p.port)))
+	}
+	pin := knownhosts.Line([]string{address}, p.hostKey) + "\n"
+	if p.jump != nil {
+		pin = p.jump.pin() + pin
+	}
+	return pin
 }
 
 func (p sshProfile) install() error {

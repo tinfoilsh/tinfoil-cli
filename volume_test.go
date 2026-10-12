@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -9,6 +10,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestParseSize(t *testing.T) {
@@ -205,6 +208,7 @@ func TestVolumeAttachSlotSelection(t *testing.T) {
 
 func TestContainerCreateWithVolume(t *testing.T) {
 	for _, tt := range []struct {
+		agent        bool
 		name         string
 		volumes      []string
 		host         string
@@ -214,6 +218,9 @@ func TestContainerCreateWithVolume(t *testing.T) {
 		wantErr      string
 		wantPaths    []string
 	}{
+		{name: "agent volumes are assigned before launch", agent: true, volumes: []string{"data-vol"}, slots: `[{"name":"data"}]`,
+			wantOut:   []string{"Status:       Deploying"},
+			wantPaths: []string{"POST /api/containers/validate", "GET /api/volumes", "POST /api/containers"}},
 		{
 			name:    "attaches then starts",
 			volumes: []string{"data-vol"},
@@ -304,6 +311,17 @@ func TestContainerCreateWithVolume(t *testing.T) {
 					if len(tt.volumes) > 0 && !strings.Contains(string(body), `"host_name":"inf13"`) {
 						t.Errorf("create body %s lacks the volume's host", body)
 					}
+					if tt.agent {
+						var request struct {
+							Repo    string            `json:"repo"`
+							Volumes map[string]string `json:"volumes"`
+						}
+						require.NoError(t, json.Unmarshal(body, &request))
+						require.Equal(t, defaultSandboxRepo, request.Repo)
+						require.Equal(t, map[string]string{"data": testVolumeID}, request.Volumes)
+						_, _ = io.WriteString(w, `{"id":"`+testContainerID+`","name":"app","status":"deploying","host_name":"inf13","volume_slots":`+slots+`}`)
+						return
+					}
 					_, _ = io.WriteString(w, `{"id":"`+testContainerID+`","name":"app","status":"stopped","host_name":"inf13","volume_slots":`+slots+`}`)
 				case r.Method == http.MethodPut && r.URL.Path == "/api/containers/"+testContainerID+"/volumes/data":
 					if tt.attachStatus != 0 {
@@ -322,6 +340,9 @@ func TestContainerCreateWithVolume(t *testing.T) {
 			defer server.Close()
 
 			configureContainerPromotionTest(t, server.URL)
+			if tt.agent {
+				createRepo = defaultSandboxRepo
+			}
 			outputFormat = "table"
 			createVolumes, createHost = tt.volumes, tt.host
 			out, err := captureTestStdout(func() error {

@@ -16,6 +16,7 @@ Client-facing documentation:
 - [Tinfoil Containers overview](https://docs.tinfoil.sh/containers/overview) and [CLI workflows](https://docs.tinfoil.sh/containers/cli)
 - [Attested SSH profiles](https://docs.tinfoil.sh/containers/attested-ssh)
 - [Standalone Tinfoil Proxy](https://docs.tinfoil.sh/local-proxy/cli), the replacement for `tinfoil proxy`
+- [Monitor and contained sandboxes](docs/monitor-sandboxes.md) (unreleased): `attest-ssh --sandbox` and then plain `ssh`
 
 ## Running locally
 
@@ -36,7 +37,8 @@ The CLI is a single Go package at the repository root, using Cobra for commands 
 - **[container.go](container.go)**: Container lifecycle commands; [project.go](project.go) manages groups of instances.
 - **[tunnel.go](tunnel.go)**: Verified TCP tunnels used by forwarding, SSH, and SCP.
 - **[volume.go](volume.go)**: Persistent disk management; [storage_commands.go](storage_commands.go) prepares automatic unlock.
-- **[sandbox.go](sandbox.go)**: Sandbox lifecycle and local key enrollment.
+- **[sandbox.go](sandbox.go)**: Sandbox lifecycle and local key enrollment; [sandbox_ssh.go](sandbox_ssh.go) reaches contained sandboxes through their Monitor.
+- **[monitor.go](monitor.go)**: Monitor creation, its attested owner API, and credential export and import.
 
 ## Development
 

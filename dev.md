@@ -161,10 +161,10 @@ tinfoil sandbox ssh my-sandbox        # the tunnelled alternative
 tinfoil sandbox stop my-sandbox       # keep the disk
 tinfoil sandbox start my-sandbox
 tinfoil sandbox restart my-sandbox
-tinfoil sandbox enroll my-sandbox     # enroll with an existing permit
+tinfoil sandbox enroll my-sandbox     # attest and enroll with the saved owner key
 tinfoil sandbox delete my-sandbox     # erase the disk
 ```
 
 `create`, `start`, and `restart` wait for the VM, verify its attestation, enroll local SSH and disk keys, and install a native ssh profile when the VM exposes a direct SSH port. The profile connects through `console.tinfoil.sh` on the allocated port, with the host key verified against the sandbox's domain. The CLI stores the local SSH and disk keys in `~/.tinfoil/sandboxes/<name>`. Back up `disk.key`; without it, the workspace cannot be opened.
 
-`enroll` uses a permit issued elsewhere, such as the dashboard. Permits expire after five minutes and work once for one boot.
+`create` binds the SHA-256 of the decoded workspace key into the measured boot config as `SANDBOX_OWNER_KEY_SHA256`. `enroll` verifies that the config matches the release template and this local owner hash before sending the key over attested TLS. The sandbox checks the hash before opening the disk. Start and restart reuse the owner binding; another device must restore the saved keys. An identical enrollment can be retried after a lost response.

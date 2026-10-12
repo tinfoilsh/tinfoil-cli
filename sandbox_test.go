@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"io"
@@ -11,8 +12,107 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/require"
+	"github.com/tinfoilsh/tinfoil-go/verify"
 	"golang.org/x/crypto/ssh"
 )
+
+const testSandboxOwnerHash = "c422e7070cb1cb455b5de9afee0d975e303d0239c72030cd7414ab5c382d3ae8"
+
+func TestSandboxCreateBindsSavedOwnerBeforeBoot(t *testing.T) {
+	oldTag, oldVariables := sandboxTag, sandboxVariables
+	sandboxTag = "v1"
+	sandboxVariables = []string{"MODE=custom"}
+	t.Cleanup(func() { sandboxTag, sandboxVariables = oldTag, oldVariables })
+	t.Setenv(envConfigPath, filepath.Join(t.TempDir(), "config.json"))
+	t.Setenv(envAdminKey, "admin_test")
+	keys, err := ensureSandboxKeys("work")
+	require.NoError(t, err)
+	owner := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{'B'}, sandboxDiskKeyBytes))
+	require.NoError(t, os.WriteFile(filepath.Join(keys.dir, sandboxDiskKeyName), []byte(owner), 0600))
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		require.Equal(t, "POST /api/containers", r.Method+" "+r.URL.Path)
+		body, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+		var request struct {
+			Name      string            `json:"name"`
+			Repo      string            `json:"repo"`
+			Tag       string            `json:"tag"`
+			Variables map[string]string `json:"variables"`
+		}
+		require.NoError(t, json.Unmarshal(body, &request))
+		require.Equal(t, "work", request.Name)
+		require.Equal(t, defaultSandboxRepo, request.Repo)
+		require.Equal(t, "v1", request.Tag)
+		require.Equal(t, map[string]string{"SANDBOX_OWNER_KEY_SHA256": testSandboxOwnerHash, "MODE": "custom"}, request.Variables)
+		require.NotContains(t, string(body), owner)
+		// Stop at provisioning so this test never needs an attestation provider.
+		http.Error(w, `{"error":"provisioning unavailable"}`, http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+	t.Setenv(envCPURL, server.URL)
+	for range 2 {
+		require.ErrorContains(t, sandboxCreateCmd.RunE(sandboxCreateCmd, []string{"work"}), "provisioning unavailable")
+	}
+	require.Equal(t, 2, requests)
+	_, err = claimBoot("POST", "/api/containers/missing/deploy", "missing", nil)
+	require.ErrorContains(t, err, "no disk key")
+	require.NoError(t, os.Remove(keys.sshKeyPath))
+	_, err = claimBoot("POST", "/api/containers/work/deploy", "work", nil)
+	require.ErrorContains(t, err, "restore the sandbox login key")
+	require.NoFileExists(t, keys.sshKeyPath)
+	require.Equal(t, 2, requests, "missing credentials must fail before boot")
+}
+
+func TestSandboxSourceRequiresLocalOwnerAndReleaseTemplate(t *testing.T) {
+	oldVariables := sandboxVariables
+	sandboxVariables = []string{"MODE=custom"}
+	t.Cleanup(func() { sandboxVariables = oldVariables })
+	t.Setenv(envConfigPath, filepath.Join(t.TempDir(), "config.json"))
+	keys, err := ensureSandboxKeys("work")
+	require.NoError(t, err)
+	owner := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{'B'}, sandboxDiskKeyBytes))
+	require.NoError(t, os.WriteFile(filepath.Join(keys.dir, sandboxDiskKeyName), []byte(owner), 0600))
+	template := []byte("containers:\n  - name: workspace\n    env: [DOMAIN, 'SANDBOX_OWNER_KEY_SHA256=default-owner', 'MODE=default']\n")
+	rendered, err := renderTemplateEnv(template, map[string]string{sandboxOwnerEnv: testSandboxOwnerHash, "MODE": "custom"})
+	require.NoError(t, err)
+	row := containerView{Repo: defaultSandboxRepo, CurrentTag: "v1", Domain: "work.example", ConfigName: "/" + sandboxConfigIdentity + "/" + storageHash(rendered), Config: string(rendered)}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/containers/work-id":
+			json.NewEncoder(w).Encode(row)
+		case "/" + defaultSandboxRepo + "/v1/tinfoil-config.yml":
+			w.Write(template)
+		default:
+			t.Errorf("unexpected request %s", r.URL.Path)
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	client := newCPClient(cliConfig{ControlplaneURL: server.URL, APIKey: "admin_test"})
+	box := sandboxView{ID: "work", ContainerID: "work-id", Domain: row.Domain}
+	source, err := sandboxSource(client, box, server.URL)
+	require.NoError(t, err)
+	repo, revision, digest, err := verify.ParseReference(source)
+	require.NoError(t, err)
+	require.Equal(t, []string{"tinfoil/containers", storageHash(rendered), storageHash(rendered)}, []string{repo, revision, digest})
+	sandboxVariables = nil
+	_, err = sandboxSource(client, box, server.URL)
+	require.ErrorContains(t, err, "--variable values")
+	sandboxVariables = []string{"MODE=custom"}
+	for _, config := range []string{
+		strings.Replace(string(rendered), testSandboxOwnerHash, strings.Repeat("a", 64), 1),
+		string(rendered) + "debug: true\n",
+		strings.Replace(string(rendered), "custom", "untrusted", 1),
+		string(template),
+	} {
+		row.Config = config
+		_, err := sandboxSource(client, box, server.URL)
+		require.ErrorContains(t, err, "owner key")
+	}
+}
 
 func TestSandboxNameRejectsNamesThatCannotBeDirectories(t *testing.T) {
 	tests := []struct {
@@ -150,7 +250,7 @@ func testSandboxKeys() *sandboxKeys {
 	}
 }
 
-func TestPostEnrollmentSendsBothKeysWithThePermit(t *testing.T) {
+func TestPostEnrollmentSendsOwnerWorkspaceAndLoginKeys(t *testing.T) {
 	type enrollment struct {
 		Key    string `json:"key"`
 		Volume string `json:"volume"`
@@ -171,11 +271,11 @@ func TestPostEnrollmentSendsBothKeysWithThePermit(t *testing.T) {
 	defer server.Close()
 
 	keys := testSandboxKeys()
-	if err := postEnrollment(server.Client(), server.URL+sandboxEnrollPath, "the.permit.token", keys); err != nil {
+	if err := postEnrollment(server.Client(), server.URL+sandboxEnrollPath, keys); err != nil {
 		t.Fatalf("postEnrollment: %v", err)
 	}
-	if authorization != "Bearer the.permit.token" {
-		t.Fatalf("Authorization = %q, want the permit as a bearer token", authorization)
+	if authorization != "" {
+		t.Fatalf("unexpected Authorization header %q", authorization)
 	}
 	if got.Key != keys.publicKey {
 		t.Fatalf("key = %q, want %q", got.Key, keys.publicKey)
@@ -199,13 +299,13 @@ func TestPostEnrollmentExplainsWhatTheSandboxRefused(t *testing.T) {
 			want:   "/keys",
 		},
 		{
-			name:   "expired permit points at a restart",
+			name:   "wrong owner key requires restoring credentials",
 			status: http.StatusForbidden,
-			reply:  `{"error":"permit refused"}`,
-			want:   "restart",
+			reply:  `{"error":"owner key refused"}`,
+			want:   "restore",
 		},
 		{
-			name:   "a spent permit says so",
+			name:   "changed enrollment conflicts",
 			status: http.StatusConflict,
 			reply:  `{"error":"sandbox is already enrolled"}`,
 			want:   "already has an owner",
@@ -226,33 +326,12 @@ func TestPostEnrollmentExplainsWhatTheSandboxRefused(t *testing.T) {
 			defer server.Close()
 
 			keys := testSandboxKeys()
-			err := postEnrollment(server.Client(), server.URL+sandboxEnrollPath, "the.permit.token", keys)
+			err := postEnrollment(server.Client(), server.URL+sandboxEnrollPath, keys)
 			if err == nil {
 				t.Fatalf("postEnrollment accepted %d", tt.status)
 			}
 			if !strings.Contains(err.Error(), tt.want) {
 				t.Fatalf("error = %q, want it to mention %q", err, tt.want)
-			}
-		})
-	}
-}
-
-func TestRenderSandboxNeverPrintsThePermit(t *testing.T) {
-	box := sandboxView{ID: "my-sandbox", Domain: "otter.box2.tinfoil.sh", State: sandboxStateRunning, Permit: "the.permit.token"}
-	for _, format := range []string{"table", "json"} {
-		t.Run(format, func(t *testing.T) {
-			outputFormat = format
-			t.Cleanup(func() { outputFormat = "table" })
-			out := captureStdout(t, func() {
-				if err := renderSandbox(&box, nil); err != nil {
-					t.Fatalf("renderSandbox: %v", err)
-				}
-			})
-			if strings.Contains(out, box.Permit) {
-				t.Fatalf("output carries the permit: %q", out)
-			}
-			if !strings.Contains(out, box.ID) {
-				t.Fatalf("output = %q, want it to name the sandbox", out)
 			}
 		})
 	}
@@ -279,4 +358,69 @@ func captureStdout(t *testing.T, run func()) string {
 		t.Fatalf("read %s: %v", path, err)
 	}
 	return string(captured)
+}
+
+func TestSandboxLifecycleUsesContainerIDs(t *testing.T) {
+	for _, action := range []string{"start", "restart", "stop", "delete"} {
+		t.Run(action, func(t *testing.T) {
+			t.Setenv(envConfigPath, filepath.Join(t.TempDir(), "config.json"))
+			t.Setenv(envAdminKey, "admin_test")
+			_, err := ensureSandboxKeys("work")
+			require.NoError(t, err)
+			oldYes := sandboxYes
+			sandboxYes = true
+			t.Cleanup(func() { sandboxYes = oldYes })
+			row := containerView{ID: "container-id", Name: "work", Repo: defaultSandboxRepo, Status: statusRunning}
+			if action == "start" {
+				row.Status = statusStopped
+			}
+			var mutations []string
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				route := r.Method + " " + r.URL.Path
+				switch route {
+				case "GET /api/containers":
+					json.NewEncoder(w).Encode([]containerView{row})
+				case "GET /api/containers/container-id":
+					json.NewEncoder(w).Encode(row)
+				case "POST /api/containers/container-id/deploy":
+					mutations = append(mutations, "deploy")
+					row.Status = statusRunning
+					json.NewEncoder(w).Encode(row)
+				case "POST /api/containers/container-id/stop":
+					mutations = append(mutations, "stop")
+					row.Status = statusStopped
+					json.NewEncoder(w).Encode(row)
+				case "DELETE /api/containers/container-id":
+					mutations = append(mutations, "delete")
+					w.WriteHeader(http.StatusNoContent)
+				default:
+					t.Errorf("unexpected request: %s", route)
+					http.NotFound(w, r)
+				}
+			}))
+			defer server.Close()
+			t.Setenv(envCPURL, server.URL)
+			switch action {
+			case "start":
+				_, err = startSandbox("work")
+				require.ErrorContains(t, err, "reported no domain") // Stop before external attestation.
+				require.Equal(t, []string{"deploy"}, mutations)
+			case "restart":
+				err = sandboxRestartCmd.RunE(sandboxRestartCmd, []string{"work"})
+				require.ErrorContains(t, err, "reported no domain")
+				require.Equal(t, []string{"stop", "deploy"}, mutations)
+			case "stop":
+				box, stopErr := stopSandbox("work")
+				require.NoError(t, stopErr)
+				require.Equal(t, "work", box.ID)
+				require.Equal(t, statusStopped, box.State)
+				require.Equal(t, []string{"stop"}, mutations)
+			case "delete":
+				require.NoError(t, sandboxDeleteCmd.RunE(sandboxDeleteCmd, []string{"work"}))
+				require.Equal(t, []string{"delete"}, mutations)
+				_, err = loadSandboxKeys("work")
+				require.NoError(t, err, "deleting compute must retain local workspace keys")
+			}
+		})
+	}
 }

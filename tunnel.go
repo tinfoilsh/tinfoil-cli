@@ -210,6 +210,9 @@ type tunnelTarget struct {
 	// sealedTo is the RTMR3 the enclave must carry, for a caller that knows what
 	// this boot was sealed to. Empty requires an unextended register.
 	sealedTo string
+	// sshConfig is the native profile of a sandbox reached through its Monitor,
+	// whose alias is host.
+	sshConfig string
 }
 
 // resolveTunnelTarget accepts an enclave hostname, a container name, or a
@@ -275,6 +278,9 @@ type tunnel struct {
 
 // Streaming bodies are not replayable, so key-error retries stay disabled.
 func newTunnel(target *tunnelTarget) (*tunnel, error) {
+	if target.sshConfig != "" {
+		return nil, fmt.Errorf("%s is reached through its Monitor; forward ports with its ssh profile instead, such as ssh -L 8080:localhost:8080 %s", target.name, target.host)
+	}
 	secure, err := newVerifiedClient(target.host, target.repo, target.sealedTo)
 	if err != nil {
 		return nil, err
@@ -291,18 +297,7 @@ func newTunnel(target *tunnelTarget) (*tunnel, error) {
 		}
 		return &http2.Transport{
 			ReadIdleTimeout: tunnelReadIdleTimeout,
-			TLSClientConfig: &tls.Config{
-				VerifyConnection: func(state tls.ConnectionState) error {
-					certFP, err := enclave.ConnectionCertFP(state)
-					if err != nil {
-						return err
-					}
-					if certFP != fingerprint {
-						return errors.New("tunnel certificate does not match the attested key; re-verify the enclave")
-					}
-					return nil
-				},
-			},
+			TLSClientConfig: &tls.Config{VerifyConnection: pinnedTLS(fingerprint)},
 			// The request authority carries the enclave-side port, so the
 			// address http2 derives from it is never the one to dial.
 			DialTLSContext: func(ctx context.Context, network, _ string, config *tls.Config) (net.Conn, error) {
@@ -318,6 +313,20 @@ func newTunnel(target *tunnelTarget) (*tunnel, error) {
 		return nil, err
 	}
 	return tun, nil
+}
+
+// pinnedTLS accepts only a connection presenting the attested TLS key.
+func pinnedTLS(fingerprint string) func(tls.ConnectionState) error {
+	return func(state tls.ConnectionState) error {
+		certFP, err := enclave.ConnectionCertFP(state)
+		if err != nil {
+			return err
+		}
+		if certFP != fingerprint {
+			return errors.New("certificate does not match the attested key; re-verify the enclave")
+		}
+		return nil
+	}
 }
 
 // checkDebugMode refuses a tunnel into an enclave running the debug toolbox,
@@ -414,17 +423,24 @@ type tunnelStream struct {
 func (s tunnelStream) Read(p []byte) (int, error)  { return s.body.Read(p) }
 func (s tunnelStream) Write(p []byte) (int, error) { return s.writer.Write(p) }
 
+func (s tunnelStream) CloseWrite() error { return s.writer.Close() }
+
 func (s tunnelStream) Close() error {
 	s.writer.Close()
 	return s.body.Close()
 }
 
+type halfCloser interface {
+	io.ReadWriteCloser
+	CloseWrite() error
+}
+
 // splice pumps a local connection through a tunnel stream. Ending the request
 // body on a local half-close lets replies still in flight arrive.
-func splice(local io.ReadWriteCloser, stream tunnelStream) error {
+func splice(local io.ReadWriteCloser, stream halfCloser) error {
 	go func() {
 		_, _ = io.Copy(stream, local)
-		stream.writer.Close()
+		stream.CloseWrite()
 	}()
 	_, err := io.Copy(local, stream)
 	local.Close()

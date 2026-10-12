@@ -3,12 +3,8 @@ package main
 import (
 	"bytes"
 	"crypto/ed25519"
-	"crypto/hkdf"
 	"crypto/rand"
-	"crypto/sha256"
-	"crypto/sha512"
 	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
@@ -26,8 +22,7 @@ import (
 )
 
 const (
-	// Sandbox records omit their source repo, so the CLI uses the release
-	// deployed by the orchestrator unless --repo overrides it.
+	// Sandbox creation uses the restricted repository through the container API.
 	defaultSandboxRepo = "tinfoilsh/confidential-agent-sandbox"
 
 	sandboxLoginUser = "sandbox"
@@ -42,9 +37,10 @@ const (
 	// confidential-agent-sandbox.
 	sandboxDiskKeyBytes = 64
 
-	// cvmimage's volume worker derives the same identity from the same key.
-	sealKeyInfo = "tinfoil seal identity v1"
+	// Measured before boot; the workspace key itself stays on this device.
+	sandboxOwnerEnv = "SANDBOX_OWNER_KEY_SHA256"
 
+	sandboxKeysDir     = "sandboxes"
 	sandboxDiskKeyName = "disk.key"
 	sandboxSSHKeyName  = "id_ed25519"
 
@@ -55,18 +51,17 @@ const (
 	maxEnrollReplyBytes = 1 << 12
 )
 
-// The control plane uses the same pattern. It also prevents path traversal
-// when the name becomes a key directory.
+// Restrict names used as local key directories to prevent path traversal.
 var sandboxNamePattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,62}$`)
 
 type sandboxView struct {
-	ID        string `json:"id"`
-	Domain    string `json:"domain"`
-	State     string `json:"state"`
-	CreatedAt string `json:"created_at"`
-	UpdatedAt string `json:"updated_at"`
-	SSHPort   int    `json:"ssh_port,omitempty"`
-	Permit    string `json:"permit,omitempty"`
+	ContainerID string `json:"container_id"`
+	ID          string `json:"id"`
+	Domain      string `json:"domain"`
+	State       string `json:"state"`
+	CreatedAt   string `json:"created_at"`
+	UpdatedAt   string `json:"updated_at"`
+	SSHPort     int    `json:"ssh_port,omitempty"`
 }
 
 type sandboxKeys struct {
@@ -74,17 +69,24 @@ type sandboxKeys struct {
 	diskKey    string
 	publicKey  string
 	sshKeyPath string
+	agentKey   string
+	monitor    *monitorAgentConfig
 }
 
 var (
-	sandboxYes      bool
-	sandboxSSHStart bool
-	sandboxSSHStop  bool
+	sandboxTag       string
+	sandboxVariables []string
+	sandboxMonitor   string
+	sandboxCreateSSH bool
+	sandboxYes       bool
+	sandboxSSHStart  bool
+	sandboxSSHStop   bool
 )
 
 func init() {
 	rootCmd.AddCommand(sandboxCmd)
 	sandboxCmd.PersistentFlags().StringVarP(&outputFormat, "output", "o", "table", "Output format: table or json")
+	sandboxCmd.PersistentFlags().StringArrayVar(&sandboxVariables, "variable", nil, "Expected config environment override in KEY=VALUE form; repeat for each override when creating or connecting")
 
 	sandboxCmd.AddCommand(
 		sandboxListCmd,
@@ -96,6 +98,9 @@ func init() {
 		sandboxEnrollCmd,
 		sandboxSSHCmd,
 	)
+	sandboxCreateCmd.Flags().StringVar(&sandboxTag, "tag", "", "Repository tag or commit to deploy")
+	sandboxCreateCmd.Flags().StringVar(&sandboxMonitor, "monitor", "", "Contain the sandbox and connect it through this Monitor (see tinfoil monitor create)")
+	sandboxCreateCmd.Flags().BoolVar(&sandboxCreateSSH, "ssh", false, "Open a shell once the sandbox is ready")
 	sandboxDeleteCmd.Flags().BoolVar(&sandboxYes, "yes", false, "Skip the confirmation prompt")
 	sandboxSSHCmd.Flags().BoolVar(&sandboxSSHStart, "start", false, "Start the sandbox first if it is stopped")
 	sandboxSSHCmd.Flags().BoolVar(&sandboxSSHStop, "stop", false, "Stop the sandbox once the session ends")
@@ -119,9 +124,15 @@ var sandboxListCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		var list []sandboxView
-		if _, err := client.do("GET", "/api/sandboxes", nil, nil, &list); err != nil {
+		var rows []containerView
+		if _, err := client.do("GET", "/api/containers", nil, nil, &rows); err != nil {
 			return err
+		}
+		list := []sandboxView{}
+		for _, row := range rows {
+			if row.Repo == defaultSandboxRepo && !row.Debug {
+				list = append(list, sandboxFromContainer(row))
+			}
 		}
 		return renderSandboxes(list)
 	},
@@ -130,18 +141,74 @@ var sandboxListCmd = &cobra.Command{
 var sandboxCreateCmd = &cobra.Command{
 	Use:   "create [name]",
 	Short: "Create a sandbox and enroll this machine's keys into it",
-	Long: `Create a sandbox, wait for it to boot, then spend its permit.
+	Long: `Create a sandbox with this device's owner key bound into its boot config,
+wait for it to boot, then enroll its workspace.
 
-The keys are made on first use and kept in ~/.tinfoil/sandboxes/<name>. Keep
+The keys are made before the first boot and kept in ~/.tinfoil/sandboxes/<name>. Keep
 the disk key: it is what the workspace is encrypted with, and without it the
-workspace cannot be opened again.`,
+workspace cannot be opened again.
+
+--monitor contains the sandbox: it reaches only that Monitor, and this machine
+reaches it through the Monitor with a native ssh profile, so ` + "`ssh <name>`" + `
+works afterwards. Its agent key joins the Monitor with no account access. --ssh
+opens a shell once the sandbox is ready. Run it again to finish an interrupted
+creation: it reuses the keys here and enrolls the running sandbox's current boot.`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		name, err := sandboxName(args[0])
 		if err != nil {
 			return err
 		}
-		return renderSandbox(bootSandbox("POST", "/api/sandboxes", name, map[string]string{"id": name}))
+		variables, err := parseKeyValues(sandboxVariables)
+		if err != nil {
+			return err
+		}
+		if variables == nil {
+			variables = make(map[string]string)
+		}
+		body := map[string]any{"name": name, "repo": defaultSandboxRepo, "tag": sandboxTag, "variables": variables}
+		resume := false
+		if sandboxMonitor != "" {
+			if resume, err = registerSandboxAgent(name, sandboxMonitor); err != nil {
+				return err
+			}
+			client, err := authedClient()
+			if err != nil {
+				return err
+			}
+			peer, err := containerNamed(client, sandboxMonitor)
+			if err != nil {
+				return err
+			}
+			body["network_policy"] = containerNetworkPolicy{EgressMode: "restricted", Egress: []containerPeer{{peer.ID, 22}}}
+		}
+		if _, err := ensureSandboxKeys(name); err != nil {
+			return err
+		}
+		owner, err := loadDiskKey(name)
+		if err != nil {
+			return err
+		}
+		variables[sandboxOwnerEnv] = storageHash(owner)
+		clear(owner)
+		var box *sandboxView
+		if resume {
+			// Retry enrollment against the existing boot's measured owner key.
+			existing, lookupErr := getSandbox(name)
+			if lookupErr != nil {
+				return lookupErr
+			}
+			box, err = claimBoot("GET", pathf("/api/containers/%s", existing.ContainerID), name, nil)
+		} else {
+			if sandboxTag == "" {
+				return errors.New("--tag is required when creating a sandbox")
+			}
+			box, err = bootSandbox("POST", "/api/containers", name, body)
+		}
+		if err := renderSandbox(box, err); err != nil || !sandboxCreateSSH {
+			return err
+		}
+		return sandboxShell(name, nil)
 	},
 }
 
@@ -154,22 +221,28 @@ var sandboxStartCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		return renderSandbox(bootSandbox("POST", pathf("/api/sandboxes/%s/start", name), name, nil))
+		return renderSandbox(startSandbox(name))
 	},
 }
 
 var sandboxRestartCmd = &cobra.Command{
 	Use:   "restart [name]",
 	Short: "Restart a sandbox and enroll this machine's keys into it",
-	Long: `Restart a sandbox, which is also how to recover one whose boot nobody
-enrolled: the new boot mints a new nonce and a permit to go with it.`,
+	Long: `Restart a sandbox with its saved owner binding, then enroll the new boot
+using this device's workspace key.`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		name, err := sandboxName(args[0])
 		if err != nil {
 			return err
 		}
-		return renderSandbox(bootSandbox("POST", pathf("/api/sandboxes/%s/restart", name), name, nil))
+		if _, err := loadSandboxKeys(name); err != nil {
+			return err
+		}
+		if _, err := stopSandbox(name); err != nil {
+			return err
+		}
+		return renderSandbox(startSandbox(name))
 	},
 }
 
@@ -188,15 +261,19 @@ var sandboxStopCmd = &cobra.Command{
 
 var sandboxDeleteCmd = &cobra.Command{
 	Use:   "delete [name]",
-	Short: "Delete a sandbox and erase its workspace",
+	Short: "Delete a sandbox, keeping its workspace volume",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		name, err := sandboxName(args[0])
 		if err != nil {
 			return err
 		}
-		fmt.Fprintf(os.Stderr, "Deleting %s erases the encrypted disk behind this workspace.\n", name)
-		fmt.Fprintln(os.Stderr, "Everything on it is lost for good and the name becomes free to reuse.")
+		dir, err := sandboxKeyDir(name)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(os.Stderr, "Deleting %s frees its name. Its encrypted workspace volume stays, and is billed, until `tinfoil volume delete` removes it.\n", name)
+		fmt.Fprintf(os.Stderr, "Keep the keys in %s: that volume cannot be opened without them.\n", dir)
 		fmt.Fprintln(os.Stderr)
 		if err := confirmYes(sandboxYes, "sandbox delete"); err != nil {
 			return err
@@ -205,35 +282,40 @@ var sandboxDeleteCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		if _, err := client.do("DELETE", pathf("/api/sandboxes/%s", name), nil, nil, nil); err != nil {
+		// A retry after a partial delete finds the sandbox gone but its access not yet removed.
+		box, err := getSandbox(name)
+		if err == nil {
+			_, err = client.do("DELETE", pathf("/api/containers/%s", box.ContainerID), nil, nil, nil)
+		}
+		var missing *cpError
+		if err != nil && (!errors.As(err, &missing) || missing.Status != http.StatusNotFound) {
 			return err
 		}
-		dir, err := sandboxKeyDir(name)
-		if err != nil {
+		contained, forgetErr := forgetContainedSandbox(name)
+		switch {
+		case forgetErr != nil:
+			return fmt.Errorf("%s is deleted, but %w", name, forgetErr)
+		case contained:
+			fmt.Printf("Deleted %s, its ssh profile and its Monitor identity. Its keys stay in %s.\n", name, dir)
+			return nil
+		case err != nil:
 			return err
 		}
-		fmt.Printf("Deleted %s. The keys in %s open nothing now and can be deleted.\n", name, dir)
+		fmt.Printf("Deleted %s. Its keys stay in %s.\n", name, dir)
 		return nil
 	},
 }
 
 var sandboxEnrollCmd = &cobra.Command{
 	Use:   "enroll [name]",
-	Short: "Enroll this machine's keys into a sandbox with a permit",
-	Long: `Spend a permit that was minted somewhere else, such as by the dashboard.
+	Short: "Attest and enroll this machine's keys into a running sandbox",
+	Long: `Verify the current boot and its owner binding, then send the saved
+workspace and login keys through an authenticated private connection. When a
+Monitor is configured, enrollment also supplies its reverse SSH configuration.
 
-Paste the permit when prompted, or pipe it in. A permit is good for five
-minutes, for one enrollment, and only for the boot it names, so a sandbox that
-has been restarted since needs the permit from that restart.
-
-The keys the enrollment names are made on first use and kept in
-~/.tinfoil/sandboxes/<name>: the SSH key the sandbox seals its sshd to, and the
-disk key its workspace is encrypted with. The disk key is written where the
-dashboard's snippet writes it, so a sandbox claimed either way keeps working.
-
-A permit is only spent by an enrollment that succeeds. The sandbox opens the
-workspace before it claims one, so a disk key it refuses can be corrected and
-the same permit used again.`,
+Keys live in ~/.tinfoil/sandboxes/<name>. Restore missing keys from a backup
+before enrolling an existing workspace. A lost enrollment reply can be retried
+without restarting the sandbox.`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		name, err := sandboxName(args[0])
@@ -244,11 +326,7 @@ the same permit used again.`,
 		if err != nil {
 			return err
 		}
-		permit, err := promptSecret("permit", fmt.Sprintf("Paste the permit for %s: ", name))
-		if err != nil {
-			return err
-		}
-		return enrollSandbox(*box, permit)
+		return enrollSandbox(*box)
 	},
 }
 
@@ -259,7 +337,9 @@ var sandboxSSHCmd = &cobra.Command{
 
 This is ` + "`tinfoil ssh`" + ` pointed at the sandbox's domain with the key
 enrolled into it, so it works only after an enrollment on the current boot.
-Anything after -- is handed to ssh unchanged.
+A sandbox bound to a Monitor is reached through the Monitor instead, with the
+native ssh profile this rewrites first. Anything after -- is handed to ssh
+unchanged.
 
 --start boots a stopped sandbox and enrolls into it before connecting. --stop
 stops it once the session ends, which takes down everything running in it,
@@ -277,48 +357,64 @@ including anything another session left behind.`,
 		if err != nil {
 			return err
 		}
-		target, err := sandboxTunnelTarget(name)
-		if err != nil {
-			return err
-		}
-		dir, err := sandboxKeyDir(name)
-		if err != nil {
-			return err
-		}
-		keyPath := filepath.Join(dir, sandboxSSHKeyName)
-		if _, err := os.Stat(keyPath); err != nil {
-			return fmt.Errorf("no SSH key for %s in %s: enroll one with `tinfoil sandbox enroll %s`", name, dir, name)
-		}
-
-		options, command := splitSSHArgs(sshArgs)
-		// Do not waste the sandbox's three authentication attempts on agent keys.
-		options = append([]string{"-i", keyPath, "-o", "IdentitiesOnly=yes"}, options...)
-		code, err := runSSH(target, defaultSSHPort, sandboxLoginUser, options, command)
-		if sandboxSSHStop {
-			if _, stopErr := stopSandbox(name); stopErr != nil {
-				err = errors.Join(err, stopErr)
-			}
-		}
-		return sshExit(code, err)
+		return sandboxShell(name, sshArgs)
 	},
 }
 
+// sandboxShell runs ssh in a sandbox and exits with its status.
+func sandboxShell(name string, sshArgs []string) error {
+	target, err := sandboxTunnelTarget(name)
+	if err != nil {
+		return err
+	}
+	dir, err := sandboxKeyDir(name)
+	if err != nil {
+		return err
+	}
+	keyPath := filepath.Join(dir, sandboxSSHKeyName)
+	if _, err := os.Stat(keyPath); err != nil {
+		return fmt.Errorf("no SSH key for %s in %s: restore this sandbox's saved keys before enrolling", name, dir)
+	}
+
+	options, command := splitSSHArgs(sshArgs)
+	// Do not waste the sandbox's three authentication attempts on agent keys.
+	options = append([]string{"-i", keyPath, "-o", "IdentitiesOnly=yes"}, options...)
+	code, err := runSSH(target, defaultSSHPort, sandboxLoginUser, options, command)
+	if sandboxSSHStop {
+		if _, stopErr := stopSandbox(name); stopErr != nil {
+			err = errors.Join(err, stopErr)
+		}
+	}
+	return sshExit(code, err)
+}
+
 func bootSandbox(method, path, name string, body any) (*sandboxView, error) {
+	fmt.Fprintf(os.Stderr, "Booting %s. A cold boot takes a few minutes.\n", name)
+	return claimBoot(method, path, name, body)
+}
+
+// claimBoot starts a container, attests and enrolls it, then installs SSH.
+func claimBoot(method, path, name string, body any) (*sandboxView, error) {
 	client, err := authedClient()
 	if err != nil {
 		return nil, err
 	}
-	client.http.Timeout = sandboxBootTimeout
-
-	fmt.Fprintf(os.Stderr, "Booting %s. A cold boot takes a few minutes.\n", name)
-	var box sandboxView
-	if _, err := client.do(method, path, nil, body, &box); err != nil {
+	if _, err := loadSandboxKeys(name); err != nil {
 		return nil, err
 	}
-	if box.Permit == "" {
-		return nil, fmt.Errorf("%s reported no permit, so nothing can enroll into this boot; restart it with `tinfoil sandbox restart %s`", name, name)
+	client.http.Timeout = sandboxBootTimeout
+
+	var row containerView
+	if _, err := client.do(method, path, nil, body, &row); err != nil {
+		return nil, err
 	}
-	if err := enrollSandbox(box, box.Permit); err != nil {
+	row, err = waitSandboxContainer(client, row, statusRunning)
+	if err != nil {
+		return nil, err
+	}
+	box := sandboxFromContainer(row)
+
+	if err := enrollSandbox(box); err != nil {
 		return nil, fmt.Errorf("%s booted but no key was enrolled into it: %w", name, err)
 	}
 	if err := installSandboxProfile(box); err != nil {
@@ -327,25 +423,59 @@ func bootSandbox(method, path, name string, body any) (*sandboxView, error) {
 	return &box, nil
 }
 
-// Only a quote sealed to the disk key enrolled here can supply the host key.
+// Only a quote for this owner's measured boot config can supply the host key.
 func installSandboxProfile(box sandboxView) error {
+	access, err := sandboxAccessFor(box.ID)
+	if err != nil {
+		return err
+	}
+	if access.Contained {
+		_, err := containedTarget(box, access)
+		return err
+	}
 	if box.SSHPort == 0 {
 		fmt.Fprintf(os.Stderr, "%s offers no direct SSH port, so no native ssh profile was installed\n", box.ID)
 		return nil
 	}
-	keys, err := ensureSandboxKeys(box.ID)
+	keys, err := loadSandboxKeys(box.ID)
 	if err != nil {
 		return err
 	}
-	diskKey, err := loadDiskKey(box.ID)
+	hostKey, client, err := privateSandboxClient(box)
 	if err != nil {
 		return err
 	}
-	hostKey, err := attestedHostKey(box.Domain, sandboxRepo(), sealFor(diskKey))
-	if err != nil {
-		return err
-	}
+	defer client.CloseIdleConnections()
 	return sshProfile{name: box.ID, hostName: managedSSHHost, port: box.SSHPort, user: sandboxLoginUser, identityFile: keys.sshKeyPath, hostKey: hostKey}.install()
+}
+
+func startSandbox(name string) (*sandboxView, error) {
+	if _, err := loadSandboxKeys(name); err != nil {
+		return nil, err
+	}
+	box, err := getSandbox(name)
+	if err != nil {
+		return nil, err
+	}
+	method, path := "POST", pathf("/api/containers/%s/deploy", box.ContainerID)
+	if box.State == sandboxStateRunning || box.State == sandboxStatePending {
+		method, path = "GET", pathf("/api/containers/%s", box.ContainerID)
+	}
+	return bootSandbox(method, path, name, nil)
+}
+
+func waitSandboxContainer(client *cpClient, row containerView, status string) (containerView, error) {
+	deadline := time.Now().Add(sandboxBootTimeout)
+	for row.Status != status {
+		if row.Status == "failed" || time.Now().After(deadline) {
+			return row, fmt.Errorf("sandbox %s is %s: %s", row.Name, row.Status, row.ErrorMessage)
+		}
+		time.Sleep(2 * time.Second)
+		if _, err := client.do("GET", pathf("/api/containers/%s", row.ID), nil, nil, &row); err != nil {
+			return row, err
+		}
+	}
+	return row, nil
 }
 
 func stopSandbox(name string) (*sandboxView, error) {
@@ -353,12 +483,21 @@ func stopSandbox(name string) (*sandboxView, error) {
 	if err != nil {
 		return nil, err
 	}
-	var box sandboxView
-	if _, err := client.do("POST", pathf("/api/sandboxes/%s/stop", name), nil, nil, &box); err != nil {
+	box, err := getSandbox(name)
+	if err != nil || box.State == sandboxStateStopped {
+		return box, err
+	}
+	var row containerView
+	if _, err := client.do("POST", pathf("/api/containers/%s/stop", box.ContainerID), nil, nil, &row); err != nil {
 		return nil, err
 	}
+	row, err = waitSandboxContainer(client, row, statusStopped)
+	if err != nil {
+		return nil, err
+	}
+	stopped := sandboxFromContainer(row)
 	fmt.Fprintf(os.Stderr, "Stopped %s. It gave up its compute; its workspace and domain stay.\n", name)
-	return &box, nil
+	return &stopped, nil
 }
 
 // runningSandbox resolves a sandbox to one with a shell to open, booting a
@@ -373,7 +512,7 @@ func runningSandbox(name string) (*sandboxView, error) {
 		if !sandboxSSHStart {
 			return nil, fmt.Errorf("sandbox %s is stopped; start it with `tinfoil sandbox start %s`, or pass --start to start it here", name, name)
 		}
-		return bootSandbox("POST", pathf("/api/sandboxes/%s/start", name), name, nil)
+		return startSandbox(name)
 	case sandboxStatePending:
 		return nil, fmt.Errorf("sandbox %s is still booting; wait for the start that is booting it to finish, or restart it with `tinfoil sandbox restart %s` if none is", name, name)
 	default:
@@ -381,32 +520,31 @@ func runningSandbox(name string) (*sandboxView, error) {
 	}
 }
 
-func enrollSandbox(box sandboxView, permit string) error {
-	if strings.TrimSpace(permit) == "" {
-		return errors.New("no permit given")
-	}
+func enrollSandbox(box sandboxView) error {
 	if box.State != sandboxStateRunning {
 		return fmt.Errorf("sandbox %s is %s, so it has no boot to enroll into; start it first", box.ID, box.State)
 	}
 	if box.Domain == "" {
 		return fmt.Errorf("sandbox %s reported no domain, so there is nothing to enroll into", box.ID)
 	}
-	keys, err := ensureSandboxKeys(box.ID)
+	access, err := sandboxAccessFor(box.ID)
+	if err != nil {
+		return err
+	}
+	if access.Contained {
+		return enrollContained(box, access)
+	}
+	keys, err := loadSandboxKeys(box.ID)
 	if err != nil {
 		return err
 	}
 
-	secure, err := newVerifiedClient(box.Domain, sandboxRepo(), "")
+	_, httpClient, err := privateSandboxClient(box)
 	if err != nil {
 		return err
 	}
-	httpClient, err := secure.HTTPClient()
-	if err != nil {
-		return fmt.Errorf("refusing to send the workspace key to an unverified or already sealed sandbox: %w", err)
-	}
-	httpClient.Timeout = sandboxEnrollTimeout
-	httpClient.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	if err := postEnrollment(httpClient, "https://"+box.Domain+sandboxEnrollPath, permit, keys); err != nil {
+	defer httpClient.CloseIdleConnections()
+	if err := sendEnrollment(httpClient, "https://"+box.Domain+sandboxEnrollPath, keys); err != nil {
 		return err
 	}
 
@@ -415,24 +553,35 @@ func enrollSandbox(box sandboxView, permit string) error {
 	return nil
 }
 
-// sandboxTunnelTarget is a tunnel into a sandbox that must be sealed to the
-// disk key here, booting a stopped one only when --start asked for it. The key
-// is read before anything starts: a boot that enrolls a freshly minted one
-// cannot open the workspace that is already there.
+// sandboxTunnelTarget verifies the measured owner binding before opening a tunnel.
+// A stopped sandbox is booted only when --start asks for it.
 func sandboxTunnelTarget(name string) (*tunnelTarget, error) {
-	key, err := loadDiskKey(name)
-	if err != nil {
+	if _, err := loadDiskKey(name); err != nil {
 		return nil, err
 	}
 	box, err := runningSandbox(name)
 	if err != nil {
 		return nil, err
 	}
-	return &tunnelTarget{name: name, host: box.Domain, repo: sandboxRepo(), sealedTo: sealFor(key)}, nil
+	access, err := sandboxAccessFor(name)
+	if err != nil {
+		return nil, err
+	}
+	if access.Contained {
+		return containedTarget(*box, access)
+	}
+	client, err := authedClient()
+	if err != nil {
+		return nil, err
+	}
+	source, err := sandboxSource(client, *box, sandboxTemplateBase)
+	if err != nil {
+		return nil, err
+	}
+	return &tunnelTarget{name: name, host: box.Domain, repo: source}, nil
 }
 
-// loadDiskKey never makes a key: a fresh one would fail the seal check against
-// a workspace it did not open, with nothing to say why.
+// loadDiskKey never replaces the credential bound into an existing sandbox config.
 func loadDiskKey(name string) ([]byte, error) {
 	dir, err := sandboxKeyDir(name)
 	if err != nil {
@@ -441,7 +590,7 @@ func loadDiskKey(name string) ([]byte, error) {
 	path := filepath.Join(dir, sandboxDiskKeyName)
 	saved, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
-		return nil, fmt.Errorf("no disk key for %s in %s: enroll one with `tinfoil sandbox enroll %s`", name, dir, name)
+		return nil, fmt.Errorf("no disk key for %s in %s: restore this sandbox's saved keys before enrolling", name, dir)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("reading %s: %w", path, err)
@@ -453,26 +602,17 @@ func loadDiskKey(name string) ([]byte, error) {
 	return key, nil
 }
 
-// sealFor is RTMR3 after the one extend a sandbox does per boot. The register
-// starts at zero and an extend replaces it with the SHA-384 of its old value
-// followed by the written digest, which cvmimage's volume worker takes over
-// the public key it derives from the disk key that opened the workspace.
-func sealFor(diskKey []byte) string {
-	seed, _ := hkdf.Key(sha256.New, diskKey, nil, sealKeyInfo, ed25519.SeedSize)
-	owner := sha512.Sum384(ed25519.NewKeyFromSeed(seed).Public().(ed25519.PublicKey))
-	var zero [sha512.Size384]byte
-	sealed := sha512.Sum384(append(zero[:], owner[:]...))
-	return hex.EncodeToString(sealed[:])
-}
-
-func postEnrollment(httpClient *http.Client, url, permit string, keys *sandboxKeys) error {
-	body, _ := json.Marshal(map[string]string{"key": keys.publicKey, "volume": keys.diskKey})
+func postEnrollment(httpClient *http.Client, url string, keys *sandboxKeys) error {
+	body, _ := json.Marshal(struct {
+		Key     string              `json:"key"`
+		Volume  string              `json:"volume"`
+		Monitor *monitorAgentConfig `json:"monitor,omitempty"`
+	}{keys.publicKey, keys.diskKey, keys.monitor})
 	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("building enrollment: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+permit)
 
 	resp, err := httpClient.Do(req)
 	if err != nil {
@@ -488,10 +628,10 @@ func postEnrollment(httpClient *http.Client, url, permit string, keys *sandboxKe
 	case http.StatusNoContent:
 		return nil
 	case http.StatusUnauthorized, http.StatusForbidden:
-		return fmt.Errorf("the sandbox refused the enrollment (%s). A permit lasts five minutes and covers one boot, so restart the sandbox for a new one; if it was the workspace key that was refused, the key in %s is not the one this workspace was made with and the permit is still unspent",
+		return fmt.Errorf("the sandbox refused the enrollment (%s); restore the owner workspace key in %s that was bound when this sandbox was created",
 			extractErrorMessage(answer), keys.dir)
 	case http.StatusConflict:
-		return errors.New("this boot already has an owner, so its permit is spent; restart the sandbox to enroll again")
+		return errors.New("this boot already has an owner enrollment with different values; retry the original enrollment or restart the sandbox")
 	default:
 		return fmt.Errorf("enrolling: %s: %s", resp.Status, extractErrorMessage(answer))
 	}
@@ -509,11 +649,23 @@ func getSandbox(name string) (*sandboxView, error) {
 	if err != nil {
 		return nil, err
 	}
-	var box sandboxView
-	if _, err := client.do("GET", pathf("/api/sandboxes/%s", name), nil, nil, &box); err != nil {
+	row, err := containerNamed(client, name)
+	if err != nil {
 		return nil, err
 	}
+	if row.Repo != defaultSandboxRepo || row.Debug {
+		return nil, fmt.Errorf("container %s is not a sandbox", name)
+	}
+	box := sandboxFromContainer(row)
 	return &box, nil
+}
+
+func sandboxFromContainer(row containerView) sandboxView {
+	state := row.Status
+	if state != statusRunning && state != statusStopped && state != "failed" {
+		state = sandboxStatePending
+	}
+	return sandboxView{ID: row.Name, ContainerID: row.ID, Domain: row.Domain, State: state, SSHPort: row.SSHPort, CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt}
 }
 
 func sandboxName(raw string) (string, error) {
@@ -533,7 +685,27 @@ func sandboxKeyDir(name string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(filepath.Dir(config), "sandboxes", name), nil
+	return filepath.Join(filepath.Dir(config), sandboxKeysDir, name), nil
+}
+
+// Enrollment and SSH must restore existing credentials, never generate replacements.
+func loadSandboxKeys(name string) (*sandboxKeys, error) {
+	dir, err := sandboxKeyDir(name)
+	if err != nil {
+		return nil, err
+	}
+	owner, err := loadDiskKey(name)
+	if err != nil {
+		return nil, err
+	}
+	defer clear(owner)
+	path := filepath.Join(dir, sandboxSSHKeyName)
+	signer, err := loadSigner(path)
+	if err != nil {
+		return nil, fmt.Errorf("restore the sandbox login key in %s: %w", path, err)
+	}
+	return &sandboxKeys{dir: dir, diskKey: base64.StdEncoding.EncodeToString(owner), sshKeyPath: path,
+		publicKey: strings.TrimSpace(string(ssh.MarshalAuthorizedKey(signer.PublicKey())))}, nil
 }
 
 func ensureSandboxKeys(name string) (*sandboxKeys, error) {
@@ -633,7 +805,6 @@ func renderSandbox(from *sandboxView, err error) error {
 		return err
 	}
 	box := *from
-	box.Permit = ""
 	if outputFormat == "json" {
 		return printJSON(box)
 	}
@@ -645,9 +816,6 @@ func renderSandbox(from *sandboxView, err error) error {
 }
 
 func renderSandboxes(list []sandboxView) error {
-	for i := range list {
-		list[i].Permit = ""
-	}
 	if outputFormat == "json" {
 		return printJSON(list)
 	}

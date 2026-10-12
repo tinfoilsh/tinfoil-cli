@@ -108,6 +108,12 @@ func runSSH(target *tunnelTarget, port int, user string, options, command []stri
 
 // sshProxyOptions supplies the same attested connection to ssh and scp.
 func sshProxyOptions(target *tunnelTarget, port int) ([]string, error) {
+	if target.sshConfig != "" {
+		if port != defaultSSHPort {
+			return nil, fmt.Errorf("%s serves SSH only on port %d", target.name, defaultSSHPort)
+		}
+		return []string{"-F", target.sshConfig}, nil
+	}
 	proxy, err := proxyCommand(target, port)
 	if err != nil {
 		return nil, err
