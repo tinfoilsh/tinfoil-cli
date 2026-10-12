@@ -16,7 +16,7 @@ Client-facing documentation:
 - [Tinfoil Containers overview](https://docs.tinfoil.sh/containers/overview) and [CLI workflows](https://docs.tinfoil.sh/containers/cli)
 - [Attested SSH profiles](https://docs.tinfoil.sh/containers/attested-ssh)
 - [Standalone Tinfoil Proxy](https://docs.tinfoil.sh/local-proxy/cli), the replacement for `tinfoil proxy`
-- [Monitor and contained sandboxes](docs/monitor-sandboxes.md) (unreleased): `attest-ssh --sandbox` and then plain `ssh`
+- [Monitor and contained sandboxes](docs/monitor-sandboxes.md): `attest-ssh --sandbox` and then plain `ssh`
 
 ## Running locally
 

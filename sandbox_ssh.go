@@ -31,7 +31,6 @@ const (
 	sandboxEnrolledKeyName = "enrolled_host_key"
 
 	sandboxConfigIdentity = "tinfoil/containers"
-	sandboxTemplateBase   = "https://raw.githubusercontent.com"
 
 	sandboxAttestationPath     = "/.well-known/tinfoil-attestation"
 	maxSandboxAttestationBytes = 32 << 20
@@ -45,6 +44,8 @@ const (
 	monitorDialTimeout    = 10 * time.Second
 	sandboxEnrollAttempts = 3
 )
+
+var sandboxTemplateBase = "https://raw.githubusercontent.com"
 
 type sandboxBinding struct {
 	Scope   accountScope `json:"scope"`
@@ -149,7 +150,7 @@ func validMonitorEndpoint(ip string, port int) bool {
 }
 
 // Generate keys only before binding; bound sandboxes must retain their keys.
-func containedKeys(name string, binding sandboxBinding, create bool) (*sandboxKeys, error) {
+func containedKeys(name string, binding sandboxBinding, create bool, supplied ...*ownerCredential) (*sandboxKeys, error) {
 	dir, err := sandboxKeyDir(name)
 	if err != nil {
 		return nil, err
@@ -176,7 +177,11 @@ func containedKeys(name string, binding sandboxBinding, create bool) (*sandboxKe
 	if _, err := ensureSSHKey(filepath.Join(dir, sandboxAgentKeyName)); err != nil {
 		return nil, err
 	}
-	if _, err := ensureSandboxKeys(name); err != nil {
+	var credential *ownerCredential
+	if len(supplied) > 0 {
+		credential = supplied[0]
+	}
+	if _, err := ensureSandboxKeysWithCredential(name, credential); err != nil {
 		return nil, err
 	}
 	if err := bindSandbox(dir, binding, true); err != nil {
@@ -187,12 +192,10 @@ func containedKeys(name string, binding sandboxBinding, create bool) (*sandboxKe
 
 func loadContainedKeys(dir string) (*sandboxKeys, error) {
 	keys := &sandboxKeys{dir: dir, sshKeyPath: filepath.Join(dir, sandboxSSHKeyName)}
-	disk, err := os.ReadFile(filepath.Join(dir, sandboxDiskKeyName))
+	credential, err := readOwnerCredential(filepath.Join(dir, sandboxDiskKeyName), sandboxDiskKeyBytes)
 	if err == nil {
-		keys.diskKey = strings.TrimSpace(string(disk))
-		if decoded, decodeErr := base64.StdEncoding.DecodeString(keys.diskKey); decodeErr != nil || len(decoded) != sandboxDiskKeyBytes {
-			err = fmt.Errorf("%s does not hold base64 for a %d-byte workspace key", filepath.Join(dir, sandboxDiskKeyName), sandboxDiskKeyBytes)
-		}
+		keys.diskKey = base64.StdEncoding.EncodeToString(credential.Key)
+		clear(credential.Key)
 	}
 	if err == nil {
 		keys.publicKey, err = loadSSHKey(keys.sshKeyPath)
@@ -220,7 +223,7 @@ func bindSandbox(dir string, binding sandboxBinding, create bool) error {
 }
 
 // Register before creation. Resume only a running sandbox bound to these keys.
-func registerSandboxAgent(name, monitor string) (resume bool, err error) {
+func registerSandboxAgent(name, monitor string, supplied ...*ownerCredential) (resume bool, err error) {
 	scope, client, err := currentScope()
 	if err != nil {
 		return false, err
@@ -261,7 +264,7 @@ func registerSandboxAgent(name, monitor string) (resume bool, err error) {
 	} else if !errors.As(err, &missing) || missing.Status != http.StatusNotFound {
 		return false, err
 	}
-	keys, err := containedKeys(name, binding, true)
+	keys, err := containedKeys(name, binding, true, supplied...)
 	if err != nil {
 		return false, err
 	}
@@ -574,11 +577,15 @@ func privateSandboxClient(box sandboxView) (ssh.PublicKey, *http.Client, error) 
 
 // Reproduce the measured config with this device's owner key before trusting it.
 func sandboxSource(client *cpClient, box sandboxView, templateBase string) (string, error) {
-	owner, err := loadDiskKey(box.ID)
+	dir, err := sandboxKeyDir(box.ID)
 	if err != nil {
 		return "", err
 	}
-	defer clear(owner)
+	credential, err := readOwnerCredential(filepath.Join(dir, sandboxDiskKeyName), sandboxDiskKeyBytes)
+	if err != nil {
+		return "", err
+	}
+	defer clear(credential.Key)
 	var row containerView
 	if _, err := client.do("GET", pathf("/api/containers/%s", box.ContainerID), nil, nil, &row); err != nil {
 		return "", err
@@ -586,23 +593,35 @@ func sandboxSource(client *cpClient, box sandboxView, templateBase string) (stri
 	if row.Repo != sandboxRepo() || row.Domain != box.Domain || row.CurrentTag == "" {
 		return "", errors.New("unexpected sandbox configuration")
 	}
-	location := templateBase + "/" + row.Repo + "/" + url.PathEscape(row.CurrentTag) + "/tinfoil-config.yml"
-	template, err := fetchUpdateData(context.Background(), &http.Client{Timeout: sandboxEnrollTimeout}, location, version, maxSandboxAttestationBytes)
+	template, err := fetchSandboxTemplate(row.CurrentTag, templateBase)
 	if err != nil {
-		return "", fmt.Errorf("fetching sandbox template: %w", err)
+		return "", err
+	}
+	_, expected, err := ownerBinding([]byte(row.Config), sandboxOwnerEnv, sandboxArgonOwnerEnv)
+	if err != nil {
+		return "", err
+	}
+	if expected == "" {
+		return "", errors.New("sandbox has no measured owner binding")
+	}
+	digest, err := credential.commitment(expected)
+	if err != nil {
+		return "", err
 	}
 	variables, err := parseKeyValues(sandboxVariables)
 	if err != nil {
 		return "", err
 	}
-	return verifySandboxConfig(row, storageHash(owner), template, variables)
+	return verifySandboxConfig(row, digest, template, variables)
 }
 
 func verifySandboxConfig(row containerView, ownerDigest string, template []byte, variables map[string]string) (string, error) {
 	if variables == nil {
 		variables = make(map[string]string)
 	}
-	variables[sandboxOwnerEnv] = ownerDigest
+	delete(variables, sandboxOwnerEnv)
+	delete(variables, sandboxArgonOwnerEnv)
+	variables[ownerEnvName(ownerDigest, sandboxOwnerEnv, sandboxArgonOwnerEnv)] = ownerDigest
 	rendered, err := renderTemplateEnv(template, variables)
 	if err != nil {
 		return "", fmt.Errorf("render sandbox template: %w", err)
@@ -612,4 +631,57 @@ func verifySandboxConfig(row containerView, ownerDigest string, template []byte,
 	}
 	digest := storageHash(rendered)
 	return sandboxConfigIdentity + "@" + digest + "@sha256:" + digest, nil
+}
+
+func fetchSandboxTemplate(tag, base string) ([]byte, error) {
+	if sandboxRepo() == defaultSandboxRepo && tag == defaultSandboxTag {
+		return bytes.Clone(approvedSandboxTemplate), nil
+	}
+	location := base + "/" + sandboxRepo() + "/" + url.PathEscape(tag) + "/tinfoil-config.yml"
+	return fetchUpdateData(context.Background(), &http.Client{Timeout: sandboxEnrollTimeout}, location, version, maxSandboxAttestationBytes)
+}
+
+func adoptSandboxCredential(box sandboxView, input string) error {
+	client, err := authedClient()
+	if err != nil {
+		return err
+	}
+	var row containerView
+	if _, err := client.do("GET", pathf("/api/containers/%s", box.ContainerID), nil, nil, &row); err != nil {
+		return err
+	}
+	if row.Repo != defaultSandboxRepo || row.Debug || row.Domain != box.Domain {
+		return errors.New("unexpected sandbox configuration")
+	}
+	template, err := fetchSandboxTemplate(row.CurrentTag, sandboxTemplateBase)
+	if err != nil {
+		return err
+	}
+	dir, err := sandboxKeyDir(box.ID)
+	if err != nil {
+		return err
+	}
+	credential, digest, err := prepareOwnerCredential(filepath.Join(dir, sandboxDiskKeyName), input, sandboxDiskKeyBytes, []byte(row.Config), template, sandboxOwnerEnv, sandboxArgonOwnerEnv)
+	if err != nil {
+		return err
+	}
+	defer clear(credential.Key)
+	variables, err := parseKeyValues(sandboxVariables)
+	if err != nil {
+		return err
+	}
+	if _, err := verifySandboxConfig(row, digest, template, variables); err != nil {
+		return err
+	}
+	access, err := sandboxAccessFor(box.ID)
+	if err != nil {
+		return err
+	}
+	if access.Contained {
+		if _, err := loadContainedKeys(dir); err != nil {
+			return errors.New("contained sandbox adoption requires its existing login and agent keys; restore a Monitor backup first")
+		}
+	}
+	_, err = ensureSandboxKeysWithCredential(box.ID, credential)
+	return err
 }

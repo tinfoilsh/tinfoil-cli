@@ -162,9 +162,11 @@ tinfoil sandbox stop my-sandbox       # keep the disk
 tinfoil sandbox start my-sandbox
 tinfoil sandbox restart my-sandbox
 tinfoil sandbox enroll my-sandbox     # attest and enroll with the saved owner key
-tinfoil sandbox delete my-sandbox     # erase the disk
+tinfoil sandbox delete my-sandbox     # retain the encrypted disk and local keys
 ```
 
 `create`, `start`, and `restart` wait for the VM, verify its attestation, enroll local SSH and disk keys, and install a native ssh profile when the VM exposes a direct SSH port. The profile connects through `console.tinfoil.sh` on the allocated port, with the host key verified against the sandbox's domain. The CLI stores the local SSH and disk keys in `~/.tinfoil/sandboxes/<name>`. Back up `disk.key`; without it, the workspace cannot be opened.
 
-`create` binds the SHA-256 of the decoded workspace key into the measured boot config as `SANDBOX_OWNER_KEY_SHA256`. `enroll` verifies that the config matches the release template and this local owner hash before sending the key over attested TLS. The sandbox checks the hash before opening the disk. Start and restart reuse the owner binding; another device must restore the saved keys. An identical enrollment can be retried after a lost response.
+`create` uses the approved sandbox release and binds a salted Argon2id verifier as `SANDBOX_OWNER_KEY_ARGON2ID`. Use `--workspace-key-file FILE` to supply the same credential as the dashboard, or let the CLI generate a secure random key locally. Passphrases accept 16 to 4096 UTF-8 bytes with whitespace preserved. Old SHA-256 bindings and saved base64 key files remain compatible.
+
+`enroll` reproduces the complete release template and checks the owner binding before sending keys over attested TLS. Start and restart reuse the saved release, binding, and credential. Another device can adopt an uncontained sandbox with `enroll --workspace-key-file FILE`; contained sandboxes require their Monitor recovery bundle with login and agent keys. An identical enrollment can be retried after a lost response. See [Monitor and contained sandboxes](docs/monitor-sandboxes.md) for setup, recovery, and credential records.

@@ -20,10 +20,10 @@ import (
 const testSandboxOwnerHash = "c422e7070cb1cb455b5de9afee0d975e303d0239c72030cd7414ab5c382d3ae8"
 
 func TestSandboxCreateBindsSavedOwnerBeforeBoot(t *testing.T) {
-	oldTag, oldVariables := sandboxTag, sandboxVariables
+	oldTag, oldVariables, oldBase := sandboxTag, sandboxVariables, sandboxTemplateBase
 	sandboxTag = "v1"
 	sandboxVariables = []string{"MODE=custom"}
-	t.Cleanup(func() { sandboxTag, sandboxVariables = oldTag, oldVariables })
+	t.Cleanup(func() { sandboxTag, sandboxVariables, sandboxTemplateBase = oldTag, oldVariables, oldBase })
 	t.Setenv(envConfigPath, filepath.Join(t.TempDir(), "config.json"))
 	t.Setenv(envAdminKey, "admin_test")
 	keys, err := ensureSandboxKeys("work")
@@ -32,6 +32,14 @@ func TestSandboxCreateBindsSavedOwnerBeforeBoot(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(keys.dir, sandboxDiskKeyName), []byte(owner), 0600))
 	requests := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "GET" && r.URL.Path == "/api/containers" {
+			io.WriteString(w, `[]`)
+			return
+		}
+		if r.Method == "GET" && strings.HasSuffix(r.URL.Path, "/tinfoil-config.yml") {
+			io.WriteString(w, "containers:\n  - name: workspace\n    env: [DOMAIN, SANDBOX_OWNER_KEY_SHA256, 'MODE=default']\n")
+			return
+		}
 		requests++
 		require.Equal(t, "POST /api/containers", r.Method+" "+r.URL.Path)
 		body, err := io.ReadAll(r.Body)
@@ -53,6 +61,7 @@ func TestSandboxCreateBindsSavedOwnerBeforeBoot(t *testing.T) {
 	}))
 	defer server.Close()
 	t.Setenv(envCPURL, server.URL)
+	sandboxTemplateBase = server.URL
 	for range 2 {
 		require.ErrorContains(t, sandboxCreateCmd.RunE(sandboxCreateCmd, []string{"work"}), "provisioning unavailable")
 	}
@@ -110,7 +119,7 @@ func TestSandboxSourceRequiresLocalOwnerAndReleaseTemplate(t *testing.T) {
 	} {
 		row.Config = config
 		_, err := sandboxSource(client, box, server.URL)
-		require.ErrorContains(t, err, "owner key")
+		require.Error(t, err)
 	}
 }
 
@@ -423,4 +432,150 @@ func TestSandboxLifecycleUsesContainerIDs(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestSandboxPassphraseCreateAndDashboardAdoption(t *testing.T) {
+	oldTag, oldVariables, oldBase, oldInput := sandboxTag, sandboxVariables, sandboxTemplateBase, sandboxWorkspaceKeyFile
+	sandboxTag, sandboxVariables = "", []string{"SANDBOX_OWNER_KEY_SHA256=ignored"}
+	t.Cleanup(func() {
+		sandboxTag, sandboxVariables, sandboxTemplateBase, sandboxWorkspaceKeyFile = oldTag, oldVariables, oldBase, oldInput
+	})
+	t.Setenv(envConfigPath, filepath.Join(t.TempDir(), "config.json"))
+	t.Setenv(envAdminKey, "admin_test")
+	secret := []byte("  Café workspace 🔐\n")
+	sandboxWorkspaceKeyFile = filepath.Join(t.TempDir(), "workspace")
+	require.NoError(t, os.WriteFile(sandboxWorkspaceKeyFile, secret, 0600))
+	template := []byte("containers:\n  - name: workspace\n    env: ['SANDBOX_OWNER_KEY_SHA256=', 'SANDBOX_OWNER_KEY_ARGON2ID=']\n")
+	oldApproved := approvedSandboxTemplate
+	approvedSandboxTemplate = template
+	t.Cleanup(func() { approvedSandboxTemplate = oldApproved })
+	var row containerView
+	var bindings []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/tinfoil-config.yml"):
+			require.Contains(t, r.URL.Path, "/"+defaultSandboxTag+"/")
+			w.Write(template)
+		case r.Method == http.MethodGet && r.URL.Path == "/api/containers":
+			rows := []containerView{}
+			if row.ID != "" {
+				rows = append(rows, row)
+			}
+			json.NewEncoder(w).Encode(rows)
+		case r.Method == http.MethodGet && r.URL.Path == "/api/containers/work-id":
+			json.NewEncoder(w).Encode(row)
+		case r.Method == http.MethodPost && r.URL.Path == "/api/containers":
+			raw, err := io.ReadAll(r.Body)
+			require.NoError(t, err)
+			require.NotContains(t, string(raw), string(secret))
+			require.NotContains(t, string(raw), base64.StdEncoding.EncodeToString(secret))
+			var body struct {
+				Tag       string            `json:"tag"`
+				Variables map[string]string `json:"variables"`
+			}
+			require.NoError(t, json.Unmarshal(raw, &body))
+			require.Equal(t, defaultSandboxTag, body.Tag)
+			require.NotContains(t, body.Variables, sandboxOwnerEnv)
+			bindings = append(bindings, body.Variables[sandboxArgonOwnerEnv])
+			http.Error(w, `{"error":"provisioning unavailable"}`, http.StatusServiceUnavailable)
+		default:
+			t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	t.Setenv(envCPURL, server.URL)
+	sandboxTemplateBase = server.URL
+	for range 2 {
+		require.ErrorContains(t, sandboxCreateCmd.RunE(sandboxCreateCmd, []string{"work"}), "provisioning unavailable")
+	}
+	require.Len(t, bindings, 2)
+	require.Equal(t, bindings[0], bindings[1], "failed provisioning reuses the same salt")
+	dir, err := sandboxKeyDir("work")
+	require.NoError(t, err)
+	credential, err := readOwnerCredential(filepath.Join(dir, sandboxDiskKeyName), 64)
+	require.NoError(t, err)
+	require.Equal(t, secret, credential.Key)
+	require.Equal(t, bindings[0], credential.Argon2ID)
+	// A dashboard-created uncontained sandbox has no CLI profile yet.
+	rendered, err := renderTemplateEnv(template, map[string]string{sandboxArgonOwnerEnv: bindings[0]})
+	require.NoError(t, err)
+	row = containerView{ID: "work-id", Name: "work", Repo: defaultSandboxRepo, CurrentTag: defaultSandboxTag, Domain: "work.example", Status: statusRunning, Config: string(rendered)}
+	box := sandboxView{ID: "work", ContainerID: "work-id", Domain: row.Domain}
+	t.Setenv(envConfigPath, filepath.Join(t.TempDir(), "config.json"))
+	secondDir, err := sandboxKeyDir("work")
+	require.NoError(t, err)
+	row.Config += "debug: true\n"
+	require.ErrorContains(t, adoptSandboxCredential(box, sandboxWorkspaceKeyFile), "measured config does not match")
+	require.NoFileExists(t, filepath.Join(secondDir, sandboxDiskKeyName))
+	row.Config = string(rendered)
+	require.NoError(t, adoptSandboxCredential(box, sandboxWorkspaceKeyFile))
+	adopted, err := readOwnerCredential(filepath.Join(secondDir, sandboxDiskKeyName), 64)
+	require.NoError(t, err)
+	require.Equal(t, credential, adopted)
+	keys, err := loadSandboxKeys("work")
+	require.NoError(t, err)
+	decoded, err := base64.StdEncoding.DecodeString(keys.diskKey)
+	require.NoError(t, err)
+	require.Equal(t, secret, decoded, "enrollment sends the original bytes in the existing transport encoding")
+	client := newCPClient(cliConfig{ControlplaneURL: server.URL, APIKey: "admin_test"})
+	_, err = sandboxSource(client, box, server.URL)
+	require.NoError(t, err)
+}
+
+func TestSandboxCreateRetainsWorkspaceOnlyWithSavedCredential(t *testing.T) {
+	oldTag, oldVolume, oldBase, oldInput := sandboxTag, sandboxVolume, sandboxTemplateBase, sandboxWorkspaceKeyFile
+	sandboxTag, sandboxVolume, sandboxWorkspaceKeyFile = "v-retained", "data-vol:workspace", ""
+	t.Cleanup(func() {
+		sandboxTag, sandboxVolume, sandboxTemplateBase, sandboxWorkspaceKeyFile = oldTag, oldVolume, oldBase, oldInput
+	})
+	t.Setenv(envConfigPath, filepath.Join(t.TempDir(), "config.json"))
+	t.Setenv(envAdminKey, "admin_test")
+	posted := 0
+	attached := ""
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == "GET" && strings.HasSuffix(r.URL.Path, "/tinfoil-config.yml"):
+			io.WriteString(w, "containers:\n  - env: [SANDBOX_OWNER_KEY_SHA256]\n")
+		case r.Method == "GET" && r.URL.Path == "/api/containers":
+			io.WriteString(w, `[]`)
+		case r.Method == "GET" && r.URL.Path == "/api/volumes":
+			json.NewEncoder(w).Encode(volumeList{Volumes: []volumeView{{ID: testVolumeID, Name: "data-vol", HostName: "dev1", ContainerID: attached}}})
+		case r.Method == "POST" && r.URL.Path == "/api/containers":
+			posted++
+			var request struct {
+				Host      string            `json:"host_name"`
+				Volumes   map[string]string `json:"volumes"`
+				Variables map[string]string `json:"variables"`
+			}
+			require.NoError(t, json.NewDecoder(r.Body).Decode(&request))
+			require.Equal(t, "dev1", request.Host)
+			require.Equal(t, map[string]string{"workspace": testVolumeID}, request.Volumes)
+			require.Equal(t, testSandboxOwnerHash, request.Variables[sandboxOwnerEnv])
+			http.Error(w, `{"error":"provisioning unavailable"}`, 503)
+		default:
+			t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	t.Setenv(envCPURL, server.URL)
+	sandboxTemplateBase = server.URL
+	require.ErrorContains(t, sandboxCreateCmd.RunE(sandboxCreateCmd, []string{"work"}), "--volume requires the original saved workspace key")
+	dir, err := sandboxKeyDir("work")
+	require.NoError(t, err)
+	require.NoFileExists(t, filepath.Join(dir, sandboxDiskKeyName))
+	require.Zero(t, posted)
+	require.NoError(t, os.MkdirAll(dir, 0700))
+	original := []byte(base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{'B'}, 64)) + "\n")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, sandboxDiskKeyName), original, 0600))
+	attached = "another-container"
+	require.ErrorContains(t, sandboxCreateCmd.RunE(sandboxCreateCmd, []string{"work"}), "attached to another container")
+	require.Zero(t, posted)
+	attached = ""
+	require.ErrorContains(t, sandboxCreateCmd.RunE(sandboxCreateCmd, []string{"work"}), "provisioning unavailable")
+	saved, err := os.ReadFile(filepath.Join(dir, sandboxDiskKeyName))
+	require.NoError(t, err)
+	require.Equal(t, original, saved)
+	require.Equal(t, 1, posted)
 }

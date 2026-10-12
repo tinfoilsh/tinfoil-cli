@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -23,11 +22,13 @@ import (
 const (
 	// A Monitor's measured config is this repo's template with the owner key
 	// digest and storage binding filled in, so the CLI can render it independently.
-	monitorTemplateRepo = "tinfoilsh/confidential-agent-monitor"
-	monitorTemplateBase = "https://raw.githubusercontent.com"
-	monitorTemplateFile = "tinfoil-config.yml"
-	monitorOwnerEnv     = "MONITOR_OWNER_KEY_SHA256"
-	monitorConfigPrefix = "/tinfoil/containers/"
+	monitorTemplateRepo  = "tinfoilsh/confidential-agent-monitor"
+	monitorTemplateBase  = "https://raw.githubusercontent.com"
+	monitorTemplateFile  = "tinfoil-config.yml"
+	monitorOwnerEnv      = "MONITOR_OWNER_KEY_SHA256"
+	monitorArgonOwnerEnv = "MONITOR_OWNER_KEY_ARGON2ID"
+	defaultMonitorTag    = "v0.1.0-private.4"
+	monitorConfigPrefix  = "/tinfoil/containers/"
 
 	monitorOwnerKeyBytes = 32
 	monitorOwnerKeyName  = "owner.key"
@@ -102,10 +103,12 @@ var sandboxRecoveryFiles = []string{sandboxDiskKeyName, sandboxSSHKeyName, sandb
 var monitorRepin bool
 var monitorTag string
 var monitorTemplatePath string
+var monitorOwnerKeyFile string
 
 func init() {
-	monitorCreateCmd.Flags().StringVar(&monitorTag, "tag", "", "Repository tag or commit to deploy, required for a new Monitor")
+	monitorCreateCmd.Flags().StringVar(&monitorTag, "tag", "", "Repository tag or commit for a new Monitor (default: "+defaultMonitorTag+")")
 	monitorCreateCmd.Flags().StringVar(&monitorTemplatePath, "template", "", "Local tinfoil-config.yml from that tag or commit, for private development")
+	monitorCreateCmd.Flags().StringVar(&monitorOwnerKeyFile, "owner-key-file", "", "Read the existing owner key or passphrase from a file; use - for stdin (preserves whitespace)")
 	rootCmd.AddCommand(monitorCmd)
 	monitorCmd.AddCommand(monitorCreateCmd, monitorExportCmd, monitorImportCmd)
 	monitorCreateCmd.Flags().BoolVar(&monitorRepin, "repin", false, "Accept the new attested SSH host key of a restarted Monitor VM")
@@ -123,7 +126,9 @@ var monitorCreateCmd = &cobra.Command{
 	Use:   "create [name]",
 	Short: "Create, start and unlock a Monitor",
 	Long: `Create, start or unlock a Monitor. Repeat to resume an interrupted setup.
-Use --tag to select the release for a new Monitor. For private development,
+New Monitors use the approved internal release. Use --tag to override it.
+Use --owner-key-file to supply an existing key or passphrase; otherwise a secure
+key is generated on this device. For private development,
 --template supplies tinfoil-config.yml from that revision for local verification.
 Use --repin after a Monitor VM restart, then restart its sandboxes.
 Back up credentials with tinfoil monitor export.`,
@@ -149,7 +154,8 @@ Back up credentials with tinfoil monitor export.`,
 		}
 		fmt.Fprintf(os.Stderr, "Monitor %s unlocked, generation %d.\n", name, m.state.Generation)
 		fmt.Printf("Monitor app: https://%s/app/\n", m.profile.Domain)
-		fmt.Printf("Create a sandbox with: tinfoil sandbox create NAME --tag TAG --monitor %s --ssh\n", name)
+		fmt.Printf("Owner credential: use your original passphrase, or the generated key field in %s. See the credential-file notes in docs/monitor-sandboxes.md.\n", filepath.Join(m.dir, monitorOwnerKeyName))
+		fmt.Printf("Create a sandbox with: tinfoil sandbox create NAME --monitor %s --ssh\n", name)
 		return nil
 	},
 }
@@ -181,7 +187,13 @@ Restore it with tinfoil monitor import.`,
 		if err != nil {
 			return err
 		}
-		export.OwnerKey = base64.StdEncoding.EncodeToString(owner)
+		clear(owner)
+		ownerFile, err := os.ReadFile(filepath.Join(dir, monitorOwnerKeyName))
+		if err != nil {
+			return err
+		}
+		export.OwnerKey = string(ownerFile)
+		clear(ownerFile)
 		config, err := configPath()
 		if err != nil {
 			return err
@@ -283,8 +295,46 @@ func provisionMonitor(client *cpClient, scope accountScope, name, templateBase s
 	if err != nil {
 		return err
 	}
-	owner, err := ensureOwnerKey(client, dir, name)
+	row, lookupErr := containerNamed(client, name)
+	var missing *cpError
+	exists := lookupErr == nil
+	if lookupErr != nil && (!errors.As(lookupErr, &missing) || missing.Status != http.StatusNotFound) {
+		return lookupErr
+	}
+	tag := monitorTag
+	if exists {
+		if row.Repo != monitorTemplateRepo {
+			return fmt.Errorf("refusing Monitor %s: unexpected repository %s", name, row.Repo)
+		}
+		if tag != "" && row.CurrentTag != tag {
+			return fmt.Errorf("Monitor %s already uses %s; stop and recreate it to select a different release", name, row.CurrentTag)
+		}
+		tag = row.CurrentTag
+	} else if tag == "" {
+		tag = defaultMonitorTag
+	}
+	template, err := monitorTemplate(dir, tag, templateBase)
 	if err != nil {
+		return err
+	}
+	var existingConfig []byte
+	if exists {
+		existingConfig = []byte(row.Config)
+	}
+	credential, digest, err := prepareOwnerCredential(filepath.Join(dir, monitorOwnerKeyName), monitorOwnerKeyFile, monitorOwnerKeyBytes, existingConfig, template, monitorOwnerEnv, monitorArgonOwnerEnv)
+	if err != nil {
+		return err
+	}
+	defer clear(credential.Key)
+	if exists {
+		if _, err := verifyMonitorConfig(row, digest, template); err != nil {
+			return fmt.Errorf("refusing Monitor %s: %w", name, err)
+		}
+	}
+	if err := prepareStorageDirectory(dir); err != nil {
+		return err
+	}
+	if err := saveOwnerCredential(filepath.Join(dir, monitorOwnerKeyName), credential, monitorOwnerKeyBytes); err != nil {
 		return err
 	}
 	// A registered device key is never remade; importing credentials registers a new one.
@@ -296,10 +346,7 @@ func provisionMonitor(client *cpClient, scope accountScope, name, templateBase s
 	if _, err := ensureSSHKey(devicePath); err != nil {
 		return err
 	}
-	digest := storageHash(owner)
-	row, err := containerNamed(client, name)
-	var missing *cpError
-	if errors.As(err, &missing) && missing.Status == http.StatusNotFound {
+	if !exists {
 		storage := map[string]string{}
 		var previous monitorProfile
 		if readErr := readStorageJSON(filepath.Join(dir, monitorProfileName), &previous); readErr == nil {
@@ -310,25 +357,16 @@ func provisionMonitor(client *cpClient, scope accountScope, name, templateBase s
 		} else if !errors.Is(readErr, os.ErrNotExist) {
 			return readErr
 		}
-		if monitorTag == "" {
-			return errors.New("--tag is required when creating a Monitor")
+		client.http.Timeout = monitorStartTimeout
+		_, err = client.do("POST", "/api/containers", nil, map[string]any{"name": name, "repo": monitorTemplateRepo, "tag": tag, "variables": map[string]string{ownerEnvName(digest, monitorOwnerEnv, monitorArgonOwnerEnv): digest}, "object_storage": storage}, &row)
+		if err != nil {
+			return err
 		}
-		_, err = client.do("POST", "/api/containers", nil, map[string]any{"name": name, "repo": monitorTemplateRepo, "tag": monitorTag, "variables": map[string]string{monitorOwnerEnv: digest}, "object_storage": storage}, &row)
-	}
-	if err != nil {
-		return err
-	}
-	if row.Repo != monitorTemplateRepo {
-		return fmt.Errorf("refusing Monitor %s: its template comes from %s, not %s", name, row.Repo, monitorTemplateRepo)
-	}
-	if monitorTag != "" && row.CurrentTag != monitorTag {
-		return fmt.Errorf("Monitor %s already uses %s; stop and recreate it to select a different release", name, row.CurrentTag)
-	}
-	template, err := monitorTemplate(dir, row.CurrentTag, templateBase)
-	if err != nil {
-		return err
 	}
 
+	if row.Repo != monitorTemplateRepo || row.CurrentTag != tag {
+		return fmt.Errorf("refusing Monitor %s: the deployed repository or release differs from the requested template", name)
+	}
 	source, err := verifyMonitorConfig(row, digest, template)
 	if err != nil {
 		return fmt.Errorf("refusing Monitor %s: %w", name, err)
@@ -378,43 +416,12 @@ func provisionMonitor(client *cpClient, scope accountScope, name, templateBase s
 	return nil
 }
 
-// Never generate an owner key for an existing Monitor.
-func ensureOwnerKey(client *cpClient, dir, name string) ([]byte, error) {
-	path := filepath.Join(dir, monitorOwnerKeyName)
-	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
-		_, err := containerNamed(client, name)
-		var missing *cpError
-		if err == nil {
-			return nil, fmt.Errorf("Monitor %s exists; restore credentials with `tinfoil monitor import FILE`", name)
-		}
-		if !errors.As(err, &missing) || missing.Status != http.StatusNotFound {
-			return nil, err
-		}
-		if err := prepareStorageDirectory(dir); err != nil {
-			return nil, err
-		}
-		key := make([]byte, monitorOwnerKeyBytes)
-		if _, err := rand.Read(key); err != nil {
-			return nil, fmt.Errorf("generating an owner secret: %w", err)
-		}
-		if err := writeNewFile(path, []byte(base64.StdEncoding.EncodeToString(key))); err != nil {
-			return nil, err
-		}
-	}
-	return loadOwnerKey(dir)
-}
-
 func loadOwnerKey(dir string) ([]byte, error) {
-	path := filepath.Join(dir, monitorOwnerKeyName)
-	saved, err := os.ReadFile(path)
+	credential, err := readOwnerCredential(filepath.Join(dir, monitorOwnerKeyName), monitorOwnerKeyBytes)
 	if err != nil {
 		return nil, err
 	}
-	key, err := base64.StdEncoding.DecodeString(strings.TrimSpace(string(saved)))
-	if err != nil || len(key) != monitorOwnerKeyBytes {
-		return nil, fmt.Errorf("%s does not hold base64 for a %d-byte owner secret", path, monitorOwnerKeyBytes)
-	}
-	return key, nil
+	return credential.Key, nil
 }
 
 // Verify the control plane response against a locally rendered template.
@@ -434,7 +441,7 @@ func verifyMonitorConfig(row containerView, ownerDigest string, template []byte)
 	if err != nil || endpoint.Scheme != "https" || endpoint.Host == "" || endpoint.User != nil || endpoint.RawQuery != "" || endpoint.Fragment != "" || endpoint.Path != "/api/deployments/storage-credentials" {
 		return "", errors.New("invalid Monitor credential endpoint")
 	}
-	rendered, err := renderTemplateEnv(template, map[string]string{monitorOwnerEnv: ownerDigest, "TINFOIL_STORAGE_BUCKET": row.ObjectStorage.BucketURL, "AWS_CONTAINER_CREDENTIALS_FULL_URI": row.ObjectStorage.CredentialsURL})
+	rendered, err := renderTemplateEnv(template, map[string]string{ownerEnvName(ownerDigest, monitorOwnerEnv, monitorArgonOwnerEnv): ownerDigest, "TINFOIL_STORAGE_BUCKET": row.ObjectStorage.BucketURL, "AWS_CONTAINER_CREDENTIALS_FULL_URI": row.ObjectStorage.CredentialsURL})
 	if err != nil {
 		return "", fmt.Errorf("render Monitor template: %w", err)
 	}
@@ -737,6 +744,9 @@ func monitorTemplate(dir, tag, base string) ([]byte, error) {
 	path := filepath.Join(dir, "template-"+storageHash([]byte(tag))+".yml")
 	if monitorTemplatePath != "" {
 		return os.ReadFile(monitorTemplatePath)
+	}
+	if tag == defaultMonitorTag {
+		return bytes.Clone(approvedMonitorTemplate), nil
 	}
 	if raw, err := os.ReadFile(path); err == nil {
 		return raw, nil

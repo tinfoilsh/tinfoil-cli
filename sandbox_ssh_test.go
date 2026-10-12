@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net"
@@ -237,12 +238,16 @@ func TestDeleteRetryRemovesAccessOfGoneSandbox(t *testing.T) {
 
 func TestCreateResumesOnlyItsOwnContainedSandbox(t *testing.T) {
 	monitor, state := "other", sandboxStateRunning
+	template := "containers:\n  - name: workspace\n    env: [SANDBOX_OWNER_KEY_SHA256]\n"
+	var ownerDigest string
 	var requests []string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		requests = append(requests, r.Method+" "+r.URL.Path+" "+string(body))
 		route := r.Method + " " + r.URL.Path
 		switch {
+		case strings.HasSuffix(route, "/tinfoil-config.yml"):
+			io.WriteString(w, template)
 		case route == "GET /api/auth/context":
 			io.WriteString(w, `{"context_type":"organization","organization":{"id":"org_1"},"user_id":"user_1"}`)
 		case route == "GET /api/containers":
@@ -250,12 +255,17 @@ func TestCreateResumesOnlyItsOwnContainedSandbox(t *testing.T) {
 		case route == "GET /api/containers/personal-id":
 			io.WriteString(w, `{"id":"personal-id","name":"personal"}`)
 		case route == "GET /api/containers/work-id":
-			json.NewEncoder(w).Encode(containerView{ID: "work-id", Name: "work", Repo: defaultSandboxRepo, Domain: "work.example", Status: state, NetworkPolicy: &containerNetworkPolicy{Egress: []containerPeer{{monitor + "-id", 22}}}})
+			rendered, err := renderTemplateEnv([]byte(template), map[string]string{sandboxOwnerEnv: ownerDigest})
+			require.NoError(t, err)
+			json.NewEncoder(w).Encode(containerView{CurrentTag: "v1", Config: string(rendered), ID: "work-id", Name: "work", Repo: defaultSandboxRepo, Domain: "work.example", Status: state, NetworkPolicy: &containerNetworkPolicy{Egress: []containerPeer{{monitor + "-id", 22}}}})
 		default:
 			http.Error(w, `{"error":"unexpected"}`, http.StatusTeapot)
 		}
 	}))
 	defer server.Close()
+	oldBase := sandboxTemplateBase
+	sandboxTemplateBase = server.URL
+	t.Cleanup(func() { sandboxTemplateBase = oldBase })
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv(envAdminKey, "admin_test")
 	t.Setenv(envCPURL, server.URL)
@@ -264,9 +274,12 @@ func TestCreateResumesOnlyItsOwnContainedSandbox(t *testing.T) {
 	t.Cleanup(func() { sandboxMonitor = "" })
 	create := func() error { return sandboxCreateCmd.RunE(sandboxCreateCmd, []string{"work"}) }
 
-	require.ErrorContains(t, create(), "holds no keys", "a sandbox this device never bound is not taken over")
-	_, err := containedKeys("work", sandboxBinding{accountScope{ControlplaneURL: server.URL, OrgID: "org_1", UserID: "user_1"}, "personal"}, true)
+	require.ErrorContains(t, create(), "no local owner credential", "a sandbox this device never bound is not taken over")
+	keys, err := containedKeys("work", sandboxBinding{accountScope{ControlplaneURL: server.URL, OrgID: "org_1", UserID: "user_1"}, "personal"}, true)
 	require.NoError(t, err)
+	ownerBytes, err := base64.StdEncoding.DecodeString(keys.diskKey)
+	require.NoError(t, err)
+	ownerDigest = storageHash(ownerBytes)
 	state, requests = sandboxStateStopped, nil
 	require.ErrorContains(t, create(), "start it with `tinfoil sandbox start work`", "create never starts an existing sandbox")
 	for _, request := range requests {

@@ -1,0 +1,65 @@
+# Provisioning sets exactly one measured owner commitment.
+cvm-version: 0.15.1-rc.3@sha256:e1c8d17c7d79663c365169a796eec06116f483825028fad5faddfe9839321217
+cvm-network:
+  inbound-ports: [443, 22]
+cpus: 2
+memory: 2048
+
+shim:
+  upstream-port: 8080
+  authenticated: false
+  paths:
+    - /healthz
+    - /app/*
+    - /
+    - /unlock
+    - /presets/*
+    - /labels/*
+    - /accounts/*
+    - /sign-in/*
+    - /connections/*
+    - /requests*
+    - /policy*
+
+networks:
+  upstream:
+    egress: open
+
+attested-keys:
+  - id: host-ssh
+    key: ed25519
+    uid: 65532
+    gid: 65532
+
+containers:
+  - name: monitor
+    image: "ghcr.io/tinfoilsh/confidential-agent-monitor@sha256:8cd8c614c7cd4e1beba04148fa0bcbd045b70e5c19257d3ca8b98e9afb701add" # v0.1.0-private.4
+    user: "65532:65532"
+    keys: [host-ssh]
+    ports: ["22:2223"]
+    networks: [upstream]
+    env:
+      - MONITOR_OWNER_KEY_SHA256=
+      - MONITOR_OWNER_KEY_ARGON2ID=
+      - TINFOIL_STORAGE_BUCKET
+      - AWS_CONTAINER_CREDENTIALS_FULL_URI
+    secrets:
+      - AWS_CONTAINER_AUTHORIZATION_TOKEN
+    command:
+      - -production
+      - -ssh-host-key
+      - /run/tinfoil/keys/host-ssh/private_key.pem
+      - -api
+      - 0.0.0.0:8080
+      - -listen
+      - 0.0.0.0:2223
+    read_only: true
+    tmpfs:
+      /tmp: rw,noexec,nosuid,nodev,size=64m
+    restart: always
+    healthcheck:
+      test: ["CMD", "/monitor", "-healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

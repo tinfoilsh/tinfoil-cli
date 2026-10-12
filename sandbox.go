@@ -33,9 +33,10 @@ const (
 	sandboxStateStopped = "stopped"
 	sandboxStatePending = "pending"
 
-	// The volume worker requires the same length as volumeKeyBytes in
-	// confidential-agent-sandbox.
-	sandboxDiskKeyBytes = 64
+	// Size of CLI-generated workspace keys; supplied credentials may vary.
+	sandboxDiskKeyBytes  = 64
+	defaultSandboxTag    = "v0.1.10"
+	sandboxArgonOwnerEnv = "SANDBOX_OWNER_KEY_ARGON2ID"
 
 	// Measured before boot; the workspace key itself stays on this device.
 	sandboxOwnerEnv = "SANDBOX_OWNER_KEY_SHA256"
@@ -74,13 +75,15 @@ type sandboxKeys struct {
 }
 
 var (
-	sandboxTag       string
-	sandboxVariables []string
-	sandboxMonitor   string
-	sandboxCreateSSH bool
-	sandboxYes       bool
-	sandboxSSHStart  bool
-	sandboxSSHStop   bool
+	sandboxTag              string
+	sandboxVolume           string
+	sandboxWorkspaceKeyFile string
+	sandboxVariables        []string
+	sandboxMonitor          string
+	sandboxCreateSSH        bool
+	sandboxYes              bool
+	sandboxSSHStart         bool
+	sandboxSSHStop          bool
 )
 
 func init() {
@@ -98,9 +101,12 @@ func init() {
 		sandboxEnrollCmd,
 		sandboxSSHCmd,
 	)
-	sandboxCreateCmd.Flags().StringVar(&sandboxTag, "tag", "", "Repository tag or commit to deploy")
+	sandboxCreateCmd.Flags().StringVar(&sandboxTag, "tag", "", "Repository tag or commit for a new sandbox (default: "+defaultSandboxTag+")")
+	sandboxCreateCmd.Flags().StringVar(&sandboxVolume, "volume", "", "Reuse an existing workspace volume by name or ID; requires its original workspace key")
 	sandboxCreateCmd.Flags().StringVar(&sandboxMonitor, "monitor", "", "Contain the sandbox and connect it through this Monitor (see tinfoil monitor create)")
 	sandboxCreateCmd.Flags().BoolVar(&sandboxCreateSSH, "ssh", false, "Open a shell once the sandbox is ready")
+	sandboxCreateCmd.Flags().StringVar(&sandboxWorkspaceKeyFile, "workspace-key-file", "", "Read the original workspace key or passphrase from a file; use - for stdin (preserves whitespace)")
+	sandboxEnrollCmd.Flags().StringVar(&sandboxWorkspaceKeyFile, "workspace-key-file", "", "Adopt this workspace using its original key or passphrase file; use - for stdin")
 	sandboxDeleteCmd.Flags().BoolVar(&sandboxYes, "yes", false, "Skip the confirmation prompt")
 	sandboxSSHCmd.Flags().BoolVar(&sandboxSSHStart, "start", false, "Start the sandbox first if it is stopped")
 	sandboxSSHCmd.Flags().BoolVar(&sandboxSSHStop, "stop", false, "Stop the sandbox once the session ends")
@@ -144,7 +150,9 @@ var sandboxCreateCmd = &cobra.Command{
 	Long: `Create a sandbox with this device's owner key bound into its boot config,
 wait for it to boot, then enroll its workspace.
 
-The keys are made before the first boot and kept in ~/.tinfoil/sandboxes/<name>. Keep
+Use --workspace-key-file for an existing key or passphrase. Otherwise a secure
+key is generated on this device. New sandboxes use the approved release; --tag
+overrides it. Keys are kept in ~/.tinfoil/sandboxes/<name>. Keep
 the disk key: it is what the workspace is encrypted with, and without it the
 workspace cannot be opened again.
 
@@ -166,14 +174,78 @@ creation: it reuses the keys here and enrolls the running sandbox's current boot
 		if variables == nil {
 			variables = make(map[string]string)
 		}
-		body := map[string]any{"name": name, "repo": defaultSandboxRepo, "tag": sandboxTag, "variables": variables}
-		resume := false
-		if sandboxMonitor != "" {
-			if resume, err = registerSandboxAgent(name, sandboxMonitor); err != nil {
+		client, err := authedClient()
+		if err != nil {
+			return err
+		}
+		row, lookupErr := containerNamed(client, name)
+		var missing *cpError
+		exists := lookupErr == nil
+		if lookupErr != nil && (!errors.As(lookupErr, &missing) || missing.Status != http.StatusNotFound) {
+			return lookupErr
+		}
+		tag := sandboxTag
+		if exists {
+			if row.Repo != defaultSandboxRepo || row.Debug {
+				return errors.New("existing resource is not a sandbox")
+			}
+			if tag != "" && tag != row.CurrentTag {
+				return errors.New("existing sandbox uses another release; start it with its saved configuration")
+			}
+			tag = row.CurrentTag
+			if row.Status != statusRunning {
+				return fmt.Errorf("sandbox %s already exists; start it with `tinfoil sandbox start %s`", name, name)
+			}
+		} else if tag == "" {
+			tag = defaultSandboxTag
+		}
+		template, err := fetchSandboxTemplate(tag, sandboxTemplateBase)
+		if err != nil {
+			return err
+		}
+		dir, err := sandboxKeyDir(name)
+		if err != nil {
+			return err
+		}
+		var retained *volumeView
+		if sandboxVolume != "" {
+			if sandboxWorkspaceKeyFile == "" {
+				saved, err := readOwnerCredential(filepath.Join(dir, sandboxDiskKeyName), sandboxDiskKeyBytes)
+				if err != nil {
+					return fmt.Errorf("--volume requires the original saved workspace key or --workspace-key-file: %w", err)
+				}
+				clear(saved.Key)
+			}
+			retained, err = retainedSandboxVolume(client, row, exists, sandboxVolume)
+			if err != nil {
 				return err
 			}
-			client, err := authedClient()
-			if err != nil {
+		}
+		var existingConfig []byte
+		if exists {
+			existingConfig = []byte(row.Config)
+		}
+		credential, digest, err := prepareOwnerCredential(filepath.Join(dir, sandboxDiskKeyName), sandboxWorkspaceKeyFile, sandboxDiskKeyBytes, existingConfig, template, sandboxOwnerEnv, sandboxArgonOwnerEnv)
+		if err != nil {
+			return err
+		}
+		defer clear(credential.Key)
+		if exists {
+			if _, err := verifySandboxConfig(row, digest, template, variables); err != nil {
+				return err
+			}
+		}
+		delete(variables, sandboxOwnerEnv)
+		delete(variables, sandboxArgonOwnerEnv)
+		variables[ownerEnvName(digest, sandboxOwnerEnv, sandboxArgonOwnerEnv)] = digest
+		body := map[string]any{"name": name, "repo": defaultSandboxRepo, "tag": tag, "variables": variables}
+		if retained != nil {
+			body["host_name"] = retained.HostName
+			body["volumes"] = map[string]string{"workspace": retained.ID}
+		}
+		resume := exists
+		if sandboxMonitor != "" {
+			if resume, err = registerSandboxAgent(name, sandboxMonitor, credential); err != nil {
 				return err
 			}
 			peer, err := containerNamed(client, sandboxMonitor)
@@ -181,16 +253,10 @@ creation: it reuses the keys here and enrolls the running sandbox's current boot
 				return err
 			}
 			body["network_policy"] = containerNetworkPolicy{EgressMode: "restricted", Egress: []containerPeer{{peer.ID, 22}}}
-		}
-		if _, err := ensureSandboxKeys(name); err != nil {
+		} else if _, err := ensureSandboxKeysWithCredential(name, credential); err != nil {
 			return err
 		}
-		owner, err := loadDiskKey(name)
-		if err != nil {
-			return err
-		}
-		variables[sandboxOwnerEnv] = storageHash(owner)
-		clear(owner)
+
 		var box *sandboxView
 		if resume {
 			// Retry enrollment against the existing boot's measured owner key.
@@ -200,9 +266,6 @@ creation: it reuses the keys here and enrolls the running sandbox's current boot
 			}
 			box, err = claimBoot("GET", pathf("/api/containers/%s", existing.ContainerID), name, nil)
 		} else {
-			if sandboxTag == "" {
-				return errors.New("--tag is required when creating a sandbox")
-			}
 			box, err = bootSandbox("POST", "/api/containers", name, body)
 		}
 		if err := renderSandbox(box, err); err != nil || !sandboxCreateSSH {
@@ -325,6 +388,11 @@ without restarting the sandbox.`,
 		box, err := getSandbox(name)
 		if err != nil {
 			return err
+		}
+		if sandboxWorkspaceKeyFile != "" {
+			if err := adoptSandboxCredential(*box, sandboxWorkspaceKeyFile); err != nil {
+				return err
+			}
 		}
 		return enrollSandbox(*box)
 	},
@@ -588,18 +656,14 @@ func loadDiskKey(name string) ([]byte, error) {
 		return nil, err
 	}
 	path := filepath.Join(dir, sandboxDiskKeyName)
-	saved, err := os.ReadFile(path)
+	credential, err := readOwnerCredential(path, sandboxDiskKeyBytes)
 	if errors.Is(err, os.ErrNotExist) {
-		return nil, fmt.Errorf("no disk key for %s in %s: restore this sandbox's saved keys before enrolling", name, dir)
+		return nil, fmt.Errorf("no disk key for %s in %s: restore saved keys or use enroll --workspace-key-file", name, dir)
 	}
 	if err != nil {
-		return nil, fmt.Errorf("reading %s: %w", path, err)
+		return nil, err
 	}
-	key, err := base64.StdEncoding.DecodeString(strings.TrimSpace(string(saved)))
-	if err != nil || len(key) != sandboxDiskKeyBytes {
-		return nil, fmt.Errorf("%s does not hold base64 for a %d-byte workspace key", path, sandboxDiskKeyBytes)
-	}
-	return key, nil
+	return credential.Key, nil
 }
 
 func postEnrollment(httpClient *http.Client, url string, keys *sandboxKeys) error {
@@ -709,6 +773,10 @@ func loadSandboxKeys(name string) (*sandboxKeys, error) {
 }
 
 func ensureSandboxKeys(name string) (*sandboxKeys, error) {
+	return ensureSandboxKeysWithCredential(name, nil)
+}
+
+func ensureSandboxKeysWithCredential(name string, supplied *ownerCredential) (*sandboxKeys, error) {
 	dir, err := sandboxKeyDir(name)
 	if err != nil {
 		return nil, err
@@ -717,6 +785,11 @@ func ensureSandboxKeys(name string) (*sandboxKeys, error) {
 		return nil, fmt.Errorf("creating %s: %w", dir, err)
 	}
 
+	if supplied != nil {
+		if err := saveOwnerCredential(filepath.Join(dir, sandboxDiskKeyName), supplied, sandboxDiskKeyBytes); err != nil {
+			return nil, err
+		}
+	}
 	keys := &sandboxKeys{dir: dir, sshKeyPath: filepath.Join(dir, sandboxSSHKeyName)}
 	if keys.diskKey, err = ensureDiskKey(filepath.Join(dir, sandboxDiskKeyName)); err != nil {
 		return nil, err
@@ -730,27 +803,23 @@ func ensureSandboxKeys(name string) (*sandboxKeys, error) {
 // ensureDiskKey never replaces an existing key. A replacement cannot unlock an
 // existing workspace.
 func ensureDiskKey(path string) (string, error) {
-	switch saved, err := os.ReadFile(path); {
-	case err == nil:
-		key := strings.TrimSpace(string(saved))
-		decoded, decodeErr := base64.StdEncoding.DecodeString(key)
-		if decodeErr != nil || len(decoded) != sandboxDiskKeyBytes {
-			return "", fmt.Errorf("%s does not hold base64 for a %d-byte workspace key; a workspace made with the original key cannot be opened without it, so move this file aside only if you mean to give that up", path, sandboxDiskKeyBytes)
+	credential, err := readOwnerCredential(path, sandboxDiskKeyBytes)
+	if errors.Is(err, os.ErrNotExist) {
+		raw := make([]byte, sandboxDiskKeyBytes)
+		if _, err = rand.Read(raw); err != nil {
+			return "", err
 		}
-		return key, nil
-	case !errors.Is(err, os.ErrNotExist):
-		return "", fmt.Errorf("reading %s: %w", path, err)
+		credential, err = newOwnerCredential(raw, true)
+		clear(raw)
+		if err == nil {
+			err = saveOwnerCredential(path, credential, sandboxDiskKeyBytes)
+		}
 	}
-
-	raw := make([]byte, sandboxDiskKeyBytes)
-	if _, err := rand.Read(raw); err != nil {
-		return "", fmt.Errorf("generating a workspace key: %w", err)
-	}
-	key := base64.StdEncoding.EncodeToString(raw)
-	if err := writeNewFile(path, []byte(key)); err != nil {
+	if err != nil {
 		return "", err
 	}
-	return key, nil
+	defer clear(credential.Key)
+	return base64.StdEncoding.EncodeToString(credential.Key), nil
 }
 
 func ensureSSHKey(path string) (string, error) {
@@ -830,4 +899,29 @@ func renderSandboxes(list []sandboxView) error {
 		)
 	}
 	return nil
+}
+
+// Reuse the workspace on its original host; never reattach another live VM's disk.
+func retainedSandboxVolume(client *cpClient, row containerView, exists bool, flag string) (*volumeView, error) {
+	requests, err := parseVolumeRequests([]string{flag})
+	if err != nil {
+		return nil, err
+	}
+	if len(requests) != 1 || (requests[0].slot != "" && requests[0].slot != "workspace") {
+		return nil, errors.New("--volume selects the sandbox workspace slot")
+	}
+	volume, err := lookupVolume(client, requests[0].identifier)
+	if err != nil {
+		return nil, err
+	}
+	if volume.ContainerID != "" && (!exists || volume.ContainerID != row.ID) {
+		return nil, fmt.Errorf("volume %s is attached to another container", volume.ID)
+	}
+	if exists && row.Volumes["workspace"] != volume.ID {
+		return nil, errors.New("existing sandbox has a different workspace volume; its saved binding was not changed")
+	}
+	if volume.HostName == "" {
+		return nil, errors.New("workspace volume has no host assignment")
+	}
+	return volume, nil
 }

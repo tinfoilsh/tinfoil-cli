@@ -1,0 +1,82 @@
+# An Ubuntu workspace with measured CVM-wide administrator access. Connect with
+# native SSH through Monitor after attested enrollment.
+# Restricted egress requires tinfoild v0.8.19 or newer.
+cvm-version: 0.15.1-rc.3@sha256:e1c8d17c7d79663c365169a796eec06116f483825028fad5faddfe9839321217
+# cpus: 32
+# memory: 524288
+# gpus: 8
+cpus: 4
+memory: 8192
+
+networks:
+  dev:
+    # The host permits only the assigned Monitor after measured boot.
+    egress: open
+
+attested-keys:
+  - id: host-ssh
+    key: ecdsa-p256
+
+volumes:
+  - name: workspace
+    size: 30GiB
+    # Persistent encrypted disk, opened by the volume key an enrollment spends.
+    exec: true
+    # The pack is read-only, so a writable store is the volume layered over it.
+    overlays:
+      - model: nix
+        source: nix/store
+        target: store
+
+models:
+  - name: nix
+    # The pack holds programs, not weights.
+    exec: true
+    repo: "nix/sandbox-toolchain@kzqj4szd3hirm5yik5rf2ww7szfq84c5"
+    mwp: "9997bc8aaf52ef8bb53a61e1decbd89748f182f0b6c4bfa13c4a0db1f8298a66_17364475904_38b04538-4fe1-5437-a5f7-0740acc8d387"
+
+containers:
+  - name: "workspace"
+    image: "ghcr.io/tinfoilsh/confidential-agent-sandbox@sha256:6b37323e3594d873b6dd2c7bc09d572231d02fe9dd3c57359494fa8fb9b4ec3e" # v0.1.10
+    # runtime: nvidia
+    # gpus: all
+    restart: on-failure
+    cvm_admin: true
+    stop_signal: SIGRTMIN+3
+    stop_timeout: 120
+    networks: [dev]
+    keys: [host-ssh]
+    models: [nix]
+    persistent_volumes: [workspace:/mnt/disk, workspace:/nix]
+
+    # A contained sandbox publishes sshd through its reverse connection. 22 lands
+    # on the CVM's loopback for the shim's CONNECT tunnel, which reaches an
+    # uncontained one; sshd accepts publickey against the enrolled key only.
+    ports:
+      - '22:22'
+
+    env:
+      # Per launch, from the unmeasured external config tinfoild writes.
+      - DOMAIN
+      # New launches bind a salted Argon2id owner commitment. SHA-256 is for
+      # existing generated credentials. Exactly one binding must be supplied.
+      - SANDBOX_OWNER_KEY_ARGON2ID=
+      - SANDBOX_OWNER_KEY_SHA256=
+
+    tmpfs:
+      /run: "rw,nosuid,nodev,mode=755"
+
+    healthcheck:
+      test: ["CMD", "/healthcheck.sh"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 120s
+
+shim:
+  # The shim supplies attestation and TLS; the workload authenticates the owner key.
+  upstream-port: 8080
+  authenticated: false
+  paths:
+    - /enroll
+    - /healthz

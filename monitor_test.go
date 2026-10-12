@@ -30,7 +30,7 @@ const testMonitorTemplate = "containers:\n  - name: monitor\n    env: [MONITOR_O
 
 func renderedMonitorConfig(template, digest string) containerView {
 	binding := &containerObjectStorage{ID: "6135b835-902c-474f-ae9b-ab8d103fbedd", BucketURL: "s3://test-bucket?region=us-west-2&prefix=containers/account/6135b835-902c-474f-ae9b-ab8d103fbedd/", CredentialsURL: "https://api.test/api/deployments/storage-credentials"}
-	raw, err := renderTemplateEnv([]byte(template), map[string]string{monitorOwnerEnv: digest, "TINFOIL_STORAGE_BUCKET": binding.BucketURL, "AWS_CONTAINER_CREDENTIALS_FULL_URI": binding.CredentialsURL})
+	raw, err := renderTemplateEnv([]byte(template), map[string]string{ownerEnvName(digest, monitorOwnerEnv, monitorArgonOwnerEnv): digest, "TINFOIL_STORAGE_BUCKET": binding.BucketURL, "AWS_CONTAINER_CREDENTIALS_FULL_URI": binding.CredentialsURL})
 	if err != nil {
 		panic(err)
 	}
@@ -102,8 +102,12 @@ func newMonitorCPFixture(t *testing.T) *monitorCPFixture {
 	}
 	f.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method + " " + r.URL.Path {
-		case "GET /" + monitorTemplateRepo + "/v1/" + monitorTemplateFile:
-			io.WriteString(w, testMonitorTemplate)
+		case "GET /" + monitorTemplateRepo + "/v1/" + monitorTemplateFile, "GET /" + monitorTemplateRepo + "/" + defaultMonitorTag + "/" + monitorTemplateFile:
+			if f.template != "" {
+				io.WriteString(w, f.template)
+			} else {
+				io.WriteString(w, testMonitorTemplate)
+			}
 		case "GET /api/containers":
 			rows := []containerView{}
 			if f.exists {
@@ -126,7 +130,11 @@ func newMonitorCPFixture(t *testing.T) *monitorCPFixture {
 			require.NotEmpty(t, request.Tag)
 			f.tags = append(f.tags, request.Tag)
 			f.exists = true
-			f.digests = append(f.digests, request.Variables[monitorOwnerEnv])
+			digest := request.Variables[monitorOwnerEnv]
+			if digest == "" {
+				digest = request.Variables[monitorArgonOwnerEnv]
+			}
+			f.digests = append(f.digests, digest)
 			f.storageIDs = append(f.storageIDs, request.ObjectStorage.ID)
 			json.NewEncoder(w).Encode(row())
 		default:
@@ -187,7 +195,7 @@ func TestProvisionMonitorResumesWithTheSameOwnerSecret(t *testing.T) {
 
 	t.Setenv(envConfigPath, filepath.Join(t.TempDir(), "config.json"))
 	err = provisionMonitor(client, scope, "personal", f.server.URL)
-	require.ErrorContains(t, err, "tinfoil monitor import", "lost credentials never mint a replacement owner")
+	require.ErrorContains(t, err, "no local owner credential", "lost credentials never mint a replacement owner")
 	lost, err := monitorDir(scope, "personal")
 	require.NoError(t, err)
 	require.NoFileExists(t, filepath.Join(lost, monitorOwnerKeyName))
@@ -241,67 +249,84 @@ func TestMonitorProfileGenerationNeverDecreases(t *testing.T) {
 }
 
 func TestMonitorExportImportKeepsScopeAndKeys(t *testing.T) {
-	org := "org_1"
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		require.Equal(t, "/api/auth/context", r.URL.Path)
-		io.WriteString(w, `{"context_type":"organization","organization":{"id":"`+org+`"},"user_id":"user_1"}`)
-	}))
-	defer server.Close()
-	t.Setenv(envAdminKey, "admin_test")
-	t.Setenv(envCPURL, server.URL)
-	t.Setenv(envConfigPath, filepath.Join(t.TempDir(), "config.json"))
-	scope := accountScope{ControlplaneURL: server.URL, OrgID: org, UserID: "user_1"}
-	dir, err := monitorDir(scope, "personal")
-	require.NoError(t, err)
-	require.NoError(t, prepareStorageDirectory(dir))
-	owner := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{7}, monitorOwnerKeyBytes))
-	require.NoError(t, writeNewFile(filepath.Join(dir, monitorOwnerKeyName), []byte(owner)))
-	require.NoError(t, writeStorageJSON(filepath.Join(dir, monitorProfileName), monitorProfile{Scope: scope, Name: "personal", Domain: "personal.example", Source: "tinfoil/containers@a@sha256:a", Generation: 7, Device: "device-exporter"}, true))
-	_, err = ensureSSHKey(filepath.Join(dir, monitorDeviceKeyName))
-	require.NoError(t, err)
-	work, err := containedKeys("work", sandboxBinding{scope, "personal"}, true)
-	require.NoError(t, err)
-	_, err = ensureSandboxKeys("uncontained")
-	require.NoError(t, err)
+	for _, format := range []string{"legacy", "passphrase"} {
+		t.Run(format, func(t *testing.T) {
+			org := "org_1"
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				require.Equal(t, "/api/auth/context", r.URL.Path)
+				io.WriteString(w, `{"context_type":"organization","organization":{"id":"`+org+`"},"user_id":"user_1"}`)
+			}))
+			defer server.Close()
+			t.Setenv(envAdminKey, "admin_test")
+			t.Setenv(envCPURL, server.URL)
+			t.Setenv(envConfigPath, filepath.Join(t.TempDir(), "config.json"))
+			scope := accountScope{ControlplaneURL: server.URL, OrgID: org, UserID: "user_1"}
+			dir, err := monitorDir(scope, "personal")
+			require.NoError(t, err)
+			require.NoError(t, prepareStorageDirectory(dir))
+			owner := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{7}, monitorOwnerKeyBytes))
+			if format == "passphrase" {
+				record, err := json.Marshal(&ownerCredential{Version: 1, Key: []byte("correct horse battery staple"), Argon2ID: testOwnerPHC})
+				require.NoError(t, err)
+				owner = string(record)
+			}
+			require.NoError(t, writeNewFile(filepath.Join(dir, monitorOwnerKeyName), []byte(owner)))
+			require.NoError(t, writeStorageJSON(filepath.Join(dir, monitorProfileName), monitorProfile{Scope: scope, Name: "personal", Domain: "personal.example", Source: "tinfoil/containers@a@sha256:a", Generation: 7, Device: "device-exporter"}, true))
+			_, err = ensureSSHKey(filepath.Join(dir, monitorDeviceKeyName))
+			require.NoError(t, err)
+			var supplied []*ownerCredential
+			if format == "passphrase" {
+				supplied = append(supplied, &ownerCredential{Version: 1, Key: []byte("correct horse battery staple"), Argon2ID: testOwnerPHC})
+			}
+			work, err := containedKeys("work", sandboxBinding{scope, "personal"}, true, supplied...)
+			require.NoError(t, err)
+			_, err = ensureSandboxKeys("uncontained")
+			require.NoError(t, err)
 
-	file := filepath.Join(t.TempDir(), "personal.json")
-	require.NoError(t, monitorExportCmd.RunE(monitorExportCmd, []string{"personal", file}))
-	info, err := os.Stat(file)
-	require.NoError(t, err)
-	require.Equal(t, os.FileMode(0o600), info.Mode().Perm())
-	var export monitorExport
-	data, err := os.ReadFile(file)
-	require.NoError(t, err)
-	require.NoError(t, json.Unmarshal(data, &export))
-	require.Len(t, export.Sandboxes, 1, "only sandboxes bound to this Monitor and account")
+			file := filepath.Join(t.TempDir(), "personal.json")
+			require.NoError(t, monitorExportCmd.RunE(monitorExportCmd, []string{"personal", file}))
+			info, err := os.Stat(file)
+			require.NoError(t, err)
+			require.Equal(t, os.FileMode(0o600), info.Mode().Perm())
+			var export monitorExport
+			data, err := os.ReadFile(file)
+			require.NoError(t, err)
+			require.NoError(t, json.Unmarshal(data, &export))
+			require.Len(t, export.Sandboxes, 1, "only sandboxes bound to this Monitor and account")
 
-	t.Setenv(envConfigPath, filepath.Join(t.TempDir(), "config.json"))
-	require.NoError(t, monitorImportCmd.RunE(monitorImportCmd, []string{file}))
-	require.NoError(t, monitorImportCmd.RunE(monitorImportCmd, []string{file}), "importing the same keys again changes nothing")
-	restored, err := monitorDir(scope, "personal")
-	require.NoError(t, err)
-	saved, err := os.ReadFile(filepath.Join(restored, monitorOwnerKeyName))
-	require.NoError(t, err)
-	require.Equal(t, owner, string(saved))
-	require.NoFileExists(t, filepath.Join(restored, monitorDeviceKeyName))
-	var profile monitorProfile
-	require.NoError(t, readStorageJSON(filepath.Join(restored, monitorProfileName), &profile))
-	require.EqualValues(t, 7, profile.Generation)
-	require.Empty(t, profile.Device, "a new device registers its own key")
-	keys, err := containedKeys("work", sandboxBinding{scope, "personal"}, false)
-	require.NoError(t, err)
-	require.Equal(t, []string{work.diskKey, work.publicKey, work.agentKey}, []string{keys.diskKey, keys.publicKey, keys.agentKey})
+			t.Setenv(envConfigPath, filepath.Join(t.TempDir(), "config.json"))
+			require.NoError(t, monitorImportCmd.RunE(monitorImportCmd, []string{file}))
+			require.NoError(t, monitorImportCmd.RunE(monitorImportCmd, []string{file}), "importing the same keys again changes nothing")
+			restored, err := monitorDir(scope, "personal")
+			require.NoError(t, err)
+			saved, err := os.ReadFile(filepath.Join(restored, monitorOwnerKeyName))
+			require.NoError(t, err)
+			require.Equal(t, owner, string(saved))
+			require.NoFileExists(t, filepath.Join(restored, monitorDeviceKeyName))
+			var profile monitorProfile
+			require.NoError(t, readStorageJSON(filepath.Join(restored, monitorProfileName), &profile))
+			require.EqualValues(t, 7, profile.Generation)
+			require.Empty(t, profile.Device, "a new device registers its own key")
+			keys, err := containedKeys("work", sandboxBinding{scope, "personal"}, false)
+			require.NoError(t, err)
+			require.Equal(t, []string{work.diskKey, work.publicKey, work.agentKey}, []string{keys.diskKey, keys.publicKey, keys.agentKey})
 
-	require.NoError(t, os.WriteFile(filepath.Join(keys.dir, sandboxDiskKeyName), []byte(base64.StdEncoding.EncodeToString(make([]byte, sandboxDiskKeyBytes))), 0o600))
-	require.ErrorContains(t, monitorImportCmd.RunE(monitorImportCmd, []string{file}), "already holds a different key")
-	org = "org_2"
-	require.ErrorContains(t, monitorImportCmd.RunE(monitorImportCmd, []string{file}), "another account")
+			require.NoError(t, os.WriteFile(filepath.Join(keys.dir, sandboxDiskKeyName), []byte(base64.StdEncoding.EncodeToString(make([]byte, sandboxDiskKeyBytes))), 0o600))
+			require.ErrorContains(t, monitorImportCmd.RunE(monitorImportCmd, []string{file}), "already holds a different key")
+			org = "org_2"
+			require.ErrorContains(t, monitorImportCmd.RunE(monitorImportCmd, []string{file}), "another account")
+		})
+	}
 }
 
 // TestMonitorSessionAgainstRealMonitor runs the owner client and the device
 // route against the sibling Monitor checkout in production mode.
 func TestMonitorSessionAgainstRealMonitor(t *testing.T) {
-	source, err := filepath.Abs(filepath.Join("..", "monitor"))
+	source := os.Getenv("TINFOIL_MONITOR_TEST_SOURCE")
+	if source == "" {
+		source = filepath.Join("..", "monitor")
+	}
+	source, err := filepath.Abs(source)
 	require.NoError(t, err)
 	if _, err := os.Stat(filepath.Join(source, "routes.go")); err != nil {
 		t.Skip("no Monitor checkout with routes next to tinfoil-cli")
@@ -316,85 +341,95 @@ func TestMonitorSessionAgainstRealMonitor(t *testing.T) {
 	if output, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("building Monitor: %v\n%s", err, output)
 	}
-	_, hostPrivate, err := ed25519.GenerateKey(rand.Reader)
-	require.NoError(t, err)
-	block, err := ssh.MarshalPrivateKey(hostPrivate, "")
-	require.NoError(t, err)
-	hostKeyPath := filepath.Join(t.TempDir(), "host_key")
-	require.NoError(t, os.WriteFile(hostKeyPath, pem.EncodeToMemory(block), 0o600))
-	owner := bytes.Repeat([]byte{9}, monitorOwnerKeyBytes)
-	bucket, api, sshAddress := t.TempDir(), freeAddress(t), freeAddress(t)
-	start := func() *exec.Cmd {
-		cmd := exec.Command(binary, "-production", "-ssh-host-key", hostKeyPath,
-			"-bucket", "file://"+bucket+"?no_tmp_dir=1", "-api", api, "-listen", sshAddress)
-		cmd.Env = append(os.Environ(), "MONITOR_OWNER_KEY_SHA256="+storageHash(owner))
-		var logs bytes.Buffer
-		cmd.Stderr = &logs
-		require.NoError(t, cmd.Start())
-		t.Cleanup(func() {
-			cmd.Process.Kill()
-			cmd.Wait()
-			if t.Failed() {
-				t.Log(logs.String())
+	for _, mode := range []string{"legacy", "passphrase"} {
+		t.Run(mode, func(t *testing.T) {
+			_, hostPrivate, err := ed25519.GenerateKey(rand.Reader)
+			require.NoError(t, err)
+			block, err := ssh.MarshalPrivateKey(hostPrivate, "")
+			require.NoError(t, err)
+			hostKeyPath := filepath.Join(t.TempDir(), "host_key")
+			require.NoError(t, os.WriteFile(hostKeyPath, pem.EncodeToMemory(block), 0o600))
+			owner := bytes.Repeat([]byte{9}, monitorOwnerKeyBytes)
+			if mode == "passphrase" {
+				owner = []byte("correct horse battery staple")
 			}
+			bucket, api, sshAddress := t.TempDir(), freeAddress(t), freeAddress(t)
+			start := func() *exec.Cmd {
+				cmd := exec.Command(binary, "-production", "-ssh-host-key", hostKeyPath,
+					"-bucket", "file://"+bucket+"?no_tmp_dir=1", "-api", api, "-listen", sshAddress)
+				cmd.Env = append(os.Environ(), "MONITOR_OWNER_KEY_ARGON2ID=", "MONITOR_OWNER_KEY_SHA256="+storageHash(owner))
+				if mode == "passphrase" {
+					cmd.Env = append(os.Environ(), "MONITOR_OWNER_KEY_SHA256=", "MONITOR_OWNER_KEY_ARGON2ID="+testOwnerPHC)
+				}
+				var logs bytes.Buffer
+				cmd.Stderr = &logs
+				require.NoError(t, cmd.Start())
+				t.Cleanup(func() {
+					cmd.Process.Kill()
+					cmd.Wait()
+					if t.Failed() {
+						t.Log(logs.String())
+					}
+				})
+				require.Eventually(t, func() bool {
+					resp, err := http.Get("http://" + api + "/healthz")
+					if err == nil {
+						resp.Body.Close()
+					}
+					return err == nil
+				}, 10*time.Second, 50*time.Millisecond)
+				return cmd
+			}
+			monitor := start()
+			dir := t.TempDir()
+			m := &monitorSession{dir: dir, profile: monitorProfile{Name: "personal"}, url: "http://" + api, http: &http.Client{Timeout: 10 * time.Second}, owner: bytes.Repeat([]byte{8}, monitorOwnerKeyBytes)}
+			require.ErrorContains(t, m.call("/unlock", map[string]uint64{"generation": 0}), "401", "another secret cannot claim an empty Monitor")
+			m.owner = owner
+			require.NoError(t, m.call("/unlock", map[string]uint64{"generation": 0}))
+
+			laptop := testSigner(t)
+			laptopLine := authorizedLine(laptop)
+			require.NoError(t, m.call("/policy/edits", map[string]any{"changes": []map[string]any{{"path": []string{"identities", "laptop"}, "value": map[string]any{"key": laptopLine, "accounts": map[string]any{}}}}}))
+			deviceLine, err := ensureSSHKey(filepath.Join(dir, monitorDeviceKeyName))
+			require.NoError(t, err)
+			require.ErrorIs(t, m.deviceRoutes(), errDeviceUnregistered)
+			require.NoError(t, m.registerDevice())
+			_, deviceName, err := m.device()
+			require.NoError(t, err)
+			identities := ownerIdentities(t, m)
+			require.Equal(t, laptopLine, strings.TrimSpace(identities["laptop"].Key), "unrelated identities are preserved")
+			require.False(t, identities["laptop"].Routes)
+			require.True(t, identities[deviceName].Routes)
+			require.NoError(t, m.deviceRoutes())
+			generation := m.state.Generation
+			require.NoError(t, m.registerDevice(), "a registered device is not added twice")
+			require.NoError(t, m.ensureIdentity("sandbox-work", deviceLine, false), "a key Monitor already knows is not added twice")
+			require.ErrorContains(t, m.ensureIdentity(deviceName, authorizedLine(testSigner(t)), false), "another key")
+			require.ErrorContains(t, m.removeIdentity("laptop", deviceLine), "another key")
+			require.Equal(t, generation, m.state.Generation)
+			revoke := func(change map[string]any) {
+				require.NoError(t, m.call("/policy/edits", map[string]any{"changes": []map[string]any{change}}))
+			}
+			revoke(map[string]any{"path": []string{"identities", deviceName, "routes"}, "value": false})
+			generation = m.state.Generation
+			require.ErrorContains(t, m.deviceRoutes(), deviceLine, "the owner can add the identity back from the message")
+			require.ErrorContains(t, m.registerDevice(), "lost route access", "the CLI never grants routes back")
+			revoke(map[string]any{"path": []string{"identities", deviceName}, "delete": true})
+			generation = m.state.Generation
+			require.ErrorContains(t, m.registerDevice(), "removed", "a removed device is not registered again")
+			require.Equal(t, generation, m.state.Generation)
+
+			ahead := &monitorSession{dir: t.TempDir(), profile: monitorProfile{Name: "personal", Generation: m.state.Generation + 5}, url: m.url, http: m.http, owner: owner}
+			require.ErrorContains(t, ahead.call("/unlock", map[string]uint64{"generation": ahead.profile.Generation}), "older than")
+
+			monitor.Process.Kill()
+			monitor.Wait()
+			start()
+			restarted := &monitorSession{dir: dir, profile: m.profile, url: m.url, http: m.http, owner: owner}
+			require.NoError(t, restarted.call("/unlock", map[string]uint64{"generation": m.profile.Generation}))
+			require.Contains(t, restarted.state.Config.Identities, "laptop", "the encrypted policy survives a restart")
 		})
-		require.Eventually(t, func() bool {
-			resp, err := http.Get("http://" + api + "/healthz")
-			if err == nil {
-				resp.Body.Close()
-			}
-			return err == nil
-		}, 10*time.Second, 50*time.Millisecond)
-		return cmd
 	}
-	monitor := start()
-	dir := t.TempDir()
-	m := &monitorSession{dir: dir, profile: monitorProfile{Name: "personal"}, url: "http://" + api, http: &http.Client{Timeout: 10 * time.Second}, owner: bytes.Repeat([]byte{8}, monitorOwnerKeyBytes)}
-	require.ErrorContains(t, m.call("/unlock", map[string]uint64{"generation": 0}), "401", "another secret cannot claim an empty Monitor")
-	m.owner = owner
-	require.NoError(t, m.call("/unlock", map[string]uint64{"generation": 0}))
-
-	laptop := testSigner(t)
-	laptopLine := authorizedLine(laptop)
-	require.NoError(t, m.call("/policy/edits", map[string]any{"changes": []map[string]any{{"path": []string{"identities", "laptop"}, "value": map[string]any{"key": laptopLine, "accounts": map[string]any{}}}}}))
-	deviceLine, err := ensureSSHKey(filepath.Join(dir, monitorDeviceKeyName))
-	require.NoError(t, err)
-	require.ErrorIs(t, m.deviceRoutes(), errDeviceUnregistered)
-	require.NoError(t, m.registerDevice())
-	_, deviceName, err := m.device()
-	require.NoError(t, err)
-	identities := ownerIdentities(t, m)
-	require.Equal(t, laptopLine, strings.TrimSpace(identities["laptop"].Key), "unrelated identities are preserved")
-	require.False(t, identities["laptop"].Routes)
-	require.True(t, identities[deviceName].Routes)
-	require.NoError(t, m.deviceRoutes())
-	generation := m.state.Generation
-	require.NoError(t, m.registerDevice(), "a registered device is not added twice")
-	require.NoError(t, m.ensureIdentity("sandbox-work", deviceLine, false), "a key Monitor already knows is not added twice")
-	require.ErrorContains(t, m.ensureIdentity(deviceName, authorizedLine(testSigner(t)), false), "another key")
-	require.ErrorContains(t, m.removeIdentity("laptop", deviceLine), "another key")
-	require.Equal(t, generation, m.state.Generation)
-	revoke := func(change map[string]any) {
-		require.NoError(t, m.call("/policy/edits", map[string]any{"changes": []map[string]any{change}}))
-	}
-	revoke(map[string]any{"path": []string{"identities", deviceName, "routes"}, "value": false})
-	generation = m.state.Generation
-	require.ErrorContains(t, m.deviceRoutes(), deviceLine, "the owner can add the identity back from the message")
-	require.ErrorContains(t, m.registerDevice(), "lost route access", "the CLI never grants routes back")
-	revoke(map[string]any{"path": []string{"identities", deviceName}, "delete": true})
-	generation = m.state.Generation
-	require.ErrorContains(t, m.registerDevice(), "removed", "a removed device is not registered again")
-	require.Equal(t, generation, m.state.Generation)
-
-	ahead := &monitorSession{dir: t.TempDir(), profile: monitorProfile{Name: "personal", Generation: m.state.Generation + 5}, url: m.url, http: m.http, owner: owner}
-	require.ErrorContains(t, ahead.call("/unlock", map[string]uint64{"generation": ahead.profile.Generation}), "older than")
-
-	monitor.Process.Kill()
-	monitor.Wait()
-	start()
-	restarted := &monitorSession{dir: dir, profile: m.profile, url: m.url, http: m.http, owner: owner}
-	require.NoError(t, restarted.call("/unlock", map[string]uint64{"generation": m.profile.Generation}))
-	require.Contains(t, restarted.state.Config.Identities, "laptop", "the encrypted policy survives a restart")
 }
 
 func freeAddress(t *testing.T) string {
@@ -491,4 +526,58 @@ func TestMonitorExplicitRevisionChangePreservesOwnerAndStateGeneration(t *testin
 	require.Equal(t, before.StorageID, after.StorageID)
 	require.Equal(t, uint64(42), after.Generation)
 	require.NotEqual(t, before.Source, after.Source)
+}
+
+func TestMonitorPassphraseCreateAdoptAndExport(t *testing.T) {
+	t.Setenv(envConfigPath, filepath.Join(t.TempDir(), "config.json"))
+	f := newMonitorCPFixture(t)
+	f.template = strings.Replace(testMonitorTemplate, "MONITOR_OWNER_KEY_SHA256", "'MONITOR_OWNER_KEY_SHA256=', 'MONITOR_OWNER_KEY_ARGON2ID='", 1)
+	oldApproved := approvedMonitorTemplate
+	approvedMonitorTemplate = []byte(f.template)
+	t.Cleanup(func() { approvedMonitorTemplate = oldApproved })
+	oldInput := monitorOwnerKeyFile
+	monitorOwnerKeyFile = filepath.Join(t.TempDir(), "passphrase")
+	monitorTag = ""
+	t.Cleanup(func() { monitorOwnerKeyFile = oldInput })
+	secret := []byte("  Café workspace 🔐\n")
+	require.NoError(t, os.WriteFile(monitorOwnerKeyFile, secret, 0600))
+	client := newCPClient(cliConfig{ControlplaneURL: f.server.URL, APIKey: "admin_test"})
+	scope := accountScope{ControlplaneURL: f.server.URL, UserID: "user_passphrase"}
+	require.NoError(t, provisionMonitor(client, scope, "personal", f.server.URL))
+	require.Equal(t, []string{defaultMonitorTag}, f.tags)
+	require.Len(t, f.digests, 1)
+	require.True(t, strings.HasPrefix(f.digests[0], ownerPHCPrefix))
+	require.NotContains(t, f.digests[0], string(secret))
+	dir, err := monitorDir(scope, "personal")
+	require.NoError(t, err)
+	credential, err := readOwnerCredential(filepath.Join(dir, monitorOwnerKeyName), 32)
+	require.NoError(t, err)
+	require.Equal(t, secret, credential.Key)
+	require.Equal(t, f.digests[0], credential.Argon2ID)
+	require.NoError(t, provisionMonitor(client, scope, "personal", f.server.URL))
+	require.Len(t, f.digests, 1, "retry does not create another Monitor")
+	// A second device adopts the existing salt only after matching all config bytes.
+	t.Setenv(envConfigPath, filepath.Join(t.TempDir(), "config.json"))
+	f.mutate = func(row *containerView) { row.Config += "debug: true\n" }
+	require.ErrorContains(t, provisionMonitor(client, scope, "personal", f.server.URL), "measured config does not match")
+	second, err := monitorDir(scope, "personal")
+	require.NoError(t, err)
+	require.NoFileExists(t, filepath.Join(second, monitorOwnerKeyName))
+	f.mutate = nil
+	require.NoError(t, provisionMonitor(client, scope, "personal", f.server.URL))
+	restored, err := readOwnerCredential(filepath.Join(second, monitorOwnerKeyName), 32)
+	require.NoError(t, err)
+	require.Equal(t, credential, restored)
+	// Export serialization retains the complete credential record for import.
+	ownerFile, err := os.ReadFile(filepath.Join(second, monitorOwnerKeyName))
+	require.NoError(t, err)
+	var profile monitorProfile
+	require.NoError(t, readStorageJSON(filepath.Join(second, monitorProfileName), &profile))
+	t.Setenv(envConfigPath, filepath.Join(t.TempDir(), "config.json"))
+	require.NoError(t, importMonitor(scope, monitorExport{Profile: profile, OwnerKey: string(ownerFile)}))
+	imported, err := monitorDir(scope, "personal")
+	require.NoError(t, err)
+	raw, err := os.ReadFile(filepath.Join(imported, monitorOwnerKeyName))
+	require.NoError(t, err)
+	require.Equal(t, ownerFile, raw)
 }
