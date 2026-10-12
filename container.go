@@ -304,7 +304,7 @@ Registry revisions also accept sha256:<config digest>. The organization must
 have registry access enabled. Registry and local configs do not support --replace.
 A new revision requires a new container; deploy without revision flags
 restarts the saved config. Local config bytes are sent to Tinfoil for deployment
-without publication; keep the exact file to verify subsequent connections.`,
+without registry publication; keep the exact file to verify subsequent connections.`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if localConfigFile != "" {

@@ -43,6 +43,8 @@ Use a public config repository connected to the Tinfoil GitHub App, with `tinfoi
 
 Local configs are sent to the controlplane for deployment without registry publication. Pin `cvm-version` to a runtime version and manifest digest (`version@sha256:digest`) and keep the exact YAML bytes for verification.
 
+The guest includes the raw config in its attestation document. Local mode supports deployments on private networks; it does not hide the config from callers that can reach the endpoint.
+
 ```bash
 tinfoil container create my-container --config ./tinfoil-config.yml --host box2
 tinfoil container connect my-container --config ./tinfoil-config.yml
