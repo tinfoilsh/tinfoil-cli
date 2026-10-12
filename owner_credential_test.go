@@ -54,3 +54,20 @@ func TestOwnerCredentialCreationNeverReplacesExistingKeys(t *testing.T) {
 		require.Equal(t, public, binding)
 	}
 }
+
+func TestLegacyOwnerCredentialErrorIdentifiesFileWithoutReplacingIt(t *testing.T) {
+	for _, size := range []int{32, 64} {
+		file := filepath.Join(t.TempDir(), "owner.key")
+		original := []byte(base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{42}, size)))
+		require.NoError(t, os.WriteFile(file, original, 0600))
+		for _, exists := range []bool{false, true} {
+			_, _, err := createOwnerCredential(file, exists)
+			require.ErrorContains(t, err, file)
+			require.ErrorContains(t, err, "legacy encryption-only key")
+			require.NotContains(t, err.Error(), string(original))
+		}
+		after, err := os.ReadFile(file)
+		require.NoError(t, err)
+		require.Equal(t, original, after)
+	}
+}
