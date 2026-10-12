@@ -15,10 +15,24 @@ import (
 	"golang.org/x/term"
 )
 
+type containerNetworkPolicy struct {
+	Public     bool            `json:"public"`
+	EgressMode string          `json:"egress_mode"`
+	Egress     []containerPeer `json:"egress"`
+}
+
+type containerPeer struct {
+	ContainerID string `json:"container_id"`
+	Port        int    `json:"port"`
+}
+
 // containerView mirrors the controlplane's containerResponse. We only model
 // the fields the CLI actually displays or forwards; everything else stays in
 // RawMessage form so updates to the API don't break decoding here.
 type containerView struct {
+	Config        string                  `json:"config"`
+	NetworkPolicy *containerNetworkPolicy `json:"network_policy"`
+
 	ID                   string           `json:"id"`
 	Name                 string           `json:"name"`
 	Repo                 string           `json:"repo"`

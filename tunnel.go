@@ -33,7 +33,6 @@ const tunnelReadIdleTimeout = 30 * time.Second
 var (
 	forwardPorts    []string
 	forwardStdio    uint
-	forwardSandbox  string
 	forwardSealedTo string
 	tunnelAPIKey    string
 	allowDebug      bool
@@ -43,7 +42,6 @@ func init() {
 	rootCmd.AddCommand(forwardCmd)
 	forwardCmd.Flags().StringArrayVarP(&forwardPorts, "local", "L", nil, "Forward [bind:]<local-port>:<enclave-port>; may be repeated")
 	forwardCmd.Flags().UintVar(&forwardStdio, "stdio", 0, "Pipe a single stream to <enclave-port> over stdin/stdout instead of listening")
-	forwardCmd.Flags().StringVar(&forwardSandbox, "sandbox", "", "Tunnel into one of your sandboxes, which must be sealed to your disk key")
 	forwardCmd.Flags().StringVar(&forwardSealedTo, "sealed-to", "", "RTMR3 the enclave must carry")
 	forwardCmd.Flags().MarkHidden("sealed-to")
 	addTunnelFlags(forwardCmd)
@@ -82,8 +80,7 @@ to select the expected workload. All connections require v3 code verification.
 
   tinfoil forward my-server -L 25565:25565
   tinfoil forward my-server -L 5432:5432 -L 8080:8080
-  tinfoil forward enclave.example.com --repo org/workload -L 2022:2022
-  tinfoil forward --sandbox my-sandbox -L 6379:6379`,
+  tinfoil forward enclave.example.com --repo org/workload -L 2022:2022`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if (len(forwardPorts) == 0) == (forwardStdio == 0) {
@@ -108,15 +105,7 @@ to select the expected workload. All connections require v3 code verification.
 		if len(args) == 1 {
 			identifier = args[0]
 		}
-		var target *tunnelTarget
-		var err error
-		if forwardSandbox == "" {
-			target, err = resolveTunnelTarget(identifier)
-		} else if identifier != "" || enclaveHost != "" {
-			return fmt.Errorf("--sandbox names the enclave, so pass no other target")
-		} else {
-			target, err = sandboxTunnelTarget(forwardSandbox)
-		}
+		target, err := resolveTunnelTarget(identifier)
 		if err != nil {
 			return err
 		}
@@ -291,18 +280,7 @@ func newTunnel(target *tunnelTarget) (*tunnel, error) {
 		}
 		return &http2.Transport{
 			ReadIdleTimeout: tunnelReadIdleTimeout,
-			TLSClientConfig: &tls.Config{
-				VerifyConnection: func(state tls.ConnectionState) error {
-					certFP, err := enclave.ConnectionCertFP(state)
-					if err != nil {
-						return err
-					}
-					if certFP != fingerprint {
-						return errors.New("tunnel certificate does not match the attested key; re-verify the enclave")
-					}
-					return nil
-				},
-			},
+			TLSClientConfig: &tls.Config{VerifyConnection: pinnedTLS(fingerprint)},
 			// The request authority carries the enclave-side port, so the
 			// address http2 derives from it is never the one to dial.
 			DialTLSContext: func(ctx context.Context, network, _ string, config *tls.Config) (net.Conn, error) {
@@ -318,6 +296,20 @@ func newTunnel(target *tunnelTarget) (*tunnel, error) {
 		return nil, err
 	}
 	return tun, nil
+}
+
+// pinnedTLS accepts only a connection presenting the attested TLS key.
+func pinnedTLS(fingerprint string) func(tls.ConnectionState) error {
+	return func(state tls.ConnectionState) error {
+		certFP, err := enclave.ConnectionCertFP(state)
+		if err != nil {
+			return err
+		}
+		if certFP != fingerprint {
+			return errors.New("certificate does not match the attested key; re-verify the enclave")
+		}
+		return nil
+	}
 }
 
 // checkDebugMode refuses a tunnel into an enclave running the debug toolbox,

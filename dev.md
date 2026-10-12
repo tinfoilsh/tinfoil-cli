@@ -151,20 +151,63 @@ For the next release, run `volume auto-unlock configure` with the same disk and 
 
 ## Sandboxes
 
-Sandboxes are user-owned confidential VMs with persistent encrypted disks.
+Every sandbox requires a Monitor and locally saved public-key credentials.
+New Monitors and sandboxes use the latest published stable release. Pass
+`--tag RELEASE` to either create command to select a release or prerelease.
+Repeating creation keeps the deployed release.
 
-```bash
-tinfoil sandbox create my-sandbox     # boots, enrolls keys, installs an ssh profile
-ssh my-sandbox
-tinfoil sandbox list
-tinfoil sandbox ssh my-sandbox        # the tunnelled alternative
-tinfoil sandbox stop my-sandbox       # keep the disk
-tinfoil sandbox start my-sandbox
-tinfoil sandbox restart my-sandbox
-tinfoil sandbox enroll my-sandbox     # enroll with an existing permit
-tinfoil sandbox delete my-sandbox     # erase the disk
+```sh
+tinfoil monitor create personal
+tinfoil sandbox create work --monitor personal
+ssh work
+tinfoil monitor open personal
 ```
 
-`create`, `start`, and `restart` wait for the VM, verify its attestation, enroll local SSH and disk keys, and install a native ssh profile when the VM exposes a direct SSH port. The profile connects through `console.tinfoil.sh` on the allocated port, with the host key verified against the sandbox's domain. The CLI stores the local SSH and disk keys in `~/.tinfoil/sandboxes/<name>`. Back up `disk.key`; without it, the workspace cannot be opened.
+Creating a new sandbox registers its agent key and authorizes this device to
+open sandbox routes. Owner SSH unlocks Monitor using the credential saved on
+this device. Existing identities keep their permissions; disabled
+route access must be enabled in the UI. Start, restart and enroll never change
+Monitor policy. Grant the `sandbox-work` identity account access in the UI.
+Keep `monitor open` running while using the UI. It connects directly to the
+Monitor's attested SSH endpoint.
 
-`enroll` uses a permit issued elsewhere, such as the dashboard. Permits expire after five minutes and work once for one boot.
+Creation puts the Monitor endpoint and verified host key in measured
+`MONITOR_ROUTE`. Bare environment references are refused. This route is fixed
+for the boot. `SANDBOX_OWNER_PUBLIC_KEY` is also measured and is the actual SSH
+login key. The CLI derives its OpenSSH encoding as `owner_ed25519` from the saved
+owner credential; it never adopts an independently generated login key.
+
+The sandbox opens a reverse SSH route before disk unlock. The CLI verifies fresh
+attestation over HTTPS, then sends the disk key and Monitor agent identity over
+SSH pinned to the attested boot key. Bootstrap OpenSSH allows only the unlock
+helper. Shell access starts after mounting and uses the same owner key. Unlock
+cannot supply a login key or a Monitor route. No application-level challenge or
+signed enrollment remains. Attestation, unlock and native SSH all travel through
+Monitor; the controlplane WebSocket is no longer used.
+
+By default, boot uses Monitor's public IPv4 address and published SSH port.
+If the platform supplies a different sandbox-facing endpoint, set it at launch
+with `--variable 'MONITOR_ROUTE={"address":"IP:PORT"}'`. The CLI supplies the
+verified host key and checks that address against the enforced network policy.
+The current platform uses a private endpoint for same-host placement, so automatic
+setup with the public default still requires cross-host placement. This change
+does not modify platform routing.
+Create and start install the attested SSH profile automatically.
+To prepare a stopped sandbox or a boot started from the dashboard, run
+`tinfoil sandbox start work`, then `ssh work`. Use `tinfoil sandbox enroll work`
+to retry enrollment or repair the SSH profile of a running sandbox.
+Forward ports with `ssh -L 8080:localhost:8080 work`.
+After a Monitor VM restart, run `monitor create personal --repin` and restart
+its sandboxes. Keys stay under `~/.tinfoil`; recovery is not supported.
+
+Use `container list`, `container stop NAME`, `container deploy NAME`, and
+`container delete NAME` for Monitor lifecycle management. Sandbox lifecycle
+commands remain under `sandbox`. Deleting a sandbox leaves its Monitor access
+grants for you to remove in the UI.
+
+The controlplane supplies each workload's configuration. The CLI passes its
+exact digest to tinfoil-go, which verifies the configuration's Sigstore approval
+and attested measurements before credentials are sent. Config updates need no
+CLI rebuild or local template. `sandbox create --variable` sets creation inputs;
+later connections use the deployed configuration without repeating those flags.
+The public-key workload images still need publishing.

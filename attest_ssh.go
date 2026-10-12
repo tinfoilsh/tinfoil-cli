@@ -16,6 +16,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/tinfoilsh/tinfoil-go/document"
+	"github.com/tinfoilsh/tinfoil-go/verify"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/knownhosts"
 	"golang.org/x/term"
@@ -118,6 +119,10 @@ func attestedHostKey(host, source, sealedTo string) (ssh.PublicKey, error) {
 	if err != nil {
 		return nil, fmt.Errorf("verifying %s: %w", host, err)
 	}
+	return endorsedHostKey(host, verified)
+}
+
+func endorsedHostKey(host string, verified *verify.Verification) (ssh.PublicKey, error) {
 	data, err := verified.CryptoMaterialData(attestedHostKeyID, document.KeySPKIV1Format)
 	if err != nil {
 		return nil, fmt.Errorf("%s endorses no attested %q key: %w", host, attestedHostKeyID, err)
@@ -140,22 +145,47 @@ type sshProfile struct {
 	user         string
 	identityFile string
 	hostKey      ssh.PublicKey
+	// hostKeyAlias pins hostKey under a name instead of the dialed address, and
+	// jump is the host this one is reached through.
+	hostKeyAlias string
+	jump         *sshProfile
 }
 
 func (p sshProfile) render() string {
+	if p.jump == nil {
+		return p.block(p.name)
+	}
+	return p.jump.block(p.name) + "\n" + p.block(p.name)
+}
+
+// block renders one Host whose pins are in pins.known_hosts.
+func (p sshProfile) block(pins string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Host %s\n  HostName %s\n  Port %d\n  User %s\n", p.name, p.hostName, p.port, p.user)
+	if p.jump != nil {
+		fmt.Fprintf(&b, "  ProxyJump %s\n", p.jump.name)
+	}
+	if p.hostKeyAlias != "" {
+		fmt.Fprintf(&b, "  HostKeyAlias %s\n", p.hostKeyAlias)
+	}
 	if p.identityFile != "" {
 		fmt.Fprintf(&b, "  IdentityFile %s\n  IdentitiesOnly yes\n", p.identityFile)
 	}
-	fmt.Fprintf(&b, "  HostKeyAlgorithms %s\n  UserKnownHostsFile ~/.ssh/tinfoil/%s.known_hosts\n", p.hostKey.Type(), p.name)
+	fmt.Fprintf(&b, "  HostKeyAlgorithms %s\n  UserKnownHostsFile ~/.ssh/tinfoil/%s.known_hosts\n", p.hostKey.Type(), pins)
 	b.WriteString("  GlobalKnownHostsFile /dev/null\n  StrictHostKeyChecking yes\n  UpdateHostKeys no\n  CheckHostIP no\n")
 	return b.String()
 }
 
 func (p sshProfile) pin() string {
-	address := knownhosts.Normalize(net.JoinHostPort(p.hostName, strconv.Itoa(p.port)))
-	return knownhosts.Line([]string{address}, p.hostKey) + "\n"
+	address := p.hostKeyAlias
+	if address == "" {
+		address = knownhosts.Normalize(net.JoinHostPort(p.hostName, strconv.Itoa(p.port)))
+	}
+	pin := knownhosts.Line([]string{address}, p.hostKey) + "\n"
+	if p.jump != nil {
+		pin = p.jump.pin() + pin
+	}
+	return pin
 }
 
 func (p sshProfile) install() error {
