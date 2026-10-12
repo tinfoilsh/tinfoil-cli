@@ -348,6 +348,9 @@ func attestConnection(dial func(context.Context, string, string) (net.Conn, erro
 	if err != nil {
 		return nil, nil, err
 	}
+	// This bootstrap request sends only a public freshness nonce. The document
+	// is authenticated by VerifyV3 below, then its attested TLS key is matched
+	// against this exact response before an enrollment client is returned.
 	fetch := &http.Client{Transport: &http.Transport{DialContext: dial, TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS13, InsecureSkipVerify: true}}, Timeout: sandboxEnrollTimeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	defer fetch.CloseIdleConnections()
 	resp, err := fetch.Get("https://" + host + sandboxAttestationPath + "?nonce=" + hex.EncodeToString(nonce))
@@ -387,6 +390,9 @@ func attestConnection(dial func(context.Context, string, string) (net.Conn, erro
 	if err := pinnedTLS(fingerprint)(*resp.TLS); err != nil {
 		return nil, nil, fmt.Errorf("shim TLS: %w", err)
 	}
+	// Hardware attestation supplies the trust root for this private endpoint.
+	// VerifyConnection checks every connection against that attested key;
+	// freshAttestation also bounds reuse of already-open connections.
 	pinned := &http.Client{Transport: &http.Transport{DialContext: dial, TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS13, InsecureSkipVerify: true, VerifyConnection: pinnedTLS(fingerprint)}}, Timeout: sandboxEnrollTimeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	pinned.Transport = freshAttestation{pinned.Transport.(*http.Transport), verified.FreshnessExpiresAt}
 	return key, pinned, nil
