@@ -1,10 +1,13 @@
 package main
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -26,6 +29,55 @@ func testBootKey(t *testing.T) ssh.PublicKey {
 	key, err := ssh.NewPublicKey(&private.PublicKey)
 	require.NoError(t, err)
 	return key
+}
+
+func TestSandboxAttestationRejectsUntrustedRelayReplies(t *testing.T) {
+	nonces := map[string]bool{}
+	for _, tt := range []struct {
+		name, body, wantError string
+		status                int
+	}{
+		{"forged evidence", `{}`, "verifying sandbox.invalid", http.StatusOK},
+		{"redirect", "", "302 Found", http.StatusFound},
+		{"oversized evidence", strings.Repeat("x", maxSandboxAttestationBytes+1), "exceeds", http.StatusOK},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			requests := make(chan *http.Request, 1)
+			var count atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if count.Add(1) == 1 {
+					requests <- r
+				}
+				w.Header().Set("Location", "/redirected")
+				w.WriteHeader(tt.status)
+				io.WriteString(w, tt.body)
+			}))
+			defer server.Close()
+			dial := func(ctx context.Context, _, _ string) (net.Conn, error) {
+				return (&net.Dialer{}).DialContext(ctx, "tcp", server.Listener.Addr().String())
+			}
+			key, expiry, err := attestConnection(dial, "sandbox.invalid", defaultSandboxRepo)
+			require.ErrorContains(t, err, tt.wantError)
+			require.Nil(t, key)
+			require.True(t, expiry.IsZero())
+			require.EqualValues(t, 1, count.Load(), "redirects must not be followed")
+			request := <-requests
+			require.Nil(t, request.TLS)
+			require.Equal(t, http.MethodGet, request.Method)
+			require.Equal(t, sandboxAttestationPath, request.URL.Path)
+			require.Zero(t, request.ContentLength)
+			for _, header := range []string{"Authorization", "Proxy-Authorization", "Cookie"} {
+				require.Empty(t, request.Header.Get(header))
+			}
+			require.Len(t, request.URL.Query(), 1)
+			nonce := request.URL.Query().Get("nonce")
+			raw, err := hex.DecodeString(nonce)
+			require.NoError(t, err)
+			require.Len(t, raw, 32)
+			require.False(t, nonces[nonce], "each attempt must use fresh evidence")
+			nonces[nonce] = true
+		})
+	}
 }
 
 func TestContainedProfileJumpsThroughMonitorAndKeepsItsAlias(t *testing.T) {

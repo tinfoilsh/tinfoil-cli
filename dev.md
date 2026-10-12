@@ -172,7 +172,9 @@ Legacy credential files remain readable and are never overwritten with new keys.
 
 The reverse SSH connection uses only the sandbox boot key and publishes fixed
 SSH and attestation ports. Its Monitor host is untrusted. The CLI checks fresh
-sandbox attestation and its endorsed TLS/SSH key before sending any secrets.
+sandbox attestation, then requires its endorsed key during SSH authentication
+before sending any secrets. Attestation uses HTTP over the relay and carries only
+a public nonce and signed evidence; it needs no TLS certificate or trusted relay.
 Application networking and native SSH strictly pin the current Monitor boot key.
 Both use Monitor's existing public SSH listener; this flow needs no CONNECT,
 WebSocket, private-connect API, persistent host key, or extra listener.

@@ -4,8 +4,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
-	"crypto/tls"
-	"crypto/x509"
 	"encoding/base32"
 	"encoding/base64"
 	"encoding/hex"
@@ -22,7 +20,6 @@ import (
 	"time"
 
 	"github.com/tinfoilsh/tinfoil-go/document"
-	"github.com/tinfoilsh/tinfoil-go/enclave"
 	"github.com/tinfoilsh/tinfoil-go/verify"
 	"golang.org/x/crypto/ssh"
 )
@@ -395,18 +392,17 @@ func (s *sandboxSession) install() error {
 	return installSandboxAlias(s.profile, home)
 }
 
-// Verify fresh evidence and the boot TLS key before authorizing SSH unlock.
+// Verify fresh evidence before pinning its endorsed key for SSH unlock.
 func attestConnection(dial func(context.Context, string, string) (net.Conn, error), host, source string) (ssh.PublicKey, time.Time, error) {
 	nonce, err := document.RandomNonce()
 	if err != nil {
 		return nil, time.Time{}, err
 	}
-	// This bootstrap request sends only a public freshness nonce. The document
-	// is authenticated by VerifyV3 below, then its attested TLS key is matched
-	// against this exact response before its SSH key is trusted.
-	fetch := &http.Client{Transport: &http.Transport{DialContext: dial, TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS13, InsecureSkipVerify: true}}, Timeout: sandboxEnrollTimeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	// Only a public nonce and attestation cross this untrusted relay. VerifyV3
+	// authenticates the evidence; owner SSH requires the endorsed boot key.
+	fetch := &http.Client{Transport: &http.Transport{DialContext: dial}, Timeout: sandboxEnrollTimeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	defer fetch.CloseIdleConnections()
-	resp, err := fetch.Get("https://" + host + sandboxAttestationPath + "?nonce=" + hex.EncodeToString(nonce))
+	resp, err := fetch.Get("http://" + host + sandboxAttestationPath + "?nonce=" + hex.EncodeToString(nonce))
 	if err != nil {
 		return nil, time.Time{}, fmt.Errorf("fetching the attestation of %s: %w", host, err)
 	}
@@ -432,20 +428,6 @@ func attestConnection(dial func(context.Context, string, string) (net.Conn, erro
 	key, err := endorsedHostKey(host, verified)
 	if err != nil {
 		return nil, time.Time{}, err
-	}
-	cryptoKey, ok := key.(ssh.CryptoPublicKey)
-	if !ok {
-		return nil, time.Time{}, errors.New("sandbox boot key has no TLS representation")
-	}
-	fingerprint, err := enclave.CertPubkeyFP(&x509.Certificate{PublicKey: cryptoKey.CryptoPublicKey()})
-	if err != nil {
-		return nil, time.Time{}, err
-	}
-	if resp.TLS == nil {
-		return nil, time.Time{}, errors.New("sandbox supplied no TLS key")
-	}
-	if err := pinnedTLS(fingerprint)(*resp.TLS); err != nil {
-		return nil, time.Time{}, fmt.Errorf("sandbox TLS: %w", err)
 	}
 	return key, verified.FreshnessExpiresAt, nil
 }
