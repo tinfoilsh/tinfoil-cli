@@ -192,6 +192,8 @@ verified host key and checks that address against the enforced network policy.
 The current platform uses a private endpoint for same-host placement, so automatic
 setup with the public default still requires cross-host placement. This change
 does not modify platform routing.
+Both create commands accept `--host HOST` to select an allowed host instead of
+the organization default. Use separate hosts for this trial.
 Create and start install the attested SSH profile automatically.
 To prepare a stopped sandbox or a boot started from the dashboard, run
 `tinfoil sandbox start work`, then `ssh work`. Use `tinfoil sandbox enroll work`

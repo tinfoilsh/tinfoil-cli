@@ -65,7 +65,8 @@ type sandboxKeys struct {
 }
 
 var (
-	sandboxTag string
+	sandboxTag  string
+	sandboxHost string
 
 	sandboxVariables []string
 	sandboxMonitor   string
@@ -87,6 +88,7 @@ func init() {
 		sandboxEnrollCmd,
 	)
 	sandboxCreateCmd.Flags().StringVar(&sandboxTag, "tag", "", "Release for a new sandbox (default: latest published stable release)")
+	sandboxCreateCmd.Flags().StringVar(&sandboxHost, "host", "", "Host for a new sandbox (default: organization default)")
 	sandboxCreateCmd.Flags().StringVar(&sandboxMonitor, "monitor", "", "Required Monitor for sandbox networking (see tinfoil monitor create)")
 	sandboxDeleteCmd.Flags().BoolVar(&sandboxYes, "yes", false, "Skip the confirmation prompt")
 
@@ -167,6 +169,9 @@ enrolls the running sandbox's current boot.`,
 			return err
 		}
 		exists := row.ID != ""
+		if exists && sandboxHost != "" && sandboxHost != row.HostName {
+			return fmt.Errorf("%s already uses host %s", name, row.HostName)
+		}
 		if exists && row.Status != statusRunning {
 			return fmt.Errorf("sandbox %s already exists; start it with `tinfoil sandbox start %s`", name, name)
 		}
@@ -181,6 +186,9 @@ enrolls the running sandbox's current boot.`,
 		defer credential.clear()
 		variables[sandboxOwnerEnv] = publicKey
 		body := map[string]any{"name": name, "repo": defaultSandboxRepo, "tag": tag, "variables": variables}
+		if sandboxHost != "" {
+			body["host_name"] = sandboxHost
+		}
 		policy, err := prepareSandboxMonitor(client, row, name, sandboxMonitor, credential, variables)
 		if err != nil {
 			return err

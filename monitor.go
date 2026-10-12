@@ -51,6 +51,7 @@ type monitorProfile struct {
 var (
 	monitorRepin bool
 	monitorTag   string
+	monitorHost  string
 )
 
 func init() {
@@ -58,6 +59,7 @@ func init() {
 	monitorCmd.AddCommand(monitorCreateCmd)
 	monitorCreateCmd.Flags().BoolVar(&monitorRepin, "repin", false, "Accept the new attested SSH host key of a restarted Monitor VM")
 	monitorCreateCmd.Flags().StringVar(&monitorTag, "tag", "", "Release for a new Monitor (default: latest published stable release)")
+	monitorCreateCmd.Flags().StringVar(&monitorHost, "host", "", "Host for a new Monitor (default: organization default)")
 	silenceUsageRecursive(monitorCmd)
 }
 
@@ -145,6 +147,9 @@ func provisionMonitor(client *cpClient, scope accountScope, name string) error {
 		return err
 	}
 	exists := row.ID != ""
+	if exists && monitorHost != "" && monitorHost != row.HostName {
+		return fmt.Errorf("%s already uses host %s", name, row.HostName)
+	}
 	credential, publicKey, err := createOwnerCredential(filepath.Join(dir, monitorOwnerKeyName), exists)
 	if err != nil {
 		return err
@@ -173,7 +178,11 @@ func provisionMonitor(client *cpClient, scope accountScope, name string) error {
 			return errors.New("this name has a saved Monitor profile; use a new name for a new Monitor")
 		}
 		client.http.Timeout = monitorStartTimeout
-		_, err = client.do("POST", "/api/containers", nil, map[string]any{"name": name, "repo": monitorRepo, "tag": tag, "variables": map[string]string{monitorOwnerEnv: publicKey}, "object_storage": map[string]string{}}, &row)
+		body := map[string]any{"name": name, "repo": monitorRepo, "tag": tag, "variables": map[string]string{monitorOwnerEnv: publicKey}, "object_storage": map[string]string{}}
+		if monitorHost != "" {
+			body["host_name"] = monitorHost
+		}
+		_, err = client.do("POST", "/api/containers", nil, body, &row)
 		if err != nil {
 			return err
 		}

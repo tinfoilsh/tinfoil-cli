@@ -65,9 +65,10 @@ func TestWorkloadSourcePinsControlplaneConfig(t *testing.T) {
 
 func TestMonitorProvisioningPublishesOnlyPublicKeyAndReusesSavedKeys(t *testing.T) {
 	t.Setenv(envConfigPath, filepath.Join(t.TempDir(), "config.json"))
-	previousURL, previousTag := workloadReleaseURL, monitorTag
+	previousURL, previousTag, previousHost := workloadReleaseURL, monitorTag, monitorHost
 	monitorTag = ""
-	t.Cleanup(func() { workloadReleaseURL, monitorTag = previousURL, previousTag })
+	monitorHost = "control.box2.tinfoil.sh"
+	t.Cleanup(func() { workloadReleaseURL, monitorTag, monitorHost = previousURL, previousTag, previousHost })
 	var row containerView
 	creates, releaseLookups := 0, 0
 	latestTag, expectedTag := "v9.8.7", "v9.8.7"
@@ -87,13 +88,16 @@ func TestMonitorProvisioningPublishesOnlyPublicKeyAndReusesSavedKeys(t *testing.
 			var body struct {
 				Name      string            `json:"name"`
 				Tag       string            `json:"tag"`
+				HostName  string            `json:"host_name"`
 				Variables map[string]string `json:"variables"`
 			}
 			require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
 			require.Len(t, body.Variables, 1)
 			require.Equal(t, expectedTag, body.Tag)
+			require.Equal(t, "control.box2.tinfoil.sh", body.HostName)
 			row = controlplaneMonitorConfig(body.Variables[monitorOwnerEnv])
 			row.Name, row.CurrentTag = body.Name, body.Tag
+			row.HostName = body.HostName
 			creates++
 			json.NewEncoder(w).Encode(row)
 		case "GET /api/containers/container-1":
@@ -119,6 +123,9 @@ func TestMonitorProvisioningPublishesOnlyPublicKeyAndReusesSavedKeys(t *testing.
 	require.Equal(t, 1, creates)
 	require.Equal(t, "v9.8.7", row.CurrentTag, "a retry keeps the deployed release")
 	require.Equal(t, 1, releaseLookups, "existing Monitors need no release lookup")
+	monitorHost = "other-host"
+	require.ErrorContains(t, create(), "already uses host control.box2.tinfoil.sh")
+	monitorHost = "control.box2.tinfoil.sh"
 	row.CurrentTag = "next-release"
 	row.Config += "# updated through the controlplane\n"
 	require.ErrorContains(t, create(), "config reference does not match")
