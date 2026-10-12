@@ -2,8 +2,12 @@ package main
 
 import (
 	"bytes"
+	"crypto/ed25519"
+	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"encoding/pem"
+	"golang.org/x/crypto/ssh"
 	"os"
 	"path/filepath"
 	"strings"
@@ -38,36 +42,58 @@ func TestSuppliedOwnerCredentialRejectsLegacyAndMalformedFiles(t *testing.T) {
 
 func TestOwnerCredentialCreationNeverReplacesExistingKeys(t *testing.T) {
 	file := filepath.Join(t.TempDir(), "owner.json")
-	_, _, err := createOwnerCredential(file, true)
-	require.ErrorContains(t, err, "no local owner credential")
-	require.NoFileExists(t, file)
-	credential, public, err := createOwnerCredential(file, false)
-	require.NoError(t, err)
-	require.NotEqual(t, credential.Key, credential.SigningSeed)
-	require.Equal(t, credential.publicKey(), public)
+	credential := testOwnerCredential(t)
+	require.NoError(t, saveOwnerCredential(file, credential))
 	require.NoError(t, saveOwnerCredential(file, credential))
 	require.ErrorContains(t, saveOwnerCredential(file, testOwnerCredential(t)), "different credential")
-	for _, exists := range []bool{false, true} {
-		again, binding, err := createOwnerCredential(file, exists)
-		require.NoError(t, err)
-		require.Equal(t, credential, again)
-		require.Equal(t, public, binding)
-	}
+	got, err := readOwnerCredential(file)
+	require.NoError(t, err)
+	require.Equal(t, credential, got)
 }
 
-func TestLegacyOwnerCredentialErrorIdentifiesFileWithoutReplacingIt(t *testing.T) {
-	for _, size := range []int{32, 64} {
-		file := filepath.Join(t.TempDir(), "owner.key")
-		original := []byte(base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{42}, size)))
-		require.NoError(t, os.WriteFile(file, original, 0600))
-		for _, exists := range []bool{false, true} {
-			_, _, err := createOwnerCredential(file, exists)
-			require.ErrorContains(t, err, file)
-			require.ErrorContains(t, err, "legacy encryption-only key")
-			require.NotContains(t, err.Error(), string(original))
-		}
-		after, err := os.ReadFile(file)
-		require.NoError(t, err)
-		require.Equal(t, original, after)
+func newSigningCredential() (*ownerCredential, error) {
+	c := &ownerCredential{Version: 2, Key: make([]byte, 32), SigningSeed: make([]byte, ed25519.SeedSize)}
+	if _, err := rand.Read(c.Key); err != nil {
+		return nil, err
 	}
+	if _, err := rand.Read(c.SigningSeed); err != nil {
+		return nil, err
+	}
+	return c, nil
+}
+
+func TestExternalOwnerCredentialsAreScopedAndRequireRecovery(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("SSH_AUTH_SOCK", "")
+	t.Setenv(envConfigPath, filepath.Join(home, "config.json"))
+	owner := testOwnerCredential(t)
+	identity := filepath.Join(home, "my owner key")
+	block, err := ssh.MarshalPrivateKey(ed25519.NewKeyFromSeed(owner.SigningSeed), "")
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(identity, pem.EncodeToMemory(block), 0600))
+	old := attestSSHIdentity
+	attestSSHIdentity = identity
+	t.Cleanup(func() { attestSSHIdentity = old })
+	scope := accountScope{ControlplaneURL: "https://cp.example", UserID: "one"}
+	dir, err := resourceDir(scope, "11111111-1111-4111-8111-111111111111")
+	require.NoError(t, err)
+	credential, err := resourceCredential(dir, "owner.key", owner.publicKey(), false)
+	require.NoError(t, err)
+	require.Empty(t, credential.SigningSeed)
+	signer, path, close, err := ownerSigner(credential, dir)
+	require.NoError(t, err)
+	defer close()
+	require.Equal(t, identity, path)
+	expected, err := measuredOwner(owner.publicKey())
+	require.NoError(t, err)
+	require.Equal(t, expected.Marshal(), signer.PublicKey().Marshal())
+	scope.UserID = "two"
+	other, err := resourceDir(scope, "11111111-1111-4111-8111-111111111111")
+	require.NoError(t, err)
+	require.NotEqual(t, dir, other)
+	require.NoError(t, os.Remove(filepath.Join(dir, "owner.key")))
+	_, err = resourceCredential(dir, "owner.key", owner.publicKey(), true)
+	require.ErrorContains(t, err, "restore encryption credentials")
+	require.NoFileExists(t, filepath.Join(dir, "owner.key"))
 }

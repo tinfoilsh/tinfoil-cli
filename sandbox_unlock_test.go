@@ -56,7 +56,7 @@ func TestUnlockUsesMeasuredSSHOwnerAndRetriesOnlyTransportFailures(t *testing.T)
 					}
 					for request := range pending {
 						var command struct{ Command string }
-						if request.Type != "exec" || ssh.Unmarshal(request.Payload, &command) != nil || command.Command != "/usr/local/libexec/workspace-enroll --unlock" {
+						if request.Type != "exec" || ssh.Unmarshal(request.Payload, &command) != nil || command.Command != "/usr/local/bin/workspace-unlock" {
 							request.Reply(false, nil)
 							continue
 						}
@@ -96,7 +96,7 @@ func TestUnlockUsesMeasuredSSHOwnerAndRetriesOnlyTransportFailures(t *testing.T)
 	require.Zero(t, requests.Load())
 	keys := &sandboxKeys{diskKey: "workspace-key", monitorIdentity: "agent-private-key"}
 	unlock := func() error {
-		return sendUnlock(func() (*ssh.Client, error) { return dial(credential.SigningSeed, host.PublicKey()) }, keys)
+		return sendOwnerRequest(func() (*ssh.Client, error) { return dial(credential.SigningSeed, host.PublicKey()) }, map[string]string{"volume": keys.diskKey, "monitor_identity": keys.monitorIdentity})
 	}
 	require.NoError(t, unlock())
 	require.EqualValues(t, 2, requests.Load())

@@ -4,13 +4,13 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"crypto/ed25519"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strconv"
 	"time"
@@ -27,20 +27,38 @@ type ownerChannelOptions struct {
 	Generation uint64
 }
 
-func connectMonitorOwner(ctx context.Context, scope accountScope, row containerView, repin bool) (*ssh.Client, string, error) {
-	_, hostKey, err := verifyMonitor(scope, row, repin)
+func connectMonitorOwner(ctx context.Context, scope accountScope, row containerView) (*ssh.Client, string, error) {
+	dir, err := monitorRecord(scope, row)
 	if err != nil {
 		return nil, "", err
 	}
-	dir, err := monitorDir(scope, row.Name)
+	environment, err := measuredEnvironment(row.Config, false)
 	if err != nil {
 		return nil, "", err
 	}
-	credential, err := readOwnerCredential(filepath.Join(dir, monitorOwnerKeyName))
+	var profile monitorProfile
+	if err := readStorageJSON(filepath.Join(dir, monitorProfileFile), &profile); err != nil {
+		return nil, "", err
+	}
+	credential, err := resourceCredential(dir, monitorOwnerKeyName, environment[monitorOwnerEnv], profile.Generation != 0)
 	if err != nil {
 		return nil, "", err
 	}
 	defer credential.clear()
+	if profile.Generation == 0 {
+		if _, err := ensureSSHKey(filepath.Join(dir, monitorDeviceKeyName)); err != nil {
+			return nil, "", err
+		}
+	}
+	hostKey, err := verifyMonitor(dir, row)
+	if err != nil {
+		return nil, "", err
+	}
+	signer, _, close, err := ownerSigner(credential, dir)
+	if err != nil {
+		return nil, "", err
+	}
+	defer close()
 	address, err := monitorAddress(ctx, row)
 	if err != nil {
 		return nil, "", err
@@ -49,15 +67,48 @@ func connectMonitorOwner(ctx context.Context, scope accountScope, row containerV
 	if err != nil {
 		return nil, "", err
 	}
-	client, err := connectOwnerSSH(conn, row.Domain, hostKey, credential.SigningSeed)
+	client, err := connectOwnerSigner(conn, row.Domain, hostKey, signer, "owner")
 	if err != nil {
 		return nil, "", err
 	}
 	if err := unlockMonitor(client, dir, credential); err != nil {
 		client.Close()
+		return nil, "", fmt.Errorf("unlock Monitor; restore the original encryption credentials if it was initialized elsewhere: %w", err)
+	}
+	if _, err := updateProfile(dir, func(p *monitorProfile) error { p.Address = address; return nil }); err != nil {
+		client.Close()
 		return nil, "", err
 	}
 	return client, dir, nil
+}
+
+func monitorRecord(scope accountScope, row containerView) (string, error) {
+	if _, err := workloadSource(row, monitorRepo); err != nil {
+		return "", err
+	}
+	env, err := measuredEnvironment(row.Config, false)
+	if err != nil {
+		return "", err
+	}
+	dir, err := monitorDir(scope, row.Name)
+	if err != nil {
+		return "", err
+	}
+	if _, err := os.Stat(filepath.Join(dir, monitorProfileFile)); errors.Is(err, os.ErrNotExist) {
+		dir, err = resourceDir(scope, row.ID)
+		if err != nil {
+			return "", err
+		}
+	}
+	_, err = updateProfile(dir, func(p *monitorProfile) error {
+		if p.Domain != "" && p.Domain != row.Domain || p.ContainerID != "" && p.ContainerID != row.ID ||
+			p.Owner != "" && (p.Owner != env[monitorOwnerEnv] || p.Storage != env["TINFOIL_STORAGE_BUCKET"]) {
+			return errors.New("Monitor identity or storage binding changed")
+		}
+		p.Domain, p.ContainerID, p.Owner, p.Storage = row.Domain, row.ID, env[monitorOwnerEnv], env["TINFOIL_STORAGE_BUCKET"]
+		return nil
+	})
+	return dir, err
 }
 
 // The public SSH endpoint is shared by owner UI access and device routes.
@@ -120,27 +171,13 @@ func monitorOwnerRequest(client *ssh.Client, dir, method, path string, input, ou
 }
 
 // Authenticate only against the SSH host key endorsed by attestation.
-func connectOwnerSSH(conn net.Conn, host string, hostKey ssh.PublicKey, seed []byte) (*ssh.Client, error) {
-	return connectOwnerSSHAs(conn, host, hostKey, seed, "owner")
-}
-
-func connectOwnerSSHAs(conn net.Conn, host string, hostKey ssh.PublicKey, seed []byte, user string) (*ssh.Client, error) {
-	if hostKey == nil || len(seed) != ed25519.SeedSize {
-		conn.Close()
-		return nil, errors.New("owner SSH requires the attested host key and owner signing key")
-	}
-	private := ed25519.NewKeyFromSeed(seed)
-	defer clear(private)
-	signer, err := ssh.NewSignerFromKey(private)
-	if err != nil {
-		conn.Close()
-		return nil, err
-	}
+func connectOwnerSigner(conn net.Conn, host string, hostKey ssh.PublicKey, signer ssh.Signer, user string) (*ssh.Client, error) {
 	// SSH-forwarded connections do not implement SetDeadline.
 	timer := time.AfterFunc(30*time.Second, func() { conn.Close() })
 	defer timer.Stop()
 	c, channels, requests, err := ssh.NewClientConn(conn, host, &ssh.ClientConfig{
 		User: user, Auth: []ssh.AuthMethod{ssh.PublicKeys(signer)}, HostKeyCallback: ssh.FixedHostKey(hostKey),
+		HostKeyAlgorithms: []string{hostKey.Type()},
 	})
 	if err != nil {
 		conn.Close()
@@ -183,4 +220,12 @@ func saveMonitorGeneration(dir string, generation uint64) error {
 		return nil
 	})
 	return err
+}
+
+// Monitor commits enrollment once and remembers revoked keys across retries.
+func pairSandboxMonitor(client *ssh.Client, dir, name, device, agent string) error {
+	return monitorOwnerRequest(client, dir, "POST", "/enroll", map[string]any{
+		"device-" + storageHash([]byte(device))[:16]: map[string]any{"key": device, "routes": true},
+		"sandbox-" + name: map[string]any{"key": agent},
+	}, nil)
 }

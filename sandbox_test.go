@@ -2,72 +2,54 @@ package main
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 )
 
-func TestSandboxCreateRequiresMonitorBeforeAnySideEffects(t *testing.T) {
-	old := sandboxMonitor
-	sandboxMonitor = ""
-	t.Cleanup(func() { sandboxMonitor = old })
-	t.Setenv(envConfigPath, filepath.Join(t.TempDir(), "config.json"))
-	require.ErrorContains(t, sandboxCreateCmd.RunE(sandboxCreateCmd, []string{"work"}), "--monitor is required")
-	dir, err := sandboxKeyDir("work")
-	require.NoError(t, err)
-	require.NoDirExists(t, dir)
-}
-
-func TestSandboxReleaseDiscoveryPreservesExistingDeployments(t *testing.T) {
-	var rows []containerView
-	lookups := 0
-	available := true
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/api/containers":
-			json.NewEncoder(w).Encode(rows)
-		case "/api/containers/work-id":
-			json.NewEncoder(w).Encode(rows[0])
-		case "/" + defaultSandboxRepo + "/releases/latest":
-			require.Empty(t, r.Header.Get("Authorization"))
-			lookups++
-			if !available {
-				http.NotFound(w, r)
-				return
-			}
-			json.NewEncoder(w).Encode(map[string]string{"tag_name": "v9.8.7"})
-		default:
-			t.Errorf("unexpected request: %s", r.URL.Path)
-			http.NotFound(w, r)
-		}
-	}))
-	defer server.Close()
-	previousURL := workloadReleaseURL
-	workloadReleaseURL = server.URL + "/%s/releases/latest"
-	t.Cleanup(func() { workloadReleaseURL = previousURL })
-	client := newCPClient(cliConfig{ControlplaneURL: server.URL, APIKey: "admin_test"})
-	_, tag, err := workloadRevision(client, "work", defaultSandboxRepo, "")
-	require.NoError(t, err)
-	require.Equal(t, "v9.8.7", tag)
-	available = false
-	_, tag, err = workloadRevision(client, "work", defaultSandboxRepo, "v10.0.0-rc.1")
-	require.NoError(t, err)
-	require.Equal(t, "v10.0.0-rc.1", tag)
-	rows = []containerView{{ID: "work-id", Name: "work", Repo: defaultSandboxRepo, CurrentTag: "v1.2.3"}}
-	_, tag, err = workloadRevision(client, "work", defaultSandboxRepo, "")
-	require.NoError(t, err)
-	require.Equal(t, "v1.2.3", tag)
-	_, _, err = workloadRevision(client, "work", defaultSandboxRepo, "v9.8.7")
-	require.ErrorContains(t, err, "already uses v1.2.3")
-	require.Equal(t, 1, lookups, "explicit tags and existing deployments need no release lookup")
-	rows = nil
-	_, tag, err = workloadRevision(client, "work", defaultSandboxRepo, "")
-	require.ErrorContains(t, err, "use --tag")
-	require.Empty(t, tag, "failed discovery must not fall back to a bundled release")
+func TestSandboxStartReusesSavedConfiguration(t *testing.T) {
+	for _, state := range []string{statusStopped, statusFailed} {
+		t.Run(state, func(t *testing.T) {
+			row := containerView{ID: "work-id", Name: "work", Repo: defaultSandboxRepo, Status: state,
+				ConfigName: "/tinfoil/containers/saved-digest", Variables: json.RawMessage(`{}`),
+				Config: "containers:\n  - env:\n      - MONITOR_ROUTE: '{\"domain\":\"personal.example\"}'\n"}
+			var starts atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.Method + " " + r.URL.Path {
+				case "GET /api/auth/context":
+					json.NewEncoder(w).Encode(authContext{ContextType: "personal", UserID: "user_1"})
+				case "GET /api/containers":
+					json.NewEncoder(w).Encode([]containerView{row})
+				case "GET /api/containers/work-id":
+					json.NewEncoder(w).Encode(row)
+				case "POST /api/containers/work-id/deploy":
+					starts.Add(1)
+					body, err := io.ReadAll(r.Body)
+					if err != nil || len(body) != 0 {
+						t.Errorf("start must reuse saved config without overrides: body=%s err=%v", body, err)
+					}
+					// Stop before enrollment while checking that boot errors propagate.
+					json.NewEncoder(w).Encode(containerView{Name: row.Name, Status: statusFailed, ErrorMessage: "test boot failure"})
+				default:
+					t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+					http.NotFound(w, r)
+				}
+			}))
+			defer server.Close()
+			t.Setenv(envConfigPath, filepath.Join(t.TempDir(), "config.json"))
+			t.Setenv(envCPURL, server.URL)
+			t.Setenv(envAdminKey, "admin_test")
+			_, err := startSandbox("work")
+			require.ErrorContains(t, err, "test boot failure")
+			require.EqualValues(t, 1, starts.Load())
+		})
+	}
 }
 
 func TestSandboxNameRejectsNamesThatCannotBeDirectories(t *testing.T) {

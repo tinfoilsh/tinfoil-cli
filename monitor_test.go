@@ -4,12 +4,10 @@ import (
 	"bytes"
 	"crypto/ed25519"
 	"crypto/rand"
-	"encoding/json"
 	"encoding/pem"
 	"fmt"
 	"net"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -61,102 +59,6 @@ func TestWorkloadSourcePinsControlplaneConfig(t *testing.T) {
 			require.NotEqual(t, source, updated, "attestation must check the new config digest")
 		})
 	}
-}
-
-func TestMonitorProvisioningPublishesOnlyPublicKeyAndReusesSavedKeys(t *testing.T) {
-	t.Setenv(envConfigPath, filepath.Join(t.TempDir(), "config.json"))
-	previousURL, previousTag, previousHost := workloadReleaseURL, monitorTag, monitorHost
-	monitorTag = ""
-	monitorHost = "control.box2.tinfoil.sh"
-	t.Cleanup(func() { workloadReleaseURL, monitorTag, monitorHost = previousURL, previousTag, previousHost })
-	var row containerView
-	creates, releaseLookups := 0, 0
-	latestTag, expectedTag := "v9.8.7", "v9.8.7"
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.Method + " " + r.URL.Path {
-		case "GET /" + monitorRepo + "/releases/latest":
-			require.Empty(t, r.Header.Get("Authorization"), "controlplane credentials stay out of release discovery")
-			releaseLookups++
-			json.NewEncoder(w).Encode(map[string]string{"tag_name": latestTag})
-		case "GET /api/containers":
-			rows := []containerView{}
-			if row.ID != "" {
-				rows = append(rows, row)
-			}
-			json.NewEncoder(w).Encode(rows)
-		case "POST /api/containers":
-			var body struct {
-				Name          string            `json:"name"`
-				Repo          string            `json:"repo"`
-				Tag           string            `json:"tag"`
-				HostName      string            `json:"host_name"`
-				Variables     map[string]string `json:"variables"`
-				ObjectStorage map[string]string `json:"object_storage"`
-			}
-			decoder := json.NewDecoder(r.Body)
-			decoder.DisallowUnknownFields()
-			require.NoError(t, decoder.Decode(&body))
-			require.Equal(t, monitorRepo, body.Repo)
-			require.NotNil(t, body.ObjectStorage)
-			require.Empty(t, body.ObjectStorage)
-			require.Len(t, body.Variables, 1)
-			require.Equal(t, expectedTag, body.Tag)
-			require.Equal(t, "control.box2.tinfoil.sh", body.HostName)
-			row = controlplaneMonitorConfig(body.Variables[monitorOwnerEnv])
-			row.Name, row.CurrentTag = body.Name, body.Tag
-			row.HostName = body.HostName
-			creates++
-			json.NewEncoder(w).Encode(row)
-		case "GET /api/containers/container-1":
-			json.NewEncoder(w).Encode(row)
-		default:
-			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
-			http.NotFound(w, r)
-		}
-	}))
-	defer server.Close()
-	workloadReleaseURL = server.URL + "/%s/releases/latest"
-	client := newCPClient(cliConfig{ControlplaneURL: server.URL, APIKey: "admin_test"})
-	scope := accountScope{ControlplaneURL: server.URL, UserID: "user_1"}
-	create := func() error { return provisionMonitor(client, scope, "personal") }
-	require.NoError(t, create())
-	dir, err := monitorDir(scope, "personal")
-	require.NoError(t, err)
-	owner, err := readOwnerCredential(filepath.Join(dir, monitorOwnerKeyName))
-	require.NoError(t, err)
-	require.Contains(t, row.Config, owner.publicKey())
-	latestTag = "v10.0.0"
-	require.NoError(t, create(), "a retry uses the saved key")
-	require.Equal(t, 1, creates)
-	require.Equal(t, "v9.8.7", row.CurrentTag, "a retry keeps the deployed release")
-	require.Equal(t, 1, releaseLookups, "existing Monitors need no release lookup")
-	originalConfig := row.Config
-	row.Config = strings.Replace(row.Config, owner.publicKey(), testOwnerCredential(t).publicKey(), 1)
-	row.ConfigName = "/tinfoil/containers/" + storageHash([]byte(row.Config))
-	require.ErrorContains(t, create(), "owner public key does not match")
-	row.Config = originalConfig
-	row.ConfigName = "/tinfoil/containers/" + storageHash([]byte(row.Config))
-	monitorHost = "other-host"
-	require.ErrorContains(t, create(), "already uses host control.box2.tinfoil.sh")
-	monitorHost = "control.box2.tinfoil.sh"
-	row.CurrentTag = "next-release"
-	row.Config += "# updated through the controlplane\n"
-	require.ErrorContains(t, create(), "config reference does not match")
-	row.ConfigName = "/tinfoil/containers/" + storageHash([]byte(row.Config))
-	require.NoError(t, create(), "the CLI accepts updated controlplane config for attestation")
-	again, err := readOwnerCredential(filepath.Join(dir, monitorOwnerKeyName))
-	require.NoError(t, err)
-	require.True(t, sameOwnerCredential(owner, again))
-	row.Domain = "other.user-1.users.monitors.tinfoil.dev"
-	require.ErrorContains(t, create(), "no longer matches the domain")
-	row.ID = ""
-	require.ErrorContains(t, create(), "use a new name")
-	require.Equal(t, 1, creates)
-	monitorTag, expectedTag = "v10.1.0-preview.1", "v10.1.0-preview.1"
-	lookups := releaseLookups
-	require.NoError(t, provisionMonitor(client, scope, "explicit"))
-	require.Equal(t, 2, creates)
-	require.Equal(t, lookups, releaseLookups, "--tag bypasses latest-release discovery")
 }
 
 func TestMonitorUnlockAndSSHPanelAgainstRealMonitor(t *testing.T) {
@@ -230,20 +132,34 @@ func TestMonitorUnlockAndSSHPanelAgainstRealMonitor(t *testing.T) {
 	require.NoError(t, err, "the measured owner can enter while locked")
 	defer panel.Close()
 	require.Error(t, monitorOwnerRequest(panel, dir, "GET", "/policy", nil, nil))
+	require.Error(t, monitorOwnerRequest(panel, dir, "POST", "/unlock", map[string]any{"storage_key": credential.Key}, nil), "unlock cannot initialize an empty store")
 	require.NoError(t, unlockMonitor(panel, dir, credential))
 	require.Error(t, unlockMonitor(panel, dir, testOwnerCredential(t)), "wrong storage key refused")
 	testOwnerSSHPanel(t, panel, dir, credential.SigningSeed, hostKey, sshAddress)
-	testSandboxPairing(t, panel, dir, hostKey, sshAddress)
+	device, agent := testSandboxPairing(t, panel, dir, hostKey, sshAddress)
 	// A new process must unlock using the saved floor and recover the encrypted state.
 	require.NoError(t, process.Process.Kill())
 	process.Wait()
+	// A new VM boot rotates the public host key, independently of the sealed state.
+	_, nextPrivate, err := ed25519.GenerateKey(rand.Reader)
+	require.NoError(t, err)
+	block, err = ssh.MarshalPrivateKey(nextPrivate, "")
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(hostKeyPath, pem.EncodeToMemory(block), 0600))
 	start()
+	conn, err = net.Dial("tcp", sshAddress)
+	require.NoError(t, err)
+	_, err = connectOwnerSSH(conn, "localhost", hostKey, credential.SigningSeed)
+	require.Error(t, err, "the prior boot pin cannot authorize this boot")
+	hostKey, err = ssh.NewPublicKey(nextPrivate.Public())
+	require.NoError(t, err)
 	conn, err = net.Dial("tcp", sshAddress)
 	require.NoError(t, err)
 	recovered, err := connectOwnerSSH(conn, "localhost", hostKey, credential.SigningSeed)
 	require.NoError(t, err)
 	defer recovered.Close()
 	require.NoError(t, unlockMonitor(recovered, dir, credential))
+	require.ErrorContains(t, pairSandboxMonitor(recovered, dir, "work", device, agent), "identity was revoked")
 	_, err = updateProfile(dir, func(p *monitorProfile) error { p.Generation += 5; return nil })
 	require.NoError(t, err)
 	require.ErrorContains(t, unlockMonitor(recovered, dir, credential), "older than")
@@ -269,7 +185,7 @@ func authorizedLine(signer ssh.Signer) string {
 }
 
 func TestWorkloadRejectsUnmeasuredEnvironment(t *testing.T) {
-	for _, env := range []string{"[OWNER]", "[{OWNER: null}]", "[{}]", "[{OWNER: fixed}, {OTHER: null}]"} {
+	for _, env := range []string{"[OWNER]", "[MONITOR_ENDPOINT]", "[{OWNER: null}]", "[{}]", "[{OWNER: fixed}, {OTHER: null}]"} {
 		row := controlplaneMonitorConfig("test")
 		row.Config = "containers:\n  - name: monitor\n    env: " + env + "\n"
 		row.ConfigName = "/tinfoil/containers/" + storageHash([]byte(row.Config))
@@ -279,4 +195,25 @@ func TestWorkloadRejectsUnmeasuredEnvironment(t *testing.T) {
 	row := controlplaneMonitorConfig("")
 	_, err := workloadSource(row, monitorRepo)
 	require.NoError(t, err, "a literal empty string cannot import runtime env")
+}
+
+func TestOnlySandboxLocatorMayBeUnmeasured(t *testing.T) {
+	_, err := measuredEnvironment("containers:\n  - env: [MONITOR_ENDPOINT, {OWNER: fixed}]\n", true)
+	require.NoError(t, err)
+	for _, env := range []string{"[MONITOR_ENDPOINT, MONITOR_ENDPOINT]", "[{MONITOR_ENDPOINT: fixed}]", "[MONITOR_ENDPOINT, OWNER]"} {
+		_, err := measuredEnvironment("containers:\n  - env: "+env, true)
+		require.Error(t, err)
+	}
+}
+
+func connectOwnerSSH(conn net.Conn, host string, hostKey ssh.PublicKey, seed []byte) (*ssh.Client, error) {
+	return connectOwnerSSHAs(conn, host, hostKey, seed, "owner")
+}
+
+func connectOwnerSSHAs(conn net.Conn, host string, hostKey ssh.PublicKey, seed []byte, user string) (*ssh.Client, error) {
+	signer, err := ssh.NewSignerFromKey(ed25519.NewKeyFromSeed(seed))
+	if err != nil {
+		return nil, err
+	}
+	return connectOwnerSigner(conn, host, hostKey, signer, user)
 }

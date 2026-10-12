@@ -151,65 +151,52 @@ For the next release, run `volume auto-unlock configure` with the same disk and 
 
 ## Sandboxes
 
-Every sandbox requires a Monitor and locally saved public-key credentials.
-New Monitors and sandboxes use the latest published stable release. Pass
-`--tag RELEASE` to either create command to select a release or prerelease.
-Repeating creation keeps the deployed release.
+Create a Monitor, then a sandbox, in the dashboard. Each form requires a compatible
+release tag and an Ed25519 SSH public key. The sandbox form selects a running
+Monitor and defaults to its owner key. Your private SSH key stays on your computer.
 
 ```sh
-tinfoil monitor create personal
-tinfoil sandbox create work --monitor personal
+tinfoil attest-ssh work --install
 ssh work
 tinfoil monitor open personal
 ```
 
-Creating a new sandbox registers its agent key and authorizes this device to
-open sandbox routes. Owner SSH unlocks Monitor using the credential saved on
-this device. Existing identities keep their permissions; disabled
-route access must be enabled in the UI. Start, restart and enroll never change
-Monitor policy. Grant the `sandbox-work` identity account access in the UI.
-Keep `monitor open` running while using the UI. It connects directly to the
-Monitor's attested SSH endpoint.
+`attest-ssh` prepares Monitor automatically, verifies the sandbox's current boot,
+and initializes or unlocks its encrypted workspace. `--identity PATH` selects an
+existing Ed25519 key; ssh-agent and encrypted identity files also work. If the two
+resources have different owners, both owner keys must be available. First use
+saves random encryption and agent keys locally. Back up the printed directory:
+the SSH key alone cannot recover encrypted storage. New records are scoped by
+account, controlplane and container UUID under `~/.tinfoil/resources/`.
+Legacy credential files remain readable and are never overwritten with new keys.
 
-Creation puts the Monitor endpoint and verified host key in measured
-`MONITOR_ROUTE`. Bare environment references are refused. This route is fixed
-for the boot. `SANDBOX_OWNER_PUBLIC_KEY` is also measured and is the actual SSH
-login key. The CLI derives its OpenSSH encoding as `owner_ed25519` from the saved
-owner credential; it never adopts an independently generated login key.
+The reverse SSH connection uses only the sandbox boot key and publishes fixed
+SSH and attestation ports. Its Monitor host is untrusted. The CLI checks fresh
+sandbox attestation and its endorsed TLS/SSH key before sending any secrets.
+Application networking and native SSH strictly pin the current Monitor boot key.
+Both use Monitor's existing public SSH listener; this flow needs no CONNECT,
+WebSocket, private-connect API, persistent host key, or extra listener.
 
-The sandbox opens a reverse SSH route before disk unlock. The CLI verifies fresh
-attestation over HTTPS, then sends the disk key and Monitor agent identity over
-SSH pinned to the attested boot key. Bootstrap OpenSSH allows only the unlock
-helper. Shell access starts after mounting and uses the same owner key. Unlock
-cannot supply a login key or a Monitor route. No application-level challenge or
-signed enrollment remains. Attestation, unlock and native SSH all travel through
-Monitor; the controlplane WebSocket is no longer used.
+After either VM reboots, rerun `attest-ssh work --install`. It updates the authorized
+application pin and the native SSH profile. If Monitor's endpoint or host grant
+changed, explicitly restart the sandbox in the dashboard or with
+`tinfoil sandbox restart work` first. Attestation never starts or restarts VMs.
+Native SSH, SCP and SFTP then work without a running CLI process. `--name ALIAS`
+selects another local alias when the name is already used by another account.
 
-By default, boot uses Monitor's public IPv4 address and published SSH port.
-If the platform supplies a different sandbox-facing endpoint, set it at launch
-with `--variable 'MONITOR_ROUTE={"address":"IP:PORT"}'`. The CLI supplies the
-verified host key and checks that address against the enforced network policy.
-The current platform uses a private endpoint for same-host placement, so automatic
-setup with the public default still requires cross-host placement. This change
-does not modify platform routing.
-Both create commands accept `--host HOST` to select an allowed host instead of
-the organization default. Use separate hosts for this trial.
-Create and start install the attested SSH profile automatically.
-To prepare a stopped sandbox or a boot started from the dashboard, run
-`tinfoil sandbox start work`, then `ssh work`. Use `tinfoil sandbox enroll work`
-to retry enrollment or repair the SSH profile of a running sandbox.
-Forward ports with `ssh -L 8080:localhost:8080 work`.
-After a Monitor VM restart, run `monitor create personal --repin` and restart
-its sandboxes. Keys stay under `~/.tinfoil`; recovery is not supported.
+Use `monitor open personal` for API keys, service sign-in and sandbox access grants.
+Keep that command running while using its local URL. Enrollment grants the device
+route access and gives the sandbox no provider permissions. Reconnecting preserves
+existing policy and refuses to recreate revoked identities.
 
-Use `container list`, `container stop NAME`, `container deploy NAME`, and
-`container delete NAME` for Monitor lifecycle management. Sandbox lifecycle
-commands remain under `sandbox`. Deleting a sandbox leaves its Monitor access
-grants for you to remove in the UI.
+Sandbox start, restart, stop, delete and enroll commands remain available. The
+dashboard also provides lifecycle actions for both resource types. Stopped storage
+remains billable; deleting a sandbox retains its volume and local credentials.
+Remove obsolete access grants in Monitor separately. Automatic undelete and volume
+reattachment are not part of this flow.
 
-The controlplane supplies each workload's configuration. The CLI passes its
-exact digest to tinfoil-go, which verifies the configuration's Sigstore approval
-and attested measurements before credentials are sent. Config updates need no
-CLI rebuild or local template. `sandbox create --variable` sets creation inputs;
-later connections use the deployed configuration without repeating those flags.
-The public-key workload images still need publishing.
+The controlplane supplies the deployed configuration; tinfoil-go verifies its exact
+digest, registry endorsement and attested measurements. Owner keys, the sandbox
+logical ID and Monitor binding are measured. Only `MONITOR_ENDPOINT` is a runtime
+locator, supplied during deploy rather than create. Compatible workload releases
+and this CLI must be published before users can run the new browser flow.

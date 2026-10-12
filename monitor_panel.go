@@ -16,7 +16,7 @@ import (
 )
 
 func init() {
-	monitorCmd.AddCommand(&cobra.Command{
+	command := &cobra.Command{
 		Use: "open NAME", Short: "Forward the Monitor UI over attested SSH", Args: cobra.ExactArgs(1),
 		Long: "Unlock and forward the Monitor UI over attested SSH.",
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -32,14 +32,16 @@ func init() {
 			if err != nil {
 				return err
 			}
-			client, dir, err := connectMonitorOwner(cmd.Context(), scope, row, false)
+			client, dir, err := connectMonitorOwner(cmd.Context(), scope, row)
 			if err != nil {
 				return err
 			}
 			defer client.Close()
 			return serveMonitorPanel(cmd, client, dir, "127.0.0.1:0")
 		},
-	})
+	}
+	command.Flags().StringVar(&attestSSHIdentity, "identity", "", "Owner SSH identity file")
+	monitorCmd.AddCommand(command)
 }
 
 func panelToken() string {

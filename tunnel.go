@@ -191,11 +191,12 @@ func listenAndForward(tun *tunnel, specs []forwardSpec) error {
 // tunnelTarget is the enclave a tunnel connects to, plus what a container
 // lookup recorded for it.
 type tunnelTarget struct {
-	name    string
-	host    string
-	repo    string
-	sshPort int
-	debug   bool
+	container *containerView
+	name      string
+	host      string
+	repo      string
+	sshPort   int
+	debug     bool
 	// sealedTo is the RTMR3 the enclave must carry, for a caller that knows what
 	// this boot was sealed to. Empty requires an unextended register.
 	sealedTo string
@@ -223,6 +224,7 @@ func resolveTunnelTarget(identifier string) (*tunnelTarget, error) {
 	if err != nil {
 		return nil, err
 	}
+	original := *container
 	host := strings.TrimSpace(container.Domain)
 	if host == "" {
 		host = strings.TrimSpace(container.InternalDomain)
@@ -244,12 +246,13 @@ func resolveTunnelTarget(identifier string) (*tunnelTarget, error) {
 		return nil, fmt.Errorf("container %s has no repo recorded — cannot tunnel", container.Name)
 	}
 	return &tunnelTarget{
-		name:     container.Name,
-		host:     host,
-		repo:     container.Repo,
-		sshPort:  container.SSHPort,
-		debug:    container.Debug,
-		sealedTo: forwardSealedTo,
+		container: &original,
+		name:      container.Name,
+		host:      host,
+		repo:      container.Repo,
+		sshPort:   container.SSHPort,
+		debug:     container.Debug,
+		sealedTo:  forwardSealedTo,
 	}, nil
 }
 

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"github.com/spf13/cobra"
@@ -30,7 +29,7 @@ func workloadSource(row containerView, repo string) (string, error) {
 	if row.Repo != repo || row.Debug || row.Config == "" {
 		return "", errors.New("unexpected workload configuration")
 	}
-	if _, err := measuredEnvironment(row.Config); err != nil {
+	if _, err := measuredEnvironment(row.Config, repo == defaultSandboxRepo); err != nil {
 		return "", err
 	}
 	digest := storageHash([]byte(row.Config))
@@ -60,32 +59,6 @@ func waitWorkload(client *cpClient, row containerView, status string, timeout ti
 	return row, nil
 }
 
-var workloadReleaseURL = "https://api.github.com/repos/%s/releases/latest"
-
-func workloadRevision(client *cpClient, name, repo, tag string) (containerView, string, error) {
-	row, err := containerNamed(client, name)
-	if missingContainer(err) {
-		if tag == "" {
-			release, err := fetchUpdateRelease(context.Background(), updateHTTPClient(30*time.Second), fmt.Sprintf(workloadReleaseURL, repo), version)
-			if err != nil {
-				return row, "", fmt.Errorf("resolving %s release; use --tag to select a published release: %w", repo, err)
-			}
-			tag = release.TagName
-		}
-		return containerView{}, tag, nil
-	}
-	if err != nil {
-		return row, "", err
-	}
-	if row.Repo != repo || row.Debug {
-		return row, "", fmt.Errorf("%s uses an unexpected repository or debug configuration", name)
-	}
-	if tag != "" && tag != row.CurrentTag {
-		return row, "", fmt.Errorf("%s already uses %s; recreate it to change releases", name, row.CurrentTag)
-	}
-	return row, row.CurrentTag, nil
-}
-
 func namedWorkload(run func(string) error) func(*cobra.Command, []string) error {
 	return func(_ *cobra.Command, args []string) error {
 		name, err := sandboxName(args[0])
@@ -96,29 +69,30 @@ func namedWorkload(run func(string) error) func(*cobra.Command, []string) error 
 	}
 }
 
-func measuredEnvironment(raw string) (map[string]string, error) {
-	// Bare names and null values import unmeasured runtime environment.
-	var config struct {
-		Containers []struct{ Env []map[string]*string }
-	}
+func measuredEnvironment(raw string, allowEndpoint bool) (map[string]string, error) {
+	var config struct{ Containers []struct{ Env []yaml.Node } }
 	if err := yaml.Unmarshal([]byte(raw), &config); err != nil {
-		return nil, fmt.Errorf("workload requires explicit measured environment mappings: %w", err)
+		return nil, err
 	}
 	values := map[string]string{}
+	seen := map[string]bool{}
 	for _, container := range config.Containers {
 		for _, entry := range container.Env {
-			if len(entry) != 1 {
-				return nil, errors.New("workload environment entries must each bind one measured value")
-			}
-			for name, value := range entry {
-				if _, exists := values[name]; exists {
-					return nil, fmt.Errorf("workload environment %s is ambiguous", name)
+			if allowEndpoint && entry.Kind == yaml.ScalarNode && entry.Value == "MONITOR_ENDPOINT" {
+				if seen[entry.Value] {
+					return nil, errors.New("ambiguous MONITOR_ENDPOINT")
 				}
-				if value == nil {
-					return nil, fmt.Errorf("workload environment %s has no measured value", name)
-				}
-				values[name] = *value
+				seen[entry.Value] = true
+				continue
 			}
+			if entry.Kind != yaml.MappingNode || len(entry.Content) != 2 || entry.Content[1].Tag != "!!str" {
+				return nil, errors.New("workload requires explicit measured environment mappings")
+			}
+			name, value := entry.Content[0].Value, entry.Content[1].Value
+			if seen[name] || allowEndpoint && name == "MONITOR_ENDPOINT" {
+				return nil, fmt.Errorf("workload environment %s is ambiguous", name)
+			}
+			seen[name], values[name] = true, value
 		}
 	}
 	return values, nil

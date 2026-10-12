@@ -76,6 +76,38 @@ attestation always uses the enclave hostname.`,
 		if err != nil {
 			return err
 		}
+		if target.container != nil {
+			switch target.container.Repo {
+			case monitorRepo:
+				return fmt.Errorf("Monitor has no interactive shell; use tinfoil monitor open %s", target.name)
+			case defaultSandboxRepo:
+				if attestSSHHost != "" || attestSSHPort != 0 {
+					return errors.New("managed sandboxes use their bound Monitor endpoint")
+				}
+				if attestSSHName != "" && !sshProfileNamePattern.MatchString(attestSSHName) {
+					return errors.New("invalid SSH profile name")
+				}
+				s, err := connectSandboxRow(*target.container)
+				if err != nil {
+					return err
+				}
+				defer s.close()
+				if err := s.enroll(); err != nil {
+					return err
+				}
+				if attestSSHName != "" {
+					s.profile.name, s.profile.jump.name = attestSSHName, attestSSHName+monitorJumpSuffix
+				}
+				if cmd.Flags().Changed("user") {
+					s.profile.user = attestSSHUser
+				}
+				if attestSSHInstall {
+					return s.install()
+				}
+				fmt.Printf("%s\n# ~/.ssh/tinfoil/%s.known_hosts\n%s", s.profile.render(), s.profile.name, s.profile.pin())
+				return nil
+			}
+		}
 		profile := sshProfile{name: attestSSHName, hostName: nativeSSHHost(target, attestSSHHost), port: sshTargetPort(target, attestSSHPort), user: attestSSHUser, identityFile: attestSSHIdentity}
 		if profile.name == "" {
 			profile.name = target.name
@@ -139,6 +171,7 @@ func endorsedHostKey(host string, verified *verify.Verification) (ssh.PublicKey,
 }
 
 type sshProfile struct {
+	resourceID   string
 	name         string
 	hostName     string
 	port         int
@@ -155,7 +188,11 @@ func (p sshProfile) render() string {
 	if p.jump == nil {
 		return p.block(p.name)
 	}
-	return p.jump.block(p.name) + "\n" + p.block(p.name)
+	marker := ""
+	if p.resourceID != "" {
+		marker = "# tinfoil-resource: " + p.resourceID + "\n"
+	}
+	return marker + p.jump.block(p.name) + "\n" + p.block(p.name)
 }
 
 // block renders one Host whose pins are in pins.known_hosts.
@@ -169,7 +206,11 @@ func (p sshProfile) block(pins string) string {
 		fmt.Fprintf(&b, "  HostKeyAlias %s\n", p.hostKeyAlias)
 	}
 	if p.identityFile != "" {
-		fmt.Fprintf(&b, "  IdentityFile %s\n  IdentitiesOnly yes\n", p.identityFile)
+		identity := p.identityFile
+		if strings.ContainsAny(identity, " \t\r\n\"\\") {
+			identity = strconv.Quote(identity)
+		}
+		fmt.Fprintf(&b, "  IdentityFile %s\n  IdentitiesOnly yes\n", identity)
 	}
 	fmt.Fprintf(&b, "  HostKeyAlgorithms %s\n  UserKnownHostsFile ~/.ssh/tinfoil/%s.known_hosts\n", p.hostKey.Type(), pins)
 	b.WriteString("  GlobalKnownHostsFile /dev/null\n  StrictHostKeyChecking yes\n  UpdateHostKeys no\n  CheckHostIP no\n")

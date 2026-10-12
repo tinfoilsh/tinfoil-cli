@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"crypto/ed25519"
-	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -18,7 +17,8 @@ const maxOwnerCredentialBytes = 4096
 type ownerCredential struct {
 	Version     int    `json:"version"`
 	Key         []byte `json:"key"`
-	SigningSeed []byte `json:"signing_seed"`
+	SigningSeed []byte `json:"signing_seed,omitempty"`
+	Owner       string `json:"owner_public_key,omitempty"`
 }
 
 func readOwnerCredential(path string) (*ownerCredential, error) {
@@ -57,8 +57,8 @@ func decodeOwnerCredential(raw []byte) (*ownerCredential, error) {
 	if err := decoder.Decode(&credential); err != nil {
 		return nil, errors.New("invalid owner SSH credential JSON; restore the original credential file")
 	}
-	if err := decoder.Decode(new(any)); err != io.EOF || credential.Version != 2 || len(credential.Key) != 32 || len(credential.SigningSeed) != ed25519.SeedSize {
-		return nil, errors.New("owner SSH credential requires version 2 and separate 32-byte key and signing_seed fields; restore the original credential file")
+	if err := decoder.Decode(new(any)); err != io.EOF || len(credential.Key) != 32 || !(credential.Version == 2 && len(credential.SigningSeed) == ed25519.SeedSize || credential.Version == 3 && credential.Owner != "" && len(credential.SigningSeed) == 0) {
+		return nil, errors.New("invalid owner credential version or keys; restore the original credential file")
 	}
 	return &credential, nil
 }
@@ -84,40 +84,17 @@ func saveOwnerCredential(path string, credential *ownerCredential) error {
 }
 
 func sameOwnerCredential(a, b *ownerCredential) bool {
-	return bytes.Equal(a.Key, b.Key) && bytes.Equal(a.SigningSeed, b.SigningSeed)
-}
-
-func newSigningCredential() (*ownerCredential, error) {
-	c := &ownerCredential{Version: 2, Key: make([]byte, 32), SigningSeed: make([]byte, ed25519.SeedSize)}
-	if _, err := rand.Read(c.Key); err != nil {
-		return nil, err
-	}
-	if _, err := rand.Read(c.SigningSeed); err != nil {
-		return nil, err
-	}
-	return c, nil
+	return bytes.Equal(a.Key, b.Key) && bytes.Equal(a.SigningSeed, b.SigningSeed) && a.Owner == b.Owner
 }
 
 func (c *ownerCredential) publicKey() string {
+	if c.Version == 3 {
+		return c.Owner
+	}
 	if len(c.SigningSeed) != ed25519.SeedSize {
 		return ""
 	}
 	private := ed25519.NewKeyFromSeed(c.SigningSeed)
 	defer clear(private)
 	return "ed25519:" + base64.StdEncoding.EncodeToString(private.Public().(ed25519.PublicKey))
-}
-
-// Existing deployments must keep their signing and storage keys.
-func createOwnerCredential(path string, exists bool) (*ownerCredential, string, error) {
-	credential, err := readOwnerCredential(path)
-	if errors.Is(err, os.ErrNotExist) {
-		if exists {
-			return nil, "", errors.New("existing resource has no local owner credential")
-		}
-		credential, err = newSigningCredential()
-	}
-	if err != nil {
-		return nil, "", err
-	}
-	return credential, credential.publicKey(), nil
 }

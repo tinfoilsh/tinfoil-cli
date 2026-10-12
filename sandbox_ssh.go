@@ -7,6 +7,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/base32"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -51,26 +52,22 @@ type sandboxEndpoint struct {
 	Port int    `json:"port"`
 }
 
-// Resolve the single allowed SSH peer before sending enrollment credentials.
-func sandboxPeer(client *cpClient, row containerView) (containerView, sandboxEndpoint, error) {
-	var peer containerView
+// Resolve the allowed endpoint only for explicit lifecycle preparation.
+func sandboxPeer(client *cpClient, row containerView) (sandboxEndpoint, error) {
 	var network struct {
 		Egress []sandboxEndpoint `json:"egress"`
 	}
 	policy := row.NetworkPolicy
 	if policy == nil || policy.EgressMode == "unrestricted" || policy.Public || len(policy.Egress) != 1 || policy.Egress[0].Port != 22 {
-		return peer, sandboxEndpoint{}, errors.New("sandbox network policy does not name one SSH peer")
-	}
-	if _, err := client.do("GET", pathf("/api/containers/%s", policy.Egress[0].ContainerID), nil, nil, &peer); err != nil {
-		return peer, sandboxEndpoint{}, err
+		return sandboxEndpoint{}, errors.New("sandbox network policy does not name one SSH peer")
 	}
 	if _, err := client.do("GET", pathf("/api/containers/%s/network", row.ID), nil, nil, &network); err != nil {
-		return peer, sandboxEndpoint{}, err
+		return sandboxEndpoint{}, err
 	}
-	if len(network.Egress) != 1 || !validMonitorEndpoint(network.Egress[0].IP, network.Egress[0].Port) || peer.SSHPort < 1 || peer.SSHPort > maxConnectionPort {
-		return peer, sandboxEndpoint{}, errors.New("peer is unavailable")
+	if len(network.Egress) != 1 || !validMonitorEndpoint(network.Egress[0].IP, network.Egress[0].Port) {
+		return sandboxEndpoint{}, errors.New("peer is unavailable")
 	}
-	return peer, network.Egress[0], nil
+	return network.Egress[0], nil
 }
 
 func validMonitorEndpoint(ip string, port int) bool {
@@ -78,187 +75,151 @@ func validMonitorEndpoint(ip string, port int) bool {
 	return parsed != nil && parsed.To4() != nil && port >= 1 && port <= maxConnectionPort
 }
 
-// Generate keys only before binding; bound sandboxes must retain their keys.
-func sandboxKeysFor(name string, binding sandboxBinding, create bool, credential *ownerCredential) (*sandboxKeys, error) {
-	dir, err := sandboxKeyDir(name)
-	if err != nil {
-		return nil, err
-	}
-	switch err := bindSandbox(dir, binding, false); {
-	case err == nil:
-		return readSandboxKeys(dir)
-	case !errors.Is(err, os.ErrNotExist):
-		return nil, err
-	case !create:
-		return nil, fmt.Errorf("this device has no saved Monitor binding for %s", name)
-	}
-	if err := prepareStorageDirectory(dir); err != nil {
-		return nil, err
-	}
-	if err := saveOwnerCredential(filepath.Join(dir, sandboxDiskKeyName), credential); err != nil {
-		return nil, err
-	}
-	if _, err := ensureSSHKey(filepath.Join(dir, sandboxAgentKeyName)); err != nil {
-		return nil, err
-	}
-	if err := bindSandbox(dir, binding, true); err != nil {
-		return nil, err
-	}
-	return readSandboxKeys(dir)
-}
-
-func bindSandbox(dir string, binding sandboxBinding, create bool) error {
-	path := filepath.Join(dir, sandboxBindingName)
-	var saved sandboxBinding
-	err := readStorageJSON(path, &saved)
-	switch {
-	case err == nil && saved != binding:
-		return fmt.Errorf("the keys in %s belong to a sandbox of Monitor %s in another account or Monitor", dir, saved.Monitor)
-	case err == nil || !errors.Is(err, os.ErrNotExist) || !create:
-		return err
-	}
-	return writeStorageJSON(path, binding, true)
-}
-
-// Bind keys, register identities and restrict networking before creation.
-func prepareSandboxMonitor(client *cpClient, row containerView, name, monitor string, credential *ownerCredential, variables map[string]string) (containerNetworkPolicy, error) {
-	policy := containerNetworkPolicy{EgressMode: "restricted"}
-	scope, _, err := currentScope()
-	if err != nil {
-		return policy, err
-	}
-	peer, err := containerNamed(client, monitor)
-	if err != nil {
-		return policy, err
-	}
-	if _, err := workloadSource(peer, monitorRepo); err != nil {
-		return policy, err
-	}
-	policy.Egress = []containerPeer{{peer.ID, 22}}
-	binding := sandboxBinding{scope, monitor}
-	if row.ID != "" {
-		p := row.NetworkPolicy
-		if p == nil || p.EgressMode == "unrestricted" || p.Public || len(p.Egress) != 1 || p.Egress[0] != policy.Egress[0] {
-			return policy, fmt.Errorf("sandbox %s already exists and is not contained by Monitor %s", name, monitor)
-		}
-	}
-	keys, err := sandboxKeysFor(name, binding, row.ID == "", credential)
-	if err != nil {
-		return policy, err
-	}
-	defer clear(keys.ownerSeed)
-	if row.ID == "" {
-		owner, dir, err := connectMonitorOwner(context.Background(), scope, peer, false)
-		if err != nil {
-			return policy, err
-		}
-		defer owner.Close()
-		if err := sandboxBootMonitor(scope, peer, variables); err != nil {
-			return policy, err
-		}
-		device, err := loadSSHKey(filepath.Join(dir, monitorDeviceKeyName))
-		if err != nil {
-			return policy, err
-		}
-		if err := pairSandboxMonitor(owner, dir, name, device, keys.agentKey); err != nil {
-			return policy, err
-		}
-	}
-	fmt.Fprintf(os.Stderr, "Grant account access to sandbox %s in the Monitor UI.\n", name)
-	return policy, nil
-}
-
-// Only public Monitor details enter the launch configuration.
-func sandboxBootMonitor(scope accountScope, peer containerView, variables map[string]string) error {
-	_, key, err := verifyMonitor(scope, peer, false)
-	if err != nil {
-		return err
-	}
-	address, err := monitorAddress(context.Background(), peer)
-	if err != nil {
-		return err
-	}
-	route := map[string]any{}
-	if raw := variables["MONITOR_ROUTE"]; raw != "" {
-		if err := json.Unmarshal([]byte(raw), &route); err != nil || route == nil {
-			return errors.New("MONITOR_ROUTE must be a JSON object")
-		}
-	}
-	// An explicit sandbox-facing address can differ from the device's public one.
-	if supplied, ok := route["address"].(string); ok && supplied != "" {
-		address = supplied
-	}
-	ip, portText, err := net.SplitHostPort(address)
-	port, portErr := strconv.Atoi(portText)
-	if err != nil || portErr != nil || !validMonitorEndpoint(ip, port) {
-		return errors.New("MONITOR_ROUTE address must be an IPv4 address and SSH port")
-	}
-	// Never copy credentials or a caller-supplied host key into boot configuration.
-	public := map[string]any{"domain": peer.Domain, "ip": ip, "port": port,
-		"host_key": strings.TrimSpace(string(ssh.MarshalAuthorizedKey(key)))}
-	if route["address"] != nil {
-		public["address"] = address
-	}
-	data, err := json.Marshal(public)
-	if err == nil {
-		variables["MONITOR_ROUTE"] = string(data)
-	}
-	return err
-}
-
 // One command keeps one verified sandbox connection through enrollment and SSH setup.
 type sandboxSession struct {
-	box     sandboxView
-	keys    *sandboxKeys
-	expires time.Time
-	monitor *ssh.Client
-	profile sshProfile
+	box         sandboxView
+	keys        *sandboxKeys
+	expires     time.Time
+	monitor     *ssh.Client
+	profile     sshProfile
+	signer      ssh.Signer
+	signerClose func()
+	binding     monitorBinding
+	claim       string
+	monitorKey  string
+	initialized bool
 }
 
-func connectSandbox(box sandboxView) (_ *sandboxSession, err error) {
-	if box.State != sandboxStateRunning {
-		return nil, fmt.Errorf("sandbox %s is %s; start it before enrolling", box.ID, box.State)
-	}
-	if box.Domain == "" {
-		return nil, fmt.Errorf("sandbox %s reported no domain", box.ID)
-	}
-	client, err := authedClient()
-	if err != nil {
-		return nil, err
-	}
-	keys, err := loadSandboxKeys(box.ID)
+type sandboxReceipt struct {
+	BootKey    string `json:"boot_key"`
+	MonitorKey string `json:"monitor_key"`
+}
+
+func connectSandbox(box sandboxView) (*sandboxSession, error) {
+	cp, err := authedClient()
 	if err != nil {
 		return nil, err
 	}
 	var row containerView
-	_, err = client.do("GET", pathf("/api/containers/%s", box.ContainerID), nil, nil, &row)
-	if err != nil {
+	if _, err := cp.do("GET", pathf("/api/containers/%s", box.ContainerID), nil, nil, &row); err != nil {
 		return nil, err
 	}
-	if row.Domain != box.Domain {
-		return nil, errors.New("sandbox domain changed while connecting")
+	return connectSandboxRow(row)
+}
+
+func connectSandboxRow(row containerView) (_ *sandboxSession, err error) {
+	if row.Volumes == nil {
+		cp, err := authedClient()
+		if err != nil {
+			return nil, err
+		}
+		id := row.ID
+		if _, err := cp.do("GET", pathf("/api/containers/%s", id), nil, nil, &row); err != nil {
+			return nil, err
+		}
+		if row.ID != id {
+			return nil, errors.New("sandbox resource changed while resolving it")
+		}
+	}
+	if len(row.Volumes) != 1 || !looksLikeUUID(row.Volumes["workspace"]) {
+		return nil, errors.New("sandbox has no unique workspace volume binding")
+	}
+	if row.Status != statusRunning {
+		return nil, fmt.Errorf("sandbox %s is %s; start it before connecting", row.Name, row.Status)
 	}
 	source, err := workloadSource(row, defaultSandboxRepo)
 	if err != nil {
 		return nil, err
 	}
-	s := &sandboxSession{box: box, keys: keys}
+	env, err := measuredEnvironment(row.Config, true)
+	if err != nil {
+		return nil, err
+	}
+	var binding monitorBinding
+	if json.Unmarshal([]byte(env["MONITOR_BINDING"]), &binding) != nil || !looksLikeUUID(env["SANDBOX_INSTANCE_ID"]) || !looksLikeUUID(binding.ContainerID) {
+		return nil, errors.New("sandbox release lacks measured instance and Monitor bindings; use compatible templates")
+	}
+	scope, cp, err := currentScope()
+	if err != nil {
+		return nil, err
+	}
+	dir, err := sandboxKeyDir(row.Name)
+	if err != nil {
+		return nil, err
+	}
+	var legacy sandboxBinding
+	if readStorageJSON(filepath.Join(dir, sandboxBindingName), &legacy) != nil || legacy.Scope != scope {
+		dir, err = resourceDir(scope, row.ID)
+		if err != nil {
+			return nil, err
+		}
+	}
+	record := struct {
+		ID, Instance, Owner string
+		Monitor             monitorBinding
+		Volumes             map[string]string
+	}{row.ID, env["SANDBOX_INSTANCE_ID"], env[sandboxOwnerEnv], binding, row.Volumes}
+	raw, _ := json.Marshal(record)
+	saved, readErr := os.ReadFile(filepath.Join(dir, "resource.json"))
+	if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
+		return nil, readErr
+	}
+	if readErr == nil && !bytes.Equal(saved, raw) {
+		return nil, errors.New("sandbox owner, storage or Monitor binding changed")
+	}
+	credential, err := resourceCredential(dir, sandboxDiskKeyName, env[sandboxOwnerEnv], readErr == nil)
+	if err != nil {
+		return nil, err
+	}
+	defer credential.clear()
+	keys := &sandboxKeys{dir: dir, diskKey: base64.StdEncoding.EncodeToString(credential.Key)}
+	if readErr != nil {
+		if _, err := ensureSSHKey(filepath.Join(dir, sandboxAgentKeyName)); err != nil {
+			return nil, err
+		}
+	}
+	keys.agentKey, err = loadSSHKey(filepath.Join(dir, sandboxAgentKeyName))
+	if err != nil {
+		return nil, err
+	}
+	identity, err := os.ReadFile(filepath.Join(dir, sandboxAgentKeyName))
+	if err != nil {
+		return nil, err
+	}
+	keys.monitorIdentity = string(identity)
+	if err := writeAtomic(filepath.Join(dir, "resource.json"), raw); err != nil {
+		return nil, err
+	}
+	s := &sandboxSession{box: sandboxFromContainer(row), keys: keys, binding: binding, claim: "sandbox-v2:" + record.Instance}
 	defer func() {
 		if err != nil {
 			s.close()
 		}
 	}()
-	if err := s.configureMonitor(client, row); err != nil {
+	s.signer, keys.sshKeyPath, s.signerClose, err = ownerSigner(credential, dir)
+	if err != nil {
+		return nil, err
+	}
+	if len(credential.SigningSeed) != 0 {
+		if err := ensureOwnerSSHKey(keys.sshKeyPath, credential.SigningSeed); err != nil {
+			return nil, err
+		}
+	}
+	var receipt sandboxReceipt
+	if err := readStorageJSON(filepath.Join(dir, sandboxEnrolledKeyName), &receipt); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
+	s.initialized = receipt.BootKey != ""
+	if err := s.configureMonitor(cp, scope, row); err != nil {
 		return nil, err
 	}
 	dial := func(ctx context.Context, _, _ string) (net.Conn, error) {
 		for {
-			conn, err := s.monitor.DialContext(ctx, "tcp", net.JoinHostPort(bootstrapRoute((&ownerCredential{SigningSeed: keys.ownerSeed}).publicKey()), "443"))
+			conn, err := s.monitor.DialContext(ctx, "tcp", net.JoinHostPort(bootstrapRoute(s.claim), "443"))
 			var channel *ssh.OpenChannelError
 			if !errors.As(err, &channel) || channel.Reason != ssh.ConnectionFailed {
 				return conn, err
 			}
-			// Readiness can precede the first reverse connection or its systemd handoff.
 			select {
 			case <-ctx.Done():
 				return nil, ctx.Err()
@@ -266,13 +227,17 @@ func connectSandbox(box sandboxView) (_ *sandboxSession, err error) {
 			}
 		}
 	}
-	host, expires, err := attestConnection(dial, box.Domain, source)
+	host, expires, err := attestConnection(dial, row.Domain, source)
 	if err != nil {
-		return nil, err
+		var denied *ssh.OpenChannelError
+		if errors.As(err, &denied) && denied.Reason == ssh.Prohibited {
+			return nil, errors.New("Monitor route access denied; restore this device explicitly in the Monitor UI")
+		}
+		return nil, fmt.Errorf("%w; if the Monitor endpoint or host grant changed, restart this sandbox explicitly", err)
 	}
 	s.expires = expires
-	s.profile = sshProfile{name: box.ID, hostName: routeName(host), port: defaultSSHPort, hostKeyAlias: box.Domain,
-		user: sandboxLoginUser, identityFile: keys.sshKeyPath, hostKey: host, jump: s.profile.jump}
+	s.profile = sshProfile{name: row.Name, hostName: routeName(host), port: defaultSSHPort, hostKeyAlias: row.Domain,
+		user: sandboxLoginUser, identityFile: keys.sshKeyPath, hostKey: host, jump: s.profile.jump, resourceID: scope.ControlplaneURL + "/" + scope.OrgID + "/" + scope.UserID + "/" + row.ID}
 	return s, nil
 }
 
@@ -280,74 +245,90 @@ func (s *sandboxSession) close() {
 	if s.monitor != nil {
 		s.monitor.Close()
 	}
-	clear(s.keys.ownerSeed)
+	if s.signerClose != nil {
+		s.signerClose()
+	}
 }
 
-func (s *sandboxSession) configureMonitor(client *cpClient, row containerView) error {
-	peer, endpoint, err := sandboxPeer(client, row)
+func (s *sandboxSession) configureMonitor(cp *cpClient, scope accountScope, row containerView) error {
+	policy := row.NetworkPolicy
+	if policy == nil || policy.Public || policy.EgressMode != "restricted" || len(policy.Egress) != 1 || policy.Egress[0] != (containerPeer{s.binding.ContainerID, 22}) {
+		return errors.New("sandbox network policy does not match its measured Monitor binding")
+	}
+	dir, err := resourceDir(scope, s.binding.ContainerID)
 	if err != nil {
 		return err
 	}
-	scope, _, err := currentScope()
+	var profile monitorProfile
+	err = readStorageJSON(filepath.Join(dir, monitorProfileFile), &profile)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	connect := func() error {
+		if profile.Owner != s.binding.Owner {
+			return errors.New("Monitor owner changed")
+		}
+		key, _, _, _, err := ssh.ParseAuthorizedKey([]byte(profile.HostKey))
+		if err != nil {
+			return err
+		}
+		device, err := loadSigner(filepath.Join(dir, monitorDeviceKeyName))
+		if err != nil {
+			return err
+		}
+		conn, err := net.DialTimeout("tcp", profile.Address, 30*time.Second)
+		if err != nil {
+			return err
+		}
+		s.monitor, err = connectOwnerSigner(conn, profile.Domain, key, device, monitorSSHUser)
+		return err
+	}
+	if err := connect(); err != nil || !s.initialized {
+		if s.monitor != nil {
+			s.monitor.Close()
+		}
+		var peer containerView
+		if _, err := cp.do("GET", pathf("/api/containers/%s", s.binding.ContainerID), nil, nil, &peer); err != nil {
+			return err
+		}
+		env, err := measuredEnvironment(peer.Config, false)
+		if err != nil {
+			return err
+		}
+		if peer.Status != statusRunning {
+			return fmt.Errorf("Monitor %s is %s; start it before connecting", peer.Name, peer.Status)
+		}
+		if env[monitorOwnerEnv] != s.binding.Owner {
+			return errors.New("Monitor does not match the sandbox's measured owner binding")
+		}
+		owner, ownerDir, err := connectMonitorOwner(context.Background(), scope, peer)
+		if err != nil {
+			return err
+		}
+		defer owner.Close()
+		dir = ownerDir
+		device, err := loadSSHKey(filepath.Join(dir, monitorDeviceKeyName))
+		if err != nil {
+			return fmt.Errorf("restore Monitor device key: %w", err)
+		}
+		if err := pairSandboxMonitor(owner, dir, s.box.ID, device, s.keys.agentKey); err != nil {
+			return err
+		}
+		if err := readStorageJSON(filepath.Join(dir, monitorProfileFile), &profile); err != nil {
+			return err
+		}
+		if err := connect(); err != nil {
+			return err
+		}
+	}
+	key, _, _, _, err := ssh.ParseAuthorizedKey([]byte(profile.HostKey))
 	if err != nil {
 		return err
 	}
-	if err := bindSandbox(s.keys.dir, sandboxBinding{scope, peer.Name}, false); err != nil {
-		return err
-	}
-	_, hostKey, err := verifyMonitor(scope, peer, false)
-	if err != nil {
-		return err
-	}
-	variables, err := measuredEnvironment(row.Config)
-	if err != nil {
-		return err
-	}
-	var route map[string]any
-	if err := json.Unmarshal([]byte(variables["MONITOR_ROUTE"]), &route); err != nil {
-		return errors.New("sandbox has no Monitor boot configuration; restart it")
-	}
-	key, _ := route["host_key"].(string)
-	if route["domain"] != peer.Domain || !sameSSHKey(key, string(ssh.MarshalAuthorizedKey(hostKey))) {
-		return errors.New("sandbox Monitor boot pin changed; restart it after explicitly repinning Monitor")
-	}
-	if route["ip"] != endpoint.IP || route["port"] != float64(endpoint.Port) {
-		return fmt.Errorf("sandbox boot address does not match its allowed Monitor endpoint %s; supply that address in MONITOR_ROUTE at launch", net.JoinHostPort(endpoint.IP, strconv.Itoa(endpoint.Port)))
-	}
-	dir, err := monitorDir(scope, peer.Name)
-	if err != nil {
-		return err
-	}
-	devicePath := filepath.Join(dir, monitorDeviceKeyName)
-	device, err := os.ReadFile(devicePath)
-	if err != nil {
-		return err
-	}
-	defer clear(device)
-	signer, err := ssh.ParsePrivateKey(device)
-	if err != nil {
-		return err
-	}
-	address, err := monitorAddress(context.Background(), peer)
-	if err != nil {
-		return err
-	}
-	s.monitor, err = ssh.Dial("tcp", address, &ssh.ClientConfig{
-		User: monitorSSHUser, Auth: []ssh.AuthMethod{ssh.PublicKeys(signer)},
-		HostKeyCallback: ssh.FixedHostKey(hostKey), Timeout: 30 * time.Second,
-	})
-	if err != nil {
-		return err
-	}
-	identity, err := os.ReadFile(filepath.Join(s.keys.dir, sandboxAgentKeyName))
-	if err != nil {
-		return err
-	}
-	s.keys.monitorIdentity = string(identity)
-	ip, port, _ := net.SplitHostPort(address)
+	ip, port, _ := net.SplitHostPort(profile.Address)
 	portNumber, _ := strconv.Atoi(port)
-	s.profile.jump = &sshProfile{name: s.box.ID + monitorJumpSuffix, hostName: ip, port: portNumber,
-		user: monitorSSHUser, identityFile: devicePath, hostKey: hostKey, hostKeyAlias: peer.Domain}
+	s.monitorKey = profile.HostKey
+	s.profile.jump = &sshProfile{name: s.box.ID + monitorJumpSuffix, hostName: ip, port: portNumber, user: monitorSSHUser, identityFile: filepath.Join(dir, monitorDeviceKeyName), hostKey: key, hostKeyAlias: profile.Domain}
 	return nil
 }
 
@@ -357,8 +338,9 @@ func bootstrapRoute(identity string) string {
 }
 
 func (s *sandboxSession) enrolled() bool {
-	key, _ := os.ReadFile(filepath.Join(s.keys.dir, sandboxEnrolledKeyName))
-	return sameSSHKey(string(key), string(ssh.MarshalAuthorizedKey(s.profile.hostKey)))
+	var receipt sandboxReceipt
+	return readStorageJSON(filepath.Join(s.keys.dir, sandboxEnrolledKeyName), &receipt) == nil &&
+		sameSSHKey(receipt.BootKey, string(ssh.MarshalAuthorizedKey(s.profile.hostKey))) && sameSSHKey(receipt.MonitorKey, s.monitorKey)
 }
 
 func (s *sandboxSession) enroll() error {
@@ -375,17 +357,30 @@ func (s *sandboxSession) enroll() error {
 		if err != nil {
 			return nil, err
 		}
-		client, err := connectOwnerSSHAs(conn, s.box.Domain, s.profile.hostKey, s.keys.ownerSeed, sandboxLoginUser)
+		client, err := connectOwnerSigner(conn, s.box.Domain, s.profile.hostKey, s.signer, sandboxLoginUser)
 		if err == nil && !time.Now().Before(s.expires) {
 			client.Close()
 			return nil, errors.New("sandbox attestation expired during SSH handshake")
 		}
 		return client, err
 	}
-	if err := sendUnlock(dial, s.keys); err != nil {
+	var receipt sandboxReceipt
+	_ = readStorageJSON(filepath.Join(s.keys.dir, sandboxEnrolledKeyName), &receipt)
+	operation := "initialize"
+	if s.initialized {
+		operation = "unlock"
+	}
+	if sameSSHKey(receipt.BootKey, string(ssh.MarshalAuthorizedKey(s.profile.hostKey))) {
+		operation = "route"
+	}
+	request := map[string]any{"operation": operation, "monitor_route": map[string]any{"binding": s.binding, "host_key": s.monitorKey}}
+	if operation != "route" {
+		request["volume"], request["monitor_identity"] = s.keys.diskKey, s.keys.monitorIdentity
+	}
+	if err := sendOwnerRequest(dial, request); err != nil {
 		return fmt.Errorf("%w; retry with `tinfoil sandbox enroll %s`", err, s.box.ID)
 	}
-	if err := writeAtomic(filepath.Join(s.keys.dir, sandboxEnrolledKeyName), ssh.MarshalAuthorizedKey(s.profile.hostKey)); err != nil {
+	if err := writeStorageJSON(filepath.Join(s.keys.dir, sandboxEnrolledKeyName), sandboxReceipt{strings.TrimSpace(string(ssh.MarshalAuthorizedKey(s.profile.hostKey))), s.monitorKey}, false); err != nil {
 		return err
 	}
 	fmt.Fprintf(os.Stderr, "Unlocked %s over SSH with the keys in %s\n", s.box.ID, s.keys.dir)
@@ -457,59 +452,40 @@ func attestConnection(dial func(context.Context, string, string) (net.Conn, erro
 
 // Preserve aliases owned by another identity.
 func installSandboxAlias(p sshProfile, home string) error {
-	if owned, err := ownsSSHProfile(home, p.name, p.identityFile); err != nil || !owned {
-		return errors.Join(err, fmt.Errorf("~/.ssh/tinfoil/%s.conf is the profile of another host; remove it so `ssh %s` reaches this sandbox", p.name, p.name))
+	if owned, err := ownsSSHProfile(home, p.name, p.resourceID); err != nil || !owned {
+		return errors.Join(err, fmt.Errorf("~/.ssh/tinfoil/%s.conf is the profile of another resource; choose --name ALIAS or remove this profile", p.name))
 	}
 	return p.installTo(home, os.Stdin, os.Stderr, false, true)
 }
 
-func ownsSSHProfile(home, name, identityFile string) (bool, error) {
+func ownsSSHProfile(home, name, resource string) (bool, error) {
 	existing, err := os.ReadFile(filepath.Join(home, ".ssh", "tinfoil", name+".conf"))
 	if errors.Is(err, os.ErrNotExist) {
 		return true, nil
 	}
-	owned := bytes.Contains(existing, []byte("\n  IdentityFile "+identityFile+"\n"))
-	// Upgrade this sandbox's old profile without overwriting its old private key.
-	if filepath.Base(identityFile) == sandboxSSHKeyName {
-		legacy := filepath.Join(filepath.Dir(identityFile), "id_ed25519")
-		owned = owned || bytes.Contains(existing, []byte("\n  IdentityFile "+legacy+"\n"))
-	}
-	return owned, err
+	return resource != "" && bytes.HasPrefix(existing, []byte("# tinfoil-resource: "+resource+"\n")), err
 }
 
 // Remove the local SSH profile while keeping the saved keys.
-func forgetSandbox(name string) error {
-	dir, err := sandboxKeyDir(name)
-	if err != nil {
-		return err
-	}
-	var binding sandboxBinding
-	if err := readStorageJSON(filepath.Join(dir, sandboxBindingName), &binding); err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil
-		}
-		return err
+func forgetSandbox(name, id string) error {
+	if id == "" {
+		return nil
 	}
 	scope, _, err := currentScope()
 	if err != nil {
 		return err
 	}
-	if binding.Scope != scope {
-		return errors.New("saved sandbox belongs to another account")
-	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return err
 	}
-	owned, err := ownsSSHProfile(home, name, filepath.Join(dir, sandboxSSHKeyName))
-	if err != nil {
+	owned, err := ownsSSHProfile(home, name, scope.ControlplaneURL+"/"+scope.OrgID+"/"+scope.UserID+"/"+id)
+	if err != nil || !owned {
 		return err
 	}
-	if owned {
-		for _, file := range []string{name + ".conf", name + ".known_hosts"} {
-			if err := os.Remove(filepath.Join(home, ".ssh", "tinfoil", file)); err != nil && !errors.Is(err, os.ErrNotExist) {
-				return err
-			}
+	for _, suffix := range []string{".conf", ".known_hosts"} {
+		if err := os.Remove(filepath.Join(home, ".ssh", "tinfoil", name+suffix)); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
 		}
 	}
 	return nil
@@ -544,11 +520,8 @@ func sameSSHKey(a, b string) bool {
 
 // Repeat only after transport failures. The server accepts identical retries of
 // this boot's unlock, including after its SSH daemon hands off to normal login.
-func sendUnlock(dial func() (*ssh.Client, error), keys *sandboxKeys) error {
-	body, err := json.Marshal(struct {
-		Volume          string `json:"volume"`
-		MonitorIdentity string `json:"monitor_identity"`
-	}{keys.diskKey, keys.monitorIdentity})
+func sendOwnerRequest(dial func() (*ssh.Client, error), request any) error {
+	body, err := json.Marshal(request)
 	if err != nil {
 		return err
 	}
@@ -565,7 +538,7 @@ func sendUnlock(dial func() (*ssh.Client, error), keys *sandboxKeys) error {
 				session.Stdin = bytes.NewReader(body)
 				var message limitedUnlockOutput
 				session.Stderr = &message
-				err = session.Run("/usr/local/libexec/workspace-enroll --unlock")
+				err = session.Run("/usr/local/bin/workspace-unlock")
 				session.Close()
 				var refused *ssh.ExitError
 				if errors.As(err, &refused) {

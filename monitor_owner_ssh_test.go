@@ -122,7 +122,7 @@ func TestSSHGenerationNeverDecreases(t *testing.T) {
 }
 
 // Pair through the production owner channel, including generation acknowledgments.
-func testSandboxPairing(t *testing.T, client *ssh.Client, dir string, hostKey ssh.PublicKey, address string) {
+func testSandboxPairing(t *testing.T, client *ssh.Client, dir string, hostKey ssh.PublicKey, address string) (string, string) {
 	deviceSigner := testSigner(t)
 	device, agent := authorizedLine(deviceSigner), authorizedLine(testSigner(t))
 	deviceName := "device-" + storageHash([]byte(device))[:16]
@@ -136,7 +136,7 @@ func testSandboxPairing(t *testing.T, client *ssh.Client, dir string, hostKey ss
 	}
 	edit := func(path []string, value any) {
 		require.NoError(t, monitorOwnerRequest(client, dir, "POST", "/policy/edits", map[string]any{
-			"changes": []map[string]any{{"path": path, "value": value}},
+			"changes": []map[string]any{{"path": path, "value": value, "delete": value == nil}},
 		}, nil))
 	}
 	require.NoError(t, pairSandboxMonitor(client, dir, "work", device, agent))
@@ -167,8 +167,12 @@ func testSandboxPairing(t *testing.T, client *ssh.Client, dir string, hostKey ss
 	// A paired device can be revoked without creation silently re-enabling it.
 	edit([]string{"identities", deviceName, "routes"}, false)
 	before = read()
-	require.ErrorContains(t, pairSandboxMonitor(client, dir, "work", device, agent), "routes disabled")
+	require.ErrorContains(t, pairSandboxMonitor(client, dir, "work", device, agent), "route access was revoked")
 	require.Equal(t, before, read())
+	edit([]string{"identities", deviceName, "routes"}, true)
+	edit([]string{"identities", "sandbox-work"}, nil)
+	require.ErrorContains(t, pairSandboxMonitor(client, dir, "work", device, agent), "identity was revoked")
+	return device, agent
 }
 
 // Exercise the actual Monitor: a publisher can announce itself before enrollment,
@@ -183,7 +187,7 @@ func testSandboxRoutes(t *testing.T, device ssh.Signer, hostKey ssh.PublicKey, a
 		return client
 	}
 	boot := testSigner(t)
-	publisher := dial("work.example", boot)
+	publisher := dial("sandbox-v2:11111111-1111-4111-8111-111111111111", boot)
 	publish := func(client *ssh.Client, port string) net.Listener {
 		listener, err := client.Listen("tcp", "127.0.0.1:"+port)
 		require.NoError(t, err)
@@ -213,26 +217,26 @@ func testSandboxRoutes(t *testing.T, device ssh.Signer, hostKey ssh.PublicKey, a
 		return string(data), err
 	}
 	for target, want := range map[string]string{
-		bootstrapRoute("work.example") + ":443": "sandbox:443",
-		routeName(boot.PublicKey()) + ":443":    "sandbox:443",
-		routeName(boot.PublicKey()) + ":22":     "sandbox:22",
+		bootstrapRoute("sandbox-v2:11111111-1111-4111-8111-111111111111") + ":443": "sandbox:443",
+		routeName(boot.PublicKey()) + ":443":                                       "sandbox:443",
+		routeName(boot.PublicKey()) + ":22":                                        "sandbox:22",
 	} {
 		got, err := read(reader, target)
 		require.NoError(t, err)
 		require.Equal(t, want, got)
 	}
-	for _, target := range []string{bootstrapRoute("work.example") + ":22", bootstrapRoute("other.example") + ":443"} {
+	for _, target := range []string{bootstrapRoute("sandbox-v2:11111111-1111-4111-8111-111111111111") + ":22", bootstrapRoute("other.example") + ":443"} {
 		_, err := read(reader, target)
 		require.Error(t, err)
 	}
 	// Unknown keys may publish but cannot use a bootstrap name to gain access.
 	stranger := dial("device", testSigner(t))
-	_, err := read(stranger, bootstrapRoute("work.example")+":443")
+	_, err := read(stranger, bootstrapRoute("sandbox-v2:11111111-1111-4111-8111-111111111111")+":443")
 	require.Error(t, err)
 	// Two untrusted claims must not silently select a publisher.
-	duplicate := dial("work.example", testSigner(t))
+	duplicate := dial("sandbox-v2:11111111-1111-4111-8111-111111111111", testSigner(t))
 	publish(duplicate, "443")
-	_, err = read(reader, bootstrapRoute("work.example")+":443")
+	_, err = read(reader, bootstrapRoute("sandbox-v2:11111111-1111-4111-8111-111111111111")+":443")
 	require.Error(t, err)
 	got, err := read(reader, routeName(boot.PublicKey())+":443")
 	require.NoError(t, err)
