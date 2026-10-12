@@ -134,6 +134,7 @@ func TestSendEnrollmentRetriesLostReply(t *testing.T) {
 		mu.Lock()
 		bodies = append(bodies, body)
 		first := len(bodies) == 1
+		responseStatus := status
 		mu.Unlock()
 		if first {
 			conn, _, err := w.(http.Hijacker).Hijack()
@@ -141,21 +142,26 @@ func TestSendEnrollmentRetriesLostReply(t *testing.T) {
 			conn.Close()
 			return
 		}
-		w.WriteHeader(status)
+		w.WriteHeader(responseStatus)
 	}))
 	defer server.Close()
 	keys := &sandboxKeys{dir: t.TempDir(), publicKey: "ssh-ed25519 AAAA", diskKey: "disk", monitor: &monitorAgentConfig{Domain: "personal.example", IP: "100.64.0.1", Port: 18293, HostKey: "ssh-ed25519 BBBB", Identity: "agent"}}
 
 	require.NoError(t, sendEnrollment(server.Client(), server.URL, keys))
-	require.Len(t, bodies, 2)
-	require.True(t, bytes.Equal(bodies[0], bodies[1]), "a lost reply is retried with the identical enrollment")
+	mu.Lock()
+	observed := append([][]byte(nil), bodies...)
+	mu.Unlock()
+	require.Len(t, observed, 2)
+	require.True(t, bytes.Equal(observed[0], observed[1]), "a lost reply is retried with the identical enrollment")
 	var sent struct {
 		Monitor monitorAgentConfig `json:"monitor"`
 	}
-	require.NoError(t, json.Unmarshal(bodies[1], &sent))
+	require.NoError(t, json.Unmarshal(observed[1], &sent))
 	require.Equal(t, *keys.monitor, sent.Monitor)
 
+	mu.Lock()
 	bodies, status = nil, http.StatusConflict
+	mu.Unlock()
 	require.ErrorContains(t, sendEnrollment(server.Client(), server.URL, keys), "already has an owner")
 }
 
@@ -188,12 +194,14 @@ func TestEnrollmentClientRequiresFreshPinnedAttestation(t *testing.T) {
 	require.ErrorContains(t, err, "no unexpired freshness", "an attestation without freshness authorizes nothing")
 	require.Zero(t, requests)
 
-	expires := time.Now().Add(300 * time.Millisecond)
+	expires := time.Now().Add(time.Hour)
 	fresh := client(fingerprint, expires)
 	resp, err := fresh.Get(server.URL)
 	require.NoError(t, err)
 	resp.Body.Close()
-	time.Sleep(time.Until(expires))
+	expired := fresh.Transport.(freshAttestation)
+	expired.expires = time.Now().Add(-time.Second)
+	fresh.Transport = expired
 	_, err = fresh.Get(server.URL)
 	require.ErrorContains(t, err, "no unexpired freshness", "a pooled connection is not reused after expiry")
 	require.Equal(t, 1, requests)

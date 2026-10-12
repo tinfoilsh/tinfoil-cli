@@ -219,8 +219,8 @@ func TestContainerCreateWithVolume(t *testing.T) {
 		wantPaths    []string
 	}{
 		{name: "agent volumes are assigned before launch", agent: true, volumes: []string{"data-vol"}, slots: `[{"name":"data"}]`,
-			wantOut:   []string{"Status:       Deploying"},
-			wantPaths: []string{"POST /api/containers/validate", "GET /api/volumes", "POST /api/containers"}},
+			wantOut:   []string{"Status:       Deploying", "Volumes:      data ← data-vol (16 TiB)"},
+			wantPaths: []string{"POST /api/containers/validate", "GET /api/volumes", "POST /api/containers", "GET /api/volumes"}},
 		{
 			name:    "attaches then starts",
 			volumes: []string{"data-vol"},
@@ -319,6 +319,7 @@ func TestContainerCreateWithVolume(t *testing.T) {
 						require.NoError(t, json.Unmarshal(body, &request))
 						require.Equal(t, defaultSandboxRepo, request.Repo)
 						require.Equal(t, map[string]string{"data": testVolumeID}, request.Volumes)
+						attached.Store(true)
 						_, _ = io.WriteString(w, `{"id":"`+testContainerID+`","name":"app","status":"deploying","host_name":"inf13","volume_slots":`+slots+`}`)
 						return
 					}

@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"github.com/tinfoilsh/tinfoil-go/verify"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -675,18 +676,33 @@ func importMonitor(scope accountScope, export monitorExport) error {
 	if err != nil {
 		return err
 	}
+	if export.Profile.Scope != scope {
+		return errors.New("Monitor export belongs to another account")
+	}
+	sourceRepo, sourceRevision, sourceDigest, sourceErr := verify.ParseReference(export.Profile.Source)
+	domain, domainErr := url.Parse("https://" + export.Profile.Domain)
+	if sourceErr != nil || sourceRepo != "tinfoil/containers" || sourceDigest == "" || sourceRevision != sourceDigest || domainErr != nil || domain.Host == "" || domain.Host != export.Profile.Domain || domain.User != nil || domain.Path != "" || domain.RawQuery != "" || domain.Fragment != "" {
+		return errors.New("Monitor export has an invalid profile")
+	}
+	credential, err := decodeOwnerCredential([]byte(export.OwnerKey), monitorOwnerKeyBytes)
+	if err != nil {
+		return err
+	}
+	defer clear(credential.Key)
+	if credential.Argon2ID != "" {
+		if _, err := credential.commitment(credential.Argon2ID); err != nil {
+			return err
+		}
+	}
 	if err := prepareStorageDirectory(dir); err != nil {
-		return err
-	}
-	if err := restoreFile(filepath.Join(dir, monitorOwnerKeyName), []byte(export.OwnerKey)); err != nil {
-		return err
-	}
-	if _, err := loadOwnerKey(dir); err != nil {
 		return err
 	}
 	if _, err := updateProfile(dir, func(p *monitorProfile) error {
 		if p.Source != "" && (p.Domain != export.Profile.Domain || p.Source != export.Profile.Source) {
 			return fmt.Errorf("%s describes another Monitor", dir)
+		}
+		if err := restoreFile(filepath.Join(dir, monitorOwnerKeyName), []byte(export.OwnerKey)); err != nil {
+			return err
 		}
 		local := *p
 		*p = export.Profile

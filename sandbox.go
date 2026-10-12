@@ -302,8 +302,14 @@ using this device's workspace key.`,
 		if _, err := loadSandboxKeys(name); err != nil {
 			return err
 		}
-		if _, err := stopSandbox(name); err != nil {
+		box, err := getSandbox(name)
+		if err != nil {
 			return err
+		}
+		if box.State != "failed" && box.State != sandboxStateStopped {
+			if _, err := stopSandbox(name); err != nil {
+				return err
+			}
 		}
 		return renderSandbox(startSandbox(name))
 	},

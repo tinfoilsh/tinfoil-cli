@@ -679,6 +679,19 @@ func adoptSandboxCredential(box sandboxView, input string) error {
 	if _, err := verifySandboxConfig(row, digest, template, variables); err != nil {
 		return err
 	}
+	if row.NetworkPolicy != nil {
+		// A contained sandbox keeps its established login and agent identity.
+		// Save only the credential whose measured owner binding we just checked,
+		// so private attestation can read it without generating replacement keys.
+		for _, file := range []string{sandboxSSHKeyName, sandboxAgentKeyName} {
+			if _, err := loadSSHKey(filepath.Join(dir, file)); err != nil {
+				return errors.New("contained sandbox adoption requires its existing login and agent keys; restore a Monitor backup first")
+			}
+		}
+		if err := saveOwnerCredential(filepath.Join(dir, sandboxDiskKeyName), credential, sandboxDiskKeyBytes); err != nil {
+			return err
+		}
+	}
 	access, err := sandboxAccessFor(box.ID)
 	if err != nil {
 		return err

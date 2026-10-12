@@ -403,18 +403,18 @@ restarts the saved config.`,
 		// with the commands to run rather than creating a container that sits
 		// stopped. Slots without one are optional and the container deploys
 		// with them empty.
-		var createSlots []volumeSlot
+		var createAssignments []string
 		if createSource == containerSourceGitHub {
 			slots, err := declaredVolumeSlots(client, createRepo, revision, args[0], replaceID)
 			if err != nil {
 				return err
 			}
-			createSlots = slots
 			planned := containerView{Name: args[0], VolumeSlots: slots}
 			assignments, err := volumeAssignments(&planned, requests)
 			if err != nil {
 				return err
 			}
+			createAssignments = assignments
 			assigned := map[string]bool{}
 			for _, name := range assignments {
 				assigned[name] = true
@@ -475,12 +475,8 @@ restarts the saved config.`,
 
 		agentRepo := strings.EqualFold(createRepo, defaultSandboxRepo) || strings.EqualFold(createRepo, monitorTemplateRepo)
 		if agentRepo && createSource == containerSourceGitHub && len(requests) > 0 {
-			slots, err := volumeAssignments(&containerView{VolumeSlots: createSlots}, requests)
-			if err != nil {
-				return err
-			}
 			bindings := map[string]string{}
-			for i, slot := range slots {
+			for i, slot := range createAssignments {
 				bindings[slot] = volumes[i].ID
 			}
 			body["volumes"] = bindings
@@ -490,7 +486,11 @@ restarts the saved config.`,
 			return err
 		}
 		if agentRepo && createSource == containerSourceGitHub {
-			return createFollowupError(created, replaceID, followAndRender(client, created, nil))
+			attached, err := loadContainerVolumes(client, created)
+			if err != nil {
+				return createFollowupError(created, replaceID, err)
+			}
+			return createFollowupError(created, replaceID, followAndRender(client, created, attached))
 		}
 		deployBody := map[string]any{}
 		if value, ok := body["mark_latest_release"].(bool); ok {

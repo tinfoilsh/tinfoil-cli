@@ -113,6 +113,11 @@ Restore missing keys from a backup, or supply the original credential when
 adopting an uncontained dashboard sandbox. The CLI does not replace a saved
 workspace key with a different one.
 
+If device registration fails before its reply is confirmed, check the Monitor
+app's device access before retrying. The CLI keeps its registration marker so a
+retry cannot silently restore a device that an owner later revoked. It shows
+the public key needed to restore access in the app.
+
 ## Changing a sandbox release
 
 Back up the Monitor bundle first. Record the current workspace volume ID, stop

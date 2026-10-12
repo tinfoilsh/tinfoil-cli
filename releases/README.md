@@ -24,6 +24,8 @@ To approve a new default:
    embedded template with only the expected owner and storage values supplied.
 
 An explicit Monitor `--template` still wins. Other Monitor revisions use the
-verified local cache or the selected release's GitHub file; other sandbox
+locally cached template or the selected release's GitHub file; other sandbox
 revisions fetch their own release template. Neither path substitutes the
-controlplane's returned config for the independent template.
+controlplane's returned config for the independent template. A custom local
+file or cached copy is trusted input, not an artifact whose release provenance
+the CLI verifies automatically.

@@ -271,7 +271,7 @@ func TestMonitorExportImportKeepsScopeAndKeys(t *testing.T) {
 				owner = string(record)
 			}
 			require.NoError(t, writeNewFile(filepath.Join(dir, monitorOwnerKeyName), []byte(owner)))
-			require.NoError(t, writeStorageJSON(filepath.Join(dir, monitorProfileName), monitorProfile{Scope: scope, Name: "personal", Domain: "personal.example", Source: "tinfoil/containers@a@sha256:a", Generation: 7, Device: "device-exporter"}, true))
+			require.NoError(t, writeStorageJSON(filepath.Join(dir, monitorProfileName), monitorProfile{Scope: scope, Name: "personal", Domain: "personal.example", Source: "tinfoil/containers@" + strings.Repeat("a", 64) + "@sha256:" + strings.Repeat("a", 64), Generation: 7, Device: "device-exporter"}, true))
 			_, err = ensureSSHKey(filepath.Join(dir, monitorDeviceKeyName))
 			require.NoError(t, err)
 			var supplied []*ownerCredential
@@ -451,13 +451,6 @@ func authorizedLine(signer ssh.Signer) string {
 	return strings.TrimSpace(string(ssh.MarshalAuthorizedKey(signer.PublicKey())))
 }
 
-func assertNoError(t *testing.T, err error) bool {
-	if err != nil {
-		t.Error(err)
-	}
-	return err == nil
-}
-
 func ownerIdentities(t *testing.T, m *monitorSession) map[string]struct {
 	Key    string `json:"key"`
 	Routes bool   `json:"routes"`
@@ -580,4 +573,26 @@ func TestMonitorPassphraseCreateAdoptAndExport(t *testing.T) {
 	raw, err := os.ReadFile(filepath.Join(imported, monitorOwnerKeyName))
 	require.NoError(t, err)
 	require.Equal(t, ownerFile, raw)
+}
+
+func TestMonitorImportRejectsInvalidBackupBeforeWritingOwner(t *testing.T) {
+	t.Setenv(envConfigPath, filepath.Join(t.TempDir(), "config.json"))
+	scope := accountScope{ControlplaneURL: "https://api.example", UserID: "user1"}
+	profile := monitorProfile{Scope: scope, Name: "personal", Domain: "personal.example", Source: "tinfoil/containers@" + strings.Repeat("a", 64) + "@sha256:" + strings.Repeat("a", 64)}
+	dir, err := monitorDir(scope, "personal")
+	require.NoError(t, err)
+	require.Error(t, importMonitor(scope, monitorExport{Profile: profile, OwnerKey: "malformed"}))
+	require.NoFileExists(t, filepath.Join(dir, monitorOwnerKeyName))
+	invalid := profile
+	invalid.Source = ""
+	require.ErrorContains(t, importMonitor(scope, monitorExport{Profile: invalid, OwnerKey: base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{'a'}, 32))}), "invalid profile")
+	require.NoFileExists(t, filepath.Join(dir, monitorOwnerKeyName))
+	require.NoError(t, prepareStorageDirectory(dir))
+	require.NoError(t, writeStorageJSON(filepath.Join(dir, monitorProfileName), profile, true))
+	owner := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{'a'}, 32))
+	wrong := profile
+	wrong.Domain = "different.example"
+	require.ErrorContains(t, importMonitor(scope, monitorExport{Profile: wrong, OwnerKey: owner}), "another Monitor")
+	require.NoFileExists(t, filepath.Join(dir, monitorOwnerKeyName))
+	require.NoError(t, importMonitor(scope, monitorExport{Profile: profile, OwnerKey: owner}))
 }

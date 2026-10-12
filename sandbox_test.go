@@ -370,7 +370,7 @@ func captureStdout(t *testing.T, run func()) string {
 }
 
 func TestSandboxLifecycleUsesContainerIDs(t *testing.T) {
-	for _, action := range []string{"start", "restart", "stop", "delete"} {
+	for _, action := range []string{"start", "restart", "restart-failed", "stop", "delete"} {
 		t.Run(action, func(t *testing.T) {
 			t.Setenv(envConfigPath, filepath.Join(t.TempDir(), "config.json"))
 			t.Setenv(envAdminKey, "admin_test")
@@ -382,6 +382,9 @@ func TestSandboxLifecycleUsesContainerIDs(t *testing.T) {
 			row := containerView{ID: "container-id", Name: "work", Repo: defaultSandboxRepo, Status: statusRunning}
 			if action == "start" {
 				row.Status = statusStopped
+			}
+			if action == "restart-failed" {
+				row.Status = "failed"
 			}
 			var mutations []string
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -418,6 +421,10 @@ func TestSandboxLifecycleUsesContainerIDs(t *testing.T) {
 				err = sandboxRestartCmd.RunE(sandboxRestartCmd, []string{"work"})
 				require.ErrorContains(t, err, "reported no domain")
 				require.Equal(t, []string{"stop", "deploy"}, mutations)
+			case "restart-failed":
+				err = sandboxRestartCmd.RunE(sandboxRestartCmd, []string{"work"})
+				require.ErrorContains(t, err, "reported no domain")
+				require.Equal(t, []string{"deploy"}, mutations)
 			case "stop":
 				box, stopErr := stopSandbox("work")
 				require.NoError(t, stopErr)
@@ -578,4 +585,65 @@ func TestSandboxCreateRetainsWorkspaceOnlyWithSavedCredential(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, original, saved)
 	require.Equal(t, 1, posted)
+}
+
+func TestContainedAdoptionRestoresWorkspaceBeforePrivateAttestation(t *testing.T) {
+	t.Setenv(envConfigPath, filepath.Join(t.TempDir(), "config.json"))
+	t.Setenv(envAdminKey, "admin_test")
+	credential := &ownerCredential{Version: 1, Key: []byte("correct horse battery staple"), Argon2ID: testOwnerPHC}
+	keys, err := ensureSandboxKeysWithCredential("work", credential)
+	require.NoError(t, err)
+	_, err = ensureSSHKey(filepath.Join(keys.dir, sandboxAgentKeyName))
+	require.NoError(t, err)
+	originalLogin, err := os.ReadFile(keys.sshKeyPath)
+	require.NoError(t, err)
+	originalAgent, err := os.ReadFile(filepath.Join(keys.dir, sandboxAgentKeyName))
+	require.NoError(t, err)
+	require.NoError(t, os.Remove(filepath.Join(keys.dir, sandboxDiskKeyName)))
+	input := filepath.Join(t.TempDir(), "passphrase")
+	require.NoError(t, os.WriteFile(input, credential.Key, 0600))
+	template := []byte("containers:\n  - env: [{SANDBOX_OWNER_KEY_SHA256: ''}, {SANDBOX_OWNER_KEY_ARGON2ID: ''}]\n")
+	config, err := renderTemplateEnv(template, map[string]string{sandboxArgonOwnerEnv: testOwnerPHC})
+	require.NoError(t, err)
+	row := containerView{ID: "work-id", Name: "work", Repo: defaultSandboxRepo, CurrentTag: "v-adopt", Domain: "work.example", Status: statusRunning, Config: string(config), NetworkPolicy: &containerNetworkPolicy{EgressMode: "restricted", Egress: []containerPeer{{"peer-id", 22}}}}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/containers":
+			json.NewEncoder(w).Encode([]containerView{row})
+		case "/api/containers/work-id":
+			json.NewEncoder(w).Encode(row)
+		case "/api/containers/peer-id":
+			json.NewEncoder(w).Encode(containerView{ID: "peer-id", Name: "personal", SSHPort: 12345, Domain: "personal.example"})
+		case "/api/containers/work-id/network":
+			http.Error(w, `{"error":"peer temporarily unavailable"}`, 503)
+		default:
+			if strings.HasSuffix(r.URL.Path, "/tinfoil-config.yml") {
+				w.Write(template)
+				return
+			}
+			t.Errorf("unexpected %s", r.URL.Path)
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	t.Setenv(envCPURL, server.URL)
+	oldBase := sandboxTemplateBase
+	sandboxTemplateBase = server.URL
+	t.Cleanup(func() { sandboxTemplateBase = oldBase })
+	box := sandboxView{ID: "work", ContainerID: row.ID, Domain: row.Domain}
+	require.ErrorContains(t, adoptSandboxCredential(box, input), "peer temporarily unavailable")
+	restored, err := readOwnerCredential(filepath.Join(keys.dir, sandboxDiskKeyName), 64)
+	require.NoError(t, err)
+	require.Equal(t, credential, restored)
+	login, err := os.ReadFile(keys.sshKeyPath)
+	require.NoError(t, err)
+	require.Equal(t, originalLogin, login)
+	agent, err := os.ReadFile(filepath.Join(keys.dir, sandboxAgentKeyName))
+	require.NoError(t, err)
+	require.Equal(t, originalAgent, agent)
+	require.NoError(t, os.Remove(filepath.Join(keys.dir, sandboxDiskKeyName)))
+	require.NoError(t, os.Remove(filepath.Join(keys.dir, sandboxAgentKeyName)))
+	require.ErrorContains(t, adoptSandboxCredential(box, input), "existing login and agent keys")
+	require.NoFileExists(t, filepath.Join(keys.dir, sandboxDiskKeyName))
+	require.NoFileExists(t, filepath.Join(keys.dir, sandboxAgentKeyName))
 }
