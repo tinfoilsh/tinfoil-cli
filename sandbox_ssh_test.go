@@ -112,6 +112,17 @@ func TestContainedKeysServeOneAccountAndMonitor(t *testing.T) {
 
 }
 
+func TestForgetSandboxWithoutLocalBindingNeedsNoCredentials(t *testing.T) {
+	t.Setenv(envConfigPath, filepath.Join(t.TempDir(), "config.json"))
+	require.NoError(t, forgetSandbox("work"))
+	dir, err := sandboxKeyDir("work")
+	require.NoError(t, err)
+	require.NoDirExists(t, dir)
+	require.NoError(t, os.MkdirAll(dir, 0700))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, sandboxBindingName), []byte("invalid JSON"), 0600))
+	require.Error(t, forgetSandbox("work"), "a malformed existing binding must not be silently ignored")
+}
+
 func TestSandboxPeerRequiresOneUsablePrivateSSHPeer(t *testing.T) {
 	var endpoint sandboxEndpoint
 	var requests atomic.Int32

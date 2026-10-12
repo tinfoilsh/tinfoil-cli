@@ -191,6 +191,13 @@ func provisionMonitor(client *cpClient, scope accountScope, name string) error {
 	if _, err := workloadSource(row, monitorRepo); err != nil {
 		return fmt.Errorf("refusing Monitor %s: %w", name, err)
 	}
+	environment, err := measuredEnvironment(row.Config)
+	if err != nil {
+		return err
+	}
+	if environment[monitorOwnerEnv] != publicKey {
+		return errors.New("Monitor's measured owner public key does not match the saved credential")
+	}
 	if _, err := updateProfile(dir, func(p *monitorProfile) error {
 		if p.Domain == "" {
 			p.Domain = row.Domain

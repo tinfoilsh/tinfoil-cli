@@ -485,6 +485,9 @@ func forgetSandbox(name string) error {
 	}
 	var binding sandboxBinding
 	if err := readStorageJSON(filepath.Join(dir, sandboxBindingName), &binding); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
 		return err
 	}
 	scope, _, err := currentScope()
@@ -498,7 +501,11 @@ func forgetSandbox(name string) error {
 	if err != nil {
 		return err
 	}
-	if owned, err := ownsSSHProfile(home, name, filepath.Join(dir, sandboxSSHKeyName)); err == nil && owned {
+	owned, err := ownsSSHProfile(home, name, filepath.Join(dir, sandboxSSHKeyName))
+	if err != nil {
+		return err
+	}
+	if owned {
 		for _, file := range []string{name + ".conf", name + ".known_hosts"} {
 			if err := os.Remove(filepath.Join(home, ".ssh", "tinfoil", file)); err != nil && !errors.Is(err, os.ErrNotExist) {
 				return err

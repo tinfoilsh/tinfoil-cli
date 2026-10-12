@@ -86,12 +86,19 @@ func TestMonitorProvisioningPublishesOnlyPublicKeyAndReusesSavedKeys(t *testing.
 			json.NewEncoder(w).Encode(rows)
 		case "POST /api/containers":
 			var body struct {
-				Name      string            `json:"name"`
-				Tag       string            `json:"tag"`
-				HostName  string            `json:"host_name"`
-				Variables map[string]string `json:"variables"`
+				Name          string            `json:"name"`
+				Repo          string            `json:"repo"`
+				Tag           string            `json:"tag"`
+				HostName      string            `json:"host_name"`
+				Variables     map[string]string `json:"variables"`
+				ObjectStorage map[string]string `json:"object_storage"`
 			}
-			require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+			decoder := json.NewDecoder(r.Body)
+			decoder.DisallowUnknownFields()
+			require.NoError(t, decoder.Decode(&body))
+			require.Equal(t, monitorRepo, body.Repo)
+			require.NotNil(t, body.ObjectStorage)
+			require.Empty(t, body.ObjectStorage)
 			require.Len(t, body.Variables, 1)
 			require.Equal(t, expectedTag, body.Tag)
 			require.Equal(t, "control.box2.tinfoil.sh", body.HostName)
@@ -123,6 +130,12 @@ func TestMonitorProvisioningPublishesOnlyPublicKeyAndReusesSavedKeys(t *testing.
 	require.Equal(t, 1, creates)
 	require.Equal(t, "v9.8.7", row.CurrentTag, "a retry keeps the deployed release")
 	require.Equal(t, 1, releaseLookups, "existing Monitors need no release lookup")
+	originalConfig := row.Config
+	row.Config = strings.Replace(row.Config, owner.publicKey(), testOwnerCredential(t).publicKey(), 1)
+	row.ConfigName = "/tinfoil/containers/" + storageHash([]byte(row.Config))
+	require.ErrorContains(t, create(), "owner public key does not match")
+	row.Config = originalConfig
+	row.ConfigName = "/tinfoil/containers/" + storageHash([]byte(row.Config))
 	monitorHost = "other-host"
 	require.ErrorContains(t, create(), "already uses host control.box2.tinfoil.sh")
 	monitorHost = "control.box2.tinfoil.sh"
