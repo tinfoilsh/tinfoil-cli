@@ -33,8 +33,8 @@ Credentials are written to `~/.tinfoil/config.json` (mode 0600). Override on a p
 Connections resolved through the controlplane (`container connect`,
 `forward`, `ssh`, `scp`, `attest-ssh` by container name or ID) are checked
 against a local connection policy before any traffic flows:
-`~/.tinfoil/known-configs.yml` (override with `TINFOIL_KNOWN_CONFIGS`). The
-file is yours to edit; the CLI preserves comments when it writes. See the
+`~/.tinfoil/known-configs.json` (override with `TINFOIL_KNOWN_CONFIGS`). The
+file is JSON; the CLI writes it atomically. See the
 [known-configs contract](docs/known-configs-contract.md) for exact matching
 and write semantics.
 
@@ -69,7 +69,7 @@ tinfoil ssh my-container --repo myorg                            # org-level ass
 tinfoil container connect my-container --dangerous               # bypass, never recorded
 ```
 
-For CI and operator machines, prefer `mode: frozen` with a pre-seeded store
+For CI and operator machines, prefer `"mode": "frozen"` with a pre-seeded store
 (or explicit pinned `--repo` values); never `--dangerous` in automation.
 
 ## First container from an existing image

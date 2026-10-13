@@ -1,9 +1,9 @@
 package main
 
 import (
+	"encoding/json/v2"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
@@ -14,7 +14,7 @@ const (
 
 func writePolicyFile(t *testing.T, content string) string {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "known-configs.yml")
+	path := filepath.Join(t.TempDir(), "known-configs.json")
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -22,29 +22,28 @@ func writePolicyFile(t *testing.T, content string) string {
 }
 
 func TestLoadConnectionPolicyMissingFileIsEmptyStore(t *testing.T) {
-	policy, err := loadConnectionPolicyFrom(filepath.Join(t.TempDir(), "known-configs.yml"))
+	policy, err := loadConnectionPolicyFrom(filepath.Join(t.TempDir(), "known-configs.json"))
 	if err != nil {
 		t.Fatalf("missing file should not error: %v", err)
 	}
 	if policy.Mode != policyModePrompt || policy.Record != policyRecordProject {
 		t.Fatalf("defaults wrong: mode=%q level=%q", policy.Mode, policy.Record)
 	}
-	if len(policy.Orgs)+len(policy.Projects)+len(policy.Pins) != 0 {
+	if len(policy.Allow.Orgs)+len(policy.Allow.Projects)+len(policy.Allow.Pins) != 0 {
 		t.Fatalf("expected empty store: %+v", policy)
 	}
 }
 
 func TestLoadConnectionPolicyFull(t *testing.T) {
-	path := writePolicyFile(t, `mode: frozen
-record: pin
-allow:
-  orgs:
-    - acme            # whole org
-  projects:
-    - acme/api
-  pins:
-    - acme/batch@r12@`+testDigestA+`
-`)
+	path := writePolicyFile(t, `{
+  "mode": "frozen",
+  "record": "pin",
+  "allow": {
+    "orgs": ["acme"],
+    "projects": ["acme/api"],
+    "pins": ["acme/batch@r12@`+testDigestA+`"]
+  }
+}`)
 	policy, err := loadConnectionPolicyFrom(path)
 	if err != nil {
 		t.Fatal(err)
@@ -52,15 +51,15 @@ allow:
 	if policy.Mode != policyModeFrozen || policy.Record != policyRecordPin {
 		t.Fatalf("mode=%q level=%q", policy.Mode, policy.Record)
 	}
-	if len(policy.Orgs) != 1 || policy.Orgs[0] != "acme" ||
-		len(policy.Projects) != 1 || policy.Projects[0] != "acme/api" ||
-		len(policy.Pins) != 1 || policy.Pins[0] != "acme/batch@r12@"+testDigestA {
+	if len(policy.Allow.Orgs) != 1 || policy.Allow.Orgs[0] != "acme" ||
+		len(policy.Allow.Projects) != 1 || policy.Allow.Projects[0] != "acme/api" ||
+		len(policy.Allow.Pins) != 1 || policy.Allow.Pins[0] != "acme/batch@r12@"+testDigestA {
 		t.Fatalf("buckets wrong: %+v", policy)
 	}
 }
 
 func TestLoadConnectionPolicyDefaultsWhenFieldsAbsent(t *testing.T) {
-	path := writePolicyFile(t, "allow:\n  projects:\n    - acme/api\n")
+	path := writePolicyFile(t, `{"allow":{"projects":["acme/api"]}}`)
 	policy, err := loadConnectionPolicyFrom(path)
 	if err != nil {
 		t.Fatal(err)
@@ -70,73 +69,43 @@ func TestLoadConnectionPolicyDefaultsWhenFieldsAbsent(t *testing.T) {
 	}
 }
 
-func TestLoadConnectionPolicyMalformedFallsBackToSafeDefaults(t *testing.T) {
+func TestLoadConnectionPolicyRejectsInvalidStore(t *testing.T) {
 	for name, content := range map[string]string{
-		"bad yaml":          "mode: [unclosed\n",
-		"unknown mode":      "mode: open\n",
-		"unknown level":     "record: everything\n",
-		"wrong shape":       "allow: [a, b]\n",
-		"project under org": "allow:\n  orgs:\n    - acme/api\n",
-		"pin under project": "allow:\n  projects:\n    - acme/api@r1@" + testDigestA + "\n",
-		"org under pin":     "allow:\n  pins:\n    - acme\n",
+		"bad JSON":          `{"mode":`,
+		"unknown mode":      `{"mode":"open"}`,
+		"unknown level":     `{"record":"everything"}`,
+		"unknown field":     `{"mod":"frozen"}`,
+		"unknown bucket":    `{"allow":{"project":["acme/api"]}}`,
+		"duplicate field":   `{"mode":"frozen","mode":"prompt"}`,
+		"wrong shape":       `{"allow":["a","b"]}`,
+		"project under org": `{"allow":{"orgs":["acme/api"]}}`,
+		"pin under project": `{"allow":{"projects":["acme/api@r1@` + testDigestA + `"]}}`,
+		"org under pin":     `{"allow":{"pins":["acme"]}}`,
+		"empty entry":       `{"allow":{"orgs":[" "]}}`,
+		"null entry":        `{"allow":{"orgs":[null]}}`,
+		"empty file":        "",
+		"null document":     "null",
+		"array document":    "[]",
+		"extra document":    `{} {}`,
+		"null mode":         `{"mode":null}`,
+		"empty mode":        `{"mode":""}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			path := writePolicyFile(t, content)
-			policy, err := loadConnectionPolicyFrom(path)
-			if err == nil {
+			if _, err := loadConnectionPolicyFrom(path); err == nil {
 				t.Fatal("expected error")
-			}
-			// The fallback must land on prompt with nothing allowed —
-			// never on accepting anything.
-			if policy.Mode != policyModePrompt || len(policy.Orgs)+len(policy.Projects)+len(policy.Pins) != 0 {
-				t.Fatalf("unsafe fallback: %+v", policy)
 			}
 		})
 	}
 }
 
-func TestLoadConnectionPolicyEmptyFile(t *testing.T) {
-	path := writePolicyFile(t, "")
-	policy, err := loadConnectionPolicyFrom(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if policy.Mode != policyModePrompt || len(policy.Orgs)+len(policy.Projects)+len(policy.Pins) != 0 {
-		t.Fatalf("%+v", policy)
-	}
-}
-
-func TestLoadConnectionPolicyNullDocument(t *testing.T) {
-	path := writePolicyFile(t, "null\n")
-	policy, err := loadConnectionPolicyFrom(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(policy.Orgs)+len(policy.Projects)+len(policy.Pins) != 0 {
-		t.Fatalf("null document should be an empty store: %+v", policy)
-	}
-	// Recording must work: the scalar root is discarded and a fresh mapping
-	// tree is built in memory.
-	if _, err := policy.recordPin("acme/api@r1@" + testDigestA); err != nil {
-		t.Fatal(err)
-	}
-	reloaded, err := loadConnectionPolicyFrom(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !reloaded.hasPin("acme/api@r1@" + testDigestA) {
-		t.Fatalf("pin not recorded over null document: %+v", reloaded)
-	}
-}
-
 func TestMatches(t *testing.T) {
-	policy := connectionPolicy{
-		Orgs:     []string{"acme"},
-		Projects: []string{"widgets/api"},
-		Pins: []string{
-			"widgets/batch@r12@" + testDigestA,
-			"ghorg/gh-repo@v1.2.3",
-		},
+	policy := connectionPolicy{}
+	policy.Allow.Orgs = []string{"acme"}
+	policy.Allow.Projects = []string{"widgets/api"}
+	policy.Allow.Pins = []string{
+		"widgets/batch@r12@" + testDigestA,
+		"ghorg/gh-repo@v1.2.3",
 	}
 	for _, tc := range []struct {
 		source string
@@ -214,7 +183,7 @@ func TestRecordTrustWritesAtConfiguredLevel(t *testing.T) {
 		policyRecordPin:     source,
 	} {
 		t.Run(level, func(t *testing.T) {
-			path := filepath.Join(t.TempDir(), "known-configs.yml")
+			path := filepath.Join(t.TempDir(), "known-configs.json")
 			policy, err := loadConnectionPolicyFrom(path)
 			if err != nil {
 				t.Fatal(err)
@@ -242,7 +211,7 @@ func TestRecordTrustWritesAtConfiguredLevel(t *testing.T) {
 }
 
 func TestRecordTrustIsInclusiveGoingDown(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "known-configs.yml")
+	path := filepath.Join(t.TempDir(), "known-configs.json")
 	policy, err := loadConnectionPolicyFrom(path)
 	if err != nil {
 		t.Fatal(err)
@@ -256,14 +225,14 @@ func TestRecordTrustIsInclusiveGoingDown(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !containsEntry(reloaded.Orgs, "acme") ||
-		!containsEntry(reloaded.Projects, "acme/api") ||
+	if !containsEntry(reloaded.Allow.Orgs, "acme") ||
+		!containsEntry(reloaded.Allow.Projects, "acme/api") ||
 		!reloaded.hasPin(source) {
 		t.Fatalf("org-yes should record all narrower levels: %+v", reloaded)
 	}
 
 	// Tightening: delete the broad lines; the narrower buckets carry you.
-	reloaded.Orgs, reloaded.Projects = nil, nil
+	reloaded.Allow.Orgs, reloaded.Allow.Projects = nil, nil
 	if !reloaded.matches(source) {
 		t.Fatal("pin should carry trust after tightening")
 	}
@@ -273,7 +242,7 @@ func TestRecordTrustIsInclusiveGoingDown(t *testing.T) {
 }
 
 func TestRecordTrustDedupes(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "known-configs.yml")
+	path := filepath.Join(t.TempDir(), "known-configs.json")
 	policy, err := loadConnectionPolicyFrom(path)
 	if err != nil {
 		t.Fatal(err)
@@ -292,13 +261,13 @@ func TestRecordTrustDedupes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(reloaded.Orgs) != 1 || len(reloaded.Projects) != 1 || len(reloaded.Pins) != 2 {
-		t.Fatalf("dedupe wrong: orgs=%v projects=%v pins=%v", reloaded.Orgs, reloaded.Projects, reloaded.Pins)
+	if len(reloaded.Allow.Orgs) != 1 || len(reloaded.Allow.Projects) != 1 || len(reloaded.Allow.Pins) != 2 {
+		t.Fatalf("dedupe wrong: orgs=%v projects=%v pins=%v", reloaded.Allow.Orgs, reloaded.Allow.Projects, reloaded.Allow.Pins)
 	}
 }
 
 func TestRecordPinJournalsAndDedupes(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "known-configs.yml")
+	path := filepath.Join(t.TempDir(), "known-configs.json")
 	policy, err := loadConnectionPolicyFrom(path)
 	if err != nil {
 		t.Fatal(err)
@@ -322,8 +291,8 @@ func TestRecordPinJournalsAndDedupes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(reloaded.Pins) != 1 {
-		t.Fatalf("expected one journaled pin: %v", reloaded.Pins)
+	if len(reloaded.Allow.Pins) != 1 {
+		t.Fatalf("expected one journaled pin: %v", reloaded.Allow.Pins)
 	}
 	// Journaling a pin must not widen policy.
 	if reloaded.matches("acme/api@r13@" + testDigestB) {
@@ -332,7 +301,7 @@ func TestRecordPinJournalsAndDedupes(t *testing.T) {
 }
 
 func TestRecordPinSortsIntoProjectGroups(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "known-configs.yml")
+	path := filepath.Join(t.TempDir(), "known-configs.json")
 	policy, err := loadConnectionPolicyFrom(path)
 	if err != nil {
 		t.Fatal(err)
@@ -356,61 +325,48 @@ func TestRecordPinSortsIntoProjectGroups(t *testing.T) {
 		"widgets/batch@r2@" + testDigestB,
 	}
 	for i := range want {
-		if reloaded.Pins[i] != want[i] {
-			t.Fatalf("pins not grouped: %v", reloaded.Pins)
+		if reloaded.Allow.Pins[i] != want[i] {
+			t.Fatalf("pins not grouped: %v", reloaded.Allow.Pins)
 		}
 	}
 }
 
 func TestRecordPinRejectsUnpinned(t *testing.T) {
-	policy := connectionPolicy{path: filepath.Join(t.TempDir(), "known-configs.yml")}
+	policy := connectionPolicy{path: filepath.Join(t.TempDir(), "known-configs.json")}
 	if _, err := policy.recordPin("acme/api"); err == nil {
 		t.Fatal("expected error for unpinned reference")
 	}
 }
 
-func TestWritesPreserveComments(t *testing.T) {
-	path := writePolicyFile(t, `# trust store — hands off, humans only
-mode: prompt
-record: project
-allow:
-  projects:
-    - acme/api   # prod api, any revision is fine
-`)
+func TestSetDefaultsPreservesAllowList(t *testing.T) {
+	path := writePolicyFile(t, `{"allow":{"projects":["acme/api"]}}`)
 	policy, err := loadConnectionPolicyFrom(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := policy.recordPin("acme/api@r12@" + testDigestA); err != nil {
+	if _, err := policy.recordPin("widgets/batch@r12@" + testDigestA); err != nil {
 		t.Fatal(err)
 	}
-	if err := policy.recordTrust("widgets/api@r1@" + testDigestB); err != nil {
+	if err := policy.setDefaults(policyModeFrozen, policyRecordPin); err != nil {
 		t.Fatal(err)
 	}
-	data, err := os.ReadFile(path)
+	reloaded, err := loadConnectionPolicyFrom(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	text := string(data)
-	for _, want := range []string{
-		"# trust store — hands off, humans only",
-		"# prod api, any revision is fine",
-		"acme/api@r12@" + testDigestA,
-		"widgets/api",
-	} {
-		if !strings.Contains(text, want) {
-			t.Errorf("file lost %q:\n%s", want, text)
-		}
+	if reloaded.Mode != policyModeFrozen || reloaded.Record != policyRecordPin ||
+		!reloaded.matches("acme/api@r99@"+testDigestB) || !reloaded.hasPin("widgets/batch@r12@"+testDigestA) {
+		t.Fatalf("defaults or allow list lost: %+v", reloaded)
 	}
 }
 
 func TestAppendIntoEmptyBuckets(t *testing.T) {
 	for name, content := range map[string]string{
-		"bare allow": "mode: prompt\nallow:\n",
-		"empty pins": "allow:\n  pins:\n",
-		"no allow":   "mode: prompt\n",
-		"empty file": "",
-		"other keys": "allow:\n  orgs:\n    - acme\n",
+		"empty allow":  `{"mode":"prompt","allow":{}}`,
+		"empty pins":   `{"allow":{"pins":[]}}`,
+		"no allow":     `{"mode":"prompt"}`,
+		"empty object": `{}`,
+		"other keys":   `{"allow":{"orgs":["acme"]}}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			path := writePolicyFile(t, content)
@@ -433,13 +389,31 @@ func TestAppendIntoEmptyBuckets(t *testing.T) {
 }
 
 func TestAppendCreatesFileWithDefaultsExplicit(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "sub", "known-configs.yml")
+	path := filepath.Join(t.TempDir(), "sub", "known-configs.json")
 	policy, err := loadConnectionPolicyFrom(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := policy.recordTrust("acme/api@r1@" + testDigestA); err != nil {
 		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stored map[string]any
+	if err := json.Unmarshal(data, &stored); err != nil {
+		t.Fatal(err)
+	}
+	if stored["mode"] != policyModePrompt || stored["record"] != policyRecordProject {
+		t.Fatalf("missing explicit defaults: %s", data)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("store permissions = %o, want 600", info.Mode().Perm())
 	}
 	reloaded, err := loadConnectionPolicyFrom(path)
 	if err != nil {
@@ -454,17 +428,8 @@ func TestAppendCreatesFileWithDefaultsExplicit(t *testing.T) {
 }
 
 func TestPruneBroaderThan(t *testing.T) {
-	content := `# header comment survives
-mode: prompt
-record: pin
-allow:
-  orgs:
-    - acme
-  projects:
-    - acme/api
-  pins:
-    - acme/api@r1@` + testDigestA + ` # pin comment survives
-`
+	content := `{"mode":"prompt","record":"pin","allow":{
+  "orgs":["acme"],"projects":["acme/api"],"pins":["acme/api@r1@` + testDigestA + `"]}}`
 	t.Run("pin prunes orgs and projects", func(t *testing.T) {
 		path := writePolicyFile(t, content)
 		policy, err := loadConnectionPolicyFrom(path)
@@ -478,14 +443,8 @@ allow:
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(reloaded.Orgs)+len(reloaded.Projects) != 0 || len(reloaded.Pins) != 1 {
+		if len(reloaded.Allow.Orgs)+len(reloaded.Allow.Projects) != 0 || len(reloaded.Allow.Pins) != 1 {
 			t.Fatalf("prune wrong: %+v", reloaded)
-		}
-		data, _ := os.ReadFile(path)
-		for _, want := range []string{"# header comment survives", "# pin comment survives"} {
-			if !strings.Contains(string(data), want) {
-				t.Fatalf("lost %q:\n%s", want, data)
-			}
 		}
 		if reloaded.matches("acme/other@r1@" + testDigestB) {
 			t.Fatal("org grant must be gone")
@@ -507,7 +466,7 @@ allow:
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(reloaded.Orgs) != 0 || len(reloaded.Projects) != 1 {
+		if len(reloaded.Allow.Orgs) != 0 || len(reloaded.Allow.Projects) != 1 {
 			t.Fatalf("prune wrong: %+v", reloaded)
 		}
 	})
@@ -524,19 +483,47 @@ allow:
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(reloaded.Orgs) != 1 || len(reloaded.Projects) != 1 {
+		if len(reloaded.Allow.Orgs) != 1 || len(reloaded.Allow.Projects) != 1 {
 			t.Fatalf("org level must prune nothing: %+v", reloaded)
 		}
 	})
 }
 
 func TestConnectionPolicyPathEnvOverride(t *testing.T) {
-	t.Setenv(envKnownConfigs, "/tmp/elsewhere.yml")
+	t.Setenv(envKnownConfigs, "/tmp/elsewhere.json")
 	path, err := connectionPolicyPath()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if path != "/tmp/elsewhere.yml" {
+	if path != "/tmp/elsewhere.json" {
 		t.Fatalf("got %q", path)
+	}
+}
+
+func TestConnectionPolicyDoesNotIgnoreYAMLStore(t *testing.T) {
+	t.Setenv(envKnownConfigs, "")
+	policyHome := t.TempDir()
+	t.Setenv("HOME", policyHome)
+	t.Setenv("USERPROFILE", policyHome)
+	path, err := connectionPolicyPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	legacy := filepath.Join(filepath.Dir(path), legacyConnectionPolicyFileName)
+	if err := os.WriteFile(legacy, []byte("mode: frozen\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadConnectionPolicy(); err == nil {
+		t.Fatal("YAML store must not be silently replaced by an empty JSON store")
+	}
+	if err := os.WriteFile(path, []byte(`{"mode":"frozen"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	policy, err := loadConnectionPolicy()
+	if err != nil || policy.Mode != policyModeFrozen {
+		t.Fatalf("converted store: mode=%q, err=%v", policy.Mode, err)
 	}
 }

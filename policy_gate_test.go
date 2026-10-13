@@ -10,7 +10,7 @@ import (
 // gateEnv points the store at a temp file and returns its path.
 func gateEnv(t *testing.T, content string) string {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "known-configs.yml")
+	path := filepath.Join(t.TempDir(), "known-configs.json")
 	if content != "" {
 		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 			t.Fatal(err)
@@ -36,7 +36,7 @@ func TestGateDangerousBypassesAndRecordsNothing(t *testing.T) {
 }
 
 func TestGateMatchedJournalsNewPin(t *testing.T) {
-	path := gateEnv(t, "allow:\n  projects:\n    - acme/api\n")
+	path := gateEnv(t, `{"allow":{"projects":["acme/api"]}}`)
 	var out strings.Builder
 	source := "acme/api@r42@" + testDigestA
 	if err := gateConnectionPolicy(source, strings.NewReader(""), &out, false, false); err != nil {
@@ -64,7 +64,7 @@ func TestGateMatchedJournalsNewPin(t *testing.T) {
 }
 
 func TestGateFrozenFailsClosed(t *testing.T) {
-	gateEnv(t, "mode: frozen\nallow:\n  projects:\n    - acme/api\n")
+	gateEnv(t, `{"mode":"frozen","allow":{"projects":["acme/api"]}}`)
 	err := gateConnectionPolicy("evil/api@r1@"+testDigestA, strings.NewReader("y\n"), &strings.Builder{}, true, false)
 	if err == nil || !strings.Contains(err.Error(), "frozen") {
 		t.Fatalf("expected frozen failure, got %v", err)
@@ -72,7 +72,7 @@ func TestGateFrozenFailsClosed(t *testing.T) {
 }
 
 func TestGateFrozenStillAllowsMatchesAndNeverWrites(t *testing.T) {
-	content := "mode: frozen\nallow:\n  projects:\n    - acme/api\n"
+	content := `{"mode":"frozen","allow":{"projects":["acme/api"]}}`
 	path := gateEnv(t, content)
 	var out strings.Builder
 	if err := gateConnectionPolicy("acme/api@r1@"+testDigestA, strings.NewReader(""), &out, false, false); err != nil {
@@ -121,10 +121,10 @@ func TestAssertTrustedSource(t *testing.T) {
 			if !policy.hasPin(source) {
 				t.Fatalf("pin always records: %+v", policy)
 			}
-			if got := containsEntry(policy.Projects, "acme/api"); got != tc.wantProject {
+			if got := containsEntry(policy.Allow.Projects, "acme/api"); got != tc.wantProject {
 				t.Fatalf("project recorded=%v want %v: %+v", got, tc.wantProject, policy)
 			}
-			if got := containsEntry(policy.Orgs, "acme"); got != tc.wantOrg {
+			if got := containsEntry(policy.Allow.Orgs, "acme"); got != tc.wantOrg {
 				t.Fatalf("org recorded=%v want %v: %+v", got, tc.wantOrg, policy)
 			}
 			// The assertion's granularity must not become the store's
@@ -140,7 +140,7 @@ func TestAssertTrustedSourceRecordsUnderBroaderGrant(t *testing.T) {
 	// An org entry already covers the resolved config, but the typed
 	// project-level assertion is an opt-in of its own: it must persist so a
 	// later pruning of the org entry does not erase it.
-	path := gateEnv(t, "allow:\n  orgs:\n    - acme\n")
+	path := gateEnv(t, `{"allow":{"orgs":["acme"]}}`)
 	source := "acme/api@r12@" + testDigestA
 	if err := assertTrustedSource("acme/api", source); err != nil {
 		t.Fatal(err)
@@ -149,10 +149,10 @@ func TestAssertTrustedSourceRecordsUnderBroaderGrant(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !containsEntry(policy.Projects, "acme/api") || !policy.hasPin(source) {
+	if !containsEntry(policy.Allow.Projects, "acme/api") || !policy.hasPin(source) {
 		t.Fatalf("assertion must persist under a broader grant: %+v", policy)
 	}
-	policy.Orgs = nil // simulate pruning the broader entry
+	policy.Allow.Orgs = nil // simulate pruning the broader entry
 	if !policy.matches(source) {
 		t.Fatal("asserted trust must survive pruning the org entry")
 	}
@@ -202,26 +202,23 @@ func TestGatePromptNoRefusesAndRecordsNothing(t *testing.T) {
 	}
 }
 
-func TestGateMalformedStoreWarnsAndPrompts(t *testing.T) {
-	content := "mode: open\n" // invalid mode: must fall back to prompt, not accept
+func TestInvalidStoreBlocksConnections(t *testing.T) {
+	content := `{"mode":"frozen","allow":{"projects":["acme/api"],"pins":["invalid"]}}`
 	path := gateEnv(t, content)
-	var out strings.Builder
-	err := gateConnectionPolicy("acme/api@r1@"+testDigestA, strings.NewReader("n\n"), &out, true, false)
-	if err == nil {
-		t.Fatal("fallback must land on the prompt, not on acceptance")
+	source := "acme/api@r1@" + testDigestA
+	for _, interactive := range []bool{false, true} {
+		var out strings.Builder
+		input := strings.NewReader("y\n")
+		err := gateConnectionPolicy(source, input, &out, interactive, false)
+		if err == nil || !strings.Contains(err.Error(), path) {
+			t.Fatalf("expected store error, got %v", err)
+		}
+		if out.Len() != 0 || input.Len() != len("y\n") {
+			t.Fatalf("invalid store must not prompt: %q", out.String())
+		}
 	}
-	if !strings.Contains(out.String(), "warning") {
-		t.Fatalf("malformed store must warn loudly: %q", out.String())
-	}
-
-	// A yes on top of an unreadable store trusts this invocation only: it
-	// must never overwrite the file the user needs to repair.
-	out.Reset()
-	if err := gateConnectionPolicy("acme/api@r1@"+testDigestA, strings.NewReader("y\n"), &out, true, false); err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(out.String(), "Not recorded") || !strings.Contains(out.String(), "repeat") {
-		t.Fatalf("yes over a broken store must say it is not recorded and will re-prompt: %q", out.String())
+	if err := assertTrustedSource("acme/api", source); err == nil {
+		t.Fatal("explicit assertions must also report the invalid store")
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -236,7 +233,7 @@ func TestGateSubstitutionScenario(t *testing.T) {
 	// The adversarial case from the review: the caller trusted config A's
 	// project; the controlplane answers with a validly endorsed config B from
 	// another project. Must never pass silently.
-	gateEnv(t, "allow:\n  projects:\n    - acme/api\n")
+	gateEnv(t, `{"allow":{"projects":["acme/api"]}}`)
 	err := gateConnectionPolicy("acme/evil@r1@"+testDigestB, strings.NewReader(""), &strings.Builder{}, false, false)
 	if err == nil {
 		t.Fatal("substituted config must not pass silently")
@@ -261,7 +258,7 @@ func TestSeedTrustFromCreate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(reloaded.Projects) != 1 || !reloaded.hasPin("acme/api@v1.2.4") {
+	if len(reloaded.Allow.Projects) != 1 || !reloaded.hasPin("acme/api@v1.2.4") {
 		t.Fatalf("re-seed wrong: %+v", reloaded)
 	}
 }
@@ -274,13 +271,13 @@ func TestSeedTrustFromCreateDigestRevision(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Digest-form revision has no tag to pin; the project still records.
-	if !policy.matches("acme/api@r1@"+testDigestB) || len(policy.Pins) != 0 {
+	if !policy.matches("acme/api@r1@"+testDigestB) || len(policy.Allow.Pins) != 0 {
 		t.Fatalf("digest seed wrong: %+v", policy)
 	}
 }
 
 func TestGateBareRepoMatchedSkipsJournal(t *testing.T) {
-	path := gateEnv(t, "allow:\n  projects:\n    - ghorg/gh-repo\n")
+	path := gateEnv(t, `{"allow":{"projects":["ghorg/gh-repo"]}}`)
 	var out strings.Builder
 	if err := gateConnectionPolicy("ghorg/gh-repo", strings.NewReader(""), &out, false, false); err != nil {
 		t.Fatal(err)
@@ -289,8 +286,8 @@ func TestGateBareRepoMatchedSkipsJournal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(policy.Pins) != 0 {
-		t.Fatalf("bare repo has nothing to pin: %v", policy.Pins)
+	if len(policy.Allow.Pins) != 0 {
+		t.Fatalf("bare repo has nothing to pin: %v", policy.Allow.Pins)
 	}
 	if strings.Contains(out.String(), "journaled") {
 		t.Fatalf("no journal announcement expected: %q", out.String())

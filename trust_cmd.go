@@ -102,7 +102,7 @@ func offerPrune(cmd *cobra.Command, policy *connectionPolicy) error {
 	}
 	// Reload before pruning: a connect in another terminal may have
 	// journaled a pin while the prompt waited, and pruning from the stale
-	// tree would drop it.
+	// store would drop it.
 	fresh, err := loadConnectionPolicyFrom(policy.path)
 	if err != nil {
 		return fmt.Errorf("re-reading %s before pruning: %w", policy.path, err)
@@ -151,7 +151,7 @@ func printTrustStore(out io.Writer, policy connectionPolicy) {
 			fmt.Fprintf(out, "    … %d more (see the file)\n", rest)
 		}
 	}
-	if len(policy.Orgs)+len(policy.Projects)+len(policy.Pins) == 0 {
+	if len(policy.Allow.Orgs)+len(policy.Allow.Projects)+len(policy.Allow.Pins) == 0 {
 		if policy.Mode == policyModeFrozen {
 			fmt.Fprint(out, "\nNothing trusted yet: mode frozen refuses unknown configs — add entries to the file by hand, or connect with an explicit --repo.\n")
 		} else {
@@ -159,9 +159,9 @@ func printTrustStore(out io.Writer, policy connectionPolicy) {
 		}
 	} else {
 		fmt.Fprint(out, "\nTrusted:\n")
-		section("Orgs (any project)", policy.Orgs, 0)
-		section("Projects (any config)", policy.Projects, 0)
-		section("Pinned configs", policy.Pins, pinDisplayLimit)
+		section("Orgs (any project)", policy.Allow.Orgs, 0)
+		section("Projects (any config)", policy.Allow.Projects, 0)
+		section("Pinned configs", policy.Allow.Pins, pinDisplayLimit)
 	}
 	if broader := policy.broaderThan(policy.Record); len(broader) > 0 {
 		// Record controls what a yes records, never how existing entries

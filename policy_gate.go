@@ -38,11 +38,9 @@ func gateConnectionPolicy(source string, in io.Reader, out io.Writer, interactiv
 		return nil
 	}
 
-	policy, loadErr := loadConnectionPolicy()
-	if loadErr != nil {
-		// Safe-default store: nothing allowed, prompt mode. Falling back to
-		// the prompt is recoverable; falling back to open would not be.
-		fmt.Fprintf(out, "warning: %v — treating the trust store as empty (prompt mode)\n", loadErr)
+	policy, err := loadConnectionPolicy()
+	if err != nil {
+		return err
 	}
 
 	if policy.matches(source) {
@@ -71,13 +69,6 @@ func gateConnectionPolicy(source string, in io.Reader, out io.Writer, interactiv
 	}
 	if !accepted {
 		return fmt.Errorf("refusing config %s", source)
-	}
-	if loadErr != nil {
-		// Never write over a file we could not read: a yes on top of a
-		// malformed store would replace the user's entries (and could reset a
-		// frozen store to prompt). Trust applies to this invocation only.
-		fmt.Fprintf(out, "Not recorded: %s could not be read. This prompt will repeat until the file is fixed.\n", policy.path)
-		return nil
 	}
 	if err := policy.recordTrust(source); err != nil {
 		return fmt.Errorf("recording trust for %s: %w", source, err)
@@ -150,8 +141,7 @@ func assertTrustedSource(assertion, resolvedSource string) error {
 	}
 	policy, err := loadConnectionPolicy()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "warning: %v — not recording %s\n", err, resolvedSource)
-		return nil
+		return err
 	}
 	// Record the assertion even when an existing (possibly broader) grant
 	// already matches: the typed granularity is an opt-in of its own, and it
