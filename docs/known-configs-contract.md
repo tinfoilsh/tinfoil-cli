@@ -10,6 +10,13 @@ controlplane-resolved connect instead of retyped. Explicit `--repo` supplies
 the expectation per invocation, `--dangerous` bypasses the check, and
 bare-hostname tunnel targets are out of scope.
 
+Local-config containers (`--config <file>`) are also out of scope: the
+caller already holds the expectation as the config file itself, and
+verification compares its exact-byte digest against the attestation
+document. There is no controlplane-chosen name to gate and nothing for the
+store to remember that the file does not state better. `--repo` is refused
+for local containers; `--config` is required.
+
 It matters most on controlplane-resolved paths (`container connect`, and
 `forward`/`ssh`/`scp`/`attest-ssh` by container name or ID), where the CLI
 otherwise builds the expectation from the controlplane's own response —
