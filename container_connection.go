@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"net"
@@ -63,6 +65,12 @@ func containerConnection(c containerView, review bool, sourceOverride string) (v
 	if err != nil {
 		return target, fmt.Errorf("invalid %s connection for %s: %w", label, c.Name, err)
 	}
+	if (c.Source == containerSourceLocal) != (target.source == "") {
+		return target, fmt.Errorf("connection source does not match container %s", c.Name)
+	}
+	if c.Source == containerSourceLocal && sourceOverride != "" {
+		return target, fmt.Errorf("local containers require --config instead of --repo")
+	}
 	if review && descriptor.Tag != c.UpdateTag {
 		return target, fmt.Errorf("review release does not match the current candidate; refresh with: tinfoil container get %s", shellQuote(c.ID))
 	}
@@ -96,6 +104,13 @@ func parseConnectionDescriptor(descriptor connectionDescriptor) (verifiedConnect
 		return target, fmt.Errorf("invalid HTTPS port in %q", descriptor.URL)
 	}
 	target.host = u.Host
+	if descriptor.ConfigName == "" && descriptor.ConfigDigest != "" {
+		digest, err := hex.DecodeString(descriptor.ConfigDigest)
+		if err != nil || len(digest) != sha256.Size || descriptor.ConfigDigest != strings.ToLower(descriptor.ConfigDigest) || descriptor.Repo != "" || descriptor.Tag != "" {
+			return target, fmt.Errorf("invalid local config reference")
+		}
+		return target, nil
+	}
 	if descriptor.ConfigName != "" || descriptor.ConfigDigest != "" {
 		identity, revision, err := configendorsement.ParseName(descriptor.ConfigName)
 		if err != nil || descriptor.Repo != "" || descriptor.ConfigDigest == "" {
@@ -163,6 +178,12 @@ func containerConnectionGuidance(c containerView, review bool) string {
 		return ""
 	}
 	var out strings.Builder
+	if c.Source == containerSourceLocal {
+		fmt.Fprintf(&out, "%s URL: %s\nConfig digest: sha256:%s\n", label, target.URL, target.ConfigDigest)
+		fmt.Fprintf(&out, "Verified request: tinfoil http get %s --enclave %s --config <FILE>\n", shellQuote(target.URL), shellQuote(target.host))
+		fmt.Fprintf(&out, "Verified proxy: tinfoil container connect %s --config <FILE>\n", shellQuote(c.ID))
+		return out.String()
+	}
 	fmt.Fprintf(&out, "%s URL: %s\nExpected source: %s\n", label, target.URL, target.source)
 	fmt.Fprintf(&out, "Verified request: tinfoil http get %s --enclave %s --repo %s\n", shellQuote(target.URL), shellQuote(target.host), shellQuote(target.source))
 	fmt.Fprintf(&out, "Verified proxy: tinfoil container connect %s%s\n", shellQuote(c.ID), flag)

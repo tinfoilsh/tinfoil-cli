@@ -78,11 +78,12 @@ deployment declared and nothing else.
 The target is a container name, whose domain and repo are looked up through the
 controlplane, or an enclave hostname (anything containing a dot), which needs no
 controlplane record. A hostname requires --repo owner/name[@tag][@sha256:digest]
-to select the expected workload. All connections require v3 code verification.
+or --config FILE to select the expected workload. All connections require v3 code verification.
 
   tinfoil forward my-server -L 25565:25565
   tinfoil forward my-server -L 5432:5432 -L 8080:8080
   tinfoil forward enclave.example.com --repo org/workload -L 2022:2022
+  tinfoil forward my-server --config tinfoil-config.yml -L 8080:8080
   tinfoil forward --sandbox my-sandbox -L 6379:6379`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -244,14 +245,20 @@ func resolveTunnelTarget(identifier string) (*tunnelTarget, error) {
 	if repo != "" {
 		container.Repo = repo
 	}
-	if container.ConfigName != "" {
+	if container.ConfigName != "" || container.Source == containerSourceLocal {
 		connection, err := containerConnection(*container, false, repo)
 		if err != nil {
 			return nil, err
 		}
 		container.Repo = connection.source
+		host = connection.host
+		if container.Source == containerSourceLocal {
+			if err := checkLocalConfigDigest(connection.ConfigDigest); err != nil {
+				return nil, err
+			}
+		}
 	}
-	if container.Repo == "" {
+	if container.Repo == "" && container.Source != containerSourceLocal {
 		return nil, fmt.Errorf("container %s has no repo recorded — cannot tunnel", container.Name)
 	}
 	return &tunnelTarget{
