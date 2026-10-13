@@ -104,6 +104,7 @@ first sight is still announced.
 - Malformed JSON, duplicate or unknown fields, unknown mode/record, or an
   invalid bucket entry: error without prompting or changing the file. Fix the
   store before connecting, including when using an explicit `--repo`.
+  `--dangerous` explicitly bypasses loading and checking the store.
 - A missing file or `{}` is an empty store with default settings. An empty
   file or `null` document is invalid.
 - Recording failures on a policy-passing connect warn; they do not block a

@@ -502,7 +502,9 @@ func TestConnectionPolicyPathEnvOverride(t *testing.T) {
 
 func TestConnectionPolicyDoesNotIgnoreYAMLStore(t *testing.T) {
 	t.Setenv(envKnownConfigs, "")
-	t.Setenv("HOME", t.TempDir())
+	policyHome := t.TempDir()
+	t.Setenv("HOME", policyHome)
+	t.Setenv("USERPROFILE", policyHome)
 	path, err := connectionPolicyPath()
 	if err != nil {
 		t.Fatal(err)
