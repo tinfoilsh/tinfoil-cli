@@ -106,6 +106,7 @@ func TestMatches(t *testing.T) {
 	policy.Allow.Pins = []string{
 		"widgets/batch@r12@" + testDigestA,
 		"ghorg/gh-repo@v1.2.3",
+		"widgets/hash-pinned@" + testDigestA,
 	}
 	for _, tc := range []struct {
 		source string
@@ -121,6 +122,16 @@ func TestMatches(t *testing.T) {
 		{"widgets/batch@r12@" + testDigestA, true},
 		{"widgets/batch@r13@" + testDigestB, false},
 		{"widgets/batch@r12@" + testDigestB, false},
+		{"widgets/batch@r13@" + testDigestA, false},
+		{"widgets/batch@" + testDigestA, false},
+		{"widgets/batch@r12", false},
+		// A digest-only pin allows any revision with that project's exact bytes.
+		{"widgets/hash-pinned@" + testDigestA, true},
+		{"widgets/hash-pinned@r1@" + testDigestA, true},
+		{"widgets/hash-pinned@r2@" + testDigestA, true},
+		{"widgets/hash-pinned@r1@" + testDigestB, false},
+		{"widgets/hash-pinned@r1", false},
+		{"other/hash-pinned@r1@" + testDigestA, false},
 		// pin without digest covers any digest of that revision
 		{"ghorg/gh-repo@v1.2.3@" + testDigestA, true},
 		{"ghorg/gh-repo@v1.2.3", true},
@@ -128,6 +139,9 @@ func TestMatches(t *testing.T) {
 		// no partial-label matches
 		{"acmecorp/api@r1@" + testDigestA, false},
 		{"widgets/api2@r1@" + testDigestA, false},
+		{"widgets/api/nested@r1@" + testDigestA, false},
+		{"acme/api@r1@sha256:short", false},
+		{"ghorg/gh-repo@v1.2.3/nested", false},
 		// unknown org/project
 		{"evil/api@r1@" + testDigestA, false},
 		{"", false},

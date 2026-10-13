@@ -56,6 +56,10 @@ so tightening later starts from everything already used. Pins double as a
 connect journal: every allowed connect records the exact config it resolved
 to, and a first sight prints `New config journaled: …`.
 
+Use `org/project@sha256:<digest>` in `allow.pins` or `--repo` to accept only
+that project's exact config bytes across replicas and revisions. Include
+`@revision` before `@sha256:` when both must match.
+
 Non-interactive flows state their expectation instead of answering a prompt:
 `--repo` accepts an org, `org/project`, or a pinned reference; the resolved
 config must fall under it or the command fails, and the assertion is

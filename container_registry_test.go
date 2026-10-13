@@ -140,7 +140,7 @@ func TestRegistryConnectionPinsNameAndDigest(t *testing.T) {
 	}))
 	defer server.Close()
 	configureContainerPromotionTest(t, server.URL)
-	gateEnv(t, `{"allow":{"projects":["acme/app"]}}`) // the gate is not under test here
+	gateEnv(t, `{"allow":{"pins":["acme/app@sha256:`+registryConfigDigest+`"]}}`)
 	previousRepo := repo
 	repo = ""
 	t.Cleanup(func() { repo = previousRepo })
@@ -150,10 +150,21 @@ func TestRegistryConnectionPinsNameAndDigest(t *testing.T) {
 	require.Equal(t, target.host, tunnel.host)
 	require.Contains(t, containerConnectionGuidance(c, false), "--repo "+expected)
 
+	descriptor.ConfigDigest = strings.TrimPrefix(testDigestB, "sha256:")
+	_, err = resolveTunnelTarget(testContainerID)
+	require.ErrorContains(t, err, "not in your known configs")
+	descriptor.ConfigDigest = registryConfigDigest
+
 	repo = "acme/app@sha256:" + strings.Repeat("a", len(registryConfigDigest))
 	tunnel, err = resolveTunnelTarget(testContainerID)
 	require.NoError(t, err)
 	require.Equal(t, repo, tunnel.repo)
+	secure, err = newVerifiedClient(tunnel.host, tunnel.repo, "")
+	require.NoError(t, err)
+	require.Equal(t, repo, secure.Repo())
+	policy, err := loadConnectionPolicy()
+	require.NoError(t, err)
+	require.True(t, policy.hasPin(repo), "explicit hash pin must be recorded")
 
 	for _, name := range []string{"", "/acme/other/v1.2.3"} {
 		invalid := descriptor

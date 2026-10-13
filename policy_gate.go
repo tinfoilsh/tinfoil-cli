@@ -47,7 +47,7 @@ func gateConnectionPolicy(source string, in io.Reader, out io.Writer, interactiv
 		if policy.Mode == policyModeFrozen {
 			// Frozen means the CLI never writes the file, journal included;
 			// a first-seen config is still announced.
-			if _, tag, _, err := verify.ParseReference(source); err == nil && tag != "" && !policy.hasPin(source) {
+			if _, tag, digest, err := verify.ParseReference(source); err == nil && (tag != "" || digest != "") && !policy.hasPin(source) {
 				fmt.Fprintf(out, "New config (not journaled, mode: frozen): %s\n", source)
 			}
 			return nil
@@ -80,11 +80,11 @@ func gateConnectionPolicy(source string, in io.Reader, out io.Writer, interactiv
 // journalPin records the exact reference of a policy-passing connect and
 // announces a first sight. Best-effort: journaling failures warn, they do not
 // block a connection that policy already allows. References without a
-// revision (a bare owner/repo) have no exact config to journal and are
+// revision or digest (a bare owner/repo) have no exact config to journal and are
 // skipped.
 func journalPin(policy *connectionPolicy, source string, out io.Writer) {
-	_, tag, _, err := verify.ParseReference(source)
-	if err != nil || tag == "" {
+	_, tag, digest, err := verify.ParseReference(source)
+	if err != nil || (tag == "" && digest == "") {
 		return
 	}
 	fresh, err := policy.recordPin(source)
@@ -100,8 +100,8 @@ func journalPin(policy *connectionPolicy, source string, out io.Writer) {
 // seedTrustFromCreate records the caller's typed intent at container create
 // time, so the first connect on this machine needs no prompt. The typed
 // --repo is the assertion (project granularity); the revision rides along as
-// the pin when it is taggable. A digest-form revision (sha256:…) records the
-// project only. Best-effort: the container exists either way.
+// the pin, including digest-form revisions (sha256:…). Best-effort: the
+// container exists either way.
 func seedTrustFromCreate(repoRef, revision string) {
 	assertion := strings.TrimSpace(repoRef)
 	if assertion == "" {
@@ -130,9 +130,7 @@ func assertTrustedSource(assertion, resolvedSource string) error {
 	if assertion == "" || resolvedSource == "" {
 		return fmt.Errorf("empty reference")
 	}
-	if assertion != resolvedSource &&
-		!strings.HasPrefix(resolvedSource, assertion+"/") &&
-		!strings.HasPrefix(resolvedSource, assertion+"@") {
+	if !referenceMatches(assertion, resolvedSource) {
 		return fmt.Errorf("resolved config %s does not match --repo %s", resolvedSource, assertion)
 	}
 	level, err := referenceGranularity(assertion)
@@ -147,13 +145,20 @@ func assertTrustedSource(assertion, resolvedSource string) error {
 	// already matches: the typed granularity is an opt-in of its own, and it
 	// must survive a later pruning of the broader entries. Deduplication
 	// makes this a no-op when everything is already present.
-	changed, err := policy.recordTrustAt(resolvedSource, level)
+	recordSource := resolvedSource
+	if level == policyRecordPin {
+		recordSource = assertion
+	}
+	changed, err := policy.recordTrustAt(recordSource, level)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "warning: could not record %s in known-configs: %v\n", resolvedSource, err)
 		return nil
 	}
 	if changed {
-		fmt.Fprintf(os.Stderr, "Recorded %s as %s in %s\n", resolvedSource, level, policy.path)
+		fmt.Fprintf(os.Stderr, "Recorded %s as %s in %s\n", recordSource, level, policy.path)
+	}
+	if recordSource != resolvedSource {
+		journalPin(&policy, resolvedSource, os.Stderr)
 	}
 	return nil
 }

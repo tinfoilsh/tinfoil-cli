@@ -108,6 +108,8 @@ func TestAssertTrustedSource(t *testing.T) {
 		{"acme", true, true},
 		{"acme/api", true, false},
 		{source, false, false}, // pin assertion records the pin only
+		{"acme/api@" + testDigestA, false, false},
+		{"acme/api@r12", false, false},
 	} {
 		t.Run(tc.assertion, func(t *testing.T) {
 			path := gateEnv(t, "")
@@ -120,6 +122,9 @@ func TestAssertTrustedSource(t *testing.T) {
 			}
 			if !policy.hasPin(source) {
 				t.Fatalf("pin always records: %+v", policy)
+			}
+			if !tc.wantProject && !policy.hasPin(tc.assertion) {
+				t.Fatalf("asserted pin must persist independently of the resolved reference: %+v", policy)
 			}
 			if got := containsEntry(policy.Allow.Projects, "acme/api"); got != tc.wantProject {
 				t.Fatalf("project recorded=%v want %v: %+v", got, tc.wantProject, policy)
@@ -160,7 +165,7 @@ func TestAssertTrustedSourceRecordsUnderBroaderGrant(t *testing.T) {
 
 func TestAssertTrustedSourceMismatchFails(t *testing.T) {
 	path := gateEnv(t, "")
-	for _, assertion := range []string{"widgets", "acme/other", "acme/api@r13@" + testDigestB, "acmecorp"} {
+	for _, assertion := range []string{"widgets", "acme/other", "acme/api@r13@" + testDigestB, "acmecorp", "acme/api@" + testDigestB, "acme/api@r13@" + testDigestA} {
 		if err := assertTrustedSource(assertion, "acme/api@r12@"+testDigestA); err == nil {
 			t.Errorf("assertion %q must not match", assertion)
 		}
@@ -270,9 +275,32 @@ func TestSeedTrustFromCreateDigestRevision(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Digest-form revision has no tag to pin; the project still records.
-	if !policy.matches("acme/api@r1@"+testDigestB) || len(policy.Allow.Pins) != 0 {
+	// Project trust and the requested digest are both recorded.
+	if !policy.matches("acme/api@r1@"+testDigestB) || !policy.hasPin("acme/api@"+testDigestA) {
 		t.Fatalf("digest seed wrong: %+v", policy)
+	}
+}
+
+func TestGateHashPinAcrossRevisions(t *testing.T) {
+	path := gateEnv(t, `{"record":"pin"}`)
+	pin := "acme/api@" + testDigestA
+	if err := gateConnectionPolicy(pin, strings.NewReader("y\n"), &strings.Builder{}, true, false); err != nil {
+		t.Fatal(err)
+	}
+	for _, source := range []string{pin, "acme/api@r1@" + testDigestA, "acme/api@r2@" + testDigestA} {
+		if err := gateConnectionPolicy(source, strings.NewReader(""), &strings.Builder{}, false, false); err != nil {
+			t.Fatalf("same hash must need no new approval: %v", err)
+		}
+	}
+	policy, err := loadConnectionPolicyFrom(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !policy.hasPin(pin) || len(policy.Allow.Orgs)+len(policy.Allow.Projects) != 0 {
+		t.Fatalf("hash approval must not grant project trust: %+v", policy)
+	}
+	if err := gateConnectionPolicy("acme/api@r2@"+testDigestB, strings.NewReader(""), &strings.Builder{}, false, false); err == nil {
+		t.Fatal("another hash must need approval")
 	}
 }
 
