@@ -55,10 +55,12 @@ exactly what it says:
 
 - an org entry covers everything in the org
 - a project entry covers any revision of the project
-- a pin covers itself; a pin without digest covers any digest of that
-  revision (the config endorsement binds revision to digest 1:1)
+- a pin requires each specified revision and digest to match:
+  `org/project@sha256:<digest>` accepts that project's exact config bytes at
+  any revision, `org/project@revision` requires that revision, and
+  `org/project@revision@sha256:<digest>` requires both
 
-Matching is a prefix test at a `/` or `@` boundary; there are no partial-name
+References are parsed into project, revision, and digest; there are no partial-name
 matches (`acme` never covers `acmecorp/...`). There are no precedence rules:
 a broad entry subsumes narrower ones below it, like ssh known_hosts. The
 `record` setting never reinterprets existing entries. Bucket shapes are
@@ -88,6 +90,10 @@ records at its own granularity, inclusive downward, without changing the
 configured default. Tightening is completed by pruning: `tinfoil trust set
 --record pin --prune` removes the broader entries (offered interactively;
 the store printout names the command whenever broader entries survive).
+
+Hash-only pins apply across replicas of the same project and config hash;
+there is no approval per container. Explicit pins are saved as supplied,
+alongside the resolved reference when it differs.
 
 ## Journal
 

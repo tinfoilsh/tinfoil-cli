@@ -169,12 +169,12 @@ func validateEntry(entry, level string) error {
 		}
 		return nil
 	case policyRecordPin:
-		_, tag, _, err := verify.ParseReference(entry)
+		_, tag, digest, err := verify.ParseReference(entry)
 		if err != nil {
 			return fmt.Errorf("invalid pin %q: %v", entry, err)
 		}
-		if tag == "" {
-			return fmt.Errorf("%q has no revision (unpinned projects have their own section)", entry)
+		if tag == "" && digest == "" {
+			return fmt.Errorf("%q has no revision or digest (unpinned projects have their own section)", entry)
 		}
 		return nil
 	default:
@@ -184,25 +184,35 @@ func validateEntry(entry, level string) error {
 
 // matches reports whether any allow entry covers the resolved source
 // reference. An entry grants exactly what it says: an org covers everything
-// in it, a project covers any of its revisions, and a pin covers itself (a
-// pin without digest covers any digest of that revision). Strictness is the
+// in it, a project covers any of its revisions, and a pin requires every
+// specified revision and digest to match. Strictness is the
 // granularity written down; the record setting never reinterprets existing
 // entries.
 func (p connectionPolicy) matches(source string) bool {
 	source = strings.TrimSpace(source)
-	if source == "" {
-		return false
-	}
 	for _, bucket := range [][]string{p.Allow.Orgs, p.Allow.Projects, p.Allow.Pins} {
 		for _, entry := range bucket {
-			if entry == source ||
-				strings.HasPrefix(source, entry+"/") ||
-				strings.HasPrefix(source, entry+"@") {
+			if referenceMatches(entry, source) {
 				return true
 			}
 		}
 	}
 	return false
+}
+
+func referenceMatches(expected, source string) bool {
+	repo, tag, digest, err := verify.ParseReference(source)
+	if err != nil {
+		return false
+	}
+	if !strings.Contains(expected, "/") {
+		org, _, _ := strings.Cut(repo, "/")
+		return org == expected
+	}
+	expectedRepo, expectedTag, expectedDigest, err := verify.ParseReference(expected)
+	return err == nil && repo == expectedRepo &&
+		(expectedTag == "" || tag == expectedTag) &&
+		(expectedDigest == "" || digest == expectedDigest)
 }
 
 // hasPin reports whether the exact reference is already journaled.
@@ -271,7 +281,7 @@ func (p *connectionPolicy) recordTrust(source string) error {
 // level) without touching the store's configured record default. It reports
 // whether anything new was written.
 func (p *connectionPolicy) recordTrustAt(source, fromLevel string) (bool, error) {
-	_, tag, _, err := verify.ParseReference(strings.TrimSpace(source))
+	_, tag, digest, err := verify.ParseReference(strings.TrimSpace(source))
 	if err != nil {
 		return false, fmt.Errorf("invalid reference %q: %w", source, err)
 	}
@@ -285,7 +295,7 @@ func (p *connectionPolicy) recordTrustAt(source, fromLevel string) (bool, error)
 	}
 	changed := false
 	for _, level := range levels {
-		if level == policyRecordPin && tag == "" {
+		if level == policyRecordPin && tag == "" && digest == "" {
 			continue // a bare repo reference has nothing to pin
 		}
 		entry, err := entryForLevel(source, level)
