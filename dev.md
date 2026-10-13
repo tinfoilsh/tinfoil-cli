@@ -28,6 +28,50 @@ Credentials are written to `~/.tinfoil/config.json` (mode 0600). Override on a p
 
 `TINFOIL_ADMIN_KEY` takes precedence over an admin key in `TINFOIL_API_KEY`, then the saved file. Saving a different key does not override the environment: login warns and shows the saved identity separately from the effective login. Logout deletes only the saved file; unset environment keys separately.
 
+## Trusting configs
+
+Connections resolved through the controlplane (`container connect`,
+`forward`, `ssh`, `scp`, `attest-ssh` by container name or ID) are checked
+against a local connection policy before any traffic flows:
+`~/.tinfoil/known-configs.yml` (override with `TINFOIL_KNOWN_CONFIGS`). The
+file is yours to edit; the CLI preserves comments when it writes. See the
+[known-configs contract](docs/known-configs-contract.md) for exact matching
+and write semantics.
+
+```bash
+tinfoil trust                        # show the store: mode, record, allow list
+tinfoil trust set --mode frozen      # unknown configs fail instead of prompting
+tinfoil trust set --record pin       # a yes records the exact revision+digest
+tinfoil trust set --record pin --prune   # also remove broader entries
+```
+
+The store has three parts. `allow` lists what is trusted, at the granularity
+written down: an org name (any project in it), `org/project` (any revision),
+or an exact pin. `mode` says what happens when a resolved config matches no
+entry: `prompt` (default) asks yes/no on a TTY and fails closed otherwise;
+`frozen` always fails closed and never writes the file automatically.
+`record` says what granularity a yes writes (`org`, `project`, or `pin`),
+inclusive going down — an org-yes also records the project and the exact pin,
+so tightening later starts from everything already used. Pins double as a
+connect journal: every allowed connect records the exact config it resolved
+to, and a first sight prints `New config journaled: …`.
+
+Non-interactive flows state their expectation instead of answering a prompt:
+`--repo` accepts an org, `org/project`, or a pinned reference; the resolved
+config must fall under it or the command fails, and the assertion is
+recorded. `--dangerous` skips the check for one invocation and records
+nothing. `container create` seeds the store with the project and revision you
+typed, so the first connect on that machine does not prompt.
+
+```bash
+tinfoil container connect my-container --repo myorg/my-project   # assert + record
+tinfoil ssh my-container --repo myorg                            # org-level assertion
+tinfoil container connect my-container --dangerous               # bypass, never recorded
+```
+
+For CI and operator machines, prefer `mode: frozen` with a pre-seeded store
+(or explicit pinned `--repo` values); never `--dangerous` in automation.
+
 ## First container from an existing image
 
 Use a public config repository connected to the Tinfoil GitHub App, with `tinfoil-config.yml` pointing to your actual image. Secrets, custom domains, and volumes are optional unless your workload requires them.
