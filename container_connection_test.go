@@ -185,7 +185,7 @@ func TestReviewConnectCommandUsesActualDescriptor(t *testing.T) {
 	}))
 	defer server.Close()
 	configureContainerPromotionTest(t, server.URL)
-	gateEnv(t, "allow:\n  projects:\n    - acme/app\n") // the gate is not under test here
+	gateEnv(t, `{"allow":{"projects":["acme/app"]}}`) // the gate is not under test here
 	oldRun, oldRepo, oldHost, oldReview := proxyCmd.RunE, repo, enclaveHost, connectReview
 	t.Cleanup(func() { proxyCmd.RunE = oldRun; repo = oldRepo; enclaveHost = oldHost; connectReview = oldReview })
 	repo = ""

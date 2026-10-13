@@ -29,20 +29,21 @@ assertion is added to the store.
 
 ## File
 
-`~/.tinfoil/known-configs.yml`, overridable with `TINFOIL_KNOWN_CONFIGS`.
-Hand-editable YAML; CLI writes preserve comments (edits operate on the
-parsed YAML tree, one atomic write per operation).
+`~/.tinfoil/known-configs.json`, overridable with `TINFOIL_KNOWN_CONFIGS`.
+Hand-editable JSON, with one atomic write per operation. If a
+`known-configs.yml` file exists, convert it to JSON before connecting; the CLI
+will not silently replace it with an empty store.
 
-```yaml
-mode: prompt
-record: project
-allow:
-  orgs:
-    - tinfoilsh # whole org, written deliberately
-  projects:
-    - tinfoilsh/confidential-api # any revision of this project
-  pins: # exact configs; also the connect journal
-    - tinfoilsh/confidential-api@v1.2.3@sha256:ab…
+```json
+{
+  "mode": "prompt",
+  "record": "project",
+  "allow": {
+    "orgs": ["tinfoilsh"],
+    "projects": ["tinfoilsh/confidential-api"],
+    "pins": ["tinfoilsh/confidential-api@v1.2.3@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]
+  }
+}
 ```
 
 ## Matching
@@ -100,11 +101,11 @@ first sight is still announced.
 
 ## Failure discipline
 
-- Malformed file, unknown mode/record, or misfiled bucket entry: loud
-  warning, then safe defaults — nothing allowed, prompt mode. A yes on top
-  of an unreadable store trusts that invocation only and never writes: the
-  broken file is preserved for repair, and the prompt repeats until fixed.
-- A `null` or empty document is a valid empty store.
+- Malformed JSON, duplicate or unknown fields, unknown mode/record, or an
+  invalid bucket entry: error without prompting or changing the file. Fix the
+  store before connecting, including when using an explicit `--repo`.
+- A missing file or `{}` is an empty store with default settings. An empty
+  file or `null` document is invalid.
 - Recording failures on a policy-passing connect warn; they do not block a
   connection that policy already allows.
 
