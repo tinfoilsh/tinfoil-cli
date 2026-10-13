@@ -233,7 +233,7 @@ func init() {
 	containerConnectCmd.Flags().UintVarP(&connectPort, "port", "p", 8080, "Local port for the verified proxy")
 	containerConnectCmd.Flags().StringVarP(&connectBindAddr, "bind", "b", "127.0.0.1", "Address to bind to")
 	containerConnectCmd.Flags().BoolVar(&connectReview, "review", false, "Connect to the available blue/green review candidate, pinned to its release (never production)")
-
+	addTrustDangerousFlag(containerConnectCmd)
 	silenceUsageRecursive(containerCmd)
 }
 
@@ -469,6 +469,9 @@ without registry publication; keep the exact file to verify subsequent connectio
 		if _, err := client.do("POST", "/api/containers", nil, body, &created); err != nil {
 			return err
 		}
+		// The caller just told us exactly what they intend to run: seed the
+		// trust store now so the first connect needs no prompt.
+		seedTrustFromCreate(createRepo, revision)
 		deployBody := map[string]any{}
 		if value, ok := body["mark_latest_release"].(bool); ok {
 			deployBody["mark_latest_release"] = value
@@ -822,16 +825,38 @@ match the candidate's repository and tag.
 		if err != nil {
 			return err
 		}
-		target, err := containerConnection(*c, connectReview, repo)
+		sourceOverride := repo
+		if repo != "" && !strings.Contains(repo, "/") {
+			// A bare org is a valid assertion here but not a verifier pin:
+			// tinfoil-go's reference grammar requires owner/name — it has no
+			// org-prefix match, even though the endorsed name it compares
+			// against would support one. Until the SDK grows that,
+			// assertTrustedSource checks the org against the resolved name
+			// (which the verifier then proves via the signed name→digest
+			// endorsement, backstopping the string check), and the verifier
+			// pins the resolved reference.
+			sourceOverride = ""
+		}
+		target, err := containerConnection(*c, connectReview, sourceOverride)
 		if err != nil {
 			return err
 		}
 		expected := target.source
 		if c.Source == containerSourceLocal {
+			// A local config is a caller-held expectation: the file's digest is
+			// the trust decision, so the connection policy does not apply.
 			if err := checkLocalConfigDigest(target.ConfigDigest); err != nil {
 				return err
 			}
 			expected = "sha256:" + target.ConfigDigest
+		} else if repo == "" {
+			// The expectation came from the controlplane response, not the
+			// caller: check it against the connection policy before trusting it.
+			if err := enforceConnectionPolicy(target.source); err != nil {
+				return err
+			}
+		} else if err := assertTrustedSource(repo, target.source); err != nil {
+			return err
 		}
 		fmt.Printf("Connecting verified proxy to %s: %s (expected %s)\n", c.Name, target.URL, expected)
 

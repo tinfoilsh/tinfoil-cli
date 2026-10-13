@@ -7,7 +7,7 @@ Available on [GitHub Releases](https://github.com/tinfoilsh/tinfoil-cli/releases
 ## How it works
 
 1. Reads the selected command, target, and local configuration.
-2. Sends management operations to the Tinfoil controlplane, or verifies the target enclave before connecting to a workload.
+2. Sends management operations to the Tinfoil controlplane, or verifies the target enclave before connecting to a workload — checking the resolved config against your local [connection policy](docs/known-configs-contract.md) first.
 3. Prints results, follows deployment progress, or keeps a connection open for local clients.
 
 Client-facing documentation:

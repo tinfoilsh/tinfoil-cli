@@ -184,7 +184,7 @@ func containerConnectionGuidance(c containerView, review bool) string {
 		fmt.Fprintf(&out, "Verified proxy: tinfoil container connect %s --config <FILE>\n", shellQuote(c.ID))
 		return out.String()
 	}
-	fmt.Fprintf(&out, "%s URL: %s\nExpected source: %s\n", label, target.URL, target.source)
+	fmt.Fprintf(&out, "%s URL: %s\nExpected config: %s\n", label, target.URL, target.source)
 	fmt.Fprintf(&out, "Verified request: tinfoil http get %s --enclave %s --repo %s\n", shellQuote(target.URL), shellQuote(target.host), shellQuote(target.source))
 	fmt.Fprintf(&out, "Verified proxy: tinfoil container connect %s%s\n", shellQuote(c.ID), flag)
 	return out.String()

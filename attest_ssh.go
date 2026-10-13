@@ -53,6 +53,7 @@ func init() {
 	flags.StringVar(&attestSSHIdentity, "identity", "", "IdentityFile written to the profile")
 	flags.BoolVar(&attestSSHInstall, "install", false, "Write the profile under ~/.ssh/tinfoil instead of printing it")
 	flags.BoolVar(&attestSSHYes, "yes", false, "Add Include "+sshIncludeGlob+" to ~/.ssh/config without prompting")
+	addTrustDangerousFlag(attestSSHCmd)
 }
 
 var attestSSHCmd = &cobra.Command{

@@ -140,6 +140,7 @@ func TestRegistryConnectionPinsNameAndDigest(t *testing.T) {
 	}))
 	defer server.Close()
 	configureContainerPromotionTest(t, server.URL)
+	gateEnv(t, "allow:\n  projects:\n    - acme/app\n") // the gate is not under test here
 	previousRepo := repo
 	repo = ""
 	t.Cleanup(func() { repo = previousRepo })

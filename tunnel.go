@@ -53,6 +53,7 @@ func init() {
 func addTunnelFlags(cmd *cobra.Command) {
 	cmd.Flags().StringVar(&tunnelAPIKey, "api-key", "", "Inference API key (tk_...) the enclave validates for tunnels (default $"+envTunnelAPIKey+")")
 	cmd.Flags().BoolVar(&allowDebug, "allow-debug", false, "Tunnel into an enclave running in debug mode, which has a shell inside it")
+	addTrustDangerousFlag(cmd)
 }
 
 // enclaveAPIKey is the key the shim's tunnel handler validates. It goes to the
@@ -242,11 +243,25 @@ func resolveTunnelTarget(identifier string) (*tunnelTarget, error) {
 	if host == "" {
 		return nil, fmt.Errorf("container %s has no domain (status=%s) — cannot tunnel", container.Name, container.Status)
 	}
-	if repo != "" {
-		container.Repo = repo
+	override := repo
+	if repo != "" && !strings.Contains(repo, "/") {
+		// A bare org is a valid assertion here but not a verifier pin:
+		// tinfoil-go's reference grammar requires owner/name — it has no
+		// org-prefix match, even though the endorsed name it compares against
+		// would support one. Until the SDK grows that, assertTrustedSource
+		// checks the org against the resolved name (which the verifier then
+		// proves via the signed name→digest endorsement, backstopping the
+		// string check), and the verifier pins the resolved reference.
+		override = ""
+	}
+	if override != "" {
+		container.Repo = override
+	}
+	if container.Source == containerSourceLocal && repo != "" {
+		return nil, fmt.Errorf("local containers require --config instead of --repo")
 	}
 	if container.ConfigName != "" || container.Source == containerSourceLocal {
-		connection, err := containerConnection(*container, false, repo)
+		connection, err := containerConnection(*container, false, override)
 		if err != nil {
 			return nil, err
 		}
@@ -260,6 +275,18 @@ func resolveTunnelTarget(identifier string) (*tunnelTarget, error) {
 	}
 	if container.Repo == "" && container.Source != containerSourceLocal {
 		return nil, fmt.Errorf("container %s has no repo recorded — cannot tunnel", container.Name)
+	}
+	if container.Source == containerSourceLocal {
+		// A local config is a caller-held expectation: the file's digest is
+		// the trust decision, so the connection policy does not apply.
+	} else if repo == "" {
+		// The expectation came from the controlplane record, not the caller:
+		// check it against the connection policy before trusting it.
+		if err := enforceConnectionPolicy(container.Repo); err != nil {
+			return nil, err
+		}
+	} else if err := assertTrustedSource(repo, container.Repo); err != nil {
+		return nil, err
 	}
 	return &tunnelTarget{
 		name:     container.Name,
