@@ -11,6 +11,8 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"reflect"
+	"slices"
 	"strings"
 	"syscall"
 
@@ -22,9 +24,6 @@ import (
 const managedKindAnnotation = "managed-kind"
 
 func init() {
-	monitorCmd.PersistentFlags().StringVarP(&outputFormat, "output", "o", "table", "Output format: table or json")
-	monitorCmd.PersistentFlags().StringVar(&attestSSHIdentity, "identity", "", "Owner SSH identity file")
-	sandboxCmd.AddCommand(sandboxStatusCmd)
 	monitorCmd.AddCommand(newManagedStatusCmd("monitor"))
 	start := newManagedContainerCmd("monitor", "start", containerDeployCmd, "no-wait")
 	start.Short = "Start a stopped or failed Monitor using its saved configuration"
@@ -32,6 +31,8 @@ func init() {
 		newManagedContainerCmd("monitor", "stop", containerStopCmd),
 		newManagedContainerCmd("monitor", "delete", containerDeleteCmd, "yes"))
 	for _, group := range []*cobra.Command{sandboxCmd, monitorCmd} {
+		group.PersistentFlags().StringVarP(&outputFormat, "output", "o", "table", "Output format: table or json")
+		group.PersistentFlags().StringVar(&attestSSHIdentity, "identity", "", "Owner SSH identity file")
 		update := newManagedContainerCmd(group.Name(), "update", containerUpdateCmd, "tag", "yes", "no-wait")
 		update.Long = "Review and apply a release update, switching traffic automatically. The shared update plan and downtime confirmation still apply, including with --no-wait."
 		group.AddCommand(update, newManagedCreateCmd(group.Name()))
@@ -99,6 +100,9 @@ func newManagedCreateCmd(kind string) *cobra.Command {
 					if err != nil {
 						return err
 					}
+					if volume.ContainerID != "" {
+						return fmt.Errorf("volume %s is already attached to %s; stop and detach it before reuse", workspace, volumeContainerLabel(*volume))
+					}
 					body["volumes"] = map[string]string{"workspace": volume.ID}
 				}
 				fmt.Fprintf(cmd.ErrOrStderr(), "Monitor: %s (%s). Service access requires it to be running and unlocked.\n", selected.Name, statusLabel(selected.Status))
@@ -109,7 +113,7 @@ func newManagedCreateCmd(kind string) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			variables[managedOwnerEnv(kind)] = owner
+			variables[strings.ToUpper(kind)+"_OWNER_PUBLIC_KEY"] = owner
 			fmt.Fprintln(cmd.ErrOrStderr(), "Creating and publishing configuration. Storage remains billable until deleted; keep the original encryption credentials when reusing a workspace.")
 			var created containerView
 			if _, err := client.do("POST", "/api/containers", nil, body, &created); err != nil {
@@ -136,16 +140,11 @@ func selectCreationMonitor(client *cpClient, identifier string) (*containerView,
 		if _, err := client.do("GET", "/api/containers", nil, nil, &rows); err != nil {
 			return nil, err
 		}
-		var names []string
-		for _, row := range rows {
-			if checkManagedKind("monitor", row) == nil {
-				identifier = row.ID
-				names = append(names, row.Name)
-			}
+		rows = slices.DeleteFunc(rows, func(row containerView) bool { return checkManagedKind("monitor", row) != nil })
+		if len(rows) != 1 {
+			return nil, errors.New("choose --monitor from `tinfoil monitor status`, or create one with `tinfoil monitor create NAME`")
 		}
-		if len(names) != 1 {
-			return nil, fmt.Errorf("choose --monitor from %v, or create one with `tinfoil monitor create NAME`", names)
-		}
+		identifier = rows[0].ID
 	}
 	row, err := managedRow(client, "monitor", identifier)
 	if err == nil && !looksLikeUUID(row.ID) {
@@ -185,14 +184,7 @@ func creationOwnerKey(publicFile, identity, fallback string) (string, error) {
 }
 
 func managedRepo(kind string) string {
-	if kind == "monitor" {
-		return monitorRepo
-	}
-	return defaultSandboxRepo
-}
-
-func managedOwnerEnv(kind string) string {
-	return strings.ToUpper(kind) + "_OWNER_PUBLIC_KEY"
+	return map[string]string{"monitor": monitorRepo, "sandbox": defaultSandboxRepo}[kind]
 }
 
 func managedRow(client *cpClient, kind, identifier string) (*containerView, error) {
@@ -230,19 +222,15 @@ func newManagedStatusCmd(kind string) *cobra.Command {
 			}
 			ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 			defer cancel()
-			var previous string
+			var previous *containerView
 			_, err = pollContainer(ctx, client, row.ID, *row, 0, func(current containerView) (bool, error) {
 				if err := checkManagedKind(kind, current); err != nil {
 					return false, err
 				}
-				snapshot, err := json.Marshal(current)
-				if err != nil {
-					return false, err
-				}
-				if string(snapshot) == previous {
+				if previous != nil && reflect.DeepEqual(*previous, current) {
 					return false, nil
 				}
-				previous = string(snapshot)
+				previous = &current
 				return false, renderContainer(current)
 			})
 			if ctx.Err() == context.Canceled {

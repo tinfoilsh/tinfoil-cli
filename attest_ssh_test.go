@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"testing/synctest"
+	"time"
 
 	"golang.org/x/crypto/ssh"
 )
@@ -205,4 +207,20 @@ func TestInstallToYesFlagWritesInclude(t *testing.T) {
 	if !bytes.HasPrefix(conf, []byte("Include tinfoil/*.conf\n")) {
 		t.Fatalf("config = %q", conf)
 	}
+}
+
+func TestConnectionProgressRepeatsAndStops(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var out bytes.Buffer
+		stop := startConnectionProgress(&out, "Looking up work")
+		defer stop()
+		time.Sleep(25 * time.Second)
+		synctest.Wait()
+		stop()
+		before := out.String()
+		time.Sleep(time.Minute)
+		if strings.Count(before, "Looking up work") != 3 || out.String() != before {
+			t.Fatalf("progress must repeat every 10s and stop when finished: %q", out.String())
+		}
+	})
 }

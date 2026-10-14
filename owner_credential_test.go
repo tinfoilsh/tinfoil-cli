@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -23,10 +24,8 @@ import (
 func testOwnerCredential(t *testing.T) *ownerCredential {
 	t.Helper()
 	c := &ownerCredential{Version: 2, Key: make([]byte, 32), SigningSeed: make([]byte, ed25519.SeedSize)}
-	_, err := rand.Read(c.Key)
-	require.NoError(t, err)
-	_, err = rand.Read(c.SigningSeed)
-	require.NoError(t, err)
+	rand.Read(c.Key)
+	rand.Read(c.SigningSeed)
 	return c
 }
 
@@ -80,27 +79,48 @@ func TestOwnerCredentialCompatibilityAndCustody(t *testing.T) {
 	}
 }
 
-func TestConcurrentSSHKeyCreationPreservesWinner(t *testing.T) {
-	for _, seed := range [][]byte{nil, testOwnerCredential(t).SigningSeed} {
-		path := filepath.Join(t.TempDir(), "identity")
-		results := make(chan ssh.Signer, 16)
+func TestConcurrentCredentialCreationPreservesWinner(t *testing.T) {
+	owner := testOwnerCredential(t)
+	for _, seed := range [][]byte{nil, owner.SigningSeed} {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "identity")
+		results := make(chan string, 16)
+		ready, start, encrypt := make(chan struct{}, 16), make(chan struct{}), make(chan struct{})
 		for range 16 {
 			go func() {
-				signer, err := ensureSSHIdentity(path, seed)
-				if err != nil {
-					t.Error(err)
+				ready <- struct{}{}
+				<-start
+				signer, sshErr := ensureSSHIdentity(path, seed)
+				ready <- struct{}{}
+				<-encrypt
+				c, err := resourceCredential(dir, "disk.key", owner.publicKey(), false)
+				if c != nil {
+					defer c.clear()
 				}
-				results <- signer
+				if err := errors.Join(sshErr, err); err != nil {
+					t.Error(err)
+					results <- ""
+					return
+				}
+				results <- authorizedLine(signer) + base64.StdEncoding.EncodeToString(c.Key)
 			}()
 		}
-		first := <-results
-		require.NotNil(t, first)
-		for range 15 {
-			signer := <-results
-			require.NotNil(t, signer)
-			require.Equal(t, first.PublicKey().Marshal(), signer.PublicKey().Marshal())
+		for _, gate := range []chan struct{}{start, encrypt} {
+			for range 16 {
+				<-ready
+			}
+			close(gate)
 		}
+		first := <-results
+		for range 15 {
+			if first != <-results {
+				t.Error("concurrent creators returned different keys")
+			}
+		}
+		require.NotEmpty(t, first)
 		require.ErrorContains(t, ensureOwnerSSHKey(path, testOwnerCredential(t).SigningSeed), "does not match")
+		_, err := resourceCredential(dir, "disk.key", testOwnerCredential(t).publicKey(), false)
+		require.ErrorContains(t, err, "measured owner changed")
 	}
 }
 

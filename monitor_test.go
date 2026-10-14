@@ -48,8 +48,6 @@ func TestMonitorUnlockAndSSHPanelAgainstRealMonitor(t *testing.T) {
 	if source == "" {
 		source = filepath.Join("..", "monitor")
 	}
-	source, err := filepath.Abs(source)
-	require.NoError(t, err)
 	if _, err := os.Stat(filepath.Join(source, "routes.go")); err != nil {
 		t.Skip("no Monitor checkout with routes next to tinfoil-cli")
 	}
@@ -57,9 +55,8 @@ func TestMonitorUnlockAndSSHPanelAgainstRealMonitor(t *testing.T) {
 	binary := filepath.Join(t.TempDir(), "monitor")
 	build := exec.Command("go", "build", "-o", binary, ".")
 	build.Dir, build.Env = source, append(os.Environ(), "GOWORK=off")
-	if output, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("building Monitor: %v\n%s", err, output)
-	}
+	output, err := build.CombinedOutput()
+	require.NoError(t, err, string(output))
 	hostKeyPath := filepath.Join(t.TempDir(), "host_key")
 	hostSigner, err := ensureSSHIdentity(hostKeyPath, nil)
 	require.NoError(t, err)
@@ -86,14 +83,14 @@ func TestMonitorUnlockAndSSHPanelAgainstRealMonitor(t *testing.T) {
 		return err == nil
 	}, 10*time.Second, 50*time.Millisecond)
 	dir := t.TempDir()
-	require.NoError(t, saveMonitorGeneration(dir, 0))
+	require.NoError(t, writeStorageJSON(filepath.Join(dir, monitorProfileFile), monitorProfile{}, false))
 	conn, err := net.Dial("tcp", sshAddress)
 	require.NoError(t, err)
-	_, err = connectOwnerSSH(conn, "localhost", hostKey, testOwnerCredential(t).SigningSeed)
+	_, err = connectOwnerSSHAs(conn, "localhost", hostKey, testOwnerCredential(t).SigningSeed, "owner")
 	require.Error(t, err, "another key cannot enter a locked Monitor")
 	conn, err = net.Dial("tcp", sshAddress)
 	require.NoError(t, err)
-	panel, err := connectOwnerSSH(conn, "localhost", hostKey, credential.SigningSeed)
+	panel, err := connectOwnerSSHAs(conn, "localhost", hostKey, credential.SigningSeed, "owner")
 	require.NoError(t, err, "the measured owner can enter while locked")
 	defer panel.Close()
 	require.Error(t, monitorOwnerRequest(panel, dir, "GET", "/policy", nil))
@@ -146,10 +143,6 @@ func testSigner(t *testing.T) ssh.Signer {
 
 func authorizedLine(signer ssh.Signer) string {
 	return strings.TrimSpace(string(ssh.MarshalAuthorizedKey(signer.PublicKey())))
-}
-
-func connectOwnerSSH(conn net.Conn, host string, hostKey ssh.PublicKey, seed []byte) (*ssh.Client, error) {
-	return connectOwnerSSHAs(conn, host, hostKey, seed, "owner")
 }
 
 func connectOwnerSSHAs(conn net.Conn, host string, hostKey ssh.PublicKey, seed []byte, user string) (*ssh.Client, error) {

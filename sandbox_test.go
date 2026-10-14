@@ -138,9 +138,18 @@ func TestSandboxDeleteKeepsCredentialsAndRemovesOwnedProfile(t *testing.T) {
 	profile := filepath.Join(home, ".ssh", "tinfoil", "work.conf")
 	require.NoError(t, os.MkdirAll(filepath.Dir(profile), 0700))
 	require.NoError(t, os.WriteFile(profile, []byte("# tinfoil-resource: "+server.URL+"//owner/"+row.ID+"\n"), 0600))
+	dir, err := resourceDir(accountScope{ControlplaneURL: server.URL, UserID: "owner"}, row.ID)
+	require.NoError(t, err)
+	credential := filepath.Join(dir, sandboxDiskKeyName)
+	require.NoError(t, writeStorageJSON(credential, testOwnerCredential(t), false))
+	before, err := os.ReadFile(credential)
+	require.NoError(t, err)
 	for range 2 {
 		require.NoError(t, sandboxDeleteCmd.RunE(sandboxDeleteCmd, []string{row.Name}))
 	}
+	after, err := os.ReadFile(credential)
+	require.NoError(t, err)
+	require.Equal(t, before, after, "deletion must preserve encryption and owner signing keys")
 	require.NoFileExists(t, profile)
 }
 

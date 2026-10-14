@@ -13,6 +13,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/tinfoilsh/tinfoil-go/document"
@@ -73,8 +75,9 @@ attestation always uses the enclave hostname.`,
 	Args:         cobra.ExactArgs(1),
 	SilenceUsage: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		fmt.Fprintln(cmd.ErrOrStderr(), "Looking up "+args[0])
+		resolved := startConnectionProgress(cmd.ErrOrStderr(), "Looking up "+args[0])
 		target, err := resolveTunnelTarget(args[0])
+		resolved()
 		if err != nil {
 			return err
 		}
@@ -133,6 +136,26 @@ attestation always uses the enclave hostname.`,
 	},
 }
 
+// Stop and join the reporter before the next step or credential prompt.
+func startConnectionProgress(out io.Writer, message string) func() {
+	fmt.Fprintln(out, message)
+	ticker := time.NewTicker(10 * time.Second)
+	stop, done := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(done)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-ticker.C:
+				fmt.Fprintln(out, message+" (still waiting)")
+			}
+		}
+	}()
+	return sync.OnceFunc(func() { close(stop); <-done })
+}
+
 func nativeSSHHost(target *tunnelTarget, override string) string {
 	if override != "" {
 		return override
@@ -146,7 +169,7 @@ func nativeSSHHost(target *tunnelTarget, override string) string {
 // attestedHostKey verifies host against source and returns the endorsed
 // host-ssh key, so a failed verification never falls back to unverified acceptance.
 func attestedHostKey(host, source, sealedTo string) (ssh.PublicKey, error) {
-	fmt.Fprintln(os.Stderr, "Verifying attestation and SSH host key for "+host)
+	defer startConnectionProgress(os.Stderr, "Verifying attestation and SSH host key for "+host)()
 	secure, err := newVerifiedClient(host, source, sealedTo)
 	if err != nil {
 		return nil, err

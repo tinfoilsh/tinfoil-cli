@@ -116,22 +116,29 @@ func TestManagedCreateUsesContainerRecovery(t *testing.T) {
 	attestSSHIdentity, followInterval = "", 0
 	t.Cleanup(func() { attestSSHIdentity, followInterval = previousIdentity, previousInterval })
 	for _, kind := range []string{"monitor", "sandbox"} {
-		for _, state := range []string{"follow", "no-wait", "json", "uncertain"} {
+		for _, state := range []string{"follow", "no-wait", "json", "uncertain", "attached"} {
+			if kind == "monitor" && state == "attached" {
+				continue
+			}
 			t.Run(kind+"/"+state, func(t *testing.T) {
 				posts, polls := 0, 0
+				volume := volumeView{ID: "22222222-2222-4222-8222-222222222222"}
+				if state == "attached" {
+					volume.ContainerID = "another-sandbox"
+				}
 				managedTestAPI(t, func(w http.ResponseWriter, r *http.Request) {
 					switch r.Method + " " + r.URL.Path {
 					case "GET /api/containers/11111111-1111-4111-8111-111111111111":
 						json.NewEncoder(w).Encode(containerView{ID: "11111111-1111-4111-8111-111111111111", Repo: monitorRepo, Config: fmt.Sprintf("containers: [{env: [{MONITOR_OWNER_PUBLIC_KEY: %q}]}]", owner)})
 					case "GET /api/volumes":
-						json.NewEncoder(w).Encode(volumeList{Volumes: []volumeView{{ID: "22222222-2222-4222-8222-222222222222"}}})
+						json.NewEncoder(w).Encode(volumeList{Volumes: []volumeView{volume}})
 					case "POST /api/containers":
 						posts++
 						var body map[string]json.RawMessage
 						require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
 						var variables map[string]string
 						require.NoError(t, json.Unmarshal(body["variables"], &variables))
-						require.Equal(t, owner, variables[managedOwnerEnv(kind)])
+						require.Equal(t, owner, variables[map[string]string{"monitor": monitorOwnerEnv, "sandbox": sandboxOwnerEnv}[kind]])
 						if kind == "sandbox" {
 							require.True(t, looksLikeUUID(variables["SANDBOX_INSTANCE_ID"]))
 							var policy containerNetworkPolicy
@@ -171,6 +178,10 @@ func TestManagedCreateUsesContainerRecovery(t *testing.T) {
 				require.NoError(t, cmd.ParseFlags(args))
 				_, err := captureTestStdout(func() error { return cmd.RunE(cmd, cmd.Flags().Args()) })
 				switch state {
+				case "attached":
+					require.ErrorContains(t, err, "already attached")
+					require.Zero(t, posts, "attached workspaces must be rejected before creation")
+					return
 				case "uncertain":
 					require.ErrorContains(t, err, "inspect `tinfoil "+kind+" status` before retrying")
 				default:

@@ -52,9 +52,7 @@ var sandboxYes bool
 
 func init() {
 	rootCmd.AddCommand(sandboxCmd)
-	sandboxCmd.PersistentFlags().StringVarP(&outputFormat, "output", "o", "table", "Output format: table or json")
-	sandboxCmd.PersistentFlags().StringVar(&attestSSHIdentity, "identity", "", "Owner SSH identity file")
-	sandboxCmd.AddCommand(sandboxStartCmd, sandboxRestartCmd, sandboxStopCmd, sandboxDeleteCmd, sandboxEnrollCmd)
+	sandboxCmd.AddCommand(sandboxStatusCmd, sandboxStartCmd, sandboxRestartCmd, sandboxStopCmd, sandboxDeleteCmd, sandboxEnrollCmd)
 	for _, cmd := range []*cobra.Command{sandboxStartCmd, sandboxRestartCmd, sandboxEnrollCmd} {
 		addTrustDangerousFlag(cmd)
 	}
@@ -99,16 +97,13 @@ func runSandboxAction(action string) func(*cobra.Command, []string) error {
 		if err != nil {
 			return err
 		}
-		row, err := resolveContainerDetail(client, args[0])
+		row, err := managedRow(client, "sandbox", args[0])
 		if action == "delete" && missingContainer(err) {
 			fmt.Fprintf(cmd.OutOrStdout(), "Sandbox %s is already deleted. Saved encryption credentials are kept.\n", args[0])
 			return nil
 		}
 		if err != nil {
 			return err
-		}
-		if row.Repo != defaultSandboxRepo || row.Debug {
-			return fmt.Errorf("container %s is not a sandbox", row.Name)
 		}
 		switch action {
 		case "delete":
@@ -150,17 +145,22 @@ func runSandboxAction(action string) func(*cobra.Command, []string) error {
 		if err != nil {
 			return err
 		}
-		if err := enrollSandbox(target); err != nil {
+		s, err := connectSandbox(target)
+		if err != nil {
 			return err
+		}
+		defer s.close()
+		if err := s.enroll(); err != nil {
+			return err
+		}
+		if err := s.install(); err != nil {
+			return fmt.Errorf("%s was enrolled, but its ssh profile was not installed: %w; retry `tinfoil sandbox enroll %s`", target.Name, err, target.Name)
 		}
 		return renderContainer(*row)
 	}
 }
 
 func startSandboxRow(client *cpClient, row containerView, restart bool) (containerView, error) {
-	if row.Repo != defaultSandboxRepo || row.Debug {
-		return row, fmt.Errorf("container %s is not a sandbox", row.Name)
-	}
 	if restart || row.Status == statusStopped || row.Status == statusFailed {
 		if err := validateSandboxNetwork(row); err != nil {
 			return row, err
@@ -185,21 +185,6 @@ func startSandboxRow(client *cpClient, row containerView, restart bool) (contain
 		return followContainer(client, row.ID, row)
 	}
 	return row, nil
-}
-
-func enrollSandbox(target *workloadTarget) error {
-	s, err := connectSandbox(target)
-	if err != nil {
-		return err
-	}
-	defer s.close()
-	if err := s.enroll(); err != nil {
-		return err
-	}
-	if err := s.install(); err != nil {
-		return fmt.Errorf("%s was enrolled, but its ssh profile was not installed: %w; retry `tinfoil sandbox enroll %s`", target.Name, err, target.Name)
-	}
-	return nil
 }
 
 func sandboxNetworkPolicy(monitorID string) containerNetworkPolicy {
@@ -265,7 +250,6 @@ type sandboxSession struct {
 	profile     sshProfile
 	signer      ssh.Signer
 	signerClose func()
-	claim       string
 	monitorKey  string
 	initialized bool
 }
@@ -350,7 +334,7 @@ func connectSandbox(target *workloadTarget) (_ *sandboxSession, err error) {
 	if err := writeAtomic(filepath.Join(dir, "resource.json"), raw); err != nil {
 		return nil, err
 	}
-	s := &sandboxSession{box: row, keys: keys, claim: "sandbox-v2:" + record.Instance}
+	s := &sandboxSession{box: row, keys: keys}
 	defer func() {
 		if err != nil {
 			s.close()
@@ -371,7 +355,7 @@ func connectSandbox(target *workloadTarget) (_ *sandboxSession, err error) {
 	dial := func(ctx context.Context, _, _ string) (net.Conn, error) {
 		waiting := false
 		for {
-			conn, err := s.monitor.DialContext(ctx, "tcp", net.JoinHostPort(bootstrapRoute(s.claim), "443"))
+			conn, err := s.monitor.DialContext(ctx, "tcp", net.JoinHostPort(bootstrapRoute("sandbox-v2:"+record.Instance), "443"))
 			var channel *ssh.OpenChannelError
 			if !errors.As(err, &channel) || channel.Reason != ssh.ConnectionFailed {
 				if err == nil {
@@ -540,7 +524,7 @@ func attestConnection(dial func(context.Context, string, string) (net.Conn, erro
 	}
 	// Only a public nonce and attestation cross this untrusted relay. VerifyV3
 	// authenticates the evidence; owner SSH requires the endorsed boot key.
-	fmt.Fprintln(os.Stderr, "Waiting for sandbox attestation through Monitor")
+	defer startConnectionProgress(os.Stderr, "Waiting for sandbox attestation through Monitor")()
 	fetch := &http.Client{Transport: &http.Transport{DialContext: dial}, Timeout: sandboxEnrollTimeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	defer fetch.CloseIdleConnections()
 	resp, err := fetch.Get("http://" + host + sandboxAttestationPath + "?nonce=" + hex.EncodeToString(nonce))

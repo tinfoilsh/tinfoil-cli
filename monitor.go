@@ -60,8 +60,6 @@ type monitorProfile struct {
 	Generation   uint64 `json:"generation"`
 }
 
-func init() { rootCmd.AddCommand(monitorCmd) }
-
 var monitorCmd = &cobra.Command{
 	Use:          "monitor",
 	Aliases:      []string{"monitors"},
@@ -83,36 +81,6 @@ func currentScope() (accountScope, *cpClient, error) {
 		scope.OrgID = identity.Organization.ID
 	}
 	return scope, newCPClient(cfg), nil
-}
-
-// Verify the deployed configuration and preserve the boot-key pin shared with sandboxes.
-func verifyMonitor(dir string, row *workloadTarget) (ssh.PublicKey, error) {
-	var profile monitorProfile
-	if err := readStorageJSON(filepath.Join(dir, monitorProfileFile), &profile); err != nil {
-		return nil, err
-	}
-	if row.Domain != profile.Domain {
-		return nil, errors.New("Monitor no longer matches its saved domain")
-	}
-	hostKey, err := attestedHostKey(row.Domain, row.source, "")
-	if err != nil {
-		return nil, err
-	}
-	attested := strings.TrimSpace(string(ssh.MarshalAuthorizedKey(hostKey)))
-	if profile.HostKey != attested || profile.ConfigSource != row.source {
-		if _, err := updateProfile(dir, func(p *monitorProfile) error {
-			if p.HostKey != profile.HostKey || p.ConfigSource != profile.ConfigSource {
-				return errors.New("another command changed the pinned Monitor SSH host key; run this again")
-			}
-			p.HostKey = attested
-			p.ConfigSource = row.source
-			return nil
-		}); err != nil {
-			return nil, err
-		}
-	}
-	fmt.Fprintf(os.Stderr, "Monitor %s attestation verified.\n", row.Name)
-	return hostKey, nil
 }
 
 // SSH authenticates the owner; the storage key only decrypts the state.
@@ -162,6 +130,9 @@ func connectMonitorOwner(ctx context.Context, scope accountScope, row *workloadT
 	if err := requireRunningConnection("Monitor", row.containerView); err != nil {
 		return nil, "", err
 	}
+	if row.SSHPort < 1 || row.SSHPort > maxConnectionPort {
+		return nil, "", errors.New("Monitor has no published SSH port")
+	}
 	fmt.Fprintf(os.Stderr, "Monitor %s: running.\n", row.Name)
 	dir, err := monitorRecord(scope, row)
 	if err != nil {
@@ -181,20 +152,34 @@ func connectMonitorOwner(ctx context.Context, scope accountScope, row *workloadT
 			return nil, "", err
 		}
 	}
-	hostKey, err := verifyMonitor(dir, row)
+	if row.Domain != profile.Domain {
+		return nil, "", errors.New("Monitor no longer matches its saved domain")
+	}
+	hostKey, err := attestedHostKey(row.Domain, row.source, "")
 	if err != nil {
 		return nil, "", err
 	}
+	attested := strings.TrimSpace(string(ssh.MarshalAuthorizedKey(hostKey)))
+	if profile.HostKey != attested || profile.ConfigSource != row.source {
+		if _, err := updateProfile(dir, func(p *monitorProfile) error {
+			if p.HostKey != profile.HostKey || p.ConfigSource != profile.ConfigSource {
+				return errors.New("another command changed the pinned Monitor SSH host key; run this again")
+			}
+			p.HostKey = attested
+			p.ConfigSource = row.source
+			return nil
+		}); err != nil {
+			return nil, "", err
+		}
+	}
+	fmt.Fprintf(os.Stderr, "Monitor %s attestation verified.\n", row.Name)
 	signer, _, close, err := ownerSigner(credential, dir)
 	if err != nil {
 		return nil, "", err
 	}
 	defer close()
 	fmt.Fprintln(os.Stderr, "Connecting to Monitor "+row.Name+" over attested SSH")
-	address, err := monitorAddress(ctx, row.containerView)
-	if err != nil {
-		return nil, "", err
-	}
+	address := net.JoinHostPort(row.Domain, strconv.Itoa(row.SSHPort))
 	conn, err := (&net.Dialer{Timeout: 30 * time.Second}).DialContext(ctx, "tcp", address)
 	if err != nil {
 		return nil, "", err
@@ -231,18 +216,6 @@ func monitorRecord(scope accountScope, row *workloadTarget) (string, error) {
 		return nil
 	})
 	return dir, err
-}
-
-// The public SSH endpoint is shared by owner UI access and device routes.
-func monitorAddress(ctx context.Context, row containerView) (string, error) {
-	if row.SSHPort < 1 || row.SSHPort > maxConnectionPort {
-		return "", errors.New("Monitor has no published SSH port")
-	}
-	addresses, err := net.DefaultResolver.LookupIP(ctx, "ip4", row.Domain)
-	if err != nil || len(addresses) == 0 {
-		return "", errors.New("Monitor domain has no IPv4 address")
-	}
-	return net.JoinHostPort(addresses[0].String(), strconv.Itoa(row.SSHPort)), nil
 }
 
 // Owner API calls use the UI's attested channel and persist its generation acknowledgments.
@@ -316,7 +289,11 @@ func openOwnerChannel(client *ssh.Client, dir, host, token string) (ssh.Channel,
 			var message struct{ Generation uint64 }
 			ok := request.Type == ownerGenerationRequest && request.WantReply && ssh.Unmarshal(request.Payload, &message) == nil && message.Generation >= profile.Generation
 			if ok {
-				ok = saveMonitorGeneration(dir, message.Generation) == nil
+				_, err := updateProfile(dir, func(p *monitorProfile) error {
+					p.Generation = max(p.Generation, message.Generation)
+					return nil
+				})
+				ok = err == nil
 			}
 			request.Reply(ok, nil)
 			if !ok {
@@ -328,16 +305,6 @@ func openOwnerChannel(client *ssh.Client, dir, host, token string) (ssh.Channel,
 	return ch, nil
 }
 
-func saveMonitorGeneration(dir string, generation uint64) error {
-	// The file lock also serializes other commands and channels. Replies can
-	// arrive out of order, so only advance the saved rollback counter.
-	_, err := updateProfile(dir, func(p *monitorProfile) error {
-		p.Generation = max(p.Generation, generation)
-		return nil
-	})
-	return err
-}
-
 // Monitor commits enrollment once and remembers revoked keys across retries.
 func pairSandboxMonitor(client *ssh.Client, dir, name, device, agent string) error {
 	return monitorOwnerRequest(client, dir, "POST", "/enroll", map[string]any{
@@ -347,9 +314,9 @@ func pairSandboxMonitor(client *ssh.Client, dir, name, device, agent string) err
 }
 
 func init() {
+	rootCmd.AddCommand(monitorCmd)
 	command := &cobra.Command{
-		Use: "open [id|name]", Short: "Forward the Monitor UI over attested SSH", Args: cobra.ExactArgs(1),
-		Long: "Unlock and forward the Monitor UI over attested SSH.",
+		Use: "open [id|name]", Short: "Unlock and forward the Monitor UI over attested SSH", Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
 			fmt.Fprintln(cmd.ErrOrStderr(), "Looking up Monitor "+name)
@@ -379,9 +346,7 @@ func init() {
 
 func panelToken() string {
 	token := make([]byte, 32)
-	if _, err := rand.Read(token); err != nil {
-		panic(err)
-	}
+	rand.Read(token)
 	return base64.RawURLEncoding.EncodeToString(token)
 }
 
@@ -406,11 +371,6 @@ func serveMonitorPanel(cmd *cobra.Command, client *ssh.Client, dir, address stri
 	go func() { <-ctx.Done(); listener.Close(); client.Close() }()
 	fmt.Fprintf(cmd.OutOrStdout(), "Local Monitor panel: http://%s/app/#session=%s\n", listener.Addr(), session)
 	fmt.Fprintln(cmd.ErrOrStderr(), "Keep this command running. Ctrl-C closes the SSH connection. Owner credentials stay out of the browser.")
-	return forwardOwnerPanel(ctx, client, dir, listener, session)
-}
-
-// No HTTP parsing or signing here. CAM serves both assets and API on this stream.
-func forwardOwnerPanel(ctx context.Context, client *ssh.Client, dir string, listener net.Listener, token string) error {
 	for {
 		local, err := listener.Accept()
 		if err != nil {
@@ -423,7 +383,7 @@ func forwardOwnerPanel(ctx context.Context, client *ssh.Client, dir string, list
 			defer local.Close()
 			stop := context.AfterFunc(ctx, func() { local.Close() })
 			defer stop()
-			remote, err := openOwnerChannel(client, dir, listener.Addr().String(), token)
+			remote, err := openOwnerChannel(client, dir, listener.Addr().String(), session)
 			if err != nil {
 				return
 			}

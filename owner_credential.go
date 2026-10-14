@@ -71,7 +71,7 @@ func saveOwnerCredential(path string, credential *ownerCredential) error {
 	if err == nil {
 		defer old.clear()
 		if !bytes.Equal(old.Key, credential.Key) || !bytes.Equal(old.SigningSeed, credential.SigningSeed) || old.Owner != credential.Owner {
-			return fmt.Errorf("%s already holds a different credential; refusing to replace it", path)
+			return fmt.Errorf("%s already holds a different credential; refusing to replace it: %w", path, os.ErrExist)
 		}
 		return nil
 	}
@@ -114,10 +114,7 @@ func ensureSSHIdentity(path string, seed []byte) (ssh.Signer, error) {
 	if errors.Is(err, os.ErrNotExist) {
 		if seed == nil {
 			seed = make([]byte, ed25519.SeedSize)
-			_, err = rand.Read(seed)
-			if err != nil {
-				return nil, err
-			}
+			rand.Read(seed)
 			defer clear(seed)
 		}
 		private := ed25519.NewKeyFromSeed(seed)
@@ -309,15 +306,17 @@ func resourceCredential(dir, file, owner string, known bool) (*ownerCredential, 
 	c, err := readOwnerCredential(filepath.Join(dir, file))
 	if errors.Is(err, os.ErrNotExist) && !known {
 		c = &ownerCredential{Version: 3, Owner: owner, Key: make([]byte, 32)}
-		if _, err = rand.Read(c.Key); err != nil {
-			return nil, err
-		}
+		defer c.clear()
+		rand.Read(c.Key)
 		if err = prepareStorageDirectory(dir); err != nil {
 			return nil, err
 		}
 		err = saveOwnerCredential(filepath.Join(dir, file), c)
 		if err == nil {
 			fmt.Fprintf(os.Stderr, "Back up the encryption credentials in %s. Your SSH key alone cannot recover this resource.\n", dir)
+		}
+		if err == nil || errors.Is(err, os.ErrExist) {
+			c, err = readOwnerCredential(filepath.Join(dir, file))
 		}
 	}
 	if err != nil {
@@ -349,12 +348,8 @@ func sandboxWorkspaceCredential(scope accountScope, dir string, resource sandbox
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, err
 	}
-	var found *ownerCredential
-	defer func() {
-		if found != nil {
-			found.clear()
-		}
-	}()
+	found := new(ownerCredential)
+	defer found.clear()
 	for _, entry := range entries {
 		if !entry.IsDir() || !looksLikeUUID(entry.Name()) {
 			continue
@@ -371,17 +366,17 @@ func sandboxWorkspaceCredential(scope accountScope, dir string, resource sandbox
 		if err != nil {
 			return nil, fmt.Errorf("restore the original workspace encryption credentials in %s: %w", savedDir, err)
 		}
-		if credential.publicKey() != owner || found != nil && !bytes.Equal(found.Key, credential.Key) {
+		if credential.publicKey() != owner || len(found.Key) != 0 && !bytes.Equal(found.Key, credential.Key) {
 			credential.clear()
 			return nil, fmt.Errorf("conflicting saved encryption credentials for workspace volume %s; restore the original credentials", volumeID)
 		}
-		if found != nil {
+		if len(found.Key) != 0 {
 			credential.clear()
 		} else {
-			found = credential
+			*found = *credential
 		}
 	}
-	if found != nil {
+	if len(found.Key) != 0 {
 		if err := prepareStorageDirectory(dir); err != nil {
 			return nil, err
 		}
@@ -390,5 +385,5 @@ func sandboxWorkspaceCredential(scope accountScope, dir string, resource sandbox
 		}
 		fmt.Fprintf(os.Stderr, "Reusing the saved encryption key for workspace volume %s. Back up the credentials in %s.\n", volumeID, dir)
 	}
-	return resourceCredential(dir, sandboxDiskKeyName, owner, found != nil)
+	return resourceCredential(dir, sandboxDiskKeyName, owner, len(found.Key) != 0)
 }
