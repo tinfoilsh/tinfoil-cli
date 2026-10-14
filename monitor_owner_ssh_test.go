@@ -107,14 +107,16 @@ func serveSSHHandshakeTest(t *testing.T, host ssh.Signer) string {
 					if err != nil {
 						return
 					}
-					defer channel.Close()
 					for request := range requests {
 						request.Reply(request.Type == "exec", nil)
 						if request.Type == "exec" {
 							channel.SendRequest("exit-status", false, ssh.Marshal(struct{ Status uint32 }{0}))
-							return
+							break
 						}
 					}
+					// Let OpenSSH acknowledge channel closure and disconnect before
+					// tearing down the transport; otherwise it can report a broken pipe.
+					channel.Close()
 				}
 			}()
 		}

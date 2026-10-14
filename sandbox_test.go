@@ -174,7 +174,7 @@ func TestSandboxCommandsShareLifecycleAndHandleDeletedResources(t *testing.T) {
 	t.Cleanup(func() { followInterval, sandboxYes, outputFormat = oldInterval, oldYes, oldOutput })
 	for _, state := range []string{statusCreated, statusDeploying, statusStarted, statusStopping} {
 		row.Status = state
-		output, err := captureTestStdout(func() error { return sandboxListCmd.RunE(sandboxListCmd, nil) })
+		output, err := captureTestStdout(func() error { return sandboxStatusCmd.RunE(sandboxStatusCmd, nil) })
 		require.NoError(t, err)
 		var listed []containerView
 		require.NoError(t, json.Unmarshal([]byte(output), &listed))

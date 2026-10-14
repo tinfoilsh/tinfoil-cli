@@ -70,9 +70,8 @@ func connectSandbox(target *workloadTarget) (_ *sandboxSession, err error) {
 	if len(row.Volumes) != 1 || !looksLikeUUID(row.Volumes["workspace"]) {
 		return nil, errors.New("sandbox has no unique workspace volume binding")
 	}
-	var binding monitorBinding
-	bindingErr := json.Unmarshal([]byte(env["MONITOR_BINDING"]), &binding)
-	if bindingErr != nil || !looksLikeUUID(env["SANDBOX_INSTANCE_ID"]) || !looksLikeUUID(binding.ContainerID) || binding.Owner == "" {
+	binding, bindingErr := sandboxMonitorBinding(env)
+	if bindingErr != nil || !looksLikeUUID(env["SANDBOX_INSTANCE_ID"]) {
 		return nil, errors.New("sandbox release lacks measured instance and Monitor bindings; use compatible templates")
 	}
 	if !sandboxNetworkMatches(row, binding.ContainerID) {

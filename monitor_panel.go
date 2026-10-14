@@ -44,7 +44,6 @@ func init() {
 			return serveMonitorPanel(cmd, client, dir, "127.0.0.1:0")
 		},
 	}
-	command.Flags().StringVar(&attestSSHIdentity, "identity", "", "Owner SSH identity file")
 	addTrustDangerousFlag(command)
 	monitorCmd.AddCommand(command)
 }

@@ -15,6 +15,7 @@ Client-facing documentation:
 - [Installation, updates, HTTP requests, and attestation](https://docs.tinfoil.sh/sdk/cli-sdk)
 - [Tinfoil Containers overview](https://docs.tinfoil.sh/containers/overview) and [CLI workflows](https://docs.tinfoil.sh/containers/cli)
 - [Attested SSH profiles](https://docs.tinfoil.sh/containers/attested-ssh)
+- [Sandbox and Monitor CLI workflows](docs/sandboxes.md) and [dashboard affordance tracker](docs/sandbox-cli-parity.md)
 - [Standalone Tinfoil Proxy](https://docs.tinfoil.sh/local-proxy/cli), the replacement for `tinfoil proxy`
 
 ## Running locally

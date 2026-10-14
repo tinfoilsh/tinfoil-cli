@@ -178,7 +178,7 @@ func failureError(c containerView) error {
 	if c.Status != statusFailed && c.UpdateStatus != statusFailed {
 		return nil
 	}
-	msg := c.ErrorMessage
+	msg := containerFailureMessage(c)
 	if msg == "" {
 		msg = "deployment failed; run \"tinfoil container get " + c.Name + "\" for details"
 	}
@@ -274,10 +274,21 @@ func followContainer(client *cpClient, id string, initial containerView) (contai
 }
 
 func pollContainer(client *cpClient, id string, current containerView, timeout time.Duration, observe func(containerView) (bool, error)) (containerView, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
+	return pollContainerContext(context.Background(), client, id, current, timeout, observe)
+}
+
+func pollContainerContext(parent context.Context, client *cpClient, id string, current containerView, timeout time.Duration, observe func(containerView) (bool, error)) (containerView, error) {
+	ctx := parent
+	if timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(parent, timeout)
+		defer cancel()
+	}
 	for {
 		if ctx.Err() != nil {
+			if timeout == 0 {
+				return current, ctx.Err()
+			}
 			return current, fmt.Errorf("still %s after %s; check \"tinfoil container get %s\": %w", strings.ToLower(statusLabel(current.Status)), timeout, current.Name, ctx.Err())
 		}
 		done, err := observe(current)
@@ -318,8 +329,25 @@ func stopContainer(client *cpClient, row containerView) (containerView, error) {
 		}
 	}
 	return pollContainer(client, row.ID, row, followTimeout, func(current containerView) (bool, error) {
+		if !sameContainerConfig(row, current) {
+			return false, fmt.Errorf("%s changed while stopping; inspect its configuration before restarting", row.Name)
+		}
+		if current.Status != statusStopping && current.Status != statusStopped && current.Status != statusFailed {
+			return false, fmt.Errorf("%s did not stop (status %s); inspect it before restarting", current.Name, current.Status)
+		}
 		return current.Status == statusStopped || current.Status == statusFailed, nil
 	})
+}
+
+func sameContainerConfig(a, b containerView) bool {
+	return a.ID == b.ID && a.Name == b.Name && a.Repo == b.Repo && a.CurrentTag == b.CurrentTag && a.ConfigName == b.ConfigName
+}
+
+func containerFailureMessage(c containerView) string {
+	if (c.Status == statusFailed || c.Status == statusStopped) && c.LastDeployAttemptError != "" {
+		return c.LastDeployAttemptError
+	}
+	return c.ErrorMessage
 }
 
 // progressLine is the single line shown while following a container.

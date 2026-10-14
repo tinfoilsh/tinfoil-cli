@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -40,11 +39,14 @@ func init() {
 	rootCmd.AddCommand(sandboxCmd)
 	sandboxCmd.PersistentFlags().StringVarP(&outputFormat, "output", "o", "table", "Output format: table or json")
 	sandboxCmd.PersistentFlags().StringVar(&attestSSHIdentity, "identity", "", "Owner SSH identity file")
-	sandboxCmd.AddCommand(sandboxListCmd, sandboxStartCmd, sandboxRestartCmd, sandboxStopCmd, sandboxDeleteCmd, sandboxEnrollCmd)
+	sandboxCmd.AddCommand(sandboxStartCmd, sandboxRestartCmd, sandboxStopCmd, sandboxDeleteCmd, sandboxEnrollCmd)
 	for _, cmd := range []*cobra.Command{sandboxStartCmd, sandboxRestartCmd, sandboxEnrollCmd} {
 		addTrustDangerousFlag(cmd)
 	}
 	sandboxDeleteCmd.Flags().BoolVar(&sandboxYes, "yes", false, "Skip the confirmation prompt")
+	for _, cmd := range []*cobra.Command{sandboxStartCmd, sandboxRestartCmd} {
+		cmd.Flags().Bool("no-enroll", false, "Boot without unlocking or enrolling this machine's keys")
+	}
 	silenceUsageRecursive(sandboxCmd)
 }
 
@@ -52,26 +54,7 @@ var sandboxCmd = &cobra.Command{
 	Use: "sandbox", Aliases: []string{"sandboxes"}, Short: "Manage your confidential sandboxes", SilenceUsage: true,
 }
 
-var sandboxListCmd = &cobra.Command{
-	Use: "list", Aliases: []string{"ls"}, Short: "List your sandboxes",
-	RunE: func(cmd *cobra.Command, args []string) error {
-		client, err := authedClient()
-		if err != nil {
-			return err
-		}
-		var rows []containerView
-		if _, err := client.do("GET", "/api/containers", nil, nil, &rows); err != nil {
-			return err
-		}
-		list := []containerView{}
-		for _, row := range rows {
-			if row.Repo == defaultSandboxRepo && !row.Debug {
-				list = append(list, row)
-			}
-		}
-		return renderContainers(list)
-	},
-}
+var sandboxStatusCmd = newManagedStatusCmd("sandbox")
 
 var sandboxStartCmd = &cobra.Command{
 	Use: "start [id|name]", Short: "Start a stopped sandbox and enroll this machine's keys into it",
@@ -143,6 +126,9 @@ func runSandboxAction(action string) func(*cobra.Command, []string) error {
 				return err
 			}
 			row = &started
+			if noEnroll, _ := cmd.Flags().GetBool("no-enroll"); noEnroll {
+				return renderContainer(*row)
+			}
 			if row.Volumes == nil {
 				row, err = resolveContainerDetail(client, row.ID)
 				if err != nil {
@@ -206,6 +192,12 @@ func enrollSandbox(target *workloadTarget) error {
 	return nil
 }
 
+func sandboxNetworkPolicy(monitorID string) containerNetworkPolicy {
+	return containerNetworkPolicy{EgressMode: "restricted", Egress: []containerPeer{{
+		ContainerID: monitorID, Port: 22, Alias: &containerAlias{IP: "10.254.0.1", Port: 22},
+	}}}
+}
+
 // The fixed endpoint is usable only with an explicit matching alias policy.
 func sandboxNetworkMatches(row containerView, monitorID string) bool {
 	policy := row.NetworkPolicy
@@ -222,9 +214,9 @@ func validateSandboxNetwork(row containerView) error {
 	if err != nil {
 		return err
 	}
-	var binding monitorBinding
-	if json.Unmarshal([]byte(env["MONITOR_BINDING"]), &binding) != nil || !looksLikeUUID(binding.ContainerID) || binding.Owner == "" {
-		return errors.New("sandbox has no measured Monitor binding")
+	binding, err := sandboxMonitorBinding(env)
+	if err != nil {
+		return err
 	}
 	if !sandboxNetworkMatches(row, binding.ContainerID) {
 		return errors.New("sandbox requires a TCP alias matching its measured Monitor binding; update its configuration and network policy")

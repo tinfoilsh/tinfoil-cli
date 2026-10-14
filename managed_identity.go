@@ -22,6 +22,14 @@ type monitorBinding struct {
 	Owner       string `json:"owner_public_key"`
 }
 
+func sandboxMonitorBinding(env map[string]string) (monitorBinding, error) {
+	var binding monitorBinding
+	if json.Unmarshal([]byte(env["MONITOR_BINDING"]), &binding) != nil || !looksLikeUUID(binding.ContainerID) || binding.Owner == "" {
+		return binding, errors.New("sandbox has no measured Monitor binding")
+	}
+	return binding, nil
+}
+
 func measuredOwner(value string) (ssh.PublicKey, error) {
 	raw, err := base64.StdEncoding.Strict().DecodeString(strings.TrimPrefix(value, "ed25519:"))
 	if err != nil || !strings.HasPrefix(value, "ed25519:") || len(raw) != ed25519.PublicKeySize {

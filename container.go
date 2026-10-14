@@ -79,6 +79,9 @@ type containerView struct {
 	SSHPort              int              `json:"ssh_port"`
 	HostID               string           `json:"host_id,omitempty"`
 
+	LastDeployAttemptError string `json:"last_deploy_attempt_error,omitempty"`
+	LastDeployAttemptTag   string `json:"last_deploy_attempt_tag,omitempty"`
+
 	Connections *containerConnections `json:"connections,omitempty"`
 	// VolumeSlots are the volumes tinfoil-config.yml declares; Volumes maps a
 	// slot to the attached volume ID. Only the single-container view has them.
@@ -102,6 +105,7 @@ func (c containerView) candidateHeld() bool {
 type bootStage struct {
 	Name   string      `json:"name"`
 	Status string      `json:"status"`
+	Detail string      `json:"detail,omitempty"`
 	Stages []bootStage `json:"stages,omitempty"`
 }
 
@@ -282,12 +286,22 @@ var containerListCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		var list []containerView
-		if _, err := client.do("GET", "/api/containers", nil, nil, &list); err != nil {
-			return err
-		}
-		return renderContainers(list)
+		return listContainers(client, "")
 	},
+}
+
+func listContainers(client *cpClient, kind string) error {
+	var rows []containerView
+	if _, err := client.do("GET", "/api/containers", nil, nil, &rows); err != nil {
+		return err
+	}
+	list := []containerView{}
+	for _, row := range rows {
+		if checkManagedKind(kind, row) == nil {
+			list = append(list, row)
+		}
+	}
+	return renderContainers(list)
 }
 
 var containerGetCmd = &cobra.Command{
@@ -396,9 +410,7 @@ without registry publication; keep the exact file to verify subsequent connectio
 			if json.Unmarshal([]byte(vars["MONITOR_BINDING"]), &binding) != nil || !looksLikeUUID(binding.ContainerID) || binding.Owner == "" {
 				return fmt.Errorf("sandbox creation requires MONITOR_BINDING with a Monitor container ID and owner public key")
 			}
-			body["network_policy"] = &containerNetworkPolicy{EgressMode: "restricted", Egress: []containerPeer{{
-				ContainerID: binding.ContainerID, Port: 22, Alias: &containerAlias{IP: "10.254.0.1", Port: 22},
-			}}}
+			body["network_policy"] = sandboxNetworkPolicy(binding.ContainerID)
 		}
 
 		if createDisableCC {
@@ -560,9 +572,12 @@ var containerDeleteCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
+		if err := checkManagedKind(cmd.Annotations[managedKindAnnotation], *c); err != nil {
+			return err
+		}
 		fmt.Fprintf(os.Stderr, "Deleting %s (%s).\n", c.Name, c.ID)
 		fmt.Fprintln(os.Stderr, "This removes the container, its saved configuration, and its DNS records. Attached volumes are kept.")
-		if err := confirmYes(deleteYes, "container delete"); err != nil {
+		if err := confirmYes(deleteYes, cmd.CommandPath()); err != nil {
 			return err
 		}
 		if _, err := client.do("DELETE", pathf("/api/containers/%s", c.ID), nil, nil, nil); err != nil {
@@ -601,6 +616,9 @@ of it. To change a running container, use "tinfoil container update".`,
 		}
 		c, err := resolveContainerDetail(client, args[0])
 		if err != nil {
+			return err
+		}
+		if err := checkManagedKind(cmd.Annotations[managedKindAnnotation], *c); err != nil {
 			return err
 		}
 		if c.Status == statusFailed && c.ErrorMessage != "" && outputFormat != "json" {
@@ -657,12 +675,19 @@ var containerStopCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
+		if err := checkManagedKind(cmd.Annotations[managedKindAnnotation], *c); err != nil {
+			return err
+		}
 		stopped, err := postContainerAction(client, c.ID, "stop", nil)
 		if err != nil {
 			return err
 		}
 		if outputFormat != "json" {
-			fmt.Printf("Stopping %s. Its configuration and volumes are kept; run \"tinfoil container deploy %s\" to bring it back.\n", c.Name, c.Name)
+			startCommand := "container deploy"
+			if kind := cmd.Annotations[managedKindAnnotation]; kind != "" {
+				startCommand = kind + " start"
+			}
+			fmt.Printf("Stopping %s. Its configuration and volumes are kept; run \"tinfoil %s %s\" to bring it back.\n", c.Name, startCommand, c.Name)
 		}
 		return renderContainer(stopped)
 	},
@@ -696,6 +721,8 @@ skip it. Omit --hold to inherit the project's default; --hold is true and
 				return fmt.Errorf("--hold: %w", err)
 			}
 			body["hold"] = hold
+		} else if cmd.Annotations[managedKindAnnotation] != "" {
+			body["hold"] = false
 		}
 
 		client, err := authedClient()
@@ -706,8 +733,11 @@ skip it. Omit --hold to inherit the project's default; --hold is true and
 		if err != nil {
 			return err
 		}
+		if err := checkManagedKind(cmd.Annotations[managedKindAnnotation], *c); err != nil {
+			return err
+		}
 		var updated containerView
-		if err := postLifecycleUpdate(client, pathf("/api/containers/%s/update", c.ID), body, &updated, updateYes, "container update", func() (updateReview, error) {
+		if err := postLifecycleUpdate(client, pathf("/api/containers/%s/update", c.ID), body, &updated, updateYes, cmd.CommandPath(), func() (updateReview, error) {
 			return planContainerUpdate(client, c.ID, body)
 		}); err != nil {
 			return err
@@ -1152,6 +1182,7 @@ func renderContainerDetail(c containerView, attached map[string]volumeView) erro
 	fmt.Printf("Status:       %s\n", statusLabel(c.Status))
 	if c.ConfigName != "" {
 		fmt.Printf("Config:       %s\n", c.ConfigName)
+		fmt.Printf("Release:      %s\n", c.CurrentTag)
 	} else if c.Source == containerSourceLocal {
 		fmt.Printf("Config:       local\n")
 	} else {
@@ -1218,9 +1249,10 @@ func renderContainerDetail(c containerView, attached map[string]volumeView) erro
 	if c.UpdateTag != "" {
 		fmt.Printf("Updating to:  %s (%s)\n", c.UpdateTag, updateLabel(c))
 	}
-	if c.ErrorMessage != "" {
-		fmt.Printf("Error:        %s\n", humanVolumeMessage(c.ErrorMessage))
+	if message := containerFailureMessage(c); message != "" {
+		fmt.Printf("Error:        %s\n", humanVolumeMessage(message))
 	}
+	printBootStages(os.Stdout, c.BootStages)
 	printContainerConnections(os.Stdout, c)
 	return nil
 }
