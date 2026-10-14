@@ -1,44 +1,22 @@
-# Sandbox and Monitor CLI workflows
+# Sandbox and Monitor commands
 
-Log in with an admin API key for the intended account (`tinfoil login`, then `tinfoil whoami`). Status is available directly under each workload:
-
-```sh
-tinfoil sandbox status                 # list sandboxes
-tinfoil monitor status                 # list Monitors
-tinfoil sandbox status work            # configuration, boot details, bound Monitor
-tinfoil monitor status personal --watch
-```
-
-`get`, `list` and `ls` alias `status` under both groups. With no name they list that resource kind. `status NAME --watch` prints changes until Ctrl-C, using the shared container poller. `--output json` exposes structured fields (watch prints successive snapshots). Status and list commands always fetch current account data.
-
-Create using an explicit published release and an existing Ed25519 SSH public key:
+Log in to the intended account with `tinfoil login` and confirm it with `tinfoil whoami`.
+Create from explicit published releases using an Ed25519 owner public key:
 
 ```sh
-tinfoil repo build info tinfoilsh/confidential-agent-monitor
 tinfoil monitor create personal --tag VERSION
 tinfoil sandbox create work --monitor personal --tag VERSION
 tinfoil attest-ssh work --install
 ssh work
+tinfoil monitor open personal
 ```
 
-Creation defaults to `~/.ssh/id_ed25519.pub` for a Monitor and its selected Monitor's measured owner for a sandbox. Override with `--owner-public-key FILE`; `--identity PATH` selects `PATH.pub` (or PATH if already a public file). Private/encryption keys stay local. Release discovery through `repo build info` needs organization repository access; public personal-account catalog discovery remains tracked work. Creation does not bypass the existing [connection policy](known-configs-contract.md).
+Monitor creation defaults to `~/.ssh/id_ed25519.pub`; sandbox creation defaults to the selected Monitor's measured owner. `--owner-public-key FILE` overrides either; `--identity PATH` selects its public key. `--workspace ID|NAME` reuses an unattached workspace on its existing host. Controlplane validates capacity, placement and entitlements. Private and encryption keys stay local.
 
-A new workspace is 30 GiB (32.21 decimal GB). `--workspace ID|NAME` reuses an unattached, non-deleted disk of at least that size on its existing host, even without quota for another volume. Inspect disks with the existing `volume list/get` commands. Keep the original encryption credentials: an SSH key alone cannot recover the data. Compute is billed while running; storage remains billable until deleted.
+Creation uses the ordinary container workflow: submit once, then follow the returned deployment. `--no-wait` or `--output json` returns the initial response. After an error or interruption, inspect `sandbox status` / `monitor status` before retrying creation. Use `start` for an existing stopped or failed resource. There is no local pending record or resume command.
 
-Creation saves one immutable intent per account/controlplane before submitting. After Ctrl-C, a timeout or `--no-wait`, use `sandbox pending` / `sandbox resume` (or `monitor resume`). Resume validates measured identity, owner, release, Monitor and workspace bindings without an extra deploy or a blind repeat of an uncertain POST. `pending clear` explicitly forgets only the local record; all remote resources and saved keys remain. Inspect resource lists before clearing. A stale lock error names the lock file; remove it only after verifying no original process is still running.
+`status [NAME]` lists resources or shows details; `get`, `list`, and `ls` are aliases. `status NAME --watch` prints changes until Ctrl-C. Monitor `start/stop/delete` and both groups' `update --tag VERSION` share the container handlers. Updates use automatic traffic switching while retaining plan review, rechecking, and downtime consent; `--yes` accepts the plan and downtime. Sandbox `start/restart` also enrolls this machine; `--no-enroll` boots without unlocking.
 
-Lifecycle and update conveniences reuse the existing container handlers:
+Rerun `attest-ssh` after either VM reboots. Keep `monitor open` running while using its local panel URL. Back up the encryption credentials: an SSH key alone cannot recover storage. Moving a workspace requires its original owner and encryption credentials. Sandbox deletion keeps billable workspace storage; Monitor deletion retains object storage. Use `volume` for disk management.
 
-```sh
-tinfoil monitor start personal         # deploy the saved configuration; --no-wait is available
-tinfoil monitor stop personal
-tinfoil monitor delete personal        # retains the existing confirmation; --yes is available
-tinfoil sandbox update work --tag VERSION
-tinfoil monitor update personal --tag VERSION
-```
-
-These commands reject another resource kind or a debug VM before mutation. Updates review and recheck the same plan as `container update`, with automatic traffic switching (`--hold=false`). `--yes` approves the plan and any downtime; `--no-wait` skips following progress after acceptance. Neither bypasses the plan. Monitor deletion retains object storage; these commands do not provide an object-store restore workflow. Advanced configuration flags remain on `container`.
-
-Existing `sandbox start/restart/stop/delete` retain their lifecycle and enrollment behavior; start/restart accepts `--no-enroll` for boot-only administration. Use `volume` for storage and `monitor open NAME` for the local panel. Rerun attestation/enrollment after reboot. Keep `monitor open` running while using its local URL.
-
-See the [79-affordance tracker](sandbox-cli-parity.md) for existing capabilities, convenience changes, implementation gaps, and unverified deployment behavior.
+Deployment requires compatible Monitor and sandbox images, a CVM runtime allowing the private TCP alias range, and host/Controlplane support for the restricted `10.254.0.1:22` alias to the bound Monitor. Live provisioning, billing, storage allocation and cross-host production behavior require deployment testing. Local tests cover API requests, lifecycle recovery, credential custody, attestation rejection, and SSH integration.

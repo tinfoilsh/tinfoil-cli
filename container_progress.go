@@ -259,7 +259,7 @@ func followContainer(client *cpClient, id string, initial containerView) (contai
 	}
 	defer finish()
 
-	return pollContainer(client, id, initial, followTimeout, func(current containerView) (bool, error) {
+	return pollContainer(context.Background(), client, id, initial, followTimeout, func(current containerView) (bool, error) {
 		done, err := followedDeploymentState(current, deploymentID)
 		if err != nil {
 			return false, err
@@ -273,11 +273,7 @@ func followContainer(client *cpClient, id string, initial containerView) (contai
 	})
 }
 
-func pollContainer(client *cpClient, id string, current containerView, timeout time.Duration, observe func(containerView) (bool, error)) (containerView, error) {
-	return pollContainerContext(context.Background(), client, id, current, timeout, observe)
-}
-
-func pollContainerContext(parent context.Context, client *cpClient, id string, current containerView, timeout time.Duration, observe func(containerView) (bool, error)) (containerView, error) {
+func pollContainer(parent context.Context, client *cpClient, id string, current containerView, timeout time.Duration, observe func(containerView) (bool, error)) (containerView, error) {
 	ctx := parent
 	if timeout > 0 {
 		var cancel context.CancelFunc
@@ -328,7 +324,7 @@ func stopContainer(client *cpClient, row containerView) (containerView, error) {
 			return row, err
 		}
 	}
-	return pollContainer(client, row.ID, row, followTimeout, func(current containerView) (bool, error) {
+	return pollContainer(context.Background(), client, row.ID, row, followTimeout, func(current containerView) (bool, error) {
 		if !sameContainerConfig(row, current) {
 			return false, fmt.Errorf("%s changed while stopping; inspect its configuration before restarting", row.Name)
 		}

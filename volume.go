@@ -24,8 +24,6 @@ type volumeView struct {
 	ContainerName string `json:"container_name,omitempty"`
 	Slot          string `json:"slot,omitempty"`
 	CreatedAt     string `json:"created_at"`
-
-	BillingEndedAt string `json:"billing_ended_at,omitempty"`
 }
 
 type volumeList struct {
@@ -33,10 +31,6 @@ type volumeList struct {
 	AllocatedBytes int64        `json:"allocated_storage_bytes"`
 	MaxBytes       int64        `json:"max_storage_bytes"`
 	AvailableBytes int64        `json:"available_storage_bytes"`
-
-	CanCreateVolumes  bool     `json:"can_create_volumes"`
-	BillingExempt     bool     `json:"billing_exempt"`
-	StorageGiBPerHour *float64 `json:"storage_gib_per_hour"`
 }
 
 // volumeSlot is a volume declared in tinfoil-config.yml. A key secret marks

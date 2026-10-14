@@ -214,29 +214,6 @@ For the next release, run `volume auto-unlock configure` with the same disk and 
 
 ## Sandboxes
 
-Create a Monitor and sandbox in the dashboard with compatible release tags and
-your Ed25519 SSH public key.
+See [Sandbox and Monitor commands](docs/sandboxes.md) for creation, connection, recovery and credential backups.
 
-```sh
-tinfoil attest-ssh work --install
-ssh work
-tinfoil monitor open personal
-```
-
-Rerun `attest-ssh` after either VM reboots. It refreshes the attested Monitor route
-and separately unlocks the workspace, or confirms that it is already mounted;
-refreshing an SSH pin alone does not unlock storage. If Monitor's address or network grant
-changes, use `tinfoil sandbox restart work`. Keep `monitor open` running for its UI.
-Back up the CLI's encryption credentials; the SSH key alone cannot recover storage.
-Deleting a sandbox retains its billable volume. Moving it to another Monitor is unsupported.
-
-Owner connections check `known-configs.json` for both the sandbox and its Monitor.
-An explicit `--repo` asserts the named resource's configuration source; only a
-revision/digest reference pins an exact configuration. An organization or project
-assertion permits matching configurations. The bound Monitor is checked separately.
-Version-2 credentials and older named directories are loaded automatically in place,
-alongside version-3 credentials. No key conversion or storage-key rotation is needed.
-
-Sandbox commands accept a name or container UUID and use the standard container
-table and JSON output. JSON uses `id` for the UUID, `name` for the name, and `status`
-for the full lifecycle state.
+Owner connections check `known-configs.json` independently for the sandbox and its bound Monitor. `--repo` asserts the configuration source; use a revision/digest reference to pin an exact configuration. Version-2 credentials and older named directories are loaded in place alongside version-3 credentials, without key conversion or storage-key rotation.

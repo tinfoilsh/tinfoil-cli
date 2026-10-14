@@ -54,18 +54,24 @@ func measuredEnvironment(raw string) (map[string]string, error) {
 		return nil, err
 	}
 	values := map[string]string{}
-	seen := map[string]bool{}
 	for _, container := range config.Containers {
 		for _, entry := range container.Env {
 			if entry.Kind != yaml.MappingNode || len(entry.Content) != 2 || entry.Content[1].Tag != "!!str" {
 				return nil, errors.New("workload requires explicit measured environment mappings")
 			}
 			name, value := entry.Content[0].Value, entry.Content[1].Value
-			if seen[name] {
+			if _, seen := values[name]; seen {
 				return nil, fmt.Errorf("workload environment %s is ambiguous", name)
 			}
-			seen[name], values[name] = true, value
+			values[name] = value
 		}
 	}
 	return values, nil
+}
+
+func requireRunningConnection(kind string, row containerView) error {
+	if row.Status != statusRunning {
+		return fmt.Errorf("%s %s is %s; inspect `tinfoil container get %s` before connecting", kind, row.Name, statusLabel(row.Status), row.ID)
+	}
+	return nil
 }

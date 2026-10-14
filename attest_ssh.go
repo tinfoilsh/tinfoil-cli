@@ -73,9 +73,8 @@ attestation always uses the enclave hostname.`,
 	Args:         cobra.ExactArgs(1),
 	SilenceUsage: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		resolved := startConnectionProgress(cmd.ErrOrStderr(), "Looking up "+args[0])
+		fmt.Fprintln(cmd.ErrOrStderr(), "Looking up "+args[0])
 		target, err := resolveTunnelTarget(args[0])
-		resolved()
 		if err != nil {
 			return err
 		}
@@ -147,8 +146,7 @@ func nativeSSHHost(target *tunnelTarget, override string) string {
 // attestedHostKey verifies host against source and returns the endorsed
 // host-ssh key, so a failed verification never falls back to unverified acceptance.
 func attestedHostKey(host, source, sealedTo string) (ssh.PublicKey, error) {
-	finish := startConnectionProgress(os.Stderr, "Verifying attestation and SSH host key for "+host)
-	defer finish()
+	fmt.Fprintln(os.Stderr, "Verifying attestation and SSH host key for "+host)
 	secure, err := newVerifiedClient(host, source, sealedTo)
 	if err != nil {
 		return nil, err

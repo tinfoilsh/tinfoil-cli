@@ -80,7 +80,6 @@ type containerView struct {
 	HostID               string           `json:"host_id,omitempty"`
 
 	LastDeployAttemptError string `json:"last_deploy_attempt_error,omitempty"`
-	LastDeployAttemptTag   string `json:"last_deploy_attempt_tag,omitempty"`
 
 	Connections *containerConnections `json:"connections,omitempty"`
 	// VolumeSlots are the volumes tinfoil-config.yml declares; Volumes maps a

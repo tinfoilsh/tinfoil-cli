@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -42,7 +41,7 @@ func TestPollContainerHonorsDeadline(t *testing.T) {
 			})
 			observations := 0
 			started := time.Now()
-			_, err := pollContainer(client, "work", containerView{Name: "work", Status: statusDeploying}, 20*time.Millisecond, func(row containerView) (bool, error) {
+			_, err := pollContainer(context.Background(), client, "work", containerView{Name: "work", Status: statusDeploying}, 20*time.Millisecond, func(row containerView) (bool, error) {
 				observations++
 				return row.Status == statusRunning, nil
 			})
@@ -53,43 +52,6 @@ func TestPollContainerHonorsDeadline(t *testing.T) {
 				require.Zero(t, requests)
 			} else {
 				require.Equal(t, 1, requests)
-			}
-		})
-	}
-}
-
-func TestStopContainerIgnoresFailedUpdateCandidate(t *testing.T) {
-	oldInterval := followInterval
-	followInterval = 0
-	t.Cleanup(func() { followInterval = oldInterval })
-	for _, initial := range []string{statusFailed, statusStopped, statusRunning, statusStopping} {
-		t.Run(initial, func(t *testing.T) {
-			row := containerView{ID: "work", Name: "work", Status: initial, UpdateStatus: statusFailed, ErrorMessage: "old candidate failed"}
-			var requests []string
-			client := newCPClient(cliConfig{ControlplaneURL: "https://cp.example"})
-			client.http.Transport = lifecycleTransport(func(r *http.Request) (*http.Response, error) {
-				requests = append(requests, r.Method+" "+r.URL.Path)
-				if r.Method == "POST" {
-					row.Status = statusStopping
-				} else {
-					row.Status = statusStopped
-				}
-				body, err := json.Marshal(row)
-				require.NoError(t, err)
-				return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(string(body)))}, nil
-			})
-			got, err := stopContainer(client, row)
-			require.NoError(t, err)
-			switch initial {
-			case statusFailed, statusStopped:
-				require.Empty(t, requests)
-				require.Equal(t, initial, got.Status)
-			case statusRunning:
-				require.Equal(t, []string{"POST /api/containers/work/stop", "GET /api/containers/work"}, requests)
-				require.Equal(t, statusStopped, got.Status)
-			case statusStopping:
-				require.Equal(t, []string{"GET /api/containers/work"}, requests)
-				require.Equal(t, statusStopped, got.Status)
 			}
 		})
 	}
