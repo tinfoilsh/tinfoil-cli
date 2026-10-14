@@ -28,17 +28,6 @@ dockers_v2:
       "org.opencontainers.image.revision": "{{ .FullCommit }}"
       "org.opencontainers.image.version": "{{ .Version }}"
 
-signs:
-  - cmd: cosign
-    signature: "${artifact}.sigstore.json"
-    args:
-      - sign-blob
-      - --yes
-      - --bundle=${signature}
-      - ${artifact}
-    artifacts: checksum
-    output: true
-
 changelog:
   sort: asc
   filters:
