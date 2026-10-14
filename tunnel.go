@@ -33,7 +33,6 @@ const tunnelReadIdleTimeout = 30 * time.Second
 var (
 	forwardPorts    []string
 	forwardStdio    uint
-	forwardSandbox  string
 	forwardSealedTo string
 	tunnelAPIKey    string
 	allowDebug      bool
@@ -43,7 +42,6 @@ func init() {
 	rootCmd.AddCommand(forwardCmd)
 	forwardCmd.Flags().StringArrayVarP(&forwardPorts, "local", "L", nil, "Forward [bind:]<local-port>:<enclave-port>; may be repeated")
 	forwardCmd.Flags().UintVar(&forwardStdio, "stdio", 0, "Pipe a single stream to <enclave-port> over stdin/stdout instead of listening")
-	forwardCmd.Flags().StringVar(&forwardSandbox, "sandbox", "", "Tunnel into one of your sandboxes, which must be sealed to your disk key")
 	forwardCmd.Flags().StringVar(&forwardSealedTo, "sealed-to", "", "RTMR3 the enclave must carry")
 	forwardCmd.Flags().MarkHidden("sealed-to")
 	addTunnelFlags(forwardCmd)
@@ -84,8 +82,7 @@ or --config FILE to select the expected workload. All connections require v3 cod
   tinfoil forward my-server -L 25565:25565
   tinfoil forward my-server -L 5432:5432 -L 8080:8080
   tinfoil forward enclave.example.com --repo org/workload -L 2022:2022
-  tinfoil forward my-server --config tinfoil-config.yml -L 8080:8080
-  tinfoil forward --sandbox my-sandbox -L 6379:6379`,
+  tinfoil forward my-server --config tinfoil-config.yml -L 8080:8080`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if (len(forwardPorts) == 0) == (forwardStdio == 0) {
@@ -110,15 +107,7 @@ or --config FILE to select the expected workload. All connections require v3 cod
 		if len(args) == 1 {
 			identifier = args[0]
 		}
-		var target *tunnelTarget
-		var err error
-		if forwardSandbox == "" {
-			target, err = resolveTunnelTarget(identifier)
-		} else if identifier != "" || enclaveHost != "" {
-			return fmt.Errorf("--sandbox names the enclave, so pass no other target")
-		} else {
-			target, err = sandboxTunnelTarget(forwardSandbox)
-		}
+		target, err := resolveTunnelTarget(identifier)
 		if err != nil {
 			return err
 		}
@@ -204,11 +193,13 @@ func listenAndForward(tun *tunnel, specs []forwardSpec) error {
 // tunnelTarget is the enclave a tunnel connects to, plus what a container
 // lookup recorded for it.
 type tunnelTarget struct {
-	name    string
-	host    string
-	repo    string
-	sshPort int
-	debug   bool
+	workload  *workloadTarget
+	container *containerView
+	name      string
+	host      string
+	repo      string
+	sshPort   int
+	debug     bool
 	// sealedTo is the RTMR3 the enclave must carry, for a caller that knows what
 	// this boot was sealed to. Empty requires an unextended register.
 	sealedTo string
@@ -236,6 +227,24 @@ func resolveTunnelTarget(identifier string) (*tunnelTarget, error) {
 	if err != nil {
 		return nil, err
 	}
+	if container.Repo == defaultSandboxRepo {
+		if container.Volumes == nil {
+			id := container.ID
+			if container, err = resolveContainerDetail(cp, id); err != nil {
+				return nil, err
+			}
+			if container.ID != id {
+				return nil, errors.New("sandbox resource changed while resolving it")
+			}
+		}
+		target, err := resolveWorkload(*container, defaultSandboxRepo, repo)
+		if err != nil {
+			return nil, err
+		}
+		return &tunnelTarget{container: &target.containerView, workload: target, name: target.Name,
+			host: target.Domain, repo: target.source, sshPort: target.SSHPort, sealedTo: forwardSealedTo}, nil
+	}
+	original := *container
 	host := strings.TrimSpace(container.Domain)
 	if host == "" {
 		host = strings.TrimSpace(container.InternalDomain)
@@ -279,22 +288,17 @@ func resolveTunnelTarget(identifier string) (*tunnelTarget, error) {
 	if container.Source == containerSourceLocal {
 		// A local config is a caller-held expectation: the file's digest is
 		// the trust decision, so the connection policy does not apply.
-	} else if repo == "" {
-		// The expectation came from the controlplane record, not the caller:
-		// check it against the connection policy before trusting it.
-		if err := enforceConnectionPolicy(container.Repo); err != nil {
-			return nil, err
-		}
-	} else if err := assertTrustedSource(repo, container.Repo); err != nil {
+	} else if err := trustConnectionSource(container.Repo, repo); err != nil {
 		return nil, err
 	}
 	return &tunnelTarget{
-		name:     container.Name,
-		host:     host,
-		repo:     container.Repo,
-		sshPort:  container.SSHPort,
-		debug:    container.Debug,
-		sealedTo: forwardSealedTo,
+		container: &original,
+		name:      container.Name,
+		host:      host,
+		repo:      container.Repo,
+		sshPort:   container.SSHPort,
+		debug:     container.Debug,
+		sealedTo:  forwardSealedTo,
 	}, nil
 }
 
@@ -325,18 +329,7 @@ func newTunnel(target *tunnelTarget) (*tunnel, error) {
 		}
 		return &http2.Transport{
 			ReadIdleTimeout: tunnelReadIdleTimeout,
-			TLSClientConfig: &tls.Config{
-				VerifyConnection: func(state tls.ConnectionState) error {
-					certFP, err := enclave.ConnectionCertFP(state)
-					if err != nil {
-						return err
-					}
-					if certFP != fingerprint {
-						return errors.New("tunnel certificate does not match the attested key; re-verify the enclave")
-					}
-					return nil
-				},
-			},
+			TLSClientConfig: &tls.Config{VerifyConnection: pinnedTLS(fingerprint)},
 			// The request authority carries the enclave-side port, so the
 			// address http2 derives from it is never the one to dial.
 			DialTLSContext: func(ctx context.Context, network, _ string, config *tls.Config) (net.Conn, error) {
@@ -352,6 +345,20 @@ func newTunnel(target *tunnelTarget) (*tunnel, error) {
 		return nil, err
 	}
 	return tun, nil
+}
+
+// pinnedTLS accepts only a connection presenting the attested TLS key.
+func pinnedTLS(fingerprint string) func(tls.ConnectionState) error {
+	return func(state tls.ConnectionState) error {
+		certFP, err := enclave.ConnectionCertFP(state)
+		if err != nil {
+			return err
+		}
+		if certFP != fingerprint {
+			return errors.New("certificate does not match the attested key; re-verify the enclave")
+		}
+		return nil
+	}
 }
 
 // checkDebugMode refuses a tunnel into an enclave running the debug toolbox,

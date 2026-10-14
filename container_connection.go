@@ -166,6 +166,14 @@ func printChangedContainerConnections(out io.Writer, initial, final containerVie
 }
 
 func containerConnectionGuidance(c containerView, review bool) string {
+	if !c.Debug && !review {
+		switch c.Repo {
+		case defaultSandboxRepo:
+			return fmt.Sprintf("Connect: tinfoil attest-ssh %s --install && ssh %s\n", shellQuote(c.Name), shellQuote(c.Name))
+		case monitorRepo:
+			return fmt.Sprintf("Open: tinfoil monitor open %s\n", shellQuote(c.Name))
+		}
+	}
 	label, flag := "Production", ""
 	if review {
 		label, flag = "Review", " --review"

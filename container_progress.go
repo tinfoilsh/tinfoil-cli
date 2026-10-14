@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -177,7 +178,7 @@ func failureError(c containerView) error {
 	if c.Status != statusFailed && c.UpdateStatus != statusFailed {
 		return nil
 	}
-	msg := c.ErrorMessage
+	msg := containerFailureMessage(c)
 	if msg == "" {
 		msg = "deployment failed; run \"tinfoil container get " + c.Name + "\" for details"
 	}
@@ -258,31 +259,91 @@ func followContainer(client *cpClient, id string, initial containerView) (contai
 	}
 	defer finish()
 
-	current := initial
-	deadline := time.Now().Add(followTimeout)
-	for {
+	return pollContainer(context.Background(), client, id, initial, followTimeout, func(current containerView) (bool, error) {
 		done, err := followedDeploymentState(current, deploymentID)
 		if err != nil {
-			return current, err
+			return false, err
 		}
 		display := current
 		if current.TinfoildDeploymentID == deploymentID {
 			display.UpdateTag = ""
 		}
 		print(progressLine(display))
+		return done, nil
+	})
+}
+
+func pollContainer(parent context.Context, client *cpClient, id string, current containerView, timeout time.Duration, observe func(containerView) (bool, error)) (containerView, error) {
+	ctx := parent
+	if timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(parent, timeout)
+		defer cancel()
+	}
+	for {
+		if ctx.Err() != nil {
+			if timeout == 0 {
+				return current, ctx.Err()
+			}
+			return current, fmt.Errorf("still %s after %s; check \"tinfoil container get %s\": %w", strings.ToLower(statusLabel(current.Status)), timeout, current.Name, ctx.Err())
+		}
+		done, err := observe(current)
+		if err != nil {
+			return current, err
+		}
 		if done {
 			return current, nil
 		}
-		if time.Now().After(deadline) {
-			return current, fmt.Errorf("still %s after %s; check \"tinfoil container get %s\"", strings.ToLower(statusLabel(current.Status)), followTimeout, current.Name)
+		select {
+		case <-ctx.Done():
+			continue
+		case <-time.After(followInterval):
 		}
-		time.Sleep(followInterval)
 		var next containerView
-		if _, err := client.do("GET", pathf("/api/containers/%s", id), nil, nil, &next); err != nil {
+		if _, err := client.doContext(ctx, "GET", pathf("/api/containers/%s", id), nil, nil, nil, &next); err != nil {
+			if ctx.Err() != nil {
+				continue
+			}
 			return current, err
 		}
 		current = next
 	}
+}
+
+func postContainerAction(client *cpClient, id, action string, body any) (containerView, error) {
+	var row containerView
+	_, err := client.do("POST", pathf("/api/containers/%s/%s", id, action), nil, body, &row)
+	return row, err
+}
+
+func stopContainer(client *cpClient, row containerView) (containerView, error) {
+	if row.Status != statusStopped && row.Status != statusStopping && row.Status != statusFailed {
+		var err error
+		row, err = postContainerAction(client, row.ID, "stop", nil)
+		if err != nil {
+			return row, err
+		}
+	}
+	return pollContainer(context.Background(), client, row.ID, row, followTimeout, func(current containerView) (bool, error) {
+		if !sameContainerConfig(row, current) {
+			return false, fmt.Errorf("%s changed while stopping; inspect its configuration before restarting", row.Name)
+		}
+		if current.Status != statusStopping && current.Status != statusStopped && current.Status != statusFailed {
+			return false, fmt.Errorf("%s did not stop (status %s); inspect it before restarting", current.Name, current.Status)
+		}
+		return current.Status == statusStopped || current.Status == statusFailed, nil
+	})
+}
+
+func sameContainerConfig(a, b containerView) bool {
+	return a.ID == b.ID && a.Name == b.Name && a.Repo == b.Repo && a.CurrentTag == b.CurrentTag && a.ConfigName == b.ConfigName
+}
+
+func containerFailureMessage(c containerView) string {
+	if (c.Status == statusFailed || c.Status == statusStopped) && c.LastDeployAttemptError != "" {
+		return c.LastDeployAttemptError
+	}
+	return c.ErrorMessage
 }
 
 // progressLine is the single line shown while following a container.

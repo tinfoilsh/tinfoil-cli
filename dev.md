@@ -214,20 +214,6 @@ For the next release, run `volume auto-unlock configure` with the same disk and 
 
 ## Sandboxes
 
-Sandboxes are user-owned confidential VMs with persistent encrypted disks.
+See [Sandbox and Monitor commands](docs/sandboxes.md) for creation, connection, recovery and credential backups.
 
-```bash
-tinfoil sandbox create my-sandbox     # boots, enrolls keys, installs an ssh profile
-ssh my-sandbox
-tinfoil sandbox list
-tinfoil sandbox ssh my-sandbox        # the tunnelled alternative
-tinfoil sandbox stop my-sandbox       # keep the disk
-tinfoil sandbox start my-sandbox
-tinfoil sandbox restart my-sandbox
-tinfoil sandbox enroll my-sandbox     # enroll with an existing permit
-tinfoil sandbox delete my-sandbox     # erase the disk
-```
-
-`create`, `start`, and `restart` wait for the VM, verify its attestation, enroll local SSH and disk keys, and install a native ssh profile when the VM exposes a direct SSH port. The profile connects through `console.tinfoil.sh` on the allocated port, with the host key verified against the sandbox's domain. The CLI stores the local SSH and disk keys in `~/.tinfoil/sandboxes/<name>`. Back up `disk.key`; without it, the workspace cannot be opened.
-
-`enroll` uses a permit issued elsewhere, such as the dashboard. Permits expire after five minutes and work once for one boot.
+Owner connections check `known-configs.json` independently for the sandbox and its bound Monitor. `--repo` asserts the configuration source; use a revision/digest reference to pin an exact configuration. Version-2 credentials and older named directories are loaded in place alongside version-3 credentials, without key conversion or storage-key rotation.

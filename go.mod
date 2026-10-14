@@ -70,7 +70,7 @@ require (
 	github.com/google/go-containerregistry v0.21.7 // indirect
 	github.com/google/go-tdx-guest v0.3.1 // indirect
 	github.com/google/logger v1.1.2 // indirect
-	github.com/google/uuid v1.6.0 // indirect
+	github.com/google/uuid v1.6.0
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.29.0 // indirect
 	github.com/in-toto/attestation v1.2.0 // indirect
 	github.com/in-toto/in-toto-golang v0.11.0 // indirect

@@ -24,11 +24,13 @@ func TestRenderDomainListsBothCNAMERecords(t *testing.T) {
 	saved := outputFormat
 	outputFormat = "table"
 	t.Cleanup(func() { outputFormat = saved })
-	out := captureStdout(t, func() {
-		if err := renderDomain(d, true); err != nil {
-			t.Fatal(err)
-		}
+	captured, err := captureTestStdout(func() error {
+		return renderDomain(d, true)
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := string(captured)
 	for _, want := range []string{
 		"  CNAME  api.example.com  =>  abc123.tf-dns.com\n",
 		"  CNAME  _acme-challenge.api.example.com  =>  acme-abc123.tf-dns.com\n",

@@ -13,9 +13,12 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/tinfoilsh/tinfoil-go/document"
+	"github.com/tinfoilsh/tinfoil-go/verify"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/knownhosts"
 	"golang.org/x/term"
@@ -72,9 +75,44 @@ attestation always uses the enclave hostname.`,
 	Args:         cobra.ExactArgs(1),
 	SilenceUsage: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		resolved := startConnectionProgress(cmd.ErrOrStderr(), "Looking up "+args[0])
 		target, err := resolveTunnelTarget(args[0])
+		resolved()
 		if err != nil {
 			return err
+		}
+		if target.container != nil {
+			fmt.Fprintf(cmd.ErrOrStderr(), "%s: %s.\n", target.name, statusLabel(target.container.Status))
+			switch target.container.Repo {
+			case monitorRepo:
+				return fmt.Errorf("Monitor has no interactive shell; use tinfoil monitor open %s", target.name)
+			case defaultSandboxRepo:
+				if attestSSHHost != "" || attestSSHPort != 0 {
+					return errors.New("managed sandboxes use their bound Monitor endpoint")
+				}
+				if attestSSHName != "" && !sshProfileNamePattern.MatchString(attestSSHName) {
+					return errors.New("invalid SSH profile name")
+				}
+				s, err := connectSandbox(target.workload)
+				if err != nil {
+					return err
+				}
+				defer s.close()
+				if err := s.enroll(); err != nil {
+					return err
+				}
+				if attestSSHName != "" {
+					s.profile.name, s.profile.jump.name = attestSSHName, attestSSHName+monitorJumpSuffix
+				}
+				if cmd.Flags().Changed("user") {
+					s.profile.user = attestSSHUser
+				}
+				if attestSSHInstall {
+					return s.install()
+				}
+				fmt.Printf("%s\n# ~/.ssh/tinfoil/%s.known_hosts\n%s", s.profile.render(), s.profile.name, s.profile.pin())
+				return nil
+			}
 		}
 		profile := sshProfile{name: attestSSHName, hostName: nativeSSHHost(target, attestSSHHost), port: sshTargetPort(target, attestSSHPort), user: attestSSHUser, identityFile: attestSSHIdentity}
 		if profile.name == "" {
@@ -98,6 +136,26 @@ attestation always uses the enclave hostname.`,
 	},
 }
 
+// Stop and join the reporter before the next step or credential prompt.
+func startConnectionProgress(out io.Writer, message string) func() {
+	fmt.Fprintln(out, message)
+	ticker := time.NewTicker(10 * time.Second)
+	stop, done := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(done)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-ticker.C:
+				fmt.Fprintln(out, message+" (still waiting)")
+			}
+		}
+	}()
+	return sync.OnceFunc(func() { close(stop); <-done })
+}
+
 func nativeSSHHost(target *tunnelTarget, override string) string {
 	if override != "" {
 		return override
@@ -111,6 +169,7 @@ func nativeSSHHost(target *tunnelTarget, override string) string {
 // attestedHostKey verifies host against source and returns the endorsed
 // host-ssh key, so a failed verification never falls back to unverified acceptance.
 func attestedHostKey(host, source, sealedTo string) (ssh.PublicKey, error) {
+	defer startConnectionProgress(os.Stderr, "Verifying attestation and SSH host key for "+host)()
 	secure, err := newVerifiedClient(host, source, sealedTo)
 	if err != nil {
 		return nil, err
@@ -119,6 +178,10 @@ func attestedHostKey(host, source, sealedTo string) (ssh.PublicKey, error) {
 	if err != nil {
 		return nil, fmt.Errorf("verifying %s: %w", host, err)
 	}
+	return endorsedHostKey(host, verified)
+}
+
+func endorsedHostKey(host string, verified *verify.Verification) (ssh.PublicKey, error) {
 	data, err := verified.CryptoMaterialData(attestedHostKeyID, document.KeySPKIV1Format)
 	if err != nil {
 		return nil, fmt.Errorf("%s endorses no attested %q key: %w", host, attestedHostKeyID, err)
@@ -135,28 +198,62 @@ func attestedHostKey(host, source, sealedTo string) (ssh.PublicKey, error) {
 }
 
 type sshProfile struct {
+	resourceID   string
 	name         string
 	hostName     string
 	port         int
 	user         string
 	identityFile string
 	hostKey      ssh.PublicKey
+	// hostKeyAlias pins hostKey under a name instead of the dialed address, and
+	// jump is the host this one is reached through.
+	hostKeyAlias string
+	jump         *sshProfile
 }
 
 func (p sshProfile) render() string {
+	if p.jump == nil {
+		return p.block(p.name)
+	}
+	marker := ""
+	if p.resourceID != "" {
+		marker = "# tinfoil-resource: " + p.resourceID + "\n"
+	}
+	return marker + p.jump.block(p.name) + "\n" + p.block(p.name)
+}
+
+// block renders one Host whose pins are in pins.known_hosts.
+func (p sshProfile) block(pins string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Host %s\n  HostName %s\n  Port %d\n  User %s\n", p.name, p.hostName, p.port, p.user)
-	if p.identityFile != "" {
-		fmt.Fprintf(&b, "  IdentityFile %s\n  IdentitiesOnly yes\n", p.identityFile)
+	if p.jump != nil {
+		fmt.Fprintf(&b, "  ProxyJump %s\n", p.jump.name)
 	}
-	fmt.Fprintf(&b, "  HostKeyAlgorithms %s\n  UserKnownHostsFile ~/.ssh/tinfoil/%s.known_hosts\n", p.hostKey.Type(), p.name)
+	if p.hostKeyAlias != "" {
+		fmt.Fprintf(&b, "  HostKeyAlias %s\n", p.hostKeyAlias)
+	}
+	if p.identityFile != "" {
+		identity := p.identityFile
+		if strings.ContainsAny(identity, " \t\r\n\"\\") {
+			identity = strconv.Quote(identity)
+		}
+		fmt.Fprintf(&b, "  IdentityFile %s\n  IdentitiesOnly yes\n", identity)
+	}
+	fmt.Fprintf(&b, "  HostKeyAlgorithms %s\n  UserKnownHostsFile ~/.ssh/tinfoil/%s.known_hosts\n", p.hostKey.Type(), pins)
 	b.WriteString("  GlobalKnownHostsFile /dev/null\n  StrictHostKeyChecking yes\n  UpdateHostKeys no\n  CheckHostIP no\n")
 	return b.String()
 }
 
 func (p sshProfile) pin() string {
-	address := knownhosts.Normalize(net.JoinHostPort(p.hostName, strconv.Itoa(p.port)))
-	return knownhosts.Line([]string{address}, p.hostKey) + "\n"
+	address := p.hostKeyAlias
+	if address == "" {
+		address = knownhosts.Normalize(net.JoinHostPort(p.hostName, strconv.Itoa(p.port)))
+	}
+	pin := knownhosts.Line([]string{address}, p.hostKey) + "\n"
+	if p.jump != nil {
+		pin = p.jump.pin() + pin
+	}
+	return pin
 }
 
 func (p sshProfile) install() error {

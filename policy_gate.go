@@ -31,6 +31,13 @@ func enforceConnectionPolicy(source string) error {
 	return gateConnectionPolicy(source, os.Stdin, os.Stderr, interactive, trustDangerous)
 }
 
+func trustConnectionSource(source, assertion string) error {
+	if assertion != "" {
+		return assertTrustedSource(assertion, source)
+	}
+	return enforceConnectionPolicy(source)
+}
+
 func gateConnectionPolicy(source string, in io.Reader, out io.Writer, interactive, dangerous bool) error {
 	source = strings.TrimSpace(source)
 	if dangerous {
