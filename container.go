@@ -42,6 +42,7 @@ type containerView struct {
 	ID                   string           `json:"id"`
 	Name                 string           `json:"name"`
 	Repo                 string           `json:"repo"`
+	Source               string           `json:"source,omitempty"`
 	ConfigName           string           `json:"config_name,omitempty"`
 	ProjectID            string           `json:"project_id"`
 	Status               string           `json:"status"`
@@ -127,6 +128,7 @@ type hostInfo struct {
 const (
 	containerSourceGitHub   = "github"
 	containerSourceRegistry = "registry"
+	containerSourceLocal    = "local"
 )
 
 var (
@@ -203,9 +205,9 @@ func init() {
 	}
 	containerCancelCmd.Flags().BoolVar(&cancelRollbackLatest, "rollback-latest", false, "Request restoring the repository's latest release to the current production tag")
 
-	containerCreateCmd.Flags().StringVar(&createRepo, "repo", "", "GitHub repository or registry project (org/project) [required]")
+	containerCreateCmd.Flags().StringVar(&createRepo, "repo", "", "GitHub repository or registry project (org/project)")
 	containerCreateCmd.Flags().StringVar(&createTag, "tag", "", "GitHub release tag (alias for --revision with --source github)")
-	containerCreateCmd.Flags().StringVar(&createSource, "source", containerSourceGitHub, "Config source: github or registry")
+	containerCreateCmd.Flags().StringVar(&createSource, "source", containerSourceGitHub, "Config source: github, registry, or local (implied by --config)")
 	containerCreateCmd.Flags().StringVar(&createRevision, "revision", "", "GitHub release tag, or registry version or sha256:<config digest>")
 	containerCreateCmd.Flags().BoolVar(&createDebug, "debug", false, "Enable debug mode (allows SSH into the enclave)")
 	containerCreateCmd.Flags().StringVar(&createMarkLatestRelease, "mark-latest", "", "Mark the deployed tag as the repository's latest GitHub release once it is running (default true; pass false to leave the latest release unchanged)")
@@ -219,9 +221,9 @@ func init() {
 	containerCreateCmd.Flags().StringArrayVar(&createSSHKeys, "ssh-key", nil, "Org SSH key name (debug only); may be repeated")
 	containerCreateCmd.Flags().StringArrayVar(&createVolumes, "volume", nil, "Volume to attach before the first deploy, as <id|name>[:<mount name>]; may be repeated")
 	containerCreateCmd.Flags().Int32Var(&createDisplayOrder, "display-order", 0, "Sort order of this instance within its project")
-	_ = containerCreateCmd.MarkFlagRequired("repo")
-	containerCreateCmd.MarkFlagsMutuallyExclusive("tag", "revision")
-	containerCreateCmd.MarkFlagsOneRequired("tag", "revision")
+	containerCreateCmd.MarkFlagsMutuallyExclusive("config", "repo")
+	containerCreateCmd.MarkFlagsMutuallyExclusive("config", "tag", "revision")
+	containerCreateCmd.MarkFlagsOneRequired("config", "tag", "revision")
 
 	containerDeleteCmd.Flags().BoolVar(&deleteYes, "yes", false, "Skip interactive confirmation")
 
@@ -251,7 +253,7 @@ func init() {
 	containerConnectCmd.Flags().UintVarP(&connectPort, "port", "p", 8080, "Local port for the verified proxy")
 	containerConnectCmd.Flags().StringVarP(&connectBindAddr, "bind", "b", "127.0.0.1", "Address to bind to")
 	containerConnectCmd.Flags().BoolVar(&connectReview, "review", false, "Connect to the available blue/green review candidate, pinned to its release (never production)")
-
+	addTrustDangerousFlag(containerConnectCmd)
 	silenceUsageRecursive(containerCmd)
 }
 
@@ -312,41 +314,61 @@ var containerGetCmd = &cobra.Command{
 var containerCreateCmd = &cobra.Command{
 	Use:   "create [name]",
 	Short: "Create a new container",
-	Long: `Create and launch a container from a GitHub release or an approved registry config.
+	Long: `Create and launch a container from a GitHub release, an approved registry config, or a local file.
 
   tinfoil container create app --repo org/repo --tag v1.2.3
   tinfoil container create app --source registry --repo org/project --revision v1.2.3
+  tinfoil container create app --config tinfoil-config.yml
 
 Registry revisions also accept sha256:<config digest>. The organization must
-have registry access enabled. Registry configs do not support --replace.
+have registry access enabled. Registry and local configs do not support --replace.
 A new revision requires a new container; deploy without revision flags
-restarts the saved config.`,
+restarts the saved config. Local config bytes are sent to Tinfoil for deployment
+without registry publication; keep the exact file to verify subsequent connections.`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		if createSource != containerSourceGitHub && createSource != containerSourceRegistry {
-			return fmt.Errorf("--source must be github or registry")
+		if localConfigFile != "" {
+			if cmd.Flags().Changed("source") && createSource != containerSourceLocal {
+				return fmt.Errorf("--config requires --source local")
+			}
+			createSource = containerSourceLocal
+		}
+		if createSource != containerSourceGitHub && createSource != containerSourceRegistry && createSource != containerSourceLocal {
+			return fmt.Errorf("--source must be github, registry, or local")
 		}
 		if createSource == containerSourceRegistry && createTag != "" {
 			return fmt.Errorf("use --revision instead of --tag for registry configs")
 		}
-		if createSource == containerSourceRegistry && createReplaceID != "" {
-			return fmt.Errorf("registry configs do not support --replace; create a new container before removing the old one")
+		if createSource != containerSourceGitHub && createReplaceID != "" {
+			return fmt.Errorf("%s configs do not support --replace; create a new container before removing the old one", createSource)
 		}
 		revision := createRevision
 		if revision == "" {
 			revision = createTag
 		}
-		body := map[string]any{
-			"name": args[0],
-			"repo": createRepo,
-		}
-		if createSource == containerSourceRegistry {
-			body["source"] = createSource
-		}
-		if createRevision != "" {
-			body["revision"] = revision
+		body := map[string]any{"name": args[0]}
+		if createSource == containerSourceLocal {
+			if createRepo != "" || revision != "" {
+				return fmt.Errorf("local configs cannot use --repo, --tag, or --revision")
+			}
+			data, err := readLocalConfig()
+			if err != nil {
+				return err
+			}
+			body["source"], body["config"] = containerSourceLocal, data
 		} else {
-			body["tag"] = revision
+			if createRepo == "" {
+				return fmt.Errorf("--repo is required for %s configs", createSource)
+			}
+			body["repo"] = createRepo
+			if createSource == containerSourceRegistry {
+				body["source"] = createSource
+			}
+			if createRevision != "" {
+				body["revision"] = revision
+			} else {
+				body["tag"] = revision
+			}
 		}
 		if err := setMarkLatestRelease(cmd, body, createMarkLatestRelease); err != nil {
 			return err
@@ -480,6 +502,9 @@ restarts the saved config.`,
 		if _, err := client.do("POST", "/api/containers", nil, body, &created); err != nil {
 			return err
 		}
+		// The caller just told us exactly what they intend to run: seed the
+		// trust store now so the first connect needs no prompt.
+		seedTrustFromCreate(createRepo, revision)
 		deployBody := map[string]any{}
 		if value, ok := body["mark_latest_release"].(bool); ok {
 			deployBody["mark_latest_release"] = value
@@ -821,7 +846,8 @@ release. An explicit --repo retains its verification pins; in review mode it mus
 match the candidate's repository and tag.
 
   tinfoil container connect my-container
-  tinfoil container connect my-container --review`,
+  tinfoil container connect my-container --review
+  tinfoil container connect my-container --config tinfoil-config.yml`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client, err := authedClient()
@@ -832,11 +858,40 @@ match the candidate's repository and tag.
 		if err != nil {
 			return err
 		}
-		target, err := containerConnection(*c, connectReview, repo)
+		sourceOverride := repo
+		if repo != "" && !strings.Contains(repo, "/") {
+			// A bare org is a valid assertion here but not a verifier pin:
+			// tinfoil-go's reference grammar requires owner/name — it has no
+			// org-prefix match, even though the endorsed name it compares
+			// against would support one. Until the SDK grows that,
+			// assertTrustedSource checks the org against the resolved name
+			// (which the verifier then proves via the signed name→digest
+			// endorsement, backstopping the string check), and the verifier
+			// pins the resolved reference.
+			sourceOverride = ""
+		}
+		target, err := containerConnection(*c, connectReview, sourceOverride)
 		if err != nil {
 			return err
 		}
-		fmt.Printf("Connecting verified proxy to %s: %s (expected %s)\n", c.Name, target.URL, target.source)
+		expected := target.source
+		if c.Source == containerSourceLocal {
+			// A local config is a caller-held expectation: the file's digest is
+			// the trust decision, so the connection policy does not apply.
+			if err := checkLocalConfigDigest(target.ConfigDigest); err != nil {
+				return err
+			}
+			expected = "sha256:" + target.ConfigDigest
+		} else if repo == "" {
+			// The expectation came from the controlplane response, not the
+			// caller: check it against the connection policy before trusting it.
+			if err := enforceConnectionPolicy(target.source); err != nil {
+				return err
+			}
+		} else if err := assertTrustedSource(repo, target.source); err != nil {
+			return err
+		}
+		fmt.Printf("Connecting verified proxy to %s: %s (expected %s)\n", c.Name, target.URL, expected)
 
 		enclaveHost = target.host
 		repo = target.source
@@ -1097,6 +1152,8 @@ func renderContainerDetail(c containerView, attached map[string]volumeView) erro
 	fmt.Printf("Status:       %s\n", statusLabel(c.Status))
 	if c.ConfigName != "" {
 		fmt.Printf("Config:       %s\n", c.ConfigName)
+	} else if c.Source == containerSourceLocal {
+		fmt.Printf("Config:       local\n")
 	} else {
 		fmt.Printf("Repo:         %s@%s\n", c.Repo, c.CurrentTag)
 	}
@@ -1189,6 +1246,8 @@ func renderContainers(list []containerView) error {
 		source := c.Repo
 		if c.ConfigName != "" {
 			source = c.ConfigName
+		} else if c.Source == containerSourceLocal {
+			source = containerSourceLocal
 		}
 		fmt.Printf("%-24s  %-10s  %-30s  %-10s  %s\n",
 			truncate(c.Name, 24), statusLabel(c.Status), truncate(domain, 30), truncate(tag, 10), source,

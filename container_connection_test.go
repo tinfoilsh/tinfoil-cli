@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -184,6 +185,7 @@ func TestReviewConnectCommandUsesActualDescriptor(t *testing.T) {
 	}))
 	defer server.Close()
 	configureContainerPromotionTest(t, server.URL)
+	gateEnv(t, `{"allow":{"projects":["acme/app"]}}`) // the gate is not under test here
 	oldRun, oldRepo, oldHost, oldReview := proxyCmd.RunE, repo, enclaveHost, connectReview
 	t.Cleanup(func() { proxyCmd.RunE = oldRun; repo = oldRepo; enclaveHost = oldHost; connectReview = oldReview })
 	repo = ""
@@ -198,6 +200,43 @@ func TestReviewConnectCommandUsesActualDescriptor(t *testing.T) {
 	_, err := captureTestStdout(func() error { return executeLifecycleCLI(t, "container", "connect", testContainerID, "--review") })
 	if err != nil || !called {
 		t.Fatalf("connect err=%v called=%t", err, called)
+	}
+}
+
+// The review's standard: the default path (no --repo, no trust store, no
+// TTY) must never silently adopt the controlplane's descriptor. The command
+// has to refuse before any proxy starts.
+func TestConnectCommandFailsClosedWithoutTrustStore(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, reviewContainerFixture)
+	}))
+	defer server.Close()
+	configureContainerPromotionTest(t, server.URL)
+	gateEnv(t, "") // empty store, nothing allowed
+	// Force a non-TTY stdin so the gate takes the fail-closed branch even
+	// when the test runs under a terminal.
+	pipeR, pipeW, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pipeW.Close()
+	oldStdin := os.Stdin
+	os.Stdin = pipeR
+	t.Cleanup(func() { os.Stdin = oldStdin; pipeR.Close() })
+	oldRun, oldRepo, oldHost, oldReview := proxyCmd.RunE, repo, enclaveHost, connectReview
+	t.Cleanup(func() { proxyCmd.RunE = oldRun; repo = oldRepo; enclaveHost = oldHost; connectReview = oldReview })
+	repo = ""
+	called := false
+	proxyCmd.RunE = func(_ *cobra.Command, _ []string) error {
+		called = true
+		return nil
+	}
+	_, err = captureTestStdout(func() error { return executeLifecycleCLI(t, "container", "connect", testContainerID) })
+	if err == nil || !strings.Contains(err.Error(), "--repo") {
+		t.Fatalf("expected fail-closed with guidance, got %v", err)
+	}
+	if called {
+		t.Fatal("proxy must not start for an untrusted config")
 	}
 }
 
@@ -216,7 +255,7 @@ func TestContainerGetAndReadyOutputShowVerifiedNextSteps(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, want := range []string{"Production URL: https://production.example.com", "Expected source: acme/app@v1", "tinfoil http get https://production.example.com --enclave production.example.com --repo acme/app@v1", "tinfoil container connect " + testContainerID} {
+		for _, want := range []string{"Production URL: https://production.example.com", "Expected config: acme/app@v1", "tinfoil http get https://production.example.com --enclave production.example.com --repo acme/app@v1", "tinfoil container connect " + testContainerID} {
 			if !strings.Contains(string(out), want) {
 				t.Fatalf("missing %q: %s", want, out)
 			}

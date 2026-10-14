@@ -28,6 +28,54 @@ Credentials are written to `~/.tinfoil/config.json` (mode 0600). Override on a p
 
 `TINFOIL_ADMIN_KEY` takes precedence over an admin key in `TINFOIL_API_KEY`, then the saved file. Saving a different key does not override the environment: login warns and shows the saved identity separately from the effective login. Logout deletes only the saved file; unset environment keys separately.
 
+## Trusting configs
+
+Connections resolved through the controlplane (`container connect`,
+`forward`, `ssh`, `scp`, `attest-ssh` by container name or ID) are checked
+against a local connection policy before any traffic flows:
+`~/.tinfoil/known-configs.json` (override with `TINFOIL_KNOWN_CONFIGS`). The
+file is JSON; the CLI writes it atomically. See the
+[known-configs contract](docs/known-configs-contract.md) for exact matching
+and write semantics.
+
+```bash
+tinfoil trust                        # show the store: mode, record, allow list
+tinfoil trust set --mode frozen      # unknown configs fail instead of prompting
+tinfoil trust set --record pin       # a yes records the exact revision+digest
+tinfoil trust set --record pin --prune   # also remove broader entries
+```
+
+The store has three parts. `allow` lists what is trusted, at the granularity
+written down: an org name (any project in it), `org/project` (any revision),
+or an exact pin. `mode` says what happens when a resolved config matches no
+entry: `prompt` (default) asks yes/no on a TTY and fails closed otherwise;
+`frozen` always fails closed and never writes the file automatically.
+`record` says what granularity a yes writes (`org`, `project`, or `pin`),
+inclusive going down — an org-yes also records the project and the exact pin,
+so tightening later starts from everything already used. Pins double as a
+connect journal: every allowed connect records the exact config it resolved
+to, and a first sight prints `New config journaled: …`.
+
+Use `org/project@sha256:<digest>` in `allow.pins` or `--repo` to accept only
+that project's exact config bytes across replicas and revisions. Include
+`@revision` before `@sha256:` when both must match.
+
+Non-interactive flows state their expectation instead of answering a prompt:
+`--repo` accepts an org, `org/project`, or a pinned reference; the resolved
+config must fall under it or the command fails, and the assertion is
+recorded. `--dangerous` skips the check for one invocation and records
+nothing. `container create` seeds the store with the project and revision you
+typed, so the first connect on that machine does not prompt.
+
+```bash
+tinfoil container connect my-container --repo myorg/my-project   # assert + record
+tinfoil ssh my-container --repo myorg                            # org-level assertion
+tinfoil container connect my-container --dangerous               # bypass, never recorded
+```
+
+For CI and operator machines, prefer `"mode": "frozen"` with a pre-seeded store
+(or explicit pinned `--repo` values); never `--dangerous` in automation.
+
 ## First container from an existing image
 
 Use a public config repository connected to the Tinfoil GitHub App, with `tinfoil-config.yml` pointing to your actual image. Secrets, custom domains, and volumes are optional unless your workload requires them.
@@ -38,6 +86,21 @@ Use a public config repository connected to the Tinfoil GitHub App, with `tinfoi
 4. **Wait for both Tinfoil Release and Build & Publish to succeed.** The build command is nonblocking, not a deploy-ready signal. Use `tinfoil repo build status myorg/my-repo-container --version v1.2.3` and the printed GitHub Actions URL; then `tinfoil repo build info myorg/my-repo-container` to confirm that same tag is published. A Git tag alone is insufficient.
 5. Create using that exact release: `tinfoil container create my-container --repo myorg/my-repo-container --tag v1.2.3`. **`--tag` is required**, not implicitly `latest`.
 6. Once Running, use the printed verified HTTP request or `tinfoil container connect my-container`. `tinfoil container get my-container` shows connection guidance again.
+
+## Local configs
+
+Local configs are sent to the controlplane for deployment without registry publication. Pin `cvm-version` to a runtime version and manifest digest (`version@sha256:digest`) and keep the exact YAML bytes for verification.
+
+The guest includes the raw config in its attestation document. Local mode supports deployments on private networks; it does not hide the config from callers that can reach the endpoint.
+
+```bash
+tinfoil container create my-container --config ./tinfoil-config.yml --host box2
+tinfoil container connect my-container --config ./tinfoil-config.yml
+tinfoil attestation verify --enclave <hostname> --config ./tinfoil-config.yml
+tinfoil http get https://<hostname>/ --enclave <hostname> --config ./tinfoil-config.yml
+```
+
+The same `--config` flag works with forwarding, SSH, and SCP. Verification uses the local file, checks runtime and platform endorsements, and compares its exact-byte hash with the hardware report. Container connections also check the selected container's config digest. `--repo`, `--tag`, and `--revision` cannot select a source alongside a local file; local configs do not support `--replace`. Deploying a stopped local container reuses its saved config.
 
 ## Containers
 

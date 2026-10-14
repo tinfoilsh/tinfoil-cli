@@ -8,18 +8,21 @@ import (
 )
 
 type domainView struct {
-	ID                string   `json:"id"`
-	Domain            string   `json:"domain"`
-	VerificationNonce string   `json:"verification_nonce"`
-	CnameHash         string   `json:"cname_hash"`
-	Verified          bool     `json:"verified"`
-	VerifiedAt        *string  `json:"verified_at"`
-	CreatedAt         string   `json:"created_at"`
-	UsedBy            []string `json:"used_by"`
-	TXTRecordHost     string   `json:"txt_record_host"`
-	TXTRecordValue    string   `json:"txt_record_value"`
-	CNAMETarget       string   `json:"cname_target"`
-	CNAMEConfigured   *bool    `json:"cname_configured"`
+	ID                      string   `json:"id"`
+	Domain                  string   `json:"domain"`
+	VerificationNonce       string   `json:"verification_nonce"`
+	CnameHash               string   `json:"cname_hash"`
+	Verified                bool     `json:"verified"`
+	VerifiedAt              *string  `json:"verified_at"`
+	CreatedAt               string   `json:"created_at"`
+	UsedBy                  []string `json:"used_by"`
+	TXTRecordHost           string   `json:"txt_record_host"`
+	TXTRecordValue          string   `json:"txt_record_value"`
+	CNAMETarget             string   `json:"cname_target"`
+	CNAMEConfigured         *bool    `json:"cname_configured"`
+	ACMEChallengeHost       string   `json:"acme_challenge_host"`
+	ACMEChallengeTarget     string   `json:"acme_challenge_target"`
+	ACMEChallengeConfigured *bool    `json:"acme_challenge_configured"`
 }
 
 func init() {
@@ -90,7 +93,7 @@ var domainAddCmd = &cobra.Command{
 
 var domainVerifyCmd = &cobra.Command{
 	Use:   "verify [domain]",
-	Short: "Re-check the DNS TXT record and update verification status",
+	Short: "Re-check the DNS records and update verification status",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client, err := authedClient()
@@ -133,13 +136,16 @@ func renderDomain(d domainView, verifyMode bool) error {
 		fmt.Printf("Verified at: %s\n", *d.VerifiedAt)
 	}
 	fmt.Printf("\nConfigure these DNS records on your domain:\n")
-	fmt.Printf("  TXT  %s  =>  %s\n", d.TXTRecordHost, d.TXTRecordValue)
 	fmt.Printf("  CNAME  %s  =>  %s\n", d.Domain, d.CNAMETarget)
+	fmt.Printf("  CNAME  %s  =>  %s\n", d.ACMEChallengeHost, d.ACMEChallengeTarget)
 	if verifyMode && d.CNAMEConfigured != nil {
-		fmt.Printf("\nCNAME currently observed: %v\n", *d.CNAMEConfigured)
+		fmt.Printf("\nTraffic CNAME currently observed: %v\n", *d.CNAMEConfigured)
+	}
+	if verifyMode && d.ACMEChallengeConfigured != nil {
+		fmt.Printf("Certificate CNAME currently observed: %v\n", *d.ACMEChallengeConfigured)
 	}
 	if !d.Verified {
-		fmt.Printf("\nRun `tinfoil domain verify %s` after the TXT record propagates.\n", d.Domain)
+		fmt.Printf("\nRun `tinfoil domain verify %s` after the %s CNAME propagates.\n", d.Domain, d.ACMEChallengeHost)
 	}
 	if len(d.UsedBy) > 0 {
 		fmt.Printf("\nUsed by: %s\n", strings.Join(d.UsedBy, ", "))
