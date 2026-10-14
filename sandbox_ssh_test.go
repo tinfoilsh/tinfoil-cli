@@ -6,7 +6,6 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
 	"io"
 	"net"
 	"net/http"
@@ -147,34 +146,4 @@ func TestProfileOwnershipUsesAccountAndResource(t *testing.T) {
 		require.False(t, owned)
 	}
 	require.NoError(t, forgetSandbox("work", ""))
-}
-
-func TestSandboxPeerRequiresOneUsablePrivateSSHPeer(t *testing.T) {
-	var endpoint sandboxEndpoint
-	var requests atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		requests.Add(1)
-		switch r.URL.Path {
-		case "/api/containers/work/network":
-			json.NewEncoder(w).Encode(map[string]any{"egress": []sandboxEndpoint{endpoint}})
-		default:
-			t.Errorf("unexpected %s", r.URL.Path)
-		}
-	}))
-	defer server.Close()
-	client := newCPClient(cliConfig{ControlplaneURL: server.URL, APIKey: "test"})
-	for _, policy := range []*containerNetworkPolicy{nil, {}, {Public: true}, {EgressMode: "unrestricted"}, {Egress: []containerPeer{{"peer", 443}}}, {Egress: []containerPeer{{"peer", 22}, {"other", 22}}}} {
-		_, err := sandboxPeer(client, containerView{ID: "work", NetworkPolicy: policy})
-		require.Error(t, err)
-	}
-	require.Zero(t, requests.Load())
-	row := containerView{ID: "work", NetworkPolicy: &containerNetworkPolicy{Egress: []containerPeer{{"peer", 22}}}}
-	for _, endpoint = range []sandboxEndpoint{{"invalid", 22}, {"100.64.0.1", 0}, {"100.64.0.1", 65536}} {
-		_, err := sandboxPeer(client, row)
-		require.Error(t, err)
-	}
-	endpoint = sandboxEndpoint{"100.64.0.1", 22}
-	got, err := sandboxPeer(client, row)
-	require.NoError(t, err)
-	require.Equal(t, endpoint, got)
 }

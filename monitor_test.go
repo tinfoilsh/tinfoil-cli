@@ -197,13 +197,14 @@ func TestWorkloadRejectsUnmeasuredEnvironment(t *testing.T) {
 	require.NoError(t, err, "a literal empty string cannot import runtime env")
 }
 
-func TestOnlySandboxLocatorMayBeUnmeasured(t *testing.T) {
-	_, err := measuredEnvironment("containers:\n  - env: [MONITOR_ENDPOINT, {OWNER: fixed}]\n", true)
-	require.NoError(t, err)
-	for _, env := range []string{"[MONITOR_ENDPOINT, MONITOR_ENDPOINT]", "[{MONITOR_ENDPOINT: fixed}]", "[MONITOR_ENDPOINT, OWNER]"} {
-		_, err := measuredEnvironment("containers:\n  - env: "+env, true)
+func TestMeasuredEnvironmentRejectsRuntimeAndAmbiguousInputs(t *testing.T) {
+	for _, env := range []string{"[MONITOR_ENDPOINT, {OWNER: fixed}]", "[{OWNER: fixed}, {OWNER: changed}]", "[OWNER, {OWNER: fixed}]"} {
+		_, err := measuredEnvironment("containers:\n  - env: " + env)
 		require.Error(t, err)
 	}
+	values, err := measuredEnvironment("containers:\n  - env: [{OWNER: fixed}]\n")
+	require.NoError(t, err)
+	require.Equal(t, map[string]string{"OWNER": "fixed"}, values)
 }
 
 func connectOwnerSSH(conn net.Conn, host string, hostKey ssh.PublicKey, seed []byte) (*ssh.Client, error) {

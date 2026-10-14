@@ -24,11 +24,14 @@ func init() {
 			if err != nil {
 				return err
 			}
+			resolved := startConnectionProgress(cmd.ErrOrStderr(), "Looking up Monitor "+name)
+			defer resolved()
 			scope, cp, err := currentScope()
 			if err != nil {
 				return err
 			}
 			row, err := containerNamed(cp, name)
+			resolved()
 			if err != nil {
 				return err
 			}
@@ -63,7 +66,9 @@ func serveMonitorPanel(cmd *cobra.Command, client *ssh.Client, dir, address stri
 	session := panelToken()
 	// Probe the channel contract before printing a URL. A stale generation or
 	// incompatible CAM must fail here, without any HTTP fallback.
+	ready := startConnectionProgress(cmd.ErrOrStderr(), "Opening the local Monitor panel")
 	probe, err := openOwnerChannel(client, dir, listener.Addr().String(), session)
+	ready()
 	if err != nil {
 		return err
 	}

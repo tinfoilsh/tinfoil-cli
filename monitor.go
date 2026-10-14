@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -102,6 +103,8 @@ func verifyMonitor(dir string, row containerView) (ssh.PublicKey, error) {
 	if err != nil {
 		return nil, err
 	}
+	finish := startConnectionProgress(os.Stderr, "Verifying Monitor "+row.Name+" attestation and SSH host key")
+	defer finish()
 	secure, err := newVerifiedClient(row.Domain, source, "")
 	if err != nil {
 		return nil, err
@@ -126,6 +129,8 @@ func verifyMonitor(dir string, row containerView) (ssh.PublicKey, error) {
 			return nil, err
 		}
 	}
+	finish()
+	fmt.Fprintf(os.Stderr, "Monitor %s attestation verified.\n", row.Name)
 	return hostKey, nil
 }
 

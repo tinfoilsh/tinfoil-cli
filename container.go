@@ -22,8 +22,14 @@ type containerNetworkPolicy struct {
 }
 
 type containerPeer struct {
-	ContainerID string `json:"container_id"`
-	Port        int    `json:"port"`
+	ContainerID string          `json:"container_id"`
+	Port        int             `json:"port"`
+	Alias       *containerAlias `json:"alias,omitempty"`
+}
+
+type containerAlias struct {
+	IP   string `json:"ip"`
+	Port int    `json:"port"`
 }
 
 // containerView mirrors the controlplane's containerResponse. We only model
@@ -358,6 +364,19 @@ restarts the saved config.`,
 		vars, err := parseKeyValues(createVariables)
 		if err != nil {
 			return err
+		}
+
+		if createSource == containerSourceGitHub && createRepo == defaultSandboxRepo {
+			if createDebug || createDisableCC {
+				return fmt.Errorf("sandbox aliases require a production deployment")
+			}
+			var binding monitorBinding
+			if json.Unmarshal([]byte(vars["MONITOR_BINDING"]), &binding) != nil || !looksLikeUUID(binding.ContainerID) || binding.Owner == "" {
+				return fmt.Errorf("sandbox creation requires MONITOR_BINDING with a Monitor container ID and owner public key")
+			}
+			body["network_policy"] = &containerNetworkPolicy{EgressMode: "restricted", Egress: []containerPeer{{
+				ContainerID: binding.ContainerID, Port: 22, Alias: &containerAlias{IP: "10.254.0.1", Port: 22},
+			}}}
 		}
 
 		if createDisableCC {

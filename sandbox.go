@@ -8,11 +8,9 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
-	"net"
 	"os"
 	"path/filepath"
 	"regexp"
-	"strconv"
 	"strings"
 	"time"
 
@@ -59,7 +57,7 @@ type sandboxView struct {
 
 type sandboxKeys struct {
 	dir             string
-	diskKey         string
+	diskKey         []byte
 	sshKeyPath      string
 	agentKey        string
 	monitorIdentity string
@@ -121,16 +119,15 @@ var sandboxRestartCmd = &cobra.Command{
 using this device's workspace key.`,
 	Args: cobra.ExactArgs(1),
 	RunE: namedWorkload(func(name string) error {
-		box, err := getSandbox(name)
+		client, err := authedClient()
 		if err != nil {
 			return err
 		}
-		if box.State != "failed" && box.State != sandboxStateStopped {
-			if _, err := stopSandbox(name); err != nil {
-				return err
-			}
+		row, err := containerNamed(client, name)
+		if err != nil {
+			return err
 		}
-		return renderSandbox(startSandbox(name))
+		return renderSandbox(startSandboxRow(client, row, true))
 	}),
 }
 
@@ -182,6 +179,9 @@ fixed by the measured owner public key at boot. The
 Monitor provides the sandbox network and reverse SSH connection.
 
 New credentials are scoped by account and container UUID under ~/.tinfoil/resources.
+When a new sandbox attaches an existing workspace volume, the CLI reuses its
+saved encryption key from the same account. Keep the original credentials and
+owner public key when moving a workspace.
 A lost enrollment reply can be retried
 without restarting the sandbox. This also repairs the local SSH profile.`,
 	Args: cobra.ExactArgs(1),
@@ -215,10 +215,6 @@ func claimBoot(method, path, name string, body any) (*sandboxView, error) {
 	if err != nil {
 		return nil, err
 	}
-	row, err = prepareSandboxEndpoint(client, row)
-	if err != nil {
-		return nil, err
-	}
 	box := sandboxFromContainer(row)
 
 	if err := enrollSandbox(box); err != nil {
@@ -236,48 +232,55 @@ func startSandbox(name string) (*sandboxView, error) {
 	if err != nil {
 		return nil, err
 	}
-	if row.Repo != defaultSandboxRepo || row.Debug {
-		return nil, fmt.Errorf("container %s is not a sandbox", name)
-	}
-	if row.Status != statusStopped && row.Status != "failed" {
-		return bootSandbox("GET", pathf("/api/containers/%s", row.ID), name, nil)
-	}
-	return bootSandbox("POST", pathf("/api/containers/%s/deploy", row.ID), name, nil)
+	return startSandboxRow(client, row, false)
 }
 
-// Lifecycle commands alone refresh the host grant and unmeasured bootstrap locator.
-func prepareSandboxEndpoint(client *cpClient, row containerView) (containerView, error) {
-	for attempt := 0; attempt < 3; attempt++ {
-		endpoint, err := sandboxPeer(client, row)
-		if err != nil {
-			return row, fmt.Errorf("sandbox route unavailable; explicitly restart %s to refresh its host grant: %w", row.Name, err)
-		}
-		locator := net.JoinHostPort(endpoint.IP, strconv.Itoa(endpoint.Port))
-		var variables map[string]string
-		if len(row.Variables) != 0 {
-			if err := json.Unmarshal(row.Variables, &variables); err != nil {
-				return row, err
-			}
-		}
-		if variables["MONITOR_ENDPOINT"] == locator {
-			return row, nil
-		}
+func startSandboxRow(client *cpClient, row containerView, restart bool) (*sandboxView, error) {
+	if row.Repo != defaultSandboxRepo || row.Debug {
+		return nil, fmt.Errorf("container %s is not a sandbox", row.Name)
+	}
+	if !restart && row.Status != statusStopped && row.Status != statusFailed {
+		return bootSandbox("GET", pathf("/api/containers/%s", row.ID), row.Name, nil)
+	}
+	if err := validateSandboxNetwork(row); err != nil {
+		return nil, err
+	}
+	if row.Status != statusStopped && row.Status != statusFailed {
+		fmt.Fprintf(os.Stderr, "Stopping %s before restarting it...\n", row.Name)
 		if _, err := client.do("POST", pathf("/api/containers/%s/stop", row.ID), nil, nil, &row); err != nil {
-			return row, err
+			return nil, err
 		}
-		row, err = waitWorkload(client, row, statusStopped, sandboxBootTimeout)
-		if err != nil {
-			return row, err
-		}
-		if _, err := client.do("POST", pathf("/api/containers/%s/deploy", row.ID), nil, map[string]any{"variables": map[string]string{"MONITOR_ENDPOINT": locator}}, &row); err != nil {
-			return row, err
-		}
-		row, err = waitWorkload(client, row, statusRunning, sandboxBootTimeout)
-		if err != nil {
-			return row, err
+		if _, err := waitWorkload(client, row, statusStopped, sandboxBootTimeout); err != nil {
+			return nil, err
 		}
 	}
-	return row, errors.New("Monitor endpoint kept changing; retry sandbox restart once it is stable")
+	return bootSandbox("POST", pathf("/api/containers/%s/deploy", row.ID), row.Name, nil)
+}
+
+// The fixed endpoint is usable only with an explicit matching alias policy.
+func sandboxNetworkMatches(row containerView, monitorID string) bool {
+	policy := row.NetworkPolicy
+	if policy == nil || policy.Public || policy.EgressMode != "restricted" || len(policy.Egress) != 1 {
+		return false
+	}
+	peer := policy.Egress[0]
+	return peer.ContainerID == monitorID && peer.Port == 22 && peer.Alias != nil &&
+		*peer.Alias == (containerAlias{IP: "10.254.0.1", Port: 22})
+}
+
+func validateSandboxNetwork(row containerView) error {
+	env, err := measuredEnvironment(row.Config)
+	if err != nil {
+		return err
+	}
+	var binding monitorBinding
+	if json.Unmarshal([]byte(env["MONITOR_BINDING"]), &binding) != nil || !looksLikeUUID(binding.ContainerID) || binding.Owner == "" {
+		return errors.New("sandbox has no measured Monitor binding")
+	}
+	if !sandboxNetworkMatches(row, binding.ContainerID) {
+		return errors.New("sandbox requires a TCP alias matching its measured Monitor binding; update its configuration and network policy")
+	}
+	return nil
 }
 
 func stopSandbox(name string) (*sandboxView, error) {

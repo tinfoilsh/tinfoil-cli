@@ -28,11 +28,15 @@ type ownerChannelOptions struct {
 }
 
 func connectMonitorOwner(ctx context.Context, scope accountScope, row containerView) (*ssh.Client, string, error) {
+	if err := requireRunningConnection("Monitor", row); err != nil {
+		return nil, "", err
+	}
+	fmt.Fprintf(os.Stderr, "Monitor %s: running.\n", row.Name)
 	dir, err := monitorRecord(scope, row)
 	if err != nil {
 		return nil, "", err
 	}
-	environment, err := measuredEnvironment(row.Config, false)
+	environment, err := measuredEnvironment(row.Config)
 	if err != nil {
 		return nil, "", err
 	}
@@ -59,6 +63,8 @@ func connectMonitorOwner(ctx context.Context, scope accountScope, row containerV
 		return nil, "", err
 	}
 	defer close()
+	connected := startConnectionProgress(os.Stderr, "Connecting to Monitor "+row.Name+" over attested SSH")
+	defer connected()
 	address, err := monitorAddress(ctx, row)
 	if err != nil {
 		return nil, "", err
@@ -68,10 +74,14 @@ func connectMonitorOwner(ctx context.Context, scope accountScope, row containerV
 		return nil, "", err
 	}
 	client, err := connectOwnerSigner(conn, row.Domain, hostKey, signer, "owner")
+	connected()
 	if err != nil {
 		return nil, "", err
 	}
-	if err := unlockMonitor(client, dir, credential); err != nil {
+	unlocked := startConnectionProgress(os.Stderr, "Unlocking Monitor "+row.Name+" encrypted state")
+	err = unlockMonitor(client, dir, credential)
+	unlocked()
+	if err != nil {
 		client.Close()
 		return nil, "", fmt.Errorf("unlock Monitor; restore the original encryption credentials if it was initialized elsewhere: %w", err)
 	}
@@ -79,6 +89,7 @@ func connectMonitorOwner(ctx context.Context, scope accountScope, row containerV
 		client.Close()
 		return nil, "", err
 	}
+	fmt.Fprintf(os.Stderr, "Monitor %s unlocked.\n", row.Name)
 	return client, dir, nil
 }
 
@@ -86,7 +97,7 @@ func monitorRecord(scope accountScope, row containerView) (string, error) {
 	if _, err := workloadSource(row, monitorRepo); err != nil {
 		return "", err
 	}
-	env, err := measuredEnvironment(row.Config, false)
+	env, err := measuredEnvironment(row.Config)
 	if err != nil {
 		return "", err
 	}
