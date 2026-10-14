@@ -27,8 +27,8 @@ type ownerChannelOptions struct {
 	Generation uint64
 }
 
-func connectMonitorOwner(ctx context.Context, scope accountScope, row containerView) (*ssh.Client, string, error) {
-	if err := requireRunningConnection("Monitor", row); err != nil {
+func connectMonitorOwner(ctx context.Context, scope accountScope, row *workloadTarget) (*ssh.Client, string, error) {
+	if err := requireRunningConnection("Monitor", row.containerView); err != nil {
 		return nil, "", err
 	}
 	fmt.Fprintf(os.Stderr, "Monitor %s: running.\n", row.Name)
@@ -36,15 +36,11 @@ func connectMonitorOwner(ctx context.Context, scope accountScope, row containerV
 	if err != nil {
 		return nil, "", err
 	}
-	environment, err := measuredEnvironment(row.Config)
-	if err != nil {
-		return nil, "", err
-	}
 	var profile monitorProfile
 	if err := readStorageJSON(filepath.Join(dir, monitorProfileFile), &profile); err != nil {
 		return nil, "", err
 	}
-	credential, err := resourceCredential(dir, monitorOwnerKeyName, environment[monitorOwnerEnv], profile.Generation != 0)
+	credential, err := resourceCredential(dir, monitorOwnerKeyName, row.env[monitorOwnerEnv], profile.Generation != 0)
 	if err != nil {
 		return nil, "", err
 	}
@@ -65,7 +61,7 @@ func connectMonitorOwner(ctx context.Context, scope accountScope, row containerV
 	defer close()
 	connected := startConnectionProgress(os.Stderr, "Connecting to Monitor "+row.Name+" over attested SSH")
 	defer connected()
-	address, err := monitorAddress(ctx, row)
+	address, err := monitorAddress(ctx, row.containerView)
 	if err != nil {
 		return nil, "", err
 	}
@@ -93,30 +89,17 @@ func connectMonitorOwner(ctx context.Context, scope accountScope, row containerV
 	return client, dir, nil
 }
 
-func monitorRecord(scope accountScope, row containerView) (string, error) {
-	if _, err := workloadSource(row, monitorRepo); err != nil {
-		return "", err
-	}
-	env, err := measuredEnvironment(row.Config)
+func monitorRecord(scope accountScope, row *workloadTarget) (string, error) {
+	dir, err := credentialDir(scope, row.containerView)
 	if err != nil {
 		return "", err
-	}
-	dir, err := monitorDir(scope, row.Name)
-	if err != nil {
-		return "", err
-	}
-	if _, err := os.Stat(filepath.Join(dir, monitorProfileFile)); errors.Is(err, os.ErrNotExist) {
-		dir, err = resourceDir(scope, row.ID)
-		if err != nil {
-			return "", err
-		}
 	}
 	_, err = updateProfile(dir, func(p *monitorProfile) error {
 		if p.Domain != "" && p.Domain != row.Domain || p.ContainerID != "" && p.ContainerID != row.ID ||
-			p.Owner != "" && (p.Owner != env[monitorOwnerEnv] || p.Storage != env["TINFOIL_STORAGE_BUCKET"]) {
+			p.Owner != "" && (p.Owner != row.env[monitorOwnerEnv] || p.Storage != row.env["TINFOIL_STORAGE_BUCKET"]) {
 			return errors.New("Monitor identity or storage binding changed")
 		}
-		p.Domain, p.ContainerID, p.Owner, p.Storage = row.Domain, row.ID, env[monitorOwnerEnv], env["TINFOIL_STORAGE_BUCKET"]
+		p.Domain, p.ContainerID, p.Owner, p.Storage = row.Domain, row.ID, row.env[monitorOwnerEnv], row.env["TINFOIL_STORAGE_BUCKET"]
 		return nil
 	})
 	return dir, err

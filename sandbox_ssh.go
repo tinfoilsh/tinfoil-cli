@@ -26,7 +26,6 @@ import (
 
 const (
 	sandboxAgentKeyName    = "agent_ed25519"
-	sandboxBindingName     = "monitor.json"
 	sandboxEnrolledKeyName = "enrolled_host_key"
 
 	sandboxAttestationPath     = "/.well-known/tinfoil-attestation"
@@ -39,14 +38,9 @@ const (
 	monitorJumpSuffix = ".monitor"
 )
 
-type sandboxBinding struct {
-	Scope   accountScope `json:"scope"`
-	Monitor string       `json:"monitor"`
-}
-
 // One command keeps one verified sandbox connection through enrollment and SSH setup.
 type sandboxSession struct {
-	box         sandboxView
+	box         containerView
 	keys        *sandboxKeys
 	expires     time.Time
 	monitor     *ssh.Client
@@ -69,48 +63,16 @@ type sandboxResource struct {
 	Volumes             map[string]string
 }
 
-func connectSandbox(box sandboxView) (*sandboxSession, error) {
-	cp, err := authedClient()
-	if err != nil {
-		return nil, err
-	}
-	var row containerView
-	if _, err := cp.do("GET", pathf("/api/containers/%s", box.ContainerID), nil, nil, &row); err != nil {
-		return nil, err
-	}
-	return connectSandboxRow(row)
-}
-
-func connectSandboxRow(row containerView) (_ *sandboxSession, err error) {
-	if row.Volumes == nil {
-		cp, err := authedClient()
-		if err != nil {
-			return nil, err
-		}
-		id := row.ID
-		if _, err := cp.do("GET", pathf("/api/containers/%s", id), nil, nil, &row); err != nil {
-			return nil, err
-		}
-		if row.ID != id {
-			return nil, errors.New("sandbox resource changed while resolving it")
-		}
-	}
+func connectSandbox(target *workloadTarget) (_ *sandboxSession, err error) {
+	row, env := target.containerView, target.env
 	if err := requireRunningConnection("Sandbox", row); err != nil {
 		return nil, err
 	}
 	if len(row.Volumes) != 1 || !looksLikeUUID(row.Volumes["workspace"]) {
 		return nil, errors.New("sandbox has no unique workspace volume binding")
 	}
-	env, err := measuredEnvironment(row.Config)
-	if err != nil {
-		return nil, err
-	}
 	var binding monitorBinding
 	bindingErr := json.Unmarshal([]byte(env["MONITOR_BINDING"]), &binding)
-	source, err := workloadSource(row, defaultSandboxRepo)
-	if err != nil {
-		return nil, err
-	}
 	if bindingErr != nil || !looksLikeUUID(env["SANDBOX_INSTANCE_ID"]) || !looksLikeUUID(binding.ContainerID) || binding.Owner == "" {
 		return nil, errors.New("sandbox release lacks measured instance and Monitor bindings; use compatible templates")
 	}
@@ -121,16 +83,9 @@ func connectSandboxRow(row containerView) (_ *sandboxSession, err error) {
 	if err != nil {
 		return nil, err
 	}
-	dir, err := sandboxKeyDir(row.Name)
+	dir, err := credentialDir(scope, row)
 	if err != nil {
 		return nil, err
-	}
-	var legacy sandboxBinding
-	if readStorageJSON(filepath.Join(dir, sandboxBindingName), &legacy) != nil || legacy.Scope != scope {
-		dir, err = resourceDir(scope, row.ID)
-		if err != nil {
-			return nil, err
-		}
 	}
 	record := sandboxResource{row.ID, env["SANDBOX_INSTANCE_ID"], env[sandboxOwnerEnv], binding, row.Volumes}
 	raw, _ := json.Marshal(record)
@@ -164,7 +119,7 @@ func connectSandboxRow(row containerView) (_ *sandboxSession, err error) {
 	if err := writeAtomic(filepath.Join(dir, "resource.json"), raw); err != nil {
 		return nil, err
 	}
-	s := &sandboxSession{box: sandboxFromContainer(row), keys: keys, binding: binding, claim: "sandbox-v2:" + record.Instance}
+	s := &sandboxSession{box: row, keys: keys, binding: binding, claim: "sandbox-v2:" + record.Instance}
 	defer func() {
 		if err != nil {
 			s.close()
@@ -174,17 +129,12 @@ func connectSandboxRow(row containerView) (_ *sandboxSession, err error) {
 	if err != nil {
 		return nil, err
 	}
-	if len(credential.SigningSeed) != 0 {
-		if err := ensureOwnerSSHKey(keys.sshKeyPath, credential.SigningSeed); err != nil {
-			return nil, err
-		}
-	}
 	var receipt sandboxReceipt
 	if err := readStorageJSON(filepath.Join(dir, sandboxEnrolledKeyName), &receipt); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, err
 	}
 	s.initialized = receipt.BootKey != ""
-	if err := s.configureMonitor(cp, scope, row); err != nil {
+	if err := s.configureMonitor(cp, scope); err != nil {
 		return nil, err
 	}
 	dial := func(ctx context.Context, _, _ string) (net.Conn, error) {
@@ -209,7 +159,7 @@ func connectSandboxRow(row containerView) (_ *sandboxSession, err error) {
 			}
 		}
 	}
-	host, expires, err := attestConnection(dial, row.Domain, source)
+	host, expires, err := attestConnection(dial, row.Domain, target.source)
 	if err != nil {
 		var denied *ssh.OpenChannelError
 		if errors.As(err, &denied) && denied.Reason == ssh.Prohibited {
@@ -234,19 +184,34 @@ func (s *sandboxSession) close() {
 	}
 }
 
-func (s *sandboxSession) configureMonitor(cp *cpClient, scope accountScope, row containerView) error {
-	dir, err := resourceDir(scope, s.binding.ContainerID)
+func (s *sandboxSession) configureMonitor(cp *cpClient, scope accountScope) error {
+	resolved := startConnectionProgress(os.Stderr, "Checking the bound Monitor for sandbox "+s.box.Name)
+	peer, err := resolveContainerDetail(cp, s.binding.ContainerID)
+	resolved()
+	if err != nil {
+		return err
+	}
+	target, err := resolveWorkload(*peer, monitorRepo, "")
+	if err != nil {
+		return fmt.Errorf("bound Monitor %s: %w; review its configuration with `tinfoil monitor open %s`", peer.Name, err, peer.Name)
+	}
+	if target.env[monitorOwnerEnv] != s.binding.Owner {
+		return errors.New("Monitor does not match the sandbox's measured owner binding")
+	}
+	if err := requireRunningConnection("Monitor", *peer); err != nil {
+		return err
+	}
+	dir, err := monitorRecord(scope, target)
 	if err != nil {
 		return err
 	}
 	var profile monitorProfile
-	err = readStorageJSON(filepath.Join(dir, monitorProfileFile), &profile)
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
+	if err := readStorageJSON(filepath.Join(dir, monitorProfileFile), &profile); err != nil {
 		return err
 	}
 	connect := func() error {
-		if profile.Owner != s.binding.Owner {
-			return errors.New("Monitor owner changed")
+		if profile.ConfigSource != target.source {
+			return errors.New("Monitor configuration needs fresh attestation")
 		}
 		key, _, _, _, err := ssh.ParseAuthorizedKey([]byte(profile.HostKey))
 		if err != nil {
@@ -256,7 +221,7 @@ func (s *sandboxSession) configureMonitor(cp *cpClient, scope accountScope, row 
 		if err != nil {
 			return err
 		}
-		finish := startConnectionProgress(os.Stderr, "Connecting to Monitor for sandbox "+s.box.ID)
+		finish := startConnectionProgress(os.Stderr, "Connecting to Monitor for sandbox "+s.box.Name)
 		defer finish()
 		conn, err := net.DialTimeout("tcp", profile.Address, 30*time.Second)
 		if err != nil {
@@ -269,24 +234,7 @@ func (s *sandboxSession) configureMonitor(cp *cpClient, scope accountScope, row 
 		if s.monitor != nil {
 			s.monitor.Close()
 		}
-		var peer containerView
-		resolved := startConnectionProgress(os.Stderr, "Checking the bound Monitor for sandbox "+s.box.ID)
-		_, err := cp.do("GET", pathf("/api/containers/%s", s.binding.ContainerID), nil, nil, &peer)
-		resolved()
-		if err != nil {
-			return err
-		}
-		env, err := measuredEnvironment(peer.Config)
-		if err != nil {
-			return err
-		}
-		if err := requireRunningConnection("Monitor", peer); err != nil {
-			return err
-		}
-		if env[monitorOwnerEnv] != s.binding.Owner {
-			return errors.New("Monitor does not match the sandbox's measured owner binding")
-		}
-		owner, ownerDir, err := connectMonitorOwner(context.Background(), scope, peer)
+		owner, ownerDir, err := connectMonitorOwner(context.Background(), scope, target)
 		if err != nil {
 			return err
 		}
@@ -296,8 +244,8 @@ func (s *sandboxSession) configureMonitor(cp *cpClient, scope accountScope, row 
 		if err != nil {
 			return fmt.Errorf("restore Monitor device key: %w", err)
 		}
-		paired := startConnectionProgress(os.Stderr, "Registering sandbox "+s.box.ID+" and this device with Monitor")
-		err = pairSandboxMonitor(owner, dir, s.box.ID, device, s.keys.agentKey)
+		paired := startConnectionProgress(os.Stderr, "Registering sandbox "+s.box.Name+" and this device with Monitor")
+		err = pairSandboxMonitor(owner, dir, s.box.Name, device, s.keys.agentKey)
 		paired()
 		if err != nil {
 			return err
@@ -316,7 +264,7 @@ func (s *sandboxSession) configureMonitor(cp *cpClient, scope accountScope, row 
 	ip, port, _ := net.SplitHostPort(profile.Address)
 	portNumber, _ := strconv.Atoi(port)
 	s.monitorKey = profile.HostKey
-	s.profile.jump = &sshProfile{name: s.box.ID + monitorJumpSuffix, hostName: ip, port: portNumber, user: monitorSSHUser, identityFile: filepath.Join(dir, monitorDeviceKeyName), hostKey: key, hostKeyAlias: profile.Domain}
+	s.profile.jump = &sshProfile{name: s.box.Name + monitorJumpSuffix, hostName: ip, port: portNumber, user: monitorSSHUser, identityFile: filepath.Join(dir, monitorDeviceKeyName), hostKey: key, hostKeyAlias: profile.Domain}
 	return nil
 }
 
@@ -346,21 +294,21 @@ func (s *sandboxSession) enroll() error {
 		}
 		return client, err
 	}
-	message := "Initializing sandbox " + s.box.ID + " encrypted workspace"
+	message := "Initializing sandbox " + s.box.Name + " encrypted workspace"
 	if s.initialized {
-		message = "Unlocking sandbox " + s.box.ID + " encrypted workspace"
+		message = "Unlocking sandbox " + s.box.Name + " encrypted workspace"
 	}
 	finish := startConnectionProgress(os.Stderr, message)
 	err := configureSandbox(dial, s.keys, s.monitorKey, !s.initialized)
 	finish()
 	if err != nil {
-		return fmt.Errorf("%w; retry with `tinfoil sandbox enroll %s`", err, s.box.ID)
+		return fmt.Errorf("%w; retry with `tinfoil sandbox enroll %s`", err, s.box.Name)
 	}
 	if err := writeStorageJSON(filepath.Join(s.keys.dir, sandboxEnrolledKeyName), sandboxReceipt{strings.TrimSpace(string(ssh.MarshalAuthorizedKey(s.profile.hostKey)))}, false); err != nil {
 		return err
 	}
 	s.initialized = true
-	fmt.Fprintf(os.Stderr, "Prepared %s over SSH with the keys in %s\n", s.box.ID, s.keys.dir)
+	fmt.Fprintf(os.Stderr, "Prepared %s over SSH with the keys in %s\n", s.box.Name, s.keys.dir)
 	return nil
 }
 

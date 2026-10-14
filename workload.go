@@ -3,70 +3,49 @@ package main
 import (
 	"errors"
 	"fmt"
-	"github.com/spf13/cobra"
-	"go.yaml.in/yaml/v3"
 	"net/http"
-	"time"
+
+	"go.yaml.in/yaml/v3"
 )
 
-func containerNamed(client *cpClient, name string) (containerView, error) {
-	var rows []containerView
-	if _, err := client.do("GET", "/api/containers", nil, nil, &rows); err != nil {
-		return containerView{}, err
-	}
-	for _, row := range rows {
-		if row.Name == name && !row.Debug {
-			_, err := client.do("GET", pathf("/api/containers/%s", row.ID), nil, nil, &row)
-			return row, err
-		}
-	}
-	return containerView{}, &cpError{Status: http.StatusNotFound, Message: "container not found"}
+// Keep the checked configuration and its measured bindings together through
+// attestation and credential delivery. Never rebuild the source after approval.
+type workloadTarget struct {
+	containerView
+	source string
+	env    map[string]string
 }
 
 // The controlplane supplies the config; tinfoil-go verifies its endorsement and
 // measured digest before a connection can carry owner credentials.
-func workloadSource(row containerView, repo string) (string, error) {
-	if row.Repo != repo || row.Debug || row.Config == "" {
-		return "", errors.New("unexpected workload configuration")
+func resolveWorkload(row containerView, repository, assertion string) (*workloadTarget, error) {
+	if localConfigFile != "" {
+		return nil, errors.New("managed workloads use their published configuration; pin it with --repo instead of --config")
 	}
-	if _, err := measuredEnvironment(row.Config); err != nil {
-		return "", err
+	if row.Repo != repository || row.Debug || row.Config == "" {
+		return nil, errors.New("unexpected workload configuration")
+	}
+	env, err := measuredEnvironment(row.Config)
+	if err != nil {
+		return nil, err
 	}
 	digest := storageHash([]byte(row.Config))
 	if row.ConfigName != "/tinfoil/containers/"+digest {
-		return "", errors.New("workload config reference does not match its digest")
+		return nil, errors.New("workload config reference does not match its digest")
 	}
 	target, err := parseConnectionDescriptor(connectionDescriptor{URL: "https://" + row.Domain, ConfigName: row.ConfigName, ConfigDigest: digest})
-	return target.source, err
+	if err != nil {
+		return nil, err
+	}
+	if err := trustConnectionSource(target.source, assertion); err != nil {
+		return nil, err
+	}
+	return &workloadTarget{containerView: row, source: target.source, env: env}, nil
 }
 
 func missingContainer(err error) bool {
 	var missing *cpError
 	return errors.As(err, &missing) && missing.Status == http.StatusNotFound
-}
-
-func waitWorkload(client *cpClient, row containerView, status string, timeout time.Duration) (containerView, error) {
-	deadline := time.Now().Add(timeout)
-	for row.Status != status {
-		if row.Status == "failed" || time.Now().After(deadline) {
-			return row, fmt.Errorf("%s is %s: %s", row.Name, row.Status, row.ErrorMessage)
-		}
-		time.Sleep(2 * time.Second)
-		if _, err := client.do("GET", pathf("/api/containers/%s", row.ID), nil, nil, &row); err != nil {
-			return row, err
-		}
-	}
-	return row, nil
-}
-
-func namedWorkload(run func(string) error) func(*cobra.Command, []string) error {
-	return func(_ *cobra.Command, args []string) error {
-		name, err := sandboxName(args[0])
-		if err != nil {
-			return err
-		}
-		return run(name)
-	}
 }
 
 func measuredEnvironment(raw string) (map[string]string, error) {

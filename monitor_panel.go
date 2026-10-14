@@ -17,25 +17,26 @@ import (
 
 func init() {
 	command := &cobra.Command{
-		Use: "open NAME", Short: "Forward the Monitor UI over attested SSH", Args: cobra.ExactArgs(1),
+		Use: "open [id|name]", Short: "Forward the Monitor UI over attested SSH", Args: cobra.ExactArgs(1),
 		Long: "Unlock and forward the Monitor UI over attested SSH.",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			name, err := sandboxName(args[0])
-			if err != nil {
-				return err
-			}
+			name := args[0]
 			resolved := startConnectionProgress(cmd.ErrOrStderr(), "Looking up Monitor "+name)
 			defer resolved()
 			scope, cp, err := currentScope()
 			if err != nil {
 				return err
 			}
-			row, err := containerNamed(cp, name)
+			row, err := resolveContainerDetail(cp, name)
 			resolved()
 			if err != nil {
 				return err
 			}
-			client, dir, err := connectMonitorOwner(cmd.Context(), scope, row)
+			target, err := resolveWorkload(*row, monitorRepo, repo)
+			if err != nil {
+				return err
+			}
+			client, dir, err := connectMonitorOwner(cmd.Context(), scope, target)
 			if err != nil {
 				return err
 			}
@@ -44,6 +45,7 @@ func init() {
 		},
 	}
 	command.Flags().StringVar(&attestSSHIdentity, "identity", "", "Owner SSH identity file")
+	addTrustDangerousFlag(command)
 	monitorCmd.AddCommand(command)
 }
 

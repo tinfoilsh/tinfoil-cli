@@ -193,6 +193,7 @@ func listenAndForward(tun *tunnel, specs []forwardSpec) error {
 // tunnelTarget is the enclave a tunnel connects to, plus what a container
 // lookup recorded for it.
 type tunnelTarget struct {
+	workload  *workloadTarget
 	container *containerView
 	name      string
 	host      string
@@ -225,6 +226,23 @@ func resolveTunnelTarget(identifier string) (*tunnelTarget, error) {
 	container, err := resolveContainer(cp, identifier)
 	if err != nil {
 		return nil, err
+	}
+	if container.Repo == defaultSandboxRepo {
+		if container.Volumes == nil {
+			id := container.ID
+			if container, err = resolveContainerDetail(cp, id); err != nil {
+				return nil, err
+			}
+			if container.ID != id {
+				return nil, errors.New("sandbox resource changed while resolving it")
+			}
+		}
+		target, err := resolveWorkload(*container, defaultSandboxRepo, repo)
+		if err != nil {
+			return nil, err
+		}
+		return &tunnelTarget{container: &target.containerView, workload: target, name: target.Name,
+			host: target.Domain, repo: target.source, sshPort: target.SSHPort, sealedTo: forwardSealedTo}, nil
 	}
 	original := *container
 	host := strings.TrimSpace(container.Domain)
@@ -270,13 +288,7 @@ func resolveTunnelTarget(identifier string) (*tunnelTarget, error) {
 	if container.Source == containerSourceLocal {
 		// A local config is a caller-held expectation: the file's digest is
 		// the trust decision, so the connection policy does not apply.
-	} else if repo == "" {
-		// The expectation came from the controlplane record, not the caller:
-		// check it against the connection policy before trusting it.
-		if err := enforceConnectionPolicy(container.Repo); err != nil {
-			return nil, err
-		}
-	} else if err := assertTrustedSource(repo, container.Repo); err != nil {
+	} else if err := trustConnectionSource(container.Repo, repo); err != nil {
 		return nil, err
 	}
 	return &tunnelTarget{

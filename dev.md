@@ -227,3 +227,12 @@ Rerun `attest-ssh` after either VM reboots. If Monitor's address or network gran
 changes, use `tinfoil sandbox restart work`. Keep `monitor open` running for its UI.
 Back up the CLI's encryption credentials; the SSH key alone cannot recover storage.
 Deleting a sandbox retains its billable volume. Moving it to another Monitor is unsupported.
+
+Owner connections check `known-configs.json` for both the sandbox and its Monitor.
+An explicit `--repo` pins the named resource; the bound Monitor is checked separately.
+Version-2 credentials and older named directories are loaded automatically in place,
+alongside version-3 credentials. No key conversion or storage-key rotation is needed.
+
+Sandbox commands accept a name or container UUID and use the standard container
+table and JSON output. JSON uses `id` for the UUID, `name` for the name, and `status`
+for the full lifecycle state.

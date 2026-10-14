@@ -258,23 +258,32 @@ func followContainer(client *cpClient, id string, initial containerView) (contai
 	}
 	defer finish()
 
-	current := initial
-	deadline := time.Now().Add(followTimeout)
-	for {
+	return pollContainer(client, id, initial, followTimeout, func(current containerView) (bool, error) {
 		done, err := followedDeploymentState(current, deploymentID)
 		if err != nil {
-			return current, err
+			return false, err
 		}
 		display := current
 		if current.TinfoildDeploymentID == deploymentID {
 			display.UpdateTag = ""
 		}
 		print(progressLine(display))
+		return done, nil
+	})
+}
+
+func pollContainer(client *cpClient, id string, current containerView, timeout time.Duration, observe func(containerView) (bool, error)) (containerView, error) {
+	deadline := time.Now().Add(timeout)
+	for {
+		done, err := observe(current)
+		if err != nil {
+			return current, err
+		}
 		if done {
 			return current, nil
 		}
 		if time.Now().After(deadline) {
-			return current, fmt.Errorf("still %s after %s; check \"tinfoil container get %s\"", strings.ToLower(statusLabel(current.Status)), followTimeout, current.Name)
+			return current, fmt.Errorf("still %s after %s; check \"tinfoil container get %s\"", strings.ToLower(statusLabel(current.Status)), timeout, current.Name)
 		}
 		time.Sleep(followInterval)
 		var next containerView
@@ -283,6 +292,28 @@ func followContainer(client *cpClient, id string, initial containerView) (contai
 		}
 		current = next
 	}
+}
+
+func postContainerAction(client *cpClient, id, action string, body any) (containerView, error) {
+	var row containerView
+	_, err := client.do("POST", pathf("/api/containers/%s/%s", id, action), nil, body, &row)
+	return row, err
+}
+
+func stopContainer(client *cpClient, row containerView) (containerView, error) {
+	if row.Status != statusStopped && row.Status != statusStopping {
+		var err error
+		row, err = postContainerAction(client, row.ID, "stop", nil)
+		if err != nil {
+			return row, err
+		}
+	}
+	return pollContainer(client, row.ID, row, followTimeout, func(current containerView) (bool, error) {
+		if current.Status == statusStopped {
+			return true, nil
+		}
+		return false, failureError(current)
+	})
 }
 
 // progressLine is the single line shown while following a container.

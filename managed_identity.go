@@ -39,12 +39,56 @@ func resourceDir(scope accountScope, id string) (string, error) {
 	return filepath.Join(filepath.Dir(config), "resources", storageHash(data), id), err
 }
 
+// Existing credentials stay in place. Callers use the same loader regardless
+// of credential version or whether this resource predates UUID directories.
+func credentialDir(scope accountScope, row containerView) (string, error) {
+	dir, err := resourceDir(scope, row.ID)
+	if err != nil {
+		return "", err
+	}
+	name, err := sandboxName(row.Name)
+	if err != nil {
+		return "", err
+	}
+	config, err := configPath()
+	if err != nil {
+		return "", err
+	}
+	switch row.Repo {
+	case monitorRepo:
+		data, _ := json.Marshal(scope)
+		legacy := filepath.Join(filepath.Dir(config), "monitors", storageHash(data), name)
+		if _, err := os.Stat(filepath.Join(legacy, monitorProfileFile)); err == nil {
+			return legacy, nil
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return "", err
+		}
+	case defaultSandboxRepo:
+		legacy := filepath.Join(filepath.Dir(config), "sandboxes", name)
+		var binding struct {
+			Scope accountScope `json:"scope"`
+		}
+		if err := readStorageJSON(filepath.Join(legacy, "monitor.json"), &binding); err == nil {
+			if binding.Scope == scope {
+				return legacy, nil
+			}
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return "", err
+		}
+	}
+	return dir, nil
+}
+
 // A public identity file selects an ssh-agent key without copying its private key.
 func ownerSigner(c *ownerCredential, dir string) (ssh.Signer, string, func(), error) {
 	close := func() {}
 	if len(c.SigningSeed) == ed25519.SeedSize {
+		path := filepath.Join(dir, sandboxSSHKeyName)
+		if err := ensureOwnerSSHKey(path, c.SigningSeed); err != nil {
+			return nil, "", close, err
+		}
 		signer, err := ssh.NewSignerFromKey(ed25519.NewKeyFromSeed(c.SigningSeed))
-		return signer, filepath.Join(dir, sandboxSSHKeyName), close, err
+		return signer, path, close, err
 	}
 	public, err := measuredOwner(c.Owner)
 	if err != nil {

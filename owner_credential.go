@@ -3,12 +3,17 @@ package main
 import (
 	"bytes"
 	"crypto/ed25519"
+	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
 	"os"
+	"strings"
+
+	"golang.org/x/crypto/ssh"
 )
 
 const maxOwnerCredentialBytes = 4096
@@ -97,4 +102,84 @@ func (c *ownerCredential) publicKey() string {
 	private := ed25519.NewKeyFromSeed(c.SigningSeed)
 	defer clear(private)
 	return "ed25519:" + base64.StdEncoding.EncodeToString(private.Public().(ed25519.PublicKey))
+}
+
+func ensureSSHKey(path string) (string, error) {
+	saved, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		saved, err = newSSHKey(path)
+	}
+	if err != nil {
+		return "", err
+	}
+	signer, err := ssh.ParsePrivateKey(saved)
+	if err != nil {
+		return "", fmt.Errorf("parsing %s: %w", path, err)
+	}
+	return strings.TrimSpace(string(ssh.MarshalAuthorizedKey(signer.PublicKey()))), nil
+}
+
+func newSSHKey(path string) ([]byte, error) {
+	_, private, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return nil, fmt.Errorf("generating an SSH key: %w", err)
+	}
+	block, err := ssh.MarshalPrivateKey(private, "")
+	if err != nil {
+		return nil, fmt.Errorf("encoding an SSH key: %w", err)
+	}
+	encoded := pem.EncodeToMemory(block)
+	if err := writeNewFile(path, encoded); err != nil {
+		return nil, err
+	}
+	return encoded, nil
+}
+
+// writeNewFile uses O_EXCL so concurrent commands cannot replace each other's
+// keys.
+func writeNewFile(path string, content []byte) error {
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return fmt.Errorf("creating %s: %w", path, err)
+	}
+	if _, err := file.Write(content); err != nil {
+		file.Close()
+		// Half a key reads as a corrupt one, which is a worse thing to find.
+		os.Remove(path)
+		return fmt.Errorf("writing %s: %w", path, err)
+	}
+	return file.Close()
+}
+
+// Native ssh reads an OpenSSH encoding of the same key committed at measured boot.
+// Existing files must match; a different login identity is never silently adopted.
+func ensureOwnerSSHKey(path string, seed []byte) error {
+	if len(seed) != ed25519.SeedSize {
+		return errors.New("invalid owner key seed")
+	}
+	private := ed25519.NewKeyFromSeed(seed)
+	defer clear(private)
+	saved, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		block, err := ssh.MarshalPrivateKey(private, "")
+		if err != nil {
+			return err
+		}
+		saved = pem.EncodeToMemory(block)
+		defer clear(saved)
+		return writeNewFile(path, saved)
+	}
+	if err != nil {
+		return err
+	}
+	defer clear(saved)
+	signer, err := ssh.ParsePrivateKey(saved)
+	if err != nil {
+		return err
+	}
+	key, _ := ssh.NewPublicKey(private.Public())
+	if !bytes.Equal(signer.PublicKey().Marshal(), key.Marshal()) {
+		return errors.New("saved SSH identity does not match the measured owner key")
+	}
+	return nil
 }

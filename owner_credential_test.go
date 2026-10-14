@@ -6,8 +6,6 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
-	"encoding/pem"
-	"golang.org/x/crypto/ssh"
 	"os"
 	"path/filepath"
 	"strings"
@@ -62,38 +60,73 @@ func newSigningCredential() (*ownerCredential, error) {
 	return c, nil
 }
 
-func TestExternalOwnerCredentialsAreScopedAndRequireRecovery(t *testing.T) {
+func TestCredentialCompatibility(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("SSH_AUTH_SOCK", "")
 	t.Setenv(envConfigPath, filepath.Join(home, "config.json"))
+	t.Setenv("SSH_AUTH_SOCK", "")
 	owner := testOwnerCredential(t)
-	identity := filepath.Join(home, "my owner key")
-	block, err := ssh.MarshalPrivateKey(ed25519.NewKeyFromSeed(owner.SigningSeed), "")
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(identity, pem.EncodeToMemory(block), 0600))
+	identity := filepath.Join(home, "external-owner")
+	require.NoError(t, ensureOwnerSSHKey(identity, owner.SigningSeed))
 	old := attestSSHIdentity
 	attestSSHIdentity = identity
 	t.Cleanup(func() { attestSSHIdentity = old })
 	scope := accountScope{ControlplaneURL: "https://cp.example", UserID: "one"}
-	dir, err := resourceDir(scope, "11111111-1111-4111-8111-111111111111")
-	require.NoError(t, err)
-	credential, err := resourceCredential(dir, "owner.key", owner.publicKey(), false)
-	require.NoError(t, err)
-	require.Empty(t, credential.SigningSeed)
-	signer, path, close, err := ownerSigner(credential, dir)
-	require.NoError(t, err)
-	defer close()
-	require.Equal(t, identity, path)
-	expected, err := measuredOwner(owner.publicKey())
-	require.NoError(t, err)
-	require.Equal(t, expected.Marshal(), signer.PublicKey().Marshal())
-	scope.UserID = "two"
-	other, err := resourceDir(scope, "11111111-1111-4111-8111-111111111111")
-	require.NoError(t, err)
-	require.NotEqual(t, dir, other)
-	require.NoError(t, os.Remove(filepath.Join(dir, "owner.key")))
-	_, err = resourceCredential(dir, "owner.key", owner.publicKey(), true)
-	require.ErrorContains(t, err, "restore encryption credentials")
-	require.NoFileExists(t, filepath.Join(dir, "owner.key"))
+	for _, repository := range []string{monitorRepo, defaultSandboxRepo} {
+		for _, legacy := range []bool{false, true} {
+			row := containerView{ID: "11111111-1111-4111-8111-111111111111", Name: "work", Repo: repository}
+			want, err := resourceDir(scope, row.ID)
+			require.NoError(t, err)
+			if legacy {
+				want = filepath.Join(home, "sandboxes", row.Name)
+				if repository == monitorRepo {
+					data, _ := json.Marshal(scope)
+					want = filepath.Join(home, "monitors", storageHash(data), row.Name)
+					require.NoError(t, writeStorageJSON(filepath.Join(want, monitorProfileFile), monitorProfile{}, false))
+				} else {
+					require.NoError(t, writeStorageJSON(filepath.Join(want, "monitor.json"), map[string]any{"scope": scope}, false))
+				}
+			}
+			dir, err := credentialDir(scope, row)
+			require.NoError(t, err)
+			require.Equal(t, want, dir)
+			require.NoError(t, prepareStorageDirectory(dir))
+			file := filepath.Join(dir, "credential-"+strings.TrimPrefix(repository, "tinfoilsh/"))
+			credential := &ownerCredential{Version: 3, Owner: owner.publicKey(), Key: owner.Key}
+			if legacy {
+				credential = owner
+			}
+			require.NoError(t, saveOwnerCredential(file, credential))
+			before, err := os.ReadFile(file)
+			require.NoError(t, err)
+			loaded, err := resourceCredential(dir, filepath.Base(file), owner.publicKey(), true)
+			require.NoError(t, err)
+			signer, path, close, err := ownerSigner(loaded, dir)
+			require.NoError(t, err)
+			close()
+			expected, err := measuredOwner(owner.publicKey())
+			require.NoError(t, err)
+			require.Equal(t, expected.Marshal(), signer.PublicKey().Marshal())
+			if legacy {
+				require.Equal(t, filepath.Join(dir, sandboxSSHKeyName), path)
+				_, _, _, err = ownerSigner(testOwnerCredential(t), dir)
+				require.ErrorContains(t, err, "does not match")
+			} else {
+				require.Equal(t, identity, path)
+			}
+			after, err := os.ReadFile(file)
+			require.NoError(t, err)
+			require.Equal(t, before, after, "reading either version must preserve its encryption key and file")
+			other := scope
+			other.UserID = "two"
+			foreign, err := credentialDir(other, row)
+			require.NoError(t, err)
+			require.NotEqual(t, dir, foreign)
+			require.NoError(t, os.Remove(file))
+			_, err = resourceCredential(dir, filepath.Base(file), owner.publicKey(), true)
+			require.ErrorContains(t, err, "restore encryption credentials")
+			require.NoFileExists(t, file)
+		}
+	}
+	_, err := credentialDir(scope, containerView{ID: "11111111-1111-4111-8111-111111111111", Name: "../escape"})
+	require.Error(t, err)
 }

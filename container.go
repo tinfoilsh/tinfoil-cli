@@ -632,8 +632,8 @@ of it. To change a running container, use "tinfoil container update".`,
 				return err
 			}
 		}
-		var deployed containerView
-		if _, err := client.do("POST", pathf("/api/containers/%s/deploy", c.ID), nil, body, &deployed); err != nil {
+		deployed, err := postContainerAction(client, c.ID, "deploy", body)
+		if err != nil {
 			return withAttachHint(err, c)
 		}
 		attached, err := loadContainerVolumes(client, deployed)
@@ -657,8 +657,8 @@ var containerStopCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		var stopped containerView
-		if _, err := client.do("POST", pathf("/api/containers/%s/stop", c.ID), nil, nil, &stopped); err != nil {
+		stopped, err := postContainerAction(client, c.ID, "stop", nil)
+		if err != nil {
 			return err
 		}
 		if outputFormat != "json" {
@@ -937,7 +937,7 @@ func resolveContainer(client *cpClient, identifier string) (*containerView, erro
 	}
 	switch len(matches) {
 	case 0:
-		return nil, fmt.Errorf("no container named %q (use the container ID or `tinfoil container list`)", id)
+		return nil, &cpError{Status: http.StatusNotFound, Method: "GET", Path: "/api/containers", Message: fmt.Sprintf("no container named %q (use the container ID or `tinfoil container list`)", id)}
 	case 1:
 		c := matches[0]
 		return &c, nil

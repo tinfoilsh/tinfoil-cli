@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -40,13 +39,14 @@ type accountScope struct {
 
 // Persist the domain, boot key and minimum generation.
 type monitorProfile struct {
-	Domain      string `json:"domain"`
-	Address     string `json:"address,omitempty"`
-	ContainerID string `json:"container_id,omitempty"`
-	Owner       string `json:"owner_public_key,omitempty"`
-	Storage     string `json:"storage,omitempty"`
-	HostKey     string `json:"host_key,omitempty"`
-	Generation  uint64 `json:"generation"`
+	Domain       string `json:"domain"`
+	Address      string `json:"address,omitempty"`
+	ContainerID  string `json:"container_id,omitempty"`
+	Owner        string `json:"owner_public_key,omitempty"`
+	Storage      string `json:"storage,omitempty"`
+	HostKey      string `json:"host_key,omitempty"`
+	ConfigSource string `json:"config_source,omitempty"`
+	Generation   uint64 `json:"generation"`
 }
 
 func init() { rootCmd.AddCommand(monitorCmd) }
@@ -74,24 +74,8 @@ func currentScope() (accountScope, *cpClient, error) {
 	return scope, newCPClient(cfg), nil
 }
 
-func monitorDir(scope accountScope, name string) (string, error) {
-	name, err := sandboxName(name)
-	if err != nil {
-		return "", err
-	}
-	config, err := configPath()
-	if err != nil {
-		return "", err
-	}
-	data, err := json.Marshal(scope)
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(filepath.Dir(config), "monitors", storageHash(data), name), nil
-}
-
 // Verify the deployed configuration and preserve the boot-key pin shared with sandboxes.
-func verifyMonitor(dir string, row containerView) (ssh.PublicKey, error) {
+func verifyMonitor(dir string, row *workloadTarget) (ssh.PublicKey, error) {
 	var profile monitorProfile
 	if err := readStorageJSON(filepath.Join(dir, monitorProfileFile), &profile); err != nil {
 		return nil, err
@@ -99,37 +83,23 @@ func verifyMonitor(dir string, row containerView) (ssh.PublicKey, error) {
 	if row.Domain != profile.Domain {
 		return nil, errors.New("Monitor no longer matches its saved domain")
 	}
-	source, err := workloadSource(row, monitorRepo)
-	if err != nil {
-		return nil, err
-	}
-	finish := startConnectionProgress(os.Stderr, "Verifying Monitor "+row.Name+" attestation and SSH host key")
-	defer finish()
-	secure, err := newVerifiedClient(row.Domain, source, "")
-	if err != nil {
-		return nil, err
-	}
-	verified, err := secure.Verify()
-	if err != nil {
-		return nil, err
-	}
-	hostKey, err := endorsedHostKey(row.Domain, verified)
+	hostKey, err := attestedHostKey(row.Domain, row.source, "")
 	if err != nil {
 		return nil, err
 	}
 	attested := strings.TrimSpace(string(ssh.MarshalAuthorizedKey(hostKey)))
-	if profile.HostKey != attested {
+	if profile.HostKey != attested || profile.ConfigSource != row.source {
 		if _, err := updateProfile(dir, func(p *monitorProfile) error {
-			if p.HostKey != profile.HostKey {
+			if p.HostKey != profile.HostKey || p.ConfigSource != profile.ConfigSource {
 				return errors.New("another command changed the pinned Monitor SSH host key; run this again")
 			}
 			p.HostKey = attested
+			p.ConfigSource = row.source
 			return nil
 		}); err != nil {
 			return nil, err
 		}
 	}
-	finish()
 	fmt.Fprintf(os.Stderr, "Monitor %s attestation verified.\n", row.Name)
 	return hostKey, nil
 }

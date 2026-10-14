@@ -176,24 +176,6 @@ func TestSandboxSetupSeparatesMonitorCredentialsAndWorkspaceUnlock(t *testing.T)
 	}
 }
 
-func TestOwnerLoginKeyIsDerivedAndNeverReplaced(t *testing.T) {
-	credential := testOwnerCredential(t)
-	path := filepath.Join(t.TempDir(), sandboxSSHKeyName)
-	require.NoError(t, ensureOwnerSSHKey(path, credential.SigningSeed))
-	before, err := os.ReadFile(path)
-	require.NoError(t, err)
-	signer, err := ssh.ParsePrivateKey(before)
-	require.NoError(t, err)
-	expected, err := ssh.NewPublicKey(ed25519.NewKeyFromSeed(credential.SigningSeed).Public())
-	require.NoError(t, err)
-	require.Equal(t, expected.Marshal(), signer.PublicKey().Marshal())
-	require.NoError(t, ensureOwnerSSHKey(path, credential.SigningSeed))
-	require.ErrorContains(t, ensureOwnerSSHKey(path, bytes.Repeat([]byte{43}, 32)), "does not match")
-	after, err := os.ReadFile(path)
-	require.NoError(t, err)
-	require.Equal(t, before, after)
-}
-
 func TestUnlockRequiresUnexpiredAttestationBeforeDial(t *testing.T) {
 	for _, expiry := range []time.Time{{}, time.Now().Add(-time.Second)} {
 		session := sandboxSession{expires: expiry, keys: &sandboxKeys{dir: t.TempDir()}, profile: sshProfile{hostKey: testBootKey(t)}}

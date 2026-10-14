@@ -91,7 +91,7 @@ attestation always uses the enclave hostname.`,
 				if attestSSHName != "" && !sshProfileNamePattern.MatchString(attestSSHName) {
 					return errors.New("invalid SSH profile name")
 				}
-				s, err := connectSandboxRow(*target.container)
+				s, err := connectSandbox(target.workload)
 				if err != nil {
 					return err
 				}

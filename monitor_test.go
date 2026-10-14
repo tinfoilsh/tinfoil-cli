@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"crypto/ed25519"
 	"crypto/rand"
+	"encoding/json"
 	"encoding/pem"
 	"fmt"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -25,40 +27,94 @@ func controlplaneMonitorConfig(publicKey string) containerView {
 	return containerView{ID: "container-1", Name: "personal", Status: statusRunning, Domain: "personal.user-1.users.monitors.tinfoil.dev", Config: config, ConfigName: "/tinfoil/containers/" + storageHash([]byte(config)), Repo: monitorRepo, CurrentTag: "v1.2.3"}
 }
 
-func TestWorkloadSourcePinsControlplaneConfig(t *testing.T) {
+func TestWorkloadPinsAndTrust(t *testing.T) {
+	t.Setenv(envKnownConfigs, filepath.Join(t.TempDir(), "known-configs.json"))
 	for _, repository := range []string{monitorRepo, defaultSandboxRepo} {
-		t.Run(repository, func(t *testing.T) {
-			row := controlplaneMonitorConfig(testOwnerCredential(t).publicKey())
-			row.Repo = repository
-			source, err := workloadSource(row, repository)
-			require.NoError(t, err)
-			identity, revision, pinned, err := verify.ParseReference(source)
-			require.NoError(t, err)
-			hash := storageHash([]byte(row.Config))
-			require.Equal(t, []string{"tinfoil/containers", hash, hash}, []string{identity, revision, pinned})
-			_, err = newVerifiedClient(row.Domain, source, "")
-			require.NoError(t, err)
+		require.NoError(t, os.WriteFile(os.Getenv(envKnownConfigs), []byte(`{"mode":"frozen","allow":{}}`), 0600))
 
-			for _, change := range []func(*containerView){
-				func(r *containerView) { r.Config += "# changed without updating reference\n" },
-				func(r *containerView) { r.Config = "" },
-				func(r *containerView) { r.ConfigName = "" },
-				func(r *containerView) { r.Repo = "other/repo" },
-				func(r *containerView) { r.Debug = true },
-				func(r *containerView) { r.Domain = "host/path" },
-			} {
-				changed := row
-				change(&changed)
-				_, err := workloadSource(changed, repository)
-				require.Error(t, err)
-			}
-			row.Config += "# new controlplane configuration\n"
-			row.ConfigName = "/tinfoil/containers/" + storageHash([]byte(row.Config))
-			updated, err := workloadSource(row, repository)
-			require.NoError(t, err)
-			require.NotEqual(t, source, updated, "attestation must check the new config digest")
-		})
+		row := controlplaneMonitorConfig(testOwnerCredential(t).publicKey())
+		row.Repo = repository
+		_, err := resolveWorkload(row, repository, "")
+		require.ErrorContains(t, err, "mode: frozen")
+		target, err := resolveWorkload(row, repository, "tinfoil/containers")
+		require.NoError(t, err)
+		identity, revision, digest, err := verify.ParseReference(target.source)
+		require.NoError(t, err)
+		hash := storageHash([]byte(row.Config))
+		require.Equal(t, []string{"tinfoil/containers", hash, hash}, []string{identity, revision, digest})
+		require.Equal(t, row, target.containerView)
+		require.Equal(t, row.Config, target.Config)
+		require.NotEmpty(t, target.env[monitorOwnerEnv])
+
+		changed := row
+		changed.Config += "# changed without updating reference\n"
+		_, err = resolveWorkload(changed, repository, target.source)
+		require.ErrorContains(t, err, "digest")
+		changed.ConfigName = "/tinfoil/containers/" + storageHash([]byte(changed.Config))
+		_, err = resolveWorkload(changed, repository, target.source)
+		require.ErrorContains(t, err, "does not match --repo", "an explicit pin must survive sandbox dispatch")
+		for _, change := range []func(*containerView){
+			func(r *containerView) { r.Config = "" },
+			func(r *containerView) { r.Repo = "other/repo" },
+			func(r *containerView) { r.Debug = true },
+			func(r *containerView) { r.Domain = "host/path" },
+		} {
+			changed = row
+			change(&changed)
+			_, err := resolveWorkload(changed, repository, "tinfoil/containers")
+			require.Error(t, err)
+		}
 	}
+	for _, env := range []string{"[OWNER]", "[{OWNER: null}]", "[{}]", "[{OWNER: fixed}, {OWNER: changed}]", "[OWNER, {OWNER: fixed}]", "[{OWNER: fixed}, {OTHER: null}]"} {
+		_, err := measuredEnvironment("containers:\n  - env: " + env)
+		require.Error(t, err, env)
+	}
+	values, err := measuredEnvironment("containers:\n  - env: [{OWNER: ''}]\n")
+	require.NoError(t, err)
+	require.Equal(t, map[string]string{"OWNER": ""}, values)
+}
+
+func TestManagedCommandsEnforceTrustBeforeCredentials(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv(envConfigPath, filepath.Join(dir, "config.json"))
+	t.Setenv(envKnownConfigs, filepath.Join(dir, "known-configs.json"))
+	require.NoError(t, os.WriteFile(os.Getenv(envKnownConfigs), []byte(`{"mode":"frozen","allow":{}}`), 0600))
+	row := controlplaneMonitorConfig(testOwnerCredential(t).publicKey())
+	row.ID = "11111111-1111-4111-8111-111111111111"
+	row.Volumes = map[string]string{"workspace": "22222222-2222-4222-8222-222222222222"}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "GET", r.Method)
+		if r.URL.Path == "/api/auth/context" {
+			json.NewEncoder(w).Encode(authContext{ContextType: "personal", UserID: "owner"})
+		} else {
+			require.Equal(t, "/api/containers/"+row.ID, r.URL.Path)
+			json.NewEncoder(w).Encode(row)
+		}
+	}))
+	defer server.Close()
+	t.Setenv(envCPURL, server.URL)
+	t.Setenv(envAdminKey, "admin_test")
+	oldRepo, oldDangerous := repo, trustDangerous
+	repo, trustDangerous = "", false
+	t.Cleanup(func() { repo, trustDangerous = oldRepo, oldDangerous })
+	command, _, err := rootCmd.Find([]string{"monitor", "open"})
+	require.NoError(t, err)
+	require.ErrorContains(t, command.RunE(command, []string{row.ID}), "mode: frozen")
+	row.Repo = defaultSandboxRepo
+	require.ErrorContains(t, sandboxEnrollCmd.RunE(sandboxEnrollCmd, []string{row.ID}), "mode: frozen")
+	require.ErrorContains(t, attestSSHCmd.RunE(attestSSHCmd, []string{row.ID}), "mode: frozen")
+	repo = "tinfoil/containers@" + strings.Repeat("0", 64)
+	require.ErrorContains(t, attestSSHCmd.RunE(attestSSHCmd, []string{row.ID}), "does not match --repo")
+	repo = "tinfoil/containers"
+	target, err := resolveTunnelTarget(row.ID)
+	require.NoError(t, err)
+	require.Same(t, target.container, &target.workload.containerView)
+	require.Equal(t, target.repo, target.workload.source)
+	// Even an approved config cannot send credentials without the network binding.
+	_, err = connectSandbox(target.workload)
+	require.ErrorContains(t, err, "measured instance and Monitor bindings")
+	require.NoDirExists(t, filepath.Join(dir, "resources"))
+	require.NoDirExists(t, filepath.Join(dir, "monitors"))
 }
 
 func TestMonitorUnlockAndSSHPanelAgainstRealMonitor(t *testing.T) {
@@ -182,29 +238,6 @@ func testSigner(t *testing.T) ssh.Signer {
 
 func authorizedLine(signer ssh.Signer) string {
 	return strings.TrimSpace(string(ssh.MarshalAuthorizedKey(signer.PublicKey())))
-}
-
-func TestWorkloadRejectsUnmeasuredEnvironment(t *testing.T) {
-	for _, env := range []string{"[OWNER]", "[MONITOR_ENDPOINT]", "[{OWNER: null}]", "[{}]", "[{OWNER: fixed}, {OTHER: null}]"} {
-		row := controlplaneMonitorConfig("test")
-		row.Config = "containers:\n  - name: monitor\n    env: " + env + "\n"
-		row.ConfigName = "/tinfoil/containers/" + storageHash([]byte(row.Config))
-		_, err := workloadSource(row, monitorRepo)
-		require.Error(t, err, env)
-	}
-	row := controlplaneMonitorConfig("")
-	_, err := workloadSource(row, monitorRepo)
-	require.NoError(t, err, "a literal empty string cannot import runtime env")
-}
-
-func TestMeasuredEnvironmentRejectsRuntimeAndAmbiguousInputs(t *testing.T) {
-	for _, env := range []string{"[MONITOR_ENDPOINT, {OWNER: fixed}]", "[{OWNER: fixed}, {OWNER: changed}]", "[OWNER, {OWNER: fixed}]"} {
-		_, err := measuredEnvironment("containers:\n  - env: " + env)
-		require.Error(t, err)
-	}
-	values, err := measuredEnvironment("containers:\n  - env: [{OWNER: fixed}]\n")
-	require.NoError(t, err)
-	require.Equal(t, map[string]string{"OWNER": "fixed"}, values)
 }
 
 func connectOwnerSSH(conn net.Conn, host string, hostKey ssh.PublicKey, seed []byte) (*ssh.Client, error) {

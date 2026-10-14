@@ -5,10 +5,11 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
-	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -95,44 +96,6 @@ func TestSandboxRequiresBoundRestrictedAliasBeforeStoppingOrDeploying(t *testing
 	require.NoError(t, validateSandboxNetwork(row))
 }
 
-func TestSandboxNameRejectsNamesThatCannotBeDirectories(t *testing.T) {
-	tests := []struct {
-		name  string
-		raw   string
-		want  string
-		valid bool
-	}{
-		{name: "plain name", raw: "my-sandbox", want: "my-sandbox", valid: true},
-		{name: "surrounding space is trimmed", raw: "  my-sandbox\n", want: "my-sandbox", valid: true},
-		{name: "underscores and digits", raw: "box_2", want: "box_2", valid: true},
-		{name: "longest allowed", raw: strings.Repeat("a", 63), want: strings.Repeat("a", 63), valid: true},
-		{name: "too long", raw: strings.Repeat("a", 64)},
-		{name: "empty", raw: ""},
-		{name: "leading dash", raw: "-box"},
-		{name: "path separator", raw: "a/b"},
-		{name: "parent directory", raw: ".."},
-		{name: "traversal", raw: "../../.ssh"},
-		{name: "dot", raw: "."},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got, err := sandboxName(tt.raw)
-			if tt.valid {
-				if err != nil {
-					t.Fatalf("sandboxName(%q) failed: %v", tt.raw, err)
-				}
-				if got != tt.want {
-					t.Fatalf("sandboxName(%q) = %q, want %q", tt.raw, got, tt.want)
-				}
-				return
-			}
-			if err == nil {
-				t.Fatalf("sandboxName(%q) = %q, want an error", tt.raw, got)
-			}
-		})
-	}
-}
-
 func TestSandboxCreateSendsExplicitAliasWithoutMonitorLookup(t *testing.T) {
 	const monitorID = "11111111-1111-4111-8111-111111111111"
 	creates := 0
@@ -162,4 +125,61 @@ func TestSandboxCreateSendsExplicitAliasWithoutMonitorLookup(t *testing.T) {
 	_, err := captureTestStdout(func() error { return containerCreateCmd.RunE(containerCreateCmd, []string{"work"}) })
 	require.NoError(t, err)
 	require.Equal(t, 1, creates)
+}
+
+func TestSandboxCommandsShareLifecycleAndHandleDeletedResources(t *testing.T) {
+	row := containerView{ID: "11111111-1111-4111-8111-111111111111", Name: "work", Repo: defaultSandboxRepo, Status: statusRunning}
+	deleted, polls := false, 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method + " " + r.URL.Path {
+		case "GET /api/auth/context":
+			json.NewEncoder(w).Encode(authContext{ContextType: "personal", UserID: "owner"})
+		case "GET /api/containers":
+			if deleted {
+				json.NewEncoder(w).Encode([]containerView{})
+			} else {
+				json.NewEncoder(w).Encode([]containerView{row})
+			}
+		case "GET /api/containers/" + row.ID:
+			if row.Status == statusStopping {
+				polls++
+				row.Status = statusStopped
+			}
+			json.NewEncoder(w).Encode(row)
+		case "POST /api/containers/" + row.ID + "/stop":
+			row.Status = statusStopping
+			json.NewEncoder(w).Encode(row)
+		case "DELETE /api/containers/" + row.ID:
+			deleted = true
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	configureContainerPromotionTest(t, server.URL)
+	t.Setenv("HOME", t.TempDir())
+	oldInterval, oldYes, oldOutput := followInterval, sandboxYes, outputFormat
+	followInterval, sandboxYes, outputFormat = time.Millisecond, true, "json"
+	t.Cleanup(func() { followInterval, sandboxYes, outputFormat = oldInterval, oldYes, oldOutput })
+	for _, state := range []string{statusCreated, statusDeploying, statusStarted, statusStopping} {
+		row.Status = state
+		output, err := captureTestStdout(func() error { return sandboxListCmd.RunE(sandboxListCmd, nil) })
+		require.NoError(t, err)
+		var listed []containerView
+		require.NoError(t, json.Unmarshal([]byte(output), &listed))
+		require.Equal(t, state, listed[0].Status)
+	}
+	row.Status = statusRunning
+	_, err := captureTestStdout(func() error { return sandboxStopCmd.RunE(sandboxStopCmd, []string{row.ID}) })
+	require.NoError(t, err)
+	require.Equal(t, 1, polls)
+	profile := filepath.Join(os.Getenv("HOME"), ".ssh", "tinfoil", "work.conf")
+	require.NoError(t, os.MkdirAll(filepath.Dir(profile), 0700))
+	require.NoError(t, os.WriteFile(profile, []byte("# tinfoil-resource: "+server.URL+"//owner/"+row.ID+"\n"), 0600))
+	for range 2 {
+		require.NoError(t, sandboxDeleteCmd.RunE(sandboxDeleteCmd, []string{row.Name}))
+	}
+	require.NoFileExists(t, profile)
 }
