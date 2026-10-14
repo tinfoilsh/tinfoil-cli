@@ -93,7 +93,7 @@ require (
 	github.com/tidwall/match v1.2.0 // indirect
 	github.com/tidwall/pretty v1.2.1 // indirect
 	github.com/tidwall/sjson v1.2.5 // indirect
-	github.com/tinfoilsh/encrypted-http-body-protocol v0.3.2 // indirect
+	github.com/tinfoilsh/encrypted-http-body-protocol v0.4.1 // indirect
 	github.com/tinfoilsh/go-sev-guest v0.0.0-20260818055935-bec7bdb637fd // indirect
 	github.com/transparency-dev/formats v0.1.1 // indirect
 	github.com/transparency-dev/merkle v0.0.2 // indirect
