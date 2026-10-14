@@ -10,6 +10,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
@@ -484,7 +485,7 @@ without registry publication; keep the exact file to verify subsequent connectio
 			return createFollowupError(created, replaceID, followAndRender(client, created, nil))
 		}
 		if len(requests) > 0 {
-			if err := attachVolumes(client, &created, requests, volumes); err != nil {
+			if err := attachVolumes(client, &created, requests, volumes, ""); err != nil {
 				return createFollowupError(created, replaceID, err)
 			}
 		}
@@ -570,6 +571,19 @@ of it. To change a running container, use "tinfoil container update".`,
 		if err != nil {
 			return err
 		}
+		if c.Status == statusStopping {
+			fmt.Fprintf(os.Stderr, "Waiting for %s to stop before deploying.\n", c.Name)
+			deadline := time.Now().Add(followTimeout)
+			for c.Status == statusStopping {
+				if time.Now().After(deadline) {
+					return fmt.Errorf("%s is still stopping after %s; deploy again once it has stopped", c.Name, followTimeout)
+				}
+				time.Sleep(followInterval)
+				if c, err = resolveContainerDetail(client, c.ID); err != nil {
+					return err
+				}
+			}
+		}
 		if c.Status == statusFailed && c.ErrorMessage != "" && outputFormat != "json" {
 			fmt.Fprintf(os.Stderr, "Last attempt failed: %s\n", humanVolumeMessage(c.ErrorMessage))
 			fmt.Fprintln(os.Stderr, "Deploying again with the same settings; pass flags to change them.")
@@ -595,7 +609,10 @@ of it. To change a running container, use "tinfoil container update".`,
 			if value, ok := body["mark_latest_release"].(bool); ok {
 				attachTarget.MarkLatestRelease = &value
 			}
-			if err := attachVolumes(client, &attachTarget, requests, volumes); err != nil {
+			if err := useTagSlots(client, &attachTarget, deployTag); err != nil {
+				return err
+			}
+			if err := attachVolumes(client, &attachTarget, requests, volumes, deployTag); err != nil {
 				return err
 			}
 		}
