@@ -188,15 +188,15 @@ var sandboxStopCmd = &cobra.Command{
 
 var sandboxDeleteCmd = &cobra.Command{
 	Use:   "delete [name]",
-	Short: "Delete a sandbox and erase its workspace",
+	Short: "Delete a sandbox and retain its workspace volume",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		name, err := sandboxName(args[0])
 		if err != nil {
 			return err
 		}
-		fmt.Fprintf(os.Stderr, "Deleting %s erases the encrypted disk behind this workspace.\n", name)
-		fmt.Fprintln(os.Stderr, "Everything on it is lost for good and the name becomes free to reuse.")
+		fmt.Fprintf(os.Stderr, "Deleting %s retains its encrypted workspace volume.\n", name)
+		fmt.Fprintln(os.Stderr, "The name becomes free to reuse. Storage charges continue until the volume is deleted.")
 		fmt.Fprintln(os.Stderr)
 		if err := confirmYes(sandboxYes, "sandbox delete"); err != nil {
 			return err
@@ -212,7 +212,7 @@ var sandboxDeleteCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		fmt.Printf("Deleted %s. The keys in %s open nothing now and can be deleted.\n", name, dir)
+		fmt.Printf("Deleted %s. Keep the keys in %s to reopen the retained workspace.\n", name, dir)
 		return nil
 	},
 }
