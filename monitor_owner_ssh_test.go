@@ -3,19 +3,124 @@ package main
 import (
 	"bufio"
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
 	"encoding/json"
 	"io"
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/ssh"
+	"golang.org/x/crypto/ssh/knownhosts"
 )
+
+func TestOwnerSSHNegotiatesRSASHA2WithPinnedKey(t *testing.T) {
+	private, err := rsa.GenerateKey(rand.Reader, 2048)
+	require.NoError(t, err)
+	host, err := ssh.NewSignerFromKey(private)
+	require.NoError(t, err)
+	host, err = ssh.NewSignerWithAlgorithms(host.(ssh.AlgorithmSigner), []string{ssh.KeyAlgoRSASHA512, ssh.KeyAlgoRSASHA256})
+	require.NoError(t, err)
+	address := serveSSHHandshakeTest(t, host)
+	for _, pin := range []ssh.PublicKey{host.PublicKey(), testSigner(t).PublicKey()} {
+		conn, err := net.Dial("tcp", address)
+		require.NoError(t, err)
+		client, err := connectOwnerSigner(conn, "monitor.example", pin, testSigner(t), "owner")
+		if pin == host.PublicKey() {
+			require.NoError(t, err)
+			client.Close()
+		} else {
+			require.ErrorContains(t, err, "host key mismatch")
+		}
+	}
+}
+
+func TestOpenSSHHostKeyAliasUsesBarePinAtNonDefaultPort(t *testing.T) {
+	program, err := exec.LookPath("ssh")
+	if err != nil {
+		t.Skip("OpenSSH unavailable")
+	}
+	host := testSigner(t)
+	address := serveSSHHandshakeTest(t, host)
+	ip, port, err := net.SplitHostPort(address)
+	require.NoError(t, err)
+	portNumber, err := strconv.Atoi(port)
+	require.NoError(t, err)
+	require.NotEqual(t, defaultSSHPort, portNumber)
+	profile := sshProfile{name: "work.monitor", hostName: ip, port: portNumber, user: monitorSSHUser,
+		hostKey: host.PublicKey(), hostKeyAlias: "personal.example"}
+	dir := t.TempDir()
+	config, pins := filepath.Join(dir, "ssh_config"), filepath.Join(dir, "known_hosts")
+	require.NoError(t, os.WriteFile(config, []byte(profile.render()), 0600))
+	for _, qualified := range []bool{false, true} {
+		pin := profile.pin()
+		if qualified {
+			pin = knownhosts.Line([]string{knownhosts.Normalize(net.JoinHostPort(profile.hostKeyAlias, port))}, profile.hostKey) + "\n"
+		}
+		require.NoError(t, os.WriteFile(pins, []byte(pin), 0600))
+		ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+		output, err := exec.CommandContext(ctx, program, "-F", config, "-o", "UserKnownHostsFile="+pins,
+			"-o", "BatchMode=yes", profile.name, "true").CombinedOutput()
+		cancel()
+		if qualified {
+			require.Error(t, err)
+			require.Contains(t, string(output), "Host key verification failed")
+		} else {
+			require.NoError(t, err, string(output))
+		}
+	}
+}
+
+// Serve real SSH handshakes and a successful exec without owner side effects.
+func serveSSHHandshakeTest(t *testing.T, host ssh.Signer) string {
+	t.Helper()
+	config := &ssh.ServerConfig{NoClientAuth: true}
+	config.AddHostKey(host)
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { listener.Close() })
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer conn.Close()
+				conn.SetDeadline(time.Now().Add(5 * time.Second))
+				server, channels, requests, err := ssh.NewServerConn(conn, config)
+				if err != nil {
+					return
+				}
+				defer server.Close()
+				go ssh.DiscardRequests(requests)
+				for incoming := range channels {
+					channel, requests, err := incoming.Accept()
+					if err != nil {
+						return
+					}
+					defer channel.Close()
+					for request := range requests {
+						request.Reply(request.Type == "exec", nil)
+						if request.Type == "exec" {
+							channel.SendRequest("exit-status", false, ssh.Marshal(struct{ Status uint32 }{0}))
+							return
+						}
+					}
+				}
+			}()
+		}
+	}()
+	return listener.Addr().String()
+}
 
 // Invoked by the real Monitor process test after its owner SSH unlock.
 func testOwnerSSHPanel(t *testing.T, sshClient *ssh.Client, dir string, seed []byte, hostKey ssh.PublicKey, address string) {

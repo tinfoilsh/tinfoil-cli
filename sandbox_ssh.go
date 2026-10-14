@@ -47,7 +47,6 @@ type sandboxSession struct {
 	profile     sshProfile
 	signer      ssh.Signer
 	signerClose func()
-	binding     monitorBinding
 	claim       string
 	monitorKey  string
 	initialized bool
@@ -83,7 +82,23 @@ func connectSandbox(target *workloadTarget) (_ *sandboxSession, err error) {
 	if err != nil {
 		return nil, err
 	}
-	dir, err := credentialDir(scope, row)
+	resolved := startConnectionProgress(os.Stderr, "Checking the bound Monitor for sandbox "+row.Name)
+	peer, err := resolveContainerDetail(cp, binding.ContainerID)
+	resolved()
+	if err != nil {
+		return nil, err
+	}
+	monitor, err := resolveWorkload(*peer, monitorRepo, "")
+	if err != nil {
+		return nil, fmt.Errorf("bound Monitor %s: %w; review its configuration with `tinfoil monitor open %s`", peer.Name, err, peer.Name)
+	}
+	if monitor.env[monitorOwnerEnv] != binding.Owner {
+		return nil, errors.New("Monitor does not match the sandbox's measured owner binding")
+	}
+	if err := requireRunningConnection("Monitor", *peer); err != nil {
+		return nil, err
+	}
+	dir, err := credentialDir(scope, row, monitor.Name)
 	if err != nil {
 		return nil, err
 	}
@@ -119,7 +134,7 @@ func connectSandbox(target *workloadTarget) (_ *sandboxSession, err error) {
 	if err := writeAtomic(filepath.Join(dir, "resource.json"), raw); err != nil {
 		return nil, err
 	}
-	s := &sandboxSession{box: row, keys: keys, binding: binding, claim: "sandbox-v2:" + record.Instance}
+	s := &sandboxSession{box: row, keys: keys, claim: "sandbox-v2:" + record.Instance}
 	defer func() {
 		if err != nil {
 			s.close()
@@ -134,7 +149,7 @@ func connectSandbox(target *workloadTarget) (_ *sandboxSession, err error) {
 		return nil, err
 	}
 	s.initialized = receipt.BootKey != ""
-	if err := s.configureMonitor(cp, scope); err != nil {
+	if err := s.configureMonitor(scope, monitor); err != nil {
 		return nil, err
 	}
 	dial := func(ctx context.Context, _, _ string) (net.Conn, error) {
@@ -184,23 +199,7 @@ func (s *sandboxSession) close() {
 	}
 }
 
-func (s *sandboxSession) configureMonitor(cp *cpClient, scope accountScope) error {
-	resolved := startConnectionProgress(os.Stderr, "Checking the bound Monitor for sandbox "+s.box.Name)
-	peer, err := resolveContainerDetail(cp, s.binding.ContainerID)
-	resolved()
-	if err != nil {
-		return err
-	}
-	target, err := resolveWorkload(*peer, monitorRepo, "")
-	if err != nil {
-		return fmt.Errorf("bound Monitor %s: %w; review its configuration with `tinfoil monitor open %s`", peer.Name, err, peer.Name)
-	}
-	if target.env[monitorOwnerEnv] != s.binding.Owner {
-		return errors.New("Monitor does not match the sandbox's measured owner binding")
-	}
-	if err := requireRunningConnection("Monitor", *peer); err != nil {
-		return err
-	}
+func (s *sandboxSession) configureMonitor(scope accountScope, target *workloadTarget) error {
 	dir, err := monitorRecord(scope, target)
 	if err != nil {
 		return err

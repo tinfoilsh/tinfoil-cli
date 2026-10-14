@@ -6,9 +6,11 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -49,6 +51,55 @@ func TestOwnerCredentialCreationNeverReplacesExistingKeys(t *testing.T) {
 	require.Equal(t, credential, got)
 }
 
+func TestConcurrentSSHKeyCreationUsesPublishedWinner(t *testing.T) {
+	for _, owner := range []bool{false, true} {
+		t.Run(fmt.Sprint("owner=", owner), func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "identity")
+			credential := testOwnerCredential(t)
+			const workers = 16
+			var ready sync.WaitGroup
+			ready.Add(workers)
+			start := make(chan struct{})
+			type result struct {
+				key string
+				err error
+			}
+			results := make(chan result, workers)
+			for range workers {
+				go func() {
+					ready.Done()
+					<-start
+					if owner {
+						if err := ensureOwnerSSHKey(path, credential.SigningSeed); err != nil {
+							results <- result{err: err}
+							return
+						}
+					}
+					key, err := ensureSSHKey(path)
+					results <- result{key, err}
+				}()
+			}
+			ready.Wait()
+			close(start)
+			var expected string
+			for range workers {
+				got := <-results
+				require.NoError(t, got.err)
+				if expected == "" {
+					expected = got.key
+				}
+				require.Equal(t, expected, got.key)
+			}
+			key, err := loadSSHKey(path)
+			require.NoError(t, err)
+			require.Equal(t, expected, key)
+			if owner {
+				require.ErrorContains(t, ensureOwnerSSHKey(path, testOwnerCredential(t).SigningSeed), "does not match")
+			}
+		})
+	}
+}
+
 func newSigningCredential() (*ownerCredential, error) {
 	c := &ownerCredential{Version: 2, Key: make([]byte, 32), SigningSeed: make([]byte, ed25519.SeedSize)}
 	if _, err := rand.Read(c.Key); err != nil {
@@ -83,10 +134,10 @@ func TestCredentialCompatibility(t *testing.T) {
 					want = filepath.Join(home, "monitors", storageHash(data), row.Name)
 					require.NoError(t, writeStorageJSON(filepath.Join(want, monitorProfileFile), monitorProfile{}, false))
 				} else {
-					require.NoError(t, writeStorageJSON(filepath.Join(want, "monitor.json"), map[string]any{"scope": scope}, false))
+					require.NoError(t, writeStorageJSON(filepath.Join(want, "monitor.json"), map[string]any{"scope": scope, "monitor": "personal"}, false))
 				}
 			}
-			dir, err := credentialDir(scope, row)
+			dir, err := credentialDir(scope, row, "personal")
 			require.NoError(t, err)
 			require.Equal(t, want, dir)
 			require.NoError(t, prepareStorageDirectory(dir))
@@ -118,7 +169,7 @@ func TestCredentialCompatibility(t *testing.T) {
 			require.Equal(t, before, after, "reading either version must preserve its encryption key and file")
 			other := scope
 			other.UserID = "two"
-			foreign, err := credentialDir(other, row)
+			foreign, err := credentialDir(other, row, "personal")
 			require.NoError(t, err)
 			require.NotEqual(t, dir, foreign)
 			require.NoError(t, os.Remove(file))
@@ -127,6 +178,6 @@ func TestCredentialCompatibility(t *testing.T) {
 			require.NoFileExists(t, file)
 		}
 	}
-	_, err := credentialDir(scope, containerView{ID: "11111111-1111-4111-8111-111111111111", Name: "../escape"})
+	_, err := credentialDir(scope, containerView{ID: "11111111-1111-4111-8111-111111111111", Name: "../escape"}, "personal")
 	require.Error(t, err)
 }

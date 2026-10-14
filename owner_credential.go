@@ -50,9 +50,11 @@ func readOwnerCredential(path string) (*ownerCredential, error) {
 func (c *ownerCredential) clear() { clear(c.Key); clear(c.SigningSeed) }
 
 func decodeOwnerCredential(raw []byte) (*ownerCredential, error) {
-	if key, err := base64.StdEncoding.Strict().DecodeString(string(bytes.TrimSpace(raw))); err == nil {
-		defer clear(key)
-		if len(key) == 32 || len(key) == 64 {
+	trimmed := bytes.TrimSpace(raw)
+	key := make([]byte, base64.StdEncoding.DecodedLen(len(trimmed)))
+	defer clear(key)
+	if n, err := base64.StdEncoding.Strict().Decode(key, trimmed); err == nil {
+		if n == 32 || n == 64 {
 			return nil, errors.New("legacy encryption-only key; this CLI requires an owner SSH credential. Keep this file for the existing deployment and use a new name for a fresh deployment")
 		}
 	}
@@ -108,10 +110,14 @@ func ensureSSHKey(path string) (string, error) {
 	saved, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		saved, err = newSSHKey(path)
+		if errors.Is(err, os.ErrExist) {
+			saved, err = os.ReadFile(path)
+		}
 	}
 	if err != nil {
 		return "", err
 	}
+	defer clear(saved)
 	signer, err := ssh.ParsePrivateKey(saved)
 	if err != nil {
 		return "", fmt.Errorf("parsing %s: %w", path, err)
@@ -124,31 +130,26 @@ func newSSHKey(path string) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("generating an SSH key: %w", err)
 	}
+	defer clear(private)
 	block, err := ssh.MarshalPrivateKey(private, "")
 	if err != nil {
 		return nil, fmt.Errorf("encoding an SSH key: %w", err)
 	}
 	encoded := pem.EncodeToMemory(block)
 	if err := writeNewFile(path, encoded); err != nil {
+		clear(encoded)
 		return nil, err
 	}
 	return encoded, nil
 }
 
-// writeNewFile uses O_EXCL so concurrent commands cannot replace each other's
-// keys.
+// Publish a complete key exclusively, using the same atomic custody-file writer
+// as storage records. Concurrent readers must never see a partially written key.
 func writeNewFile(path string, content []byte) error {
-	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-	if err != nil {
-		return fmt.Errorf("creating %s: %w", path, err)
+	if err := writeStorageFile(path, content, true); err != nil {
+		return fmt.Errorf("publishing %s: %w", path, err)
 	}
-	if _, err := file.Write(content); err != nil {
-		file.Close()
-		// Half a key reads as a corrupt one, which is a worse thing to find.
-		os.Remove(path)
-		return fmt.Errorf("writing %s: %w", path, err)
-	}
-	return file.Close()
+	return nil
 }
 
 // Native ssh reads an OpenSSH encoding of the same key committed at measured boot.
@@ -161,13 +162,16 @@ func ensureOwnerSSHKey(path string, seed []byte) error {
 	defer clear(private)
 	saved, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
-		block, err := ssh.MarshalPrivateKey(private, "")
-		if err != nil {
-			return err
+		block, marshalErr := ssh.MarshalPrivateKey(private, "")
+		if marshalErr != nil {
+			return marshalErr
 		}
 		saved = pem.EncodeToMemory(block)
 		defer clear(saved)
-		return writeNewFile(path, saved)
+		if err := writeNewFile(path, saved); !errors.Is(err, os.ErrExist) {
+			return err
+		}
+		saved, err = os.ReadFile(path)
 	}
 	if err != nil {
 		return err

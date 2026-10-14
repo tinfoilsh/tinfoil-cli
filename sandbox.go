@@ -170,7 +170,7 @@ func startSandboxRow(client *cpClient, row containerView, restart bool) (contain
 			return row, err
 		}
 		var err error
-		if restart && row.Status != statusStopped {
+		if restart {
 			row, err = stopContainer(client, row)
 			if err != nil {
 				return row, err

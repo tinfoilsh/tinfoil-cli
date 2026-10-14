@@ -150,6 +150,7 @@ func TestSandboxSetupSeparatesMonitorCredentialsAndWorkspaceUnlock(t *testing.T)
 	install(<-calls)
 	unlock = <-calls
 	require.NotContains(t, unlock.command, "--initialize")
+	require.Equal(t, volumeKey, unlock.body, "a Monitor-only reboot still attempts workspace unlock")
 	require.NoFileExists(t, filepath.Join(directory, "injected"))
 	output, err := os.ReadFile(restarted)
 	require.NoError(t, err)

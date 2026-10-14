@@ -90,7 +90,7 @@ func connectMonitorOwner(ctx context.Context, scope accountScope, row *workloadT
 }
 
 func monitorRecord(scope accountScope, row *workloadTarget) (string, error) {
-	dir, err := credentialDir(scope, row.containerView)
+	dir, err := credentialDir(scope, row.containerView, "")
 	if err != nil {
 		return "", err
 	}
@@ -171,7 +171,6 @@ func connectOwnerSigner(conn net.Conn, host string, hostKey ssh.PublicKey, signe
 	defer timer.Stop()
 	c, channels, requests, err := ssh.NewClientConn(conn, host, &ssh.ClientConfig{
 		User: user, Auth: []ssh.AuthMethod{ssh.PublicKeys(signer)}, HostKeyCallback: ssh.FixedHostKey(hostKey),
-		HostKeyAlgorithms: []string{hostKey.Type()},
 	})
 	if err != nil {
 		conn.Close()

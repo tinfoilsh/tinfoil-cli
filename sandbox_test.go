@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -15,10 +16,16 @@ import (
 )
 
 func TestSandboxStartUsesSavedAliasWithoutMonitorLookup(t *testing.T) {
-	for _, state := range []string{statusStopped, statusFailed, statusRunning} {
-		t.Run(state, func(t *testing.T) {
+	for _, tc := range []struct {
+		state   string
+		restart bool
+	}{
+		{statusStopped, false}, {statusFailed, false},
+		{statusStopped, true}, {statusFailed, true}, {statusRunning, true},
+	} {
+		t.Run(fmt.Sprintf("%s/restart=%t", tc.state, tc.restart), func(t *testing.T) {
 			const monitorID = "11111111-1111-4111-8111-111111111111"
-			row := containerView{ID: "work-id", Name: "work", Repo: defaultSandboxRepo, Status: state,
+			row := containerView{ID: "work-id", Name: "work", Repo: defaultSandboxRepo, Status: tc.state,
 				ConfigName:    "/tinfoil/containers/saved-digest",
 				Config:        "containers:\n  - env:\n      - MONITOR_BINDING: '{\"container_id\":\"" + monitorID + "\",\"owner_public_key\":\"owner\"}'\n",
 				NetworkPolicy: &containerNetworkPolicy{EgressMode: "restricted", Egress: []containerPeer{{ContainerID: monitorID, Port: 22, Alias: &containerAlias{IP: "10.254.0.1", Port: 22}}}}}
@@ -55,11 +62,11 @@ func TestSandboxStartUsesSavedAliasWithoutMonitorLookup(t *testing.T) {
 			t.Setenv(envCPURL, server.URL)
 			t.Setenv(envAdminKey, "admin_test")
 			client := newCPClient(cliConfig{ControlplaneURL: server.URL, APIKey: "test"})
-			_, err := startSandboxRow(client, row, state == statusRunning)
+			_, err := startSandboxRow(client, row, tc.restart)
 			require.ErrorContains(t, err, "test boot failure")
 			require.EqualValues(t, 1, starts.Load())
 			expected := []string{"/api/containers/work-id/deploy"}
-			if state == statusRunning {
+			if tc.restart && tc.state == statusRunning {
 				expected = append([]string{"/api/containers/work-id/stop"}, expected...)
 			}
 			require.Equal(t, expected, mutations)
@@ -159,7 +166,9 @@ func TestSandboxCommandsShareLifecycleAndHandleDeletedResources(t *testing.T) {
 	}))
 	defer server.Close()
 	configureContainerPromotionTest(t, server.URL)
-	t.Setenv("HOME", t.TempDir())
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	oldInterval, oldYes, oldOutput := followInterval, sandboxYes, outputFormat
 	followInterval, sandboxYes, outputFormat = time.Millisecond, true, "json"
 	t.Cleanup(func() { followInterval, sandboxYes, outputFormat = oldInterval, oldYes, oldOutput })
@@ -175,7 +184,7 @@ func TestSandboxCommandsShareLifecycleAndHandleDeletedResources(t *testing.T) {
 	_, err := captureTestStdout(func() error { return sandboxStopCmd.RunE(sandboxStopCmd, []string{row.ID}) })
 	require.NoError(t, err)
 	require.Equal(t, 1, polls)
-	profile := filepath.Join(os.Getenv("HOME"), ".ssh", "tinfoil", "work.conf")
+	profile := filepath.Join(home, ".ssh", "tinfoil", "work.conf")
 	require.NoError(t, os.MkdirAll(filepath.Dir(profile), 0700))
 	require.NoError(t, os.WriteFile(profile, []byte("# tinfoil-resource: "+server.URL+"//owner/"+row.ID+"\n"), 0600))
 	for range 2 {

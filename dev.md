@@ -223,13 +223,17 @@ ssh work
 tinfoil monitor open personal
 ```
 
-Rerun `attest-ssh` after either VM reboots. If Monitor's address or network grant
+Rerun `attest-ssh` after either VM reboots. It refreshes the attested Monitor route
+and separately unlocks the workspace, or confirms that it is already mounted;
+refreshing an SSH pin alone does not unlock storage. If Monitor's address or network grant
 changes, use `tinfoil sandbox restart work`. Keep `monitor open` running for its UI.
 Back up the CLI's encryption credentials; the SSH key alone cannot recover storage.
 Deleting a sandbox retains its billable volume. Moving it to another Monitor is unsupported.
 
 Owner connections check `known-configs.json` for both the sandbox and its Monitor.
-An explicit `--repo` pins the named resource; the bound Monitor is checked separately.
+An explicit `--repo` asserts the named resource's configuration source; only a
+revision/digest reference pins an exact configuration. An organization or project
+assertion permits matching configurations. The bound Monitor is checked separately.
 Version-2 credentials and older named directories are loaded automatically in place,
 alongside version-3 credentials. No key conversion or storage-key rotation is needed.
 

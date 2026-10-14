@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -273,8 +274,12 @@ func followContainer(client *cpClient, id string, initial containerView) (contai
 }
 
 func pollContainer(client *cpClient, id string, current containerView, timeout time.Duration, observe func(containerView) (bool, error)) (containerView, error) {
-	deadline := time.Now().Add(timeout)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
 	for {
+		if ctx.Err() != nil {
+			return current, fmt.Errorf("still %s after %s; check \"tinfoil container get %s\": %w", strings.ToLower(statusLabel(current.Status)), timeout, current.Name, ctx.Err())
+		}
 		done, err := observe(current)
 		if err != nil {
 			return current, err
@@ -282,12 +287,16 @@ func pollContainer(client *cpClient, id string, current containerView, timeout t
 		if done {
 			return current, nil
 		}
-		if time.Now().After(deadline) {
-			return current, fmt.Errorf("still %s after %s; check \"tinfoil container get %s\"", strings.ToLower(statusLabel(current.Status)), timeout, current.Name)
+		select {
+		case <-ctx.Done():
+			continue
+		case <-time.After(followInterval):
 		}
-		time.Sleep(followInterval)
 		var next containerView
-		if _, err := client.do("GET", pathf("/api/containers/%s", id), nil, nil, &next); err != nil {
+		if _, err := client.doContext(ctx, "GET", pathf("/api/containers/%s", id), nil, nil, nil, &next); err != nil {
+			if ctx.Err() != nil {
+				continue
+			}
 			return current, err
 		}
 		current = next
@@ -301,7 +310,7 @@ func postContainerAction(client *cpClient, id, action string, body any) (contain
 }
 
 func stopContainer(client *cpClient, row containerView) (containerView, error) {
-	if row.Status != statusStopped && row.Status != statusStopping {
+	if row.Status != statusStopped && row.Status != statusStopping && row.Status != statusFailed {
 		var err error
 		row, err = postContainerAction(client, row.ID, "stop", nil)
 		if err != nil {
@@ -309,10 +318,7 @@ func stopContainer(client *cpClient, row containerView) (containerView, error) {
 		}
 	}
 	return pollContainer(client, row.ID, row, followTimeout, func(current containerView) (bool, error) {
-		if current.Status == statusStopped {
-			return true, nil
-		}
-		return false, failureError(current)
+		return current.Status == statusStopped || current.Status == statusFailed, nil
 	})
 }
 

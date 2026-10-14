@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -53,6 +54,10 @@ func (c *cpClient) do(method, path string, query url.Values, body any, out any) 
 // doWithHeaders is do with additional request headers, for endpoints that
 // take out-of-band values such as a forwarded Hugging Face token.
 func (c *cpClient) doWithHeaders(method, path string, query url.Values, headers map[string]string, body any, out any) (int, error) {
+	return c.doContext(context.Background(), method, path, query, headers, body, out)
+}
+
+func (c *cpClient) doContext(ctx context.Context, method, path string, query url.Values, headers map[string]string, body any, out any) (int, error) {
 	if err := validateControlplaneURL(c.baseURL); err != nil {
 		return 0, err
 	}
@@ -70,7 +75,7 @@ func (c *cpClient) doWithHeaders(method, path string, query url.Values, headers 
 		reader = bytes.NewReader(buf)
 	}
 
-	req, err := http.NewRequest(method, u, reader)
+	req, err := http.NewRequestWithContext(ctx, method, u, reader)
 	if err != nil {
 		return 0, fmt.Errorf("building request: %w", err)
 	}

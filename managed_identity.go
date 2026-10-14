@@ -41,7 +41,8 @@ func resourceDir(scope accountScope, id string) (string, error) {
 
 // Existing credentials stay in place. Callers use the same loader regardless
 // of credential version or whether this resource predates UUID directories.
-func credentialDir(scope accountScope, row containerView) (string, error) {
+// For a sandbox, monitorName must come from its resolved measured Monitor binding.
+func credentialDir(scope accountScope, row containerView, monitorName string) (string, error) {
 	dir, err := resourceDir(scope, row.ID)
 	if err != nil {
 		return "", err
@@ -66,10 +67,14 @@ func credentialDir(scope accountScope, row containerView) (string, error) {
 	case defaultSandboxRepo:
 		legacy := filepath.Join(filepath.Dir(config), "sandboxes", name)
 		var binding struct {
-			Scope accountScope `json:"scope"`
+			Scope   accountScope `json:"scope"`
+			Monitor string       `json:"monitor"`
 		}
 		if err := readStorageJSON(filepath.Join(legacy, "monitor.json"), &binding); err == nil {
 			if binding.Scope == scope {
+				if binding.Monitor == "" || binding.Monitor != monitorName {
+					return "", errors.New("saved sandbox Monitor binding does not match the measured Monitor")
+				}
 				return legacy, nil
 			}
 		} else if !errors.Is(err, os.ErrNotExist) {
@@ -118,12 +123,15 @@ func ownerSigner(c *ownerCredential, dir string) (ssh.Signer, string, func(), er
 		var encrypted *ssh.PassphraseMissingError
 		if errors.As(parseErr, &encrypted) && encrypted.PublicKey != nil && sameSSHKey(string(ssh.MarshalAuthorizedKey(encrypted.PublicKey)), string(ssh.MarshalAuthorizedKey(public))) {
 			if !term.IsTerminal(int(os.Stdin.Fd())) {
-				return nil, "", close, errors.New("encrypted SSH identity requires a terminal or ssh-agent")
+				clear(raw)
+				continue
 			}
 			fmt.Fprintf(os.Stderr, "Passphrase for %s: ", path)
 			password, passwordErr := term.ReadPassword(int(os.Stdin.Fd()))
 			fmt.Fprintln(os.Stderr)
 			if passwordErr != nil {
+				clear(raw)
+				clear(password)
 				return nil, "", close, passwordErr
 			}
 			signer, parseErr = ssh.ParsePrivateKeyWithPassphrase(raw, password)
