@@ -62,7 +62,7 @@ jobs:
           DIGEST="$(docker buildx imagetools inspect "${IMAGE}:${VERSION}" --format '{{json .Manifest.Digest}}' | tr -d '"')"
           cosign sign --yes "${IMAGE}@${DIGEST}"
           printf '%s@%s\n' "$IMAGE" "$DIGEST" > docker-image-digest.txt
-          gh release upload "$TAG" docker-image-digest.txt
+          gh release upload --clobber "$TAG" docker-image-digest.txt
           {
             echo "### Docker image"
             echo '```'
@@ -70,6 +70,6 @@ jobs:
             echo '```'
             echo "Verify:"
             echo '```'
-            echo "cosign verify --certificate-identity-regexp '^https://github.com/tinfoilsh/tinfoil-cli/' --certificate-oidc-issuer https://token.actions.githubusercontent.com ${IMAGE}@${DIGEST}"
+            echo "cosign verify --certificate-identity 'https://github.com/tinfoilsh/tinfoil-cli/.github/workflows/release.yml@refs/tags/${TAG}' --certificate-oidc-issuer https://token.actions.githubusercontent.com ${IMAGE}@${DIGEST}"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
