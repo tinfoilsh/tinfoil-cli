@@ -168,7 +168,7 @@ func TestEncryptedOwnerIdentityFallsBackToAgent(t *testing.T) {
 	require.ErrorIs(t, <-done, io.EOF)
 }
 
-func TestLegacySandboxCredentialsRequireMatchingMonitor(t *testing.T) {
+func TestSandboxCredentialsUseResourceUUID(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv(envConfigPath, filepath.Join(home, "config.json"))
 	scope := accountScope{ControlplaneURL: "https://cp.example", UserID: "owner"}
@@ -176,15 +176,12 @@ func TestLegacySandboxCredentialsRequireMatchingMonitor(t *testing.T) {
 	dir := filepath.Join(home, "sandboxes", row.Name)
 	path := filepath.Join(dir, "monitor.json")
 	require.NoError(t, writeStorageJSON(path, map[string]any{"scope": scope, "monitor": "personal"}, false))
-	got, err := credentialDir(scope, row, "personal")
+	got, err := credentialDir(scope, row)
 	require.NoError(t, err)
-	require.Equal(t, dir, got)
-	_, err = credentialDir(scope, row, "replacement")
-	require.ErrorContains(t, err, "saved sandbox Monitor binding does not match")
-	require.NoFileExists(t, filepath.Join(dir, "resource.json"))
-	require.NoError(t, os.WriteFile(path, []byte("malformed metadata"), 0600))
-	_, err = credentialDir(scope, row, "personal")
-	require.ErrorContains(t, err, "invalid storage metadata")
+	want, err := resourceDir(scope, row.ID)
+	require.NoError(t, err)
+	require.Equal(t, want, got)
+	require.NotEqual(t, dir, got)
 }
 
 func TestWorkspaceCredentialsFollowOnlyTheirAccountAndVolume(t *testing.T) {

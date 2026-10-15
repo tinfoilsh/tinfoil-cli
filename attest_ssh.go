@@ -88,7 +88,7 @@ attestation always uses the enclave hostname.`,
 				return fmt.Errorf("Monitor has no interactive shell; use tinfoil monitor open %s", target.name)
 			case defaultSandboxRepo:
 				if attestSSHHost != "" || attestSSHPort != 0 {
-					return errors.New("managed sandboxes use their bound Monitor endpoint")
+					return errors.New("managed sandboxes use their configured SSH endpoint")
 				}
 				if attestSSHName != "" && !sshProfileNamePattern.MatchString(attestSSHName) {
 					return errors.New("invalid SSH profile name")
@@ -102,7 +102,10 @@ attestation always uses the enclave hostname.`,
 					return err
 				}
 				if attestSSHName != "" {
-					s.profile.name, s.profile.jump.name = attestSSHName, attestSSHName+monitorJumpSuffix
+					s.profile.name = attestSSHName
+					if s.profile.jump != nil {
+						s.profile.jump.name = attestSSHName + monitorJumpSuffix
+					}
 				}
 				if cmd.Flags().Changed("user") {
 					s.profile.user = attestSSHUser
@@ -212,12 +215,12 @@ type sshProfile struct {
 }
 
 func (p sshProfile) render() string {
-	if p.jump == nil {
-		return p.block(p.name)
-	}
 	marker := ""
 	if p.resourceID != "" {
 		marker = "# tinfoil-resource: " + p.resourceID + "\n"
+	}
+	if p.jump == nil {
+		return marker + p.block(p.name)
 	}
 	return marker + p.jump.block(p.name) + "\n" + p.block(p.name)
 }

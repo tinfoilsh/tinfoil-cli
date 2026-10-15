@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -92,8 +91,7 @@ func newManagedCreateCmd(kind string) *cobra.Command {
 				if _, err := measuredOwner(fallbackOwner); err != nil {
 					return err
 				}
-				binding, _ := json.Marshal(monitorBinding{selected.ID, fallbackOwner})
-				variables["MONITOR_BINDING"], variables["SANDBOX_INSTANCE_ID"] = string(binding), uuid.NewString()
+				variables["SANDBOX_INSTANCE_ID"] = uuid.NewString()
 				body["network_policy"] = sandboxNetworkPolicy(selected.ID)
 				if workspace != "" {
 					volume, err := lookupVolume(client, workspace)
