@@ -40,7 +40,7 @@ func TestSandboxStartUsesSavedAliasWithoutMonitorLookup(t *testing.T) {
 			const monitorID = "11111111-1111-4111-8111-111111111111"
 			row := containerView{ID: "work-id", Name: "work", Repo: defaultSandboxRepo, Status: tc.state, UpdateStatus: statusFailed,
 				ConfigName:    "/tinfoil/containers/saved-digest",
-				Config:        "containers:\n  - env:\n      - MONITOR_BINDING: '{\"container_id\":\"" + monitorID + "\",\"owner_public_key\":\"owner\"}'\n",
+				Config:        "containers: [{env: []}]",
 				NetworkPolicy: &containerNetworkPolicy{EgressMode: "restricted", Egress: []containerPeer{{ContainerID: monitorID, Port: 22, Alias: &containerAlias{IP: "10.254.0.1", Port: 22}}}}}
 			var mutations []string
 			client := newCPClient(cliConfig{ControlplaneURL: "https://cp.example"})
@@ -75,10 +75,10 @@ func TestSandboxStartUsesSavedAliasWithoutMonitorLookup(t *testing.T) {
 	}
 }
 
-func TestSandboxRequiresBoundRestrictedAliasBeforeStoppingOrDeploying(t *testing.T) {
+func TestSandboxRequiresRestrictedAliasBeforeStoppingOrDeploying(t *testing.T) {
 	const monitorID = "11111111-1111-4111-8111-111111111111"
 	row := containerView{ID: "work-id", Name: "work", Repo: defaultSandboxRepo,
-		Config: "containers:\n  - env:\n      - MONITOR_BINDING: '{\"container_id\":\"" + monitorID + "\",\"owner_public_key\":\"owner\"}'\n"}
+		Config: "containers: [{env: []}]"}
 	peer := containerPeer{ContainerID: monitorID, Port: 22, Alias: &containerAlias{IP: "10.254.0.1", Port: 22}}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Errorf("invalid policy made a request: %s %s", r.Method, r.URL.Path)

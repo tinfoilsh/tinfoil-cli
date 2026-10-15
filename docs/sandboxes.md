@@ -19,4 +19,15 @@ Creation uses the ordinary container workflow: submit once, then follow the retu
 
 Rerun `attest-ssh` after either VM reboots. Keep `monitor open` running while using its local panel URL. Back up the encryption credentials: an SSH key alone cannot recover storage. Moving a workspace requires its original owner and encryption credentials. Sandbox deletion keeps billable workspace storage; Monitor deletion retains object storage. Use `volume` for disk management.
 
-Deployment requires compatible Monitor and sandbox images, a CVM runtime allowing the private TCP alias range, and host/Controlplane support for the restricted `10.254.0.1:22` alias to the bound Monitor. Live provisioning, billing, storage allocation and cross-host production behavior require deployment testing. Local tests cover API requests, lifecycle recovery, credential custody, attestation rejection, and SSH integration.
+The sandbox's network policy selects its Monitor. The CLI verifies that Monitor's
+published configuration and attestation before enrolling credentials. Changing the
+Monitor in the dashboard requires rerunning `tinfoil attest-ssh NAME --install`.
+
+To launch without Monitor, select **Run without Monitor (NO_MONITOR=1)** in the
+dashboard using a sandbox release that declares `NO_MONITOR`. The measured value
+`1` requires no network policy. `attest-ssh` and `sandbox enroll/start/restart` use
+direct SSH to the published port, retain attestation and workspace encryption,
+and warn that network traffic is not being tunneled through Monitor. A local
+shell environment variable cannot change an existing sandbox's mode.
+
+Monitored deployments require compatible Monitor and sandbox images, a CVM runtime allowing the private TCP alias range, and host/Controlplane support for the restricted `10.254.0.1:22` alias to the selected Monitor. Direct deployments require public attestation and the published SSH port. Live provisioning, billing, storage allocation and cross-host production behavior require deployment testing. Local tests cover API requests, lifecycle recovery, credential custody, attestation rejection, and SSH integration.

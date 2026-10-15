@@ -405,11 +405,9 @@ without registry publication; keep the exact file to verify subsequent connectio
 			if createDebug || createDisableCC {
 				return fmt.Errorf("sandbox aliases require a production deployment")
 			}
-			var binding monitorBinding
-			if json.Unmarshal([]byte(vars["MONITOR_BINDING"]), &binding) != nil || !looksLikeUUID(binding.ContainerID) || binding.Owner == "" {
-				return fmt.Errorf("sandbox creation requires MONITOR_BINDING with a Monitor container ID and owner public key")
+			if vars["NO_MONITOR"] != "1" {
+				return fmt.Errorf("use `tinfoil sandbox create NAME --monitor MONITOR --tag VERSION` to create a monitored sandbox")
 			}
-			body["network_policy"] = sandboxNetworkPolicy(binding.ContainerID)
 		}
 
 		if createDisableCC {

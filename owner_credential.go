@@ -149,19 +149,6 @@ func ensureSSHIdentity(path string, seed []byte) (ssh.Signer, error) {
 	return signer, nil
 }
 
-type monitorBinding struct {
-	ContainerID string `json:"container_id"`
-	Owner       string `json:"owner_public_key"`
-}
-
-func sandboxMonitorBinding(env map[string]string) (monitorBinding, error) {
-	var binding monitorBinding
-	if json.Unmarshal([]byte(env["MONITOR_BINDING"]), &binding) != nil || !looksLikeUUID(binding.ContainerID) || binding.Owner == "" {
-		return binding, errors.New("sandbox has no measured Monitor binding")
-	}
-	return binding, nil
-}
-
 func measuredOwner(value string) (ssh.PublicKey, error) {
 	raw, err := base64.StdEncoding.Strict().DecodeString(strings.TrimPrefix(value, "ed25519:"))
 	if err != nil || !strings.HasPrefix(value, "ed25519:") || len(raw) != ed25519.PublicKeySize {
@@ -179,10 +166,8 @@ func resourceDir(scope accountScope, id string) (string, error) {
 	return filepath.Join(filepath.Dir(config), "resources", storageHash(data), id), err
 }
 
-// Existing credentials stay in place. Callers use the same loader regardless
-// of credential version or whether this resource predates UUID directories.
-// For a sandbox, monitorName must come from its resolved measured Monitor binding.
-func credentialDir(scope accountScope, row containerView, monitorName string) (string, error) {
+// Existing Monitor credentials stay in place; sandbox credentials use resource UUIDs.
+func credentialDir(scope accountScope, row containerView) (string, error) {
 	dir, err := resourceDir(scope, row.ID)
 	if err != nil {
 		return "", err
@@ -201,22 +186,6 @@ func credentialDir(scope accountScope, row containerView, monitorName string) (s
 		legacy := filepath.Join(filepath.Dir(config), "monitors", storageHash(data), name)
 		if _, err := os.Stat(filepath.Join(legacy, monitorProfileFile)); err == nil {
 			return legacy, nil
-		} else if !errors.Is(err, os.ErrNotExist) {
-			return "", err
-		}
-	case defaultSandboxRepo:
-		legacy := filepath.Join(filepath.Dir(config), "sandboxes", name)
-		var binding struct {
-			Scope   accountScope `json:"scope"`
-			Monitor string       `json:"monitor"`
-		}
-		if err := readStorageJSON(filepath.Join(legacy, "monitor.json"), &binding); err == nil {
-			if binding.Scope == scope {
-				if binding.Monitor == "" || binding.Monitor != monitorName {
-					return "", errors.New("saved sandbox Monitor binding does not match the measured Monitor")
-				}
-				return legacy, nil
-			}
 		} else if !errors.Is(err, os.ErrNotExist) {
 			return "", err
 		}
