@@ -375,7 +375,15 @@ func serveMonitorPanel(cmd *cobra.Command, client *ssh.Client, dir, address stri
 	url := fmt.Sprintf("http://%s/app/#session=%s", listener.Addr(), session)
 	fmt.Fprintf(cmd.OutOrStdout(), "Local Monitor panel: %s\n", url)
 	fmt.Fprintln(cmd.ErrOrStderr(), "Keep this command running. Ctrl-C closes the SSH connection. Owner credentials stay out of the browser.")
-	promptMonitorBrowser(ctx, cmd, url)
+	if input, ok := cmd.InOrStdin().(*os.File); ok && term.IsTerminal(int(input.Fd())) {
+		fmt.Fprintln(cmd.ErrOrStderr(), "Press Enter to open the Monitor in your browser.")
+		// Input must not block forwarding or shutdown of the SSH connection.
+		go func() {
+			if err := openMonitorBrowserOnEnter(ctx, input, url); err != nil && ctx.Err() == nil {
+				fmt.Fprintf(cmd.ErrOrStderr(), "Could not open your browser: %v. Open the Local Monitor panel URL above manually.\n", err)
+			}
+		}()
+	}
 	for {
 		local, err := listener.Accept()
 		if err != nil {
@@ -403,20 +411,6 @@ func serveMonitorPanel(cmd *cobra.Command, client *ssh.Client, dir, address stri
 	}
 }
 
-func promptMonitorBrowser(ctx context.Context, cmd *cobra.Command, url string) {
-	input, ok := cmd.InOrStdin().(*os.File)
-	if !ok || !term.IsTerminal(int(input.Fd())) {
-		return
-	}
-	fmt.Fprintln(cmd.ErrOrStderr(), "Press Enter to open the Monitor in your browser.")
-	// Input must not block forwarding or shutdown of the SSH connection.
-	go func() {
-		if err := openMonitorBrowserOnEnter(ctx, input, url); err != nil && ctx.Err() == nil {
-			fmt.Fprintf(cmd.ErrOrStderr(), "Could not open your browser: %v. Open the Local Monitor panel URL above manually.\n", err)
-		}
-	}()
-}
-
 func openMonitorBrowserOnEnter(ctx context.Context, input io.Reader, url string) error {
 	if ctx.Err() != nil {
 		return nil
@@ -424,14 +418,9 @@ func openMonitorBrowserOnEnter(ctx context.Context, input io.Reader, url string)
 	if _, err := bufio.NewReader(input).ReadString('\n'); err != nil || ctx.Err() != nil {
 		return nil
 	}
-	var opener string
-	switch runtime.GOOS {
-	case "darwin":
+	opener := "xdg-open"
+	if runtime.GOOS == "darwin" {
 		opener = "open"
-	case "linux":
-		opener = "xdg-open"
-	default:
-		return fmt.Errorf("opening a browser is unsupported on %s", runtime.GOOS)
 	}
 	return exec.CommandContext(ctx, opener, url).Run()
 }

@@ -139,7 +139,10 @@ func TestMonitorUnlockAndSSHPanelAgainstRealMonitor(t *testing.T) {
 	var stderr bytes.Buffer
 	command := &cobra.Command{}
 	command.SetContext(ctx)
-	command.SetIn(strings.NewReader("\n"))
+	input, err := os.Open(os.DevNull)
+	require.NoError(t, err)
+	defer input.Close()
+	command.SetIn(input)
 	command.SetOut(outputWriter)
 	command.SetErr(&stderr)
 	done := make(chan error, 1)
