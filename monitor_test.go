@@ -1,20 +1,24 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"io"
 	"net"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/ssh"
 )
@@ -124,6 +128,107 @@ func TestMonitorUnlockAndSSHPanelAgainstRealMonitor(t *testing.T) {
 	_, err = updateProfile(dir, func(p *monitorProfile) error { p.Generation += 5; return nil })
 	require.NoError(t, err)
 	require.ErrorContains(t, unlockMonitor(panel, dir, credential), "older than")
+	_, err = updateProfile(dir, func(p *monitorProfile) error { p.Generation -= 5; return nil })
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	outputReader, outputWriter := io.Pipe()
+	defer outputReader.Close()
+	defer outputWriter.Close()
+	var stderr bytes.Buffer
+	command := &cobra.Command{}
+	command.SetContext(ctx)
+	command.SetIn(strings.NewReader("\n"))
+	command.SetOut(outputWriter)
+	command.SetErr(&stderr)
+	done := make(chan error, 1)
+	go func() {
+		err := serveMonitorPanel(command, panel, dir, "127.0.0.1:0")
+		outputWriter.Close()
+		done <- err
+	}()
+	line, err := bufio.NewReader(outputReader).ReadString('\n')
+	require.NoError(t, err)
+	panelURL := strings.TrimSpace(strings.TrimPrefix(line, "Local Monitor panel: "))
+	response, err := http.Get(panelURL)
+	require.NoError(t, err)
+	response.Body.Close()
+	require.Equal(t, http.StatusOK, response.StatusCode)
+	cancel()
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("panel did not stop after cancellation")
+	}
+	require.NotContains(t, stderr.String(), "Press Enter", "noninteractive forwarding must not prompt")
+}
+
+func TestOpenMonitorBrowserOnEnter(t *testing.T) {
+	opener := "xdg-open"
+	if runtime.GOOS == "darwin" {
+		opener = "open"
+	} else if runtime.GOOS != "linux" {
+		t.Skip("browser launch is supported on Linux and macOS")
+	}
+	dir := t.TempDir()
+	record := filepath.Join(dir, "browser-arguments")
+	t.Setenv("PATH", dir)
+	t.Setenv("TINFOIL_TEST_BROWSER_RECORD", record)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, opener), []byte("#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$TINFOIL_TEST_BROWSER_RECORD\"\n"), 0700))
+	const panelURL = "http://127.0.0.1:43210/app/#session=test-token"
+	for _, test := range []struct {
+		name     string
+		input    string
+		canceled bool
+		opened   bool
+	}{
+		{name: "Enter", input: "\n", opened: true},
+		{name: "CRLF", input: "\r\n", opened: true},
+		{name: "EOF"},
+		{name: "EOF without Enter", input: " "},
+		{name: "canceled", input: "\n", canceled: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			os.Remove(record)
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			if test.canceled {
+				cancel()
+			}
+			require.NoError(t, openMonitorBrowserOnEnter(ctx, strings.NewReader(test.input), panelURL))
+			args, err := os.ReadFile(record)
+			if test.opened {
+				require.NoError(t, err)
+				require.Equal(t, panelURL+"\n", string(args), "open the exact URL, including the session fragment")
+			} else {
+				require.ErrorIs(t, err, os.ErrNotExist)
+			}
+		})
+	}
+	t.Run("canceled while waiting for Enter", func(t *testing.T) {
+		os.Remove(record)
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		input, writer := io.Pipe()
+		defer input.Close()
+		defer writer.Close()
+		done := make(chan error, 1)
+		go func() { done <- openMonitorBrowserOnEnter(ctx, input, panelURL) }()
+		_, err := io.WriteString(writer, " ")
+		require.NoError(t, err)
+		cancel()
+		_, err = io.WriteString(writer, "\n")
+		require.NoError(t, err)
+		require.NoError(t, <-done)
+		_, err = os.Stat(record)
+		require.ErrorIs(t, err, os.ErrNotExist)
+	})
+	t.Run("launcher failure", func(t *testing.T) {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, opener), []byte("#!/bin/sh\nexit 7\n"), 0700))
+		require.ErrorContains(t, openMonitorBrowserOnEnter(t.Context(), strings.NewReader("\n"), panelURL), "exit status 7")
+	})
 }
 
 func freeAddress(t *testing.T) string {
