@@ -106,6 +106,34 @@ func TestManagedStatusFiltersAndWatches(t *testing.T) {
 	}
 }
 
+func TestSandboxCreationOnlySelectsOwnMonitors(t *testing.T) {
+	own := containerView{ID: "11111111-1111-4111-8111-111111111111", Name: "mine", Repo: monitorRepo, ClerkUserID: "user_test"}
+	other := containerView{ID: "33333333-3333-4333-8333-333333333333", Name: "shared", Repo: monitorRepo, ClerkUserID: "user_other", Status: statusRunning}
+	managedTestAPI(t, func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "GET", r.Method)
+		switch r.URL.Path {
+		case "/api/containers":
+			json.NewEncoder(w).Encode([]containerView{other, own})
+		case "/api/containers/" + own.ID:
+			json.NewEncoder(w).Encode(own)
+		case "/api/containers/" + other.ID:
+			json.NewEncoder(w).Encode(other)
+		default:
+			t.Errorf("unexpected request %s", r.URL.Path)
+			http.NotFound(w, r)
+		}
+	})
+	client, err := authedClient()
+	require.NoError(t, err)
+	selected, err := selectCreationMonitor(client, "", "user_test")
+	require.NoError(t, err)
+	require.Equal(t, own.ID, selected.ID, "another member's Monitor must not count toward the default")
+	_, err = selectCreationMonitor(client, other.ID, "user_test")
+	require.ErrorContains(t, err, "Monitor shared was created by another user")
+	_, err = selectCreationMonitor(client, "", "user_without_monitor")
+	require.ErrorContains(t, err, "choose one of your Monitors")
+}
+
 func TestManagedCreateUsesContainerRecovery(t *testing.T) {
 	owner := testOwnerCredential(t).publicKey()
 	key, err := measuredOwner(owner)
@@ -128,8 +156,10 @@ func TestManagedCreateUsesContainerRecovery(t *testing.T) {
 				}
 				managedTestAPI(t, func(w http.ResponseWriter, r *http.Request) {
 					switch r.Method + " " + r.URL.Path {
+					case "GET /api/auth/context":
+						w.Write([]byte(`{"context_type":"personal","organization":null,"user_id":"user_test"}`))
 					case "GET /api/containers/11111111-1111-4111-8111-111111111111":
-						json.NewEncoder(w).Encode(containerView{ID: "11111111-1111-4111-8111-111111111111", Repo: monitorRepo, Config: fmt.Sprintf("containers: [{env: [{MONITOR_OWNER_PUBLIC_KEY: %q}]}]", owner)})
+						json.NewEncoder(w).Encode(containerView{ID: "11111111-1111-4111-8111-111111111111", Repo: monitorRepo, ClerkUserID: "user_test", Config: fmt.Sprintf("containers: [{env: [{MONITOR_OWNER_PUBLIC_KEY: %q}]}]", owner)})
 					case "GET /api/volumes":
 						json.NewEncoder(w).Encode(volumeList{Volumes: []volumeView{volume}})
 					case "POST /api/containers":

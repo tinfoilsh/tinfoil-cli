@@ -11,7 +11,7 @@ ssh work
 tinfoil monitor open personal
 ```
 
-Monitor creation defaults to `~/.ssh/id_ed25519.pub`; sandbox creation defaults to the selected Monitor's measured owner. `--owner-public-key FILE` overrides either; `--identity PATH` selects its public key. `--workspace ID|NAME` reuses an unattached workspace on its existing host. Controlplane validates capacity, placement and entitlements. Private and encryption keys stay local.
+A sandbox can only use a Monitor you created, because pairing needs that Monitor's owner key and encryption credentials. Without `--monitor`, sandbox creation selects your only Monitor. Monitor creation defaults to `~/.ssh/id_ed25519.pub`; sandbox creation defaults to the selected Monitor's measured owner. `--owner-public-key FILE` overrides either; `--identity PATH` selects its public key. `--workspace ID|NAME` reuses an unattached workspace on its existing host. Controlplane validates capacity, placement and entitlements. Private and encryption keys stay local.
 
 Creation uses the ordinary container workflow: submit once, then follow the returned deployment. `--no-wait` or `--output json` returns the initial response. After an error or interruption, inspect `sandbox status` / `monitor status` before retrying creation. Use `start` for an existing stopped or failed resource. There is no local pending record or resume command.
 
