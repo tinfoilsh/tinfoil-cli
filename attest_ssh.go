@@ -212,6 +212,10 @@ type sshProfile struct {
 	// jump is the host this one is reached through.
 	hostKeyAlias string
 	jump         *sshProfile
+	// noAgent keeps ssh-agent keys out of this hop. OpenSSH offers agent keys
+	// that match any IdentityFile (including one from a user's Host * block)
+	// before key files, so identityFile alone does not decide which key is sent.
+	noAgent bool
 }
 
 func (p sshProfile) render() string {
@@ -241,6 +245,9 @@ func (p sshProfile) block(pins string) string {
 			identity = strconv.Quote(identity)
 		}
 		fmt.Fprintf(&b, "  IdentityFile %s\n  IdentitiesOnly yes\n", identity)
+	}
+	if p.noAgent {
+		b.WriteString("  IdentityAgent none\n")
 	}
 	fmt.Fprintf(&b, "  HostKeyAlgorithms %s\n  UserKnownHostsFile ~/.ssh/tinfoil/%s.known_hosts\n", p.hostKey.Type(), pins)
 	b.WriteString("  GlobalKnownHostsFile /dev/null\n  StrictHostKeyChecking yes\n  UpdateHostKeys no\n  CheckHostIP no\n")

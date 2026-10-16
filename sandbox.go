@@ -488,8 +488,17 @@ func (s *sandboxSession) configureMonitor(scope accountScope, target *workloadTa
 	ip, port, _ := net.SplitHostPort(profile.Address)
 	portNumber, _ := strconv.Atoi(port)
 	s.monitorKey = profile.HostKey
-	s.profile.jump = &sshProfile{name: s.box.Name + monitorJumpSuffix, hostName: ip, port: portNumber, user: monitorSSHUser, identityFile: filepath.Join(dir, monitorDeviceKeyName), hostKey: key, hostKeyAlias: profile.Domain}
+	s.profile.jump = monitorJump(s.box.Name, ip, portNumber, dir, key, profile.Domain)
 	return nil
+}
+
+// monitorJump is the hop through the Monitor. It must present the device key:
+// the Monitor gives its owner key (by default the user's ~/.ssh/id_ed25519)
+// an owner-only session that cannot open routes to sandboxes, and that key is
+// usually in ssh-agent. The device key is an unencrypted file, so the hop needs
+// no agent.
+func monitorJump(sandbox, host string, port int, dir string, hostKey ssh.PublicKey, domain string) *sshProfile {
+	return &sshProfile{name: sandbox + monitorJumpSuffix, hostName: host, port: port, user: monitorSSHUser, identityFile: filepath.Join(dir, monitorDeviceKeyName), hostKey: hostKey, hostKeyAlias: domain, noAgent: true}
 }
 
 func bootstrapRoute(identity string) string {
