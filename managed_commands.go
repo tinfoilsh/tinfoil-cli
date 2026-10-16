@@ -79,7 +79,11 @@ func newManagedCreateCmd(kind string) *cobra.Command {
 			body := map[string]any{"name": strings.TrimSpace(args[0]), "repo": managedRepo(kind), "tag": strings.TrimSpace(tag), "variables": variables}
 			fallbackOwner := ""
 			if kind == "sandbox" {
-				selected, err := selectCreationMonitor(client, monitor)
+				scope, _, err := currentScope()
+				if err != nil {
+					return err
+				}
+				selected, err := selectCreationMonitor(client, monitor, scope.UserID)
 				if err != nil {
 					return err
 				}
@@ -132,21 +136,36 @@ func newManagedCreateCmd(kind string) *cobra.Command {
 	return cmd
 }
 
-func selectCreationMonitor(client *cpClient, identifier string) (*containerView, error) {
+// Pairing a sandbox needs the Monitor creator's local credentials, so
+// Controlplane only attaches sandboxes to Monitors with the same creator.
+func selectCreationMonitor(client *cpClient, identifier, userID string) (*containerView, error) {
 	if identifier == "" {
 		var rows []containerView
 		if _, err := client.do("GET", "/api/containers", nil, nil, &rows); err != nil {
 			return nil, err
 		}
-		rows = slices.DeleteFunc(rows, func(row containerView) bool { return checkManagedKind("monitor", row) != nil })
-		if len(rows) != 1 {
-			return nil, errors.New("choose --monitor from `tinfoil monitor status`, or create one with `tinfoil monitor create NAME`")
+		rows = slices.DeleteFunc(rows, func(row containerView) bool {
+			return checkManagedKind("monitor", row) != nil || row.ClerkUserID != userID
+		})
+		switch len(rows) {
+		case 0:
+			return nil, errors.New("you have no Monitors in this account; create one with `tinfoil monitor create NAME`, since sandboxes cannot use Monitors created by other users")
+		case 1:
+			identifier = rows[0].ID
+		default:
+			names := make([]string, len(rows))
+			for i, row := range rows {
+				names[i] = row.Name
+			}
+			return nil, fmt.Errorf("choose one of your Monitors with --monitor: %s", strings.Join(names, ", "))
 		}
-		identifier = rows[0].ID
 	}
 	row, err := managedRow(client, "monitor", identifier)
 	if err == nil && !looksLikeUUID(row.ID) {
 		err = errors.New("invalid Monitor UUID")
+	}
+	if err == nil && row.ClerkUserID != userID {
+		err = fmt.Errorf("Monitor %s was created by another user, and sandboxes can only use Monitors you created; choose one of yours or create one with `tinfoil monitor create NAME`", row.Name)
 	}
 	return row, err
 }

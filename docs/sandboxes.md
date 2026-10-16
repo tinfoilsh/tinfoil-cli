@@ -11,7 +11,7 @@ ssh work
 tinfoil monitor open personal
 ```
 
-Monitor creation defaults to `~/.ssh/id_ed25519.pub`; sandbox creation defaults to the selected Monitor's measured owner. `--owner-public-key FILE` overrides either; `--identity PATH` selects its public key. `--workspace ID|NAME` reuses an unattached workspace on its existing host. Controlplane validates capacity, placement and entitlements. Private and encryption keys stay local.
+A sandbox can only use a Monitor you created, because pairing needs that Monitor's owner key and encryption credentials. Without `--monitor`, sandbox creation selects your only Monitor. Monitor creation defaults to `~/.ssh/id_ed25519.pub`; sandbox creation defaults to the selected Monitor's measured owner. `--owner-public-key FILE` overrides either; `--identity PATH` selects its public key. `--workspace ID|NAME` reuses an unattached workspace on its existing host. Controlplane validates capacity, placement and entitlements. Private and encryption keys stay local.
 
 Creation uses the ordinary container workflow: submit once, then follow the returned deployment. `--no-wait` or `--output json` returns the initial response. After an error or interruption, inspect `sandbox status` / `monitor status` before retrying creation. Use `start` for an existing stopped or failed resource. There is no local pending record or resume command.
 
@@ -23,9 +23,9 @@ The sandbox's network policy selects its Monitor. The CLI verifies that Monitor'
 published configuration and attestation before enrolling credentials. Changing the
 Monitor in the dashboard requires rerunning `tinfoil attest-ssh NAME --install`.
 
-To launch without Monitor, select **Run without Monitor (NO_MONITOR=1)** in the
-dashboard using a sandbox release that declares `NO_MONITOR`. The measured value
-`1` requires no network policy. `attest-ssh` and `sandbox enroll/start/restart` use
+To launch without Monitor, choose **No Monitor** in the dashboard's Monitor step,
+using a sandbox release that declares `NO_MONITOR`. This sets the measured value
+`NO_MONITOR=1`, which requires no network policy. `attest-ssh` and `sandbox enroll/start/restart` use
 direct SSH to the published port, retain attestation and workspace encryption,
 and warn that network traffic is not being tunneled through Monitor. A local
 shell environment variable cannot change an existing sandbox's mode.

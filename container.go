@@ -45,6 +45,7 @@ type containerView struct {
 	Source               string           `json:"source,omitempty"`
 	ConfigName           string           `json:"config_name,omitempty"`
 	ProjectID            string           `json:"project_id"`
+	ClerkUserID          string           `json:"clerk_user_id,omitempty"`
 	Status               string           `json:"status"`
 	CurrentTag           string           `json:"current_tag"`
 	Domain               string           `json:"domain"`
