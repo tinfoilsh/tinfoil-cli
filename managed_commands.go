@@ -147,17 +147,25 @@ func selectCreationMonitor(client *cpClient, identifier, userID string) (*contai
 		rows = slices.DeleteFunc(rows, func(row containerView) bool {
 			return checkManagedKind("monitor", row) != nil || row.ClerkUserID != userID
 		})
-		if len(rows) != 1 {
-			return nil, errors.New("choose one of your Monitors with --monitor from `tinfoil monitor status`, or create one with `tinfoil monitor create NAME`")
+		switch len(rows) {
+		case 0:
+			return nil, errors.New("you have no Monitors in this account; create one with `tinfoil monitor create NAME`, since sandboxes cannot use Monitors created by other users")
+		case 1:
+			identifier = rows[0].ID
+		default:
+			names := make([]string, len(rows))
+			for i, row := range rows {
+				names[i] = row.Name
+			}
+			return nil, fmt.Errorf("choose one of your Monitors with --monitor: %s", strings.Join(names, ", "))
 		}
-		identifier = rows[0].ID
 	}
 	row, err := managedRow(client, "monitor", identifier)
 	if err == nil && !looksLikeUUID(row.ID) {
 		err = errors.New("invalid Monitor UUID")
 	}
 	if err == nil && row.ClerkUserID != userID {
-		err = fmt.Errorf("Monitor %s was created by another user; a sandbox can only use a Monitor you created", row.Name)
+		err = fmt.Errorf("Monitor %s was created by another user, and sandboxes can only use Monitors you created; choose one of yours or create one with `tinfoil monitor create NAME`", row.Name)
 	}
 	return row, err
 }

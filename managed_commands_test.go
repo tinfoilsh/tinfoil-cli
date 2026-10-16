@@ -109,11 +109,12 @@ func TestManagedStatusFiltersAndWatches(t *testing.T) {
 func TestSandboxCreationOnlySelectsOwnMonitors(t *testing.T) {
 	own := containerView{ID: "11111111-1111-4111-8111-111111111111", Name: "mine", Repo: monitorRepo, ClerkUserID: "user_test"}
 	other := containerView{ID: "33333333-3333-4333-8333-333333333333", Name: "shared", Repo: monitorRepo, ClerkUserID: "user_other", Status: statusRunning}
+	second := containerView{ID: "44444444-4444-4444-8444-444444444444", Name: "spare", Repo: monitorRepo, ClerkUserID: "user_second"}
 	managedTestAPI(t, func(w http.ResponseWriter, r *http.Request) {
 		require.Equal(t, "GET", r.Method)
 		switch r.URL.Path {
 		case "/api/containers":
-			json.NewEncoder(w).Encode([]containerView{other, own})
+			json.NewEncoder(w).Encode([]containerView{other, own, second, {Name: "spare-copy", Repo: monitorRepo, ClerkUserID: "user_second"}})
 		case "/api/containers/" + own.ID:
 			json.NewEncoder(w).Encode(own)
 		case "/api/containers/" + other.ID:
@@ -131,7 +132,9 @@ func TestSandboxCreationOnlySelectsOwnMonitors(t *testing.T) {
 	_, err = selectCreationMonitor(client, other.ID, "user_test")
 	require.ErrorContains(t, err, "Monitor shared was created by another user")
 	_, err = selectCreationMonitor(client, "", "user_without_monitor")
-	require.ErrorContains(t, err, "choose one of your Monitors")
+	require.ErrorContains(t, err, "you have no Monitors in this account; create one")
+	_, err = selectCreationMonitor(client, "", "user_second")
+	require.EqualError(t, err, "choose one of your Monitors with --monitor: spare, spare-copy")
 }
 
 func TestManagedCreateUsesContainerRecovery(t *testing.T) {
