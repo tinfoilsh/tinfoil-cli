@@ -23,9 +23,9 @@ The sandbox's network policy selects its Monitor. The CLI verifies that Monitor'
 published configuration and attestation before enrolling credentials. Changing the
 Monitor in the dashboard requires rerunning `tinfoil attest-ssh NAME --install`.
 
-To launch without Monitor, select **Run without Monitor (NO_MONITOR=1)** in the
-dashboard using a sandbox release that declares `NO_MONITOR`. The measured value
-`1` requires no network policy. `attest-ssh` and `sandbox enroll/start/restart` use
+To launch without Monitor, choose **No Monitor** in the dashboard's Monitor step,
+using a sandbox release that declares `NO_MONITOR`. This sets the measured value
+`NO_MONITOR=1`, which requires no network policy. `attest-ssh` and `sandbox enroll/start/restart` use
 direct SSH to the published port, retain attestation and workspace encryption,
 and warn that network traffic is not being tunneled through Monitor. A local
 shell environment variable cannot change an existing sandbox's mode.
