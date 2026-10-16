@@ -153,7 +153,7 @@ func TestManagedCreateUsesContainerRecovery(t *testing.T) {
 			}
 			t.Run(kind+"/"+state, func(t *testing.T) {
 				posts, polls := 0, 0
-				volume := volumeView{ID: "22222222-2222-4222-8222-222222222222"}
+				volume := volumeView{ID: "22222222-2222-4222-8222-222222222222", Sandbox: true}
 				if state == "attached" {
 					volume.ContainerID = "another-sandbox"
 				}
@@ -234,4 +234,27 @@ func TestManagedCreateUsesContainerRecovery(t *testing.T) {
 		_, err := creationOwnerKey(publicFile, "", "")
 		require.Error(t, err, strings.TrimSpace(invalid))
 	}
+}
+
+func TestSandboxWorkspaceIgnoresContainerVolumes(t *testing.T) {
+	workspace := volumeView{ID: "22222222-2222-4222-8222-222222222222", Name: "data", Sandbox: true}
+	managedTestAPI(t, func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "GET /api/volumes", r.Method+" "+r.URL.Path)
+		json.NewEncoder(w).Encode(volumeList{Volumes: []volumeView{
+			workspace,
+			{ID: "33333333-3333-4333-8333-333333333333", Name: "data"},
+			{ID: "44444444-4444-4444-8444-444444444444", Name: "logs"},
+		}})
+	})
+	client, err := authedClient()
+	require.NoError(t, err)
+	volume, err := lookupSandboxWorkspace(client, "data")
+	require.NoError(t, err, "a container volume with the same name must not make the workspace ambiguous")
+	require.Equal(t, workspace.ID, volume.ID)
+	for _, identifier := range []string{"logs", "44444444-4444-4444-8444-444444444444"} {
+		_, err = lookupSandboxWorkspace(client, identifier)
+		require.ErrorContains(t, err, "volume logs is a container volume")
+	}
+	_, err = lookupSandboxWorkspace(client, "missing")
+	require.ErrorContains(t, err, `no volume named "missing"`)
 }

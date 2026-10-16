@@ -499,3 +499,18 @@ func configureVolumeTest(t *testing.T, serverURL string) {
 		volumeAttachAs, volumeYes = previousAs, previousYes
 	})
 }
+
+func TestRenderVolumesShowsKind(t *testing.T) {
+	out, err := captureTestStdout(func() error {
+		return renderVolumes(volumeList{Volumes: []volumeView{{Name: "workspace", Sandbox: true}, {Name: "data"}}})
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(string(out), "\n")
+	for i, want := range [][2]string{{"NAME", "KIND"}, {"workspace", "sandbox"}, {"data", "container"}} {
+		if fields := strings.Fields(lines[i]); len(fields) < 2 || fields[0] != want[0] || fields[1] != want[1] {
+			t.Errorf("line %d = %q, want %s then %s", i, lines[i], want[0], want[1])
+		}
+	}
+}

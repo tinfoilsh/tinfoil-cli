@@ -7,6 +7,7 @@ import (
 	"math/big"
 	"net/http"
 	"os"
+	"slices"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -24,6 +25,7 @@ type volumeView struct {
 	ContainerName string `json:"container_name,omitempty"`
 	Slot          string `json:"slot,omitempty"`
 	CreatedAt     string `json:"created_at"`
+	Sandbox       bool   `json:"sandbox"`
 }
 
 type volumeList struct {
@@ -74,7 +76,7 @@ func init() {
 var volumeCmd = &cobra.Command{
 	Use:          "volume",
 	Aliases:      []string{"volumes"},
-	Short:        "Manage persistent volumes for containers",
+	Short:        "Manage persistent volumes for containers and sandboxes",
 	SilenceUsage: true,
 }
 
@@ -300,6 +302,24 @@ func lookupVolume(client *cpClient, identifier string) (*volumeView, error) {
 		return nil, err
 	}
 	return resolveVolume(list.Volumes, identifier)
+}
+
+// lookupSandboxWorkspace resolves only sandbox volumes, since sandboxes cannot
+// use container volumes.
+func lookupSandboxWorkspace(client *cpClient, identifier string) (*volumeView, error) {
+	list, err := listVolumes(client)
+	if err != nil {
+		return nil, err
+	}
+	workspaces := slices.DeleteFunc(slices.Clone(list.Volumes), func(v volumeView) bool { return !v.Sandbox })
+	volume, err := resolveVolume(workspaces, identifier)
+	if err != nil {
+		if other, otherErr := resolveVolume(list.Volumes, identifier); otherErr == nil {
+			return nil, fmt.Errorf("volume %s is a container volume; sandboxes can only reuse sandbox workspaces (see `tinfoil volume list`)", other.Name)
+		}
+		return nil, err
+	}
+	return volume, nil
 }
 
 // resolveVolume accepts a volume ID or name. Names are not unique within an
@@ -738,14 +758,14 @@ func renderVolumes(list volumeList) error {
 	if len(list.Volumes) == 0 {
 		fmt.Println("No volumes.")
 	} else {
-		fmt.Printf("%-24s  %-10s  %-16s  %-24s  %s\n", "NAME", "SIZE", "HOST", "ATTACHED TO", "CREATED")
+		fmt.Printf("%-24s  %-9s  %-10s  %-16s  %-24s  %s\n", "NAME", "KIND", "SIZE", "HOST", "ATTACHED TO", "CREATED")
 		for _, v := range list.Volumes {
 			attached := "-"
 			if v.ContainerID != "" {
 				attached = volumeContainerLabel(v)
 			}
-			fmt.Printf("%-24s  %-10s  %-16s  %-24s  %s\n",
-				truncate(v.Name, 24), formatSize(v.SizeBytes), truncate(v.HostName, 16), truncate(attached, 24), v.CreatedAt,
+			fmt.Printf("%-24s  %-9s  %-10s  %-16s  %-24s  %s\n",
+				truncate(v.Name, 24), volumeKind(v), formatSize(v.SizeBytes), truncate(v.HostName, 16), truncate(attached, 24), v.CreatedAt,
 			)
 		}
 	}
@@ -754,12 +774,22 @@ func renderVolumes(list volumeList) error {
 	return nil
 }
 
+// volumeKind names whether the volume belongs to sandboxes or containers;
+// each kind attaches only to its own workloads.
+func volumeKind(v volumeView) string {
+	if v.Sandbox {
+		return "sandbox"
+	}
+	return "container"
+}
+
 func renderVolume(v volumeView) error {
 	if outputFormat == "json" {
 		return printJSON(v)
 	}
 	fmt.Printf("Name:         %s\n", v.Name)
 	fmt.Printf("ID:           %s\n", v.ID)
+	fmt.Printf("Kind:         %s\n", volumeKind(v))
 	fmt.Printf("Size:         %s\n", formatSize(v.SizeBytes))
 	fmt.Printf("Host:         %s\n", v.HostName)
 	if v.ContainerID == "" {
