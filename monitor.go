@@ -13,8 +13,10 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -22,6 +24,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"golang.org/x/crypto/ssh"
+	"golang.org/x/term"
 )
 
 const (
@@ -369,8 +372,18 @@ func serveMonitorPanel(cmd *cobra.Command, client *ssh.Client, dir, address stri
 	probe.Close()
 	go func() { client.Wait(); stop() }()
 	go func() { <-ctx.Done(); listener.Close(); client.Close() }()
-	fmt.Fprintf(cmd.OutOrStdout(), "Local Monitor panel: http://%s/app/#session=%s\n", listener.Addr(), session)
+	url := fmt.Sprintf("http://%s/app/#session=%s", listener.Addr(), session)
+	fmt.Fprintf(cmd.OutOrStdout(), "Local Monitor panel: %s\n", url)
 	fmt.Fprintln(cmd.ErrOrStderr(), "Keep this command running. Ctrl-C closes the SSH connection. Owner credentials stay out of the browser.")
+	if input, ok := cmd.InOrStdin().(*os.File); ok && term.IsTerminal(int(input.Fd())) {
+		fmt.Fprintln(cmd.ErrOrStderr(), "Press Enter to open the Monitor in your browser.")
+		// Input must not block forwarding or shutdown of the SSH connection.
+		go func() {
+			if err := openMonitorBrowserOnEnter(ctx, input, url); err != nil && ctx.Err() == nil {
+				fmt.Fprintf(cmd.ErrOrStderr(), "Could not open your browser: %v. Open the Local Monitor panel URL above manually.\n", err)
+			}
+		}()
+	}
 	for {
 		local, err := listener.Accept()
 		if err != nil {
@@ -396,4 +409,18 @@ func serveMonitorPanel(cmd *cobra.Command, client *ssh.Client, dir, address stri
 			<-done
 		}()
 	}
+}
+
+func openMonitorBrowserOnEnter(ctx context.Context, input io.Reader, url string) error {
+	if ctx.Err() != nil {
+		return nil
+	}
+	if _, err := bufio.NewReader(input).ReadString('\n'); err != nil || ctx.Err() != nil {
+		return nil
+	}
+	opener := "xdg-open"
+	if runtime.GOOS == "darwin" {
+		opener = "open"
+	}
+	return exec.CommandContext(ctx, opener, url).Run()
 }
