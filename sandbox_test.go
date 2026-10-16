@@ -212,7 +212,7 @@ func TestContainedProfileJumpsThroughMonitorAndKeepsItsAlias(t *testing.T) {
 	require.NoError(t, os.MkdirAll(dir, 0o700))
 	boot, monitorKey := testHostKey(t), testHostKey(t)
 	profile := sshProfile{resourceID: "cp/org/user/resource", name: "work", hostName: routeName(boot), port: defaultSSHPort, user: sandboxLoginUser, identityFile: "/keys/my work/owner_ed25519", hostKey: boot, hostKeyAlias: "work.acme.sandboxes.tinfoil.dev",
-		jump: &sshProfile{name: "work" + monitorJumpSuffix, hostName: "203.0.113.8", port: 22042, user: monitorSSHUser, identityFile: "/keys/personal/device_ed25519", hostKey: monitorKey, hostKeyAlias: "personal.acme.monitors.tinfoil.dev"}}
+		jump: monitorJump("work", "203.0.113.8", 22042, "/keys/personal", monitorKey, "personal.acme.monitors.tinfoil.dev")}
 
 	other := []byte("Host work\n  HostName work.example\n  IdentityFile ~/.ssh/id_work\n")
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "work.conf"), other, 0o600))
@@ -234,7 +234,7 @@ func TestContainedProfileJumpsThroughMonitorAndKeepsItsAlias(t *testing.T) {
 	path := filepath.Join(dir, "work.conf")
 	for host, expected := range map[string][]string{
 		"work":         {"hostname " + strings.ToLower(routeName(rebooted)), "proxyjump work.monitor", "hostkeyalias work.acme.sandboxes.tinfoil.dev", "user sandbox", "stricthostkeychecking true"},
-		"work.monitor": {"hostname 203.0.113.8", "port 22042", "hostkeyalias personal.acme.monitors.tinfoil.dev", "identityfile /keys/personal/device_ed25519"},
+		"work.monitor": {"hostname 203.0.113.8", "port 22042", "hostkeyalias personal.acme.monitors.tinfoil.dev", "identityfile /keys/personal/device_ed25519", "identityagent none"},
 	} {
 		data, err := exec.Command(program, "-G", "-F", path, host).Output()
 		require.NoError(t, err)
@@ -242,6 +242,9 @@ func TestContainedProfileJumpsThroughMonitorAndKeepsItsAlias(t *testing.T) {
 			require.Contains(t, string(data), want+"\n", host)
 		}
 	}
+	data, err := exec.Command(program, "-G", "-F", path, "work").Output()
+	require.NoError(t, err)
+	require.NotContains(t, string(data), "identityagent none\n", "the sandbox hop may still use an agent-held owner key")
 	pins, err := knownhosts.New(filepath.Join(dir, "work.known_hosts"))
 	require.NoError(t, err)
 	remote := &net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: defaultSSHPort}
