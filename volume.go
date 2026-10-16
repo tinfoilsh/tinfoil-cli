@@ -197,11 +197,15 @@ var volumeAttachCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		v, err := lookupVolume(client, args[0])
+		c, err := resolveContainerDetail(client, args[1])
 		if err != nil {
 			return err
 		}
-		c, err := resolveContainerDetail(client, args[1])
+		list, err := listVolumes(client)
+		if err != nil {
+			return err
+		}
+		v, err := resolveVolumeOfKind(list.Volumes, args[0], c.Repo == defaultSandboxRepo)
 		if err != nil {
 			return err
 		}
@@ -311,15 +315,27 @@ func lookupSandboxWorkspace(client *cpClient, identifier string) (*volumeView, e
 	if err != nil {
 		return nil, err
 	}
-	workspaces := slices.DeleteFunc(slices.Clone(list.Volumes), func(v volumeView) bool { return !v.Sandbox })
-	volume, err := resolveVolume(workspaces, identifier)
-	if err != nil {
-		if other, otherErr := resolveVolume(list.Volumes, identifier); otherErr == nil {
-			return nil, fmt.Errorf("volume %s is a container volume; sandboxes can only reuse sandbox workspaces (see `tinfoil volume list`)", other.Name)
-		}
-		return nil, err
+	return resolveVolumeOfKind(list.Volumes, identifier, true)
+}
+
+// resolveVolumeOfKind resolves among sandbox or container volumes only. Each
+// kind attaches only to its own workloads, so a name shared across kinds is
+// not ambiguous.
+func resolveVolumeOfKind(volumes []volumeView, identifier string, sandbox bool) (*volumeView, error) {
+	ofKind := slices.DeleteFunc(slices.Clone(volumes), func(v volumeView) bool { return v.Sandbox != sandbox })
+	volume, err := resolveVolume(ofKind, identifier)
+	if err == nil {
+		return volume, nil
 	}
-	return volume, nil
+	other, otherErr := resolveVolume(volumes, identifier)
+	switch {
+	case otherErr != nil:
+		return nil, err
+	case sandbox:
+		return nil, fmt.Errorf("volume %s is a container volume; sandboxes can only use sandbox volumes (see `tinfoil volume list`)", other.Name)
+	default:
+		return nil, fmt.Errorf("volume %s is a sandbox volume; containers can only use container volumes (see `tinfoil volume list`)", other.Name)
+	}
 }
 
 // resolveVolume accepts a volume ID or name. Names are not unique within an
@@ -409,7 +425,7 @@ func resolveVolumeRequests(all []volumeView, requests []volumeRequest, replaceme
 	volumes := make([]volumeView, len(requests))
 	seen := map[string]bool{}
 	for i, r := range requests {
-		v, err := resolveVolume(all, r.identifier)
+		v, err := resolveVolumeOfKind(all, r.identifier, false)
 		if err != nil {
 			return nil, err
 		}

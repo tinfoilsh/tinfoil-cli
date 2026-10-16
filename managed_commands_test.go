@@ -258,3 +258,44 @@ func TestSandboxWorkspaceIgnoresContainerVolumes(t *testing.T) {
 	_, err = lookupSandboxWorkspace(client, "missing")
 	require.ErrorContains(t, err, `no volume named "missing"`)
 }
+
+func TestContainerVolumesIgnoreSandboxWorkspaces(t *testing.T) {
+	volumes := []volumeView{
+		{ID: "11111111-1111-4111-8111-111111111111", Name: "data", Sandbox: true},
+		{ID: "22222222-2222-4222-8222-222222222222", Name: "data"},
+		{ID: "33333333-3333-4333-8333-333333333333", Name: "workspace", Sandbox: true},
+	}
+	resolved, err := resolveVolumeRequests(volumes, []volumeRequest{{identifier: "data"}}, nil)
+	require.NoError(t, err, "a sandbox workspace with the same name must not make the container volume ambiguous")
+	require.Equal(t, volumes[1].ID, resolved[0].ID)
+	_, err = resolveVolumeRequests(volumes, []volumeRequest{{identifier: "workspace"}}, nil)
+	require.ErrorContains(t, err, "volume workspace is a sandbox volume")
+
+	for _, sandbox := range []bool{false, true} {
+		target := containerView{ID: testContainerID, Name: "work", Status: statusStopped, VolumeSlots: []volumeSlot{{Name: "workspace"}}}
+		want := volumes[1].ID
+		if sandbox {
+			target.Repo, want = defaultSandboxRepo, volumes[0].ID
+		}
+		var attached string
+		managedTestAPI(t, func(w http.ResponseWriter, r *http.Request) {
+			switch r.Method + " " + r.URL.Path {
+			case "GET /api/containers/" + testContainerID:
+				json.NewEncoder(w).Encode(target)
+			case "GET /api/volumes":
+				json.NewEncoder(w).Encode(volumeList{Volumes: volumes})
+			case "PUT /api/containers/" + testContainerID + "/volumes/workspace":
+				var body map[string]string
+				require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+				attached = body["volume_id"]
+				w.WriteHeader(http.StatusNoContent)
+			default:
+				t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+				http.NotFound(w, r)
+			}
+		})
+		_, err := captureTestStdout(func() error { return executeLifecycleCLI(t, "volume", "attach", "data", testContainerID) })
+		require.NoError(t, err)
+		require.Equal(t, want, attached, "volume attach resolves the volume kind that matches the target")
+	}
+}
