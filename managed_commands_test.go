@@ -153,7 +153,7 @@ func TestManagedCreateUsesContainerRecovery(t *testing.T) {
 			}
 			t.Run(kind+"/"+state, func(t *testing.T) {
 				posts, polls := 0, 0
-				volume := volumeView{ID: "22222222-2222-4222-8222-222222222222"}
+				volume := volumeView{ID: "22222222-2222-4222-8222-222222222222", Sandbox: true}
 				if state == "attached" {
 					volume.ContainerID = "another-sandbox"
 				}
@@ -233,5 +233,69 @@ func TestManagedCreateUsesContainerRecovery(t *testing.T) {
 		require.NoError(t, os.WriteFile(publicFile, []byte(invalid), 0600))
 		_, err := creationOwnerKey(publicFile, "", "")
 		require.Error(t, err, strings.TrimSpace(invalid))
+	}
+}
+
+func TestSandboxWorkspaceIgnoresContainerVolumes(t *testing.T) {
+	workspace := volumeView{ID: "22222222-2222-4222-8222-222222222222", Name: "data", Sandbox: true}
+	managedTestAPI(t, func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "GET /api/volumes", r.Method+" "+r.URL.Path)
+		json.NewEncoder(w).Encode(volumeList{Volumes: []volumeView{
+			workspace,
+			{ID: "33333333-3333-4333-8333-333333333333", Name: "data"},
+			{ID: "44444444-4444-4444-8444-444444444444", Name: "logs"},
+		}})
+	})
+	client, err := authedClient()
+	require.NoError(t, err)
+	volume, err := lookupSandboxWorkspace(client, "data")
+	require.NoError(t, err, "a container volume with the same name must not make the workspace ambiguous")
+	require.Equal(t, workspace.ID, volume.ID)
+	for _, identifier := range []string{"logs", "44444444-4444-4444-8444-444444444444"} {
+		_, err = lookupSandboxWorkspace(client, identifier)
+		require.ErrorContains(t, err, "volume logs is a container volume")
+	}
+	_, err = lookupSandboxWorkspace(client, "missing")
+	require.ErrorContains(t, err, `no volume named "missing"`)
+}
+
+func TestContainerVolumesIgnoreSandboxWorkspaces(t *testing.T) {
+	volumes := []volumeView{
+		{ID: "11111111-1111-4111-8111-111111111111", Name: "data", Sandbox: true},
+		{ID: "22222222-2222-4222-8222-222222222222", Name: "data"},
+		{ID: "33333333-3333-4333-8333-333333333333", Name: "workspace", Sandbox: true},
+	}
+	resolved, err := resolveVolumeRequests(volumes, []volumeRequest{{identifier: "data"}}, nil)
+	require.NoError(t, err, "a sandbox workspace with the same name must not make the container volume ambiguous")
+	require.Equal(t, volumes[1].ID, resolved[0].ID)
+	_, err = resolveVolumeRequests(volumes, []volumeRequest{{identifier: "workspace"}}, nil)
+	require.ErrorContains(t, err, "volume workspace is a sandbox volume")
+
+	for _, sandbox := range []bool{false, true} {
+		target := containerView{ID: testContainerID, Name: "work", Status: statusStopped, VolumeSlots: []volumeSlot{{Name: "workspace"}}}
+		want := volumes[1].ID
+		if sandbox {
+			target.Repo, want = defaultSandboxRepo, volumes[0].ID
+		}
+		var attached string
+		managedTestAPI(t, func(w http.ResponseWriter, r *http.Request) {
+			switch r.Method + " " + r.URL.Path {
+			case "GET /api/containers/" + testContainerID:
+				json.NewEncoder(w).Encode(target)
+			case "GET /api/volumes":
+				json.NewEncoder(w).Encode(volumeList{Volumes: volumes})
+			case "PUT /api/containers/" + testContainerID + "/volumes/workspace":
+				var body map[string]string
+				require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+				attached = body["volume_id"]
+				w.WriteHeader(http.StatusNoContent)
+			default:
+				t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+				http.NotFound(w, r)
+			}
+		})
+		_, err := captureTestStdout(func() error { return executeLifecycleCLI(t, "volume", "attach", "data", testContainerID) })
+		require.NoError(t, err)
+		require.Equal(t, want, attached, "volume attach resolves the volume kind that matches the target")
 	}
 }

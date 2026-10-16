@@ -98,7 +98,7 @@ func newManagedCreateCmd(kind string) *cobra.Command {
 				variables["SANDBOX_INSTANCE_ID"] = uuid.NewString()
 				body["network_policy"] = sandboxNetworkPolicy(selected.ID)
 				if workspace != "" {
-					volume, err := lookupVolume(client, workspace)
+					volume, err := lookupSandboxWorkspace(client, workspace)
 					if err != nil {
 						return err
 					}

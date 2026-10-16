@@ -7,6 +7,7 @@ import (
 	"math/big"
 	"net/http"
 	"os"
+	"slices"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -24,6 +25,7 @@ type volumeView struct {
 	ContainerName string `json:"container_name,omitempty"`
 	Slot          string `json:"slot,omitempty"`
 	CreatedAt     string `json:"created_at"`
+	Sandbox       bool   `json:"sandbox"`
 }
 
 type volumeList struct {
@@ -74,7 +76,7 @@ func init() {
 var volumeCmd = &cobra.Command{
 	Use:          "volume",
 	Aliases:      []string{"volumes"},
-	Short:        "Manage persistent volumes for containers",
+	Short:        "Manage persistent volumes for containers and sandboxes",
 	SilenceUsage: true,
 }
 
@@ -195,11 +197,15 @@ var volumeAttachCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		v, err := lookupVolume(client, args[0])
+		c, err := resolveContainerDetail(client, args[1])
 		if err != nil {
 			return err
 		}
-		c, err := resolveContainerDetail(client, args[1])
+		list, err := listVolumes(client)
+		if err != nil {
+			return err
+		}
+		v, err := resolveVolumeOfKind(list.Volumes, args[0], c.Repo == defaultSandboxRepo)
 		if err != nil {
 			return err
 		}
@@ -302,6 +308,36 @@ func lookupVolume(client *cpClient, identifier string) (*volumeView, error) {
 	return resolveVolume(list.Volumes, identifier)
 }
 
+// lookupSandboxWorkspace resolves only sandbox volumes, since sandboxes cannot
+// use container volumes.
+func lookupSandboxWorkspace(client *cpClient, identifier string) (*volumeView, error) {
+	list, err := listVolumes(client)
+	if err != nil {
+		return nil, err
+	}
+	return resolveVolumeOfKind(list.Volumes, identifier, true)
+}
+
+// resolveVolumeOfKind resolves among sandbox or container volumes only. Each
+// kind attaches only to its own workloads, so a name shared across kinds is
+// not ambiguous.
+func resolveVolumeOfKind(volumes []volumeView, identifier string, sandbox bool) (*volumeView, error) {
+	ofKind := slices.DeleteFunc(slices.Clone(volumes), func(v volumeView) bool { return v.Sandbox != sandbox })
+	volume, err := resolveVolume(ofKind, identifier)
+	if err == nil {
+		return volume, nil
+	}
+	other, otherErr := resolveVolume(volumes, identifier)
+	switch {
+	case otherErr != nil:
+		return nil, err
+	case sandbox:
+		return nil, fmt.Errorf("volume %s is a container volume; sandboxes can only use sandbox volumes (see `tinfoil volume list`)", other.Name)
+	default:
+		return nil, fmt.Errorf("volume %s is a sandbox volume; containers can only use container volumes (see `tinfoil volume list`)", other.Name)
+	}
+}
+
 // resolveVolume accepts a volume ID or name. Names are not unique within an
 // organization, so a shared name is an error that points at the IDs.
 func resolveVolume(volumes []volumeView, identifier string) (*volumeView, error) {
@@ -389,7 +425,7 @@ func resolveVolumeRequests(all []volumeView, requests []volumeRequest, replaceme
 	volumes := make([]volumeView, len(requests))
 	seen := map[string]bool{}
 	for i, r := range requests {
-		v, err := resolveVolume(all, r.identifier)
+		v, err := resolveVolumeOfKind(all, r.identifier, false)
 		if err != nil {
 			return nil, err
 		}
@@ -738,14 +774,14 @@ func renderVolumes(list volumeList) error {
 	if len(list.Volumes) == 0 {
 		fmt.Println("No volumes.")
 	} else {
-		fmt.Printf("%-24s  %-10s  %-16s  %-24s  %s\n", "NAME", "SIZE", "HOST", "ATTACHED TO", "CREATED")
+		fmt.Printf("%-24s  %-9s  %-10s  %-16s  %-24s  %s\n", "NAME", "KIND", "SIZE", "HOST", "ATTACHED TO", "CREATED")
 		for _, v := range list.Volumes {
 			attached := "-"
 			if v.ContainerID != "" {
 				attached = volumeContainerLabel(v)
 			}
-			fmt.Printf("%-24s  %-10s  %-16s  %-24s  %s\n",
-				truncate(v.Name, 24), formatSize(v.SizeBytes), truncate(v.HostName, 16), truncate(attached, 24), v.CreatedAt,
+			fmt.Printf("%-24s  %-9s  %-10s  %-16s  %-24s  %s\n",
+				truncate(v.Name, 24), volumeKind(v), formatSize(v.SizeBytes), truncate(v.HostName, 16), truncate(attached, 24), v.CreatedAt,
 			)
 		}
 	}
@@ -754,12 +790,22 @@ func renderVolumes(list volumeList) error {
 	return nil
 }
 
+// volumeKind names whether the volume belongs to sandboxes or containers;
+// each kind attaches only to its own workloads.
+func volumeKind(v volumeView) string {
+	if v.Sandbox {
+		return "sandbox"
+	}
+	return "container"
+}
+
 func renderVolume(v volumeView) error {
 	if outputFormat == "json" {
 		return printJSON(v)
 	}
 	fmt.Printf("Name:         %s\n", v.Name)
 	fmt.Printf("ID:           %s\n", v.ID)
+	fmt.Printf("Kind:         %s\n", volumeKind(v))
 	fmt.Printf("Size:         %s\n", formatSize(v.SizeBytes))
 	fmt.Printf("Host:         %s\n", v.HostName)
 	if v.ContainerID == "" {
