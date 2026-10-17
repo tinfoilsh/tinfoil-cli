@@ -88,6 +88,8 @@ func TestMonitorUnlockAndSSHPanelAgainstRealMonitor(t *testing.T) {
 	}, 10*time.Second, 50*time.Millisecond)
 	dir := t.TempDir()
 	require.NoError(t, writeStorageJSON(filepath.Join(dir, monitorProfileFile), monitorProfile{}, false))
+	device, err := ensureSSHKey(filepath.Join(dir, monitorDeviceKeyName))
+	require.NoError(t, err)
 	conn, err := net.Dial("tcp", sshAddress)
 	require.NoError(t, err)
 	_, err = connectOwnerSSHAs(conn, "localhost", hostKey, testOwnerCredential(t).SigningSeed, "owner")
@@ -99,11 +101,80 @@ func TestMonitorUnlockAndSSHPanelAgainstRealMonitor(t *testing.T) {
 	defer panel.Close()
 	require.Error(t, monitorOwnerRequest(panel, dir, "GET", "/policy", nil))
 	require.Error(t, monitorOwnerRequest(panel, dir, "POST", "/unlock", map[string]any{"storage_key": credential.Key}), "unlock cannot initialize an empty store")
-	require.NoError(t, unlockMonitor(panel, dir, credential))
-	require.Error(t, unlockMonitor(panel, dir, testOwnerCredential(t)), "wrong storage key refused")
-	device, agent := authorizedLine(testSigner(t)), authorizedLine(testSigner(t))
+	require.NoError(t, unlockMonitor(panel, dir, credential, true))
+	require.Error(t, unlockMonitor(panel, dir, testOwnerCredential(t), true), "wrong storage key refused")
+	agentSigner := testSigner(t)
+	agent := authorizedLine(agentSigner)
 	require.NoError(t, pairSandboxMonitor(panel, dir, "work", device, agent))
 	require.NoError(t, pairSandboxMonitor(panel, dir, "work", device, agent))
+
+	// Exercise a sandbox reverse route through the real Monitor SSH server.
+	conn, err = net.Dial("tcp", sshAddress)
+	require.NoError(t, err)
+	publisher, err := connectOwnerSigner(conn, "localhost", hostKey, agentSigner, "sandbox")
+	require.NoError(t, err)
+	defer publisher.Close()
+	route, err := publisher.Listen("tcp", "127.0.0.1:22")
+	require.NoError(t, err)
+	defer route.Close()
+	go func() {
+		for {
+			conn, err := route.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer conn.Close()
+				io.Copy(conn, conn)
+			}()
+		}
+	}()
+	checkRoute := func(allowed bool) {
+		t.Helper()
+		signer, err := loadSigner(filepath.Join(dir, monitorDeviceKeyName))
+		require.NoError(t, err)
+		conn, err := net.Dial("tcp", sshAddress)
+		require.NoError(t, err)
+		client, err := connectOwnerSigner(conn, "localhost", hostKey, signer, monitorSSHUser)
+		require.NoError(t, err)
+		defer client.Close()
+		routed, err := client.DialContext(t.Context(), "tcp", net.JoinHostPort(routeName(agentSigner.PublicKey()), "22"))
+		if !allowed {
+			var channel *ssh.OpenChannelError
+			require.ErrorAs(t, err, &channel)
+			require.Equal(t, ssh.Prohibited, channel.Reason)
+			return
+		}
+		require.NoError(t, err)
+		defer routed.Close()
+		timer := time.AfterFunc(5*time.Second, func() { client.Close() })
+		defer timer.Stop()
+		_, err = io.WriteString(routed, "sandbox reachable")
+		require.NoError(t, err)
+		reply := make([]byte, len("sandbox reachable"))
+		_, err = io.ReadFull(routed, reply)
+		require.NoError(t, err)
+		require.Equal(t, "sandbox reachable", string(reply))
+	}
+	checkRoute(true)
+	name := "device-" + storageHash([]byte(device))[:16]
+	for _, change := range []map[string]any{
+		{"path": []string{"identities", name, "routes"}, "value": false},
+		{"path": []string{"identities", name}, "delete": true},
+	} {
+		require.NoError(t, monitorOwnerRequest(panel, dir, "POST", "/policy/edits", map[string]any{"changes": []any{change}}))
+		checkRoute(false)
+		require.NoError(t, unlockMonitor(panel, dir, credential, false))
+		checkRoute(false)
+		require.ErrorContains(t, pairSandboxMonitor(panel, dir, "work", device, agent), "revoked")
+		require.NoError(t, unlockMonitor(panel, dir, credential, true))
+		checkRoute(true)
+		var before, after monitorProfile
+		require.NoError(t, readStorageJSON(filepath.Join(dir, monitorProfileFile), &before))
+		require.NoError(t, unlockMonitor(panel, dir, credential, true))
+		require.NoError(t, readStorageJSON(filepath.Join(dir, monitorProfileFile), &after))
+		require.Equal(t, before.Generation, after.Generation, "unchanged open must not rewrite Monitor state")
+	}
 	identity := filepath.Join(dir, "owner")
 	require.NoError(t, ensureOwnerSSHKey(identity, credential.SigningSeed))
 	host, port, err := net.SplitHostPort(sshAddress)
@@ -127,7 +198,7 @@ func TestMonitorUnlockAndSSHPanelAgainstRealMonitor(t *testing.T) {
 	}
 	_, err = updateProfile(dir, func(p *monitorProfile) error { p.Generation += 5; return nil })
 	require.NoError(t, err)
-	require.ErrorContains(t, unlockMonitor(panel, dir, credential), "older than")
+	require.ErrorContains(t, unlockMonitor(panel, dir, credential, true), "older than")
 	_, err = updateProfile(dir, func(p *monitorProfile) error { p.Generation -= 5; return nil })
 	require.NoError(t, err)
 
@@ -166,6 +237,15 @@ func TestMonitorUnlockAndSSHPanelAgainstRealMonitor(t *testing.T) {
 		t.Fatal("panel did not stop after cancellation")
 	}
 	require.NotContains(t, stderr.String(), "Press Enter", "noninteractive forwarding must not prompt")
+}
+
+func TestMonitorUnlockMissingDeviceKey(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, writeStorageJSON(filepath.Join(dir, monitorProfileFile), monitorProfile{Generation: 1}, false))
+	err := unlockMonitor(nil, dir, testOwnerCredential(t), true)
+	require.ErrorContains(t, err, "restore Monitor device key")
+	require.ErrorContains(t, err, filepath.Join(dir, monitorDeviceKeyName))
+	require.NoFileExists(t, filepath.Join(dir, monitorDeviceKeyName), "restoration must not replace a lost key")
 }
 
 func TestOpenMonitorBrowserOnEnter(t *testing.T) {

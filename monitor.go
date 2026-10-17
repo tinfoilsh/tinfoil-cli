@@ -87,15 +87,24 @@ func currentScope() (accountScope, *cpClient, error) {
 }
 
 // SSH authenticates the owner; the storage key only decrypts the state.
-func unlockMonitor(client *ssh.Client, dir string, credential *ownerCredential) error {
+func unlockMonitor(client *ssh.Client, dir string, credential *ownerCredential, restoreDevice bool) error {
 	var profile monitorProfile
 	if err := readStorageJSON(filepath.Join(dir, monitorProfileFile), &profile); err != nil {
 		return err
 	}
+	var device string
+	if restoreDevice {
+		var err error
+		device, err = loadSSHKey(filepath.Join(dir, monitorDeviceKeyName))
+		if err != nil {
+			return fmt.Errorf("restore Monitor device key: %w", err)
+		}
+	}
 	return monitorOwnerRequest(client, dir, http.MethodPost, "/unlock", struct {
 		StorageKey []byte `json:"storage_key"`
 		Initialize bool   `json:"initialize"`
-	}{credential.Key, profile.Generation == 0})
+		DeviceKey  string `json:"device_key,omitempty"`
+	}{credential.Key, profile.Generation == 0, device})
 }
 
 // Serialize updates to preserve boot-key pins and the maximum generation.
@@ -129,7 +138,7 @@ type ownerChannelOptions struct {
 	Generation uint64
 }
 
-func connectMonitorOwner(ctx context.Context, scope accountScope, row *workloadTarget) (*ssh.Client, string, error) {
+func connectMonitorOwner(ctx context.Context, scope accountScope, row *workloadTarget, restoreDevice bool) (*ssh.Client, string, error) {
 	if err := requireRunningConnection("Monitor", row.containerView); err != nil {
 		return nil, "", err
 	}
@@ -192,10 +201,10 @@ func connectMonitorOwner(ctx context.Context, scope accountScope, row *workloadT
 		return nil, "", err
 	}
 	fmt.Fprintln(os.Stderr, "Unlocking Monitor "+row.Name+" encrypted state")
-	err = unlockMonitor(client, dir, credential)
+	err = unlockMonitor(client, dir, credential, restoreDevice)
 	if err != nil {
 		client.Close()
-		return nil, "", fmt.Errorf("unlock Monitor; restore the original encryption credentials if it was initialized elsewhere: %w", err)
+		return nil, "", fmt.Errorf("unlock Monitor: %w", err)
 	}
 	if _, err := updateProfile(dir, func(p *monitorProfile) error { p.Address = address; return nil }); err != nil {
 		client.Close()
@@ -320,6 +329,7 @@ func init() {
 	rootCmd.AddCommand(monitorCmd)
 	command := &cobra.Command{
 		Use: "open [id|name]", Short: "Unlock and forward the Monitor UI over attested SSH", Args: cobra.ExactArgs(1),
+		Long: "Unlock the Monitor, restore this device's sandbox connectivity, and forward its UI over attested SSH. Requires a Monitor release supporting device restoration during unlock.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
 			fmt.Fprintln(cmd.ErrOrStderr(), "Looking up Monitor "+name)
@@ -335,7 +345,7 @@ func init() {
 			if err != nil {
 				return err
 			}
-			client, dir, err := connectMonitorOwner(cmd.Context(), scope, target)
+			client, dir, err := connectMonitorOwner(cmd.Context(), scope, target, true)
 			if err != nil {
 				return err
 			}
