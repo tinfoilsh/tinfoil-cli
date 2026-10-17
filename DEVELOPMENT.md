@@ -5,8 +5,7 @@ Use the Go version declared in [go.mod](go.mod). Run the commands below from the
 ## Build
 
 ```sh
-export GOWORK=off
-go build -o tinfoil .
+GOWORK=off go build -o tinfoil .
 ./tinfoil --help
 ```
 
@@ -17,14 +16,14 @@ go build -o tinfoil .
 Format edited Go files with `gofmt`, then run:
 
 ```sh
-go test ./...
-go vet ./...
+GOWORK=off go test ./...
+GOWORK=off go vet ./...
 ```
 
 To run a focused set of tests:
 
 ```sh
-go test -count=1 -run '^TestLoadConfig' .
+GOWORK=off go test -count=1 -run '^TestLoadConfig' .
 ```
 
 [CI](.github/workflows/test.yml) runs the test suite on pull requests.
