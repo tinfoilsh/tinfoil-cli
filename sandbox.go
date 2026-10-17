@@ -405,7 +405,7 @@ func connectSandbox(target *workloadTarget) (_ *sandboxSession, err error) {
 	if err != nil {
 		var denied *ssh.OpenChannelError
 		if errors.As(err, &denied) && denied.Reason == ssh.Prohibited {
-			return nil, errors.New("Monitor route access denied; restore this device explicitly in the Monitor UI")
+				return nil, fmt.Errorf("Monitor route access denied; restore this device with `tinfoil monitor open %s`, then retry", monitor.Name)
 		}
 		return nil, fmt.Errorf("sandbox attestation through Monitor: %w", err)
 	}
@@ -459,7 +459,7 @@ func (s *sandboxSession) configureMonitor(scope accountScope, target *workloadTa
 		if s.monitor != nil {
 			s.monitor.Close()
 		}
-		owner, ownerDir, err := connectMonitorOwner(context.Background(), scope, target)
+		owner, ownerDir, err := connectMonitorOwner(context.Background(), scope, target, false)
 		if err != nil {
 			return err
 		}
