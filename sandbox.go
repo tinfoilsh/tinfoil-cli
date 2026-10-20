@@ -16,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -238,9 +239,11 @@ const (
 
 	// Monitor routes to a sandbox boot by a name derived from its SSH host key.
 	sandboxRouteSuffix = ".sandbox.invalid"
-	// Monitor ignores the SSH user; only the device key authorizes routes.
-	monitorSSHUser    = "device"
-	monitorJumpSuffix = ".monitor"
+	// The device key authorizes routes; setup also requires the sandbox identity.
+	monitorSSHUser           = "device"
+	monitorSandboxUserPrefix = "device+sandbox:"
+	monitorSandboxEnrollment = "sandbox-enrollment-v1"
+	monitorJumpSuffix        = ".monitor"
 )
 
 // One command keeps one verified sandbox connection through enrollment and SSH setup.
@@ -405,7 +408,7 @@ func connectSandbox(target *workloadTarget) (_ *sandboxSession, err error) {
 	if err != nil {
 		var denied *ssh.OpenChannelError
 		if errors.As(err, &denied) && denied.Reason == ssh.Prohibited {
-				return nil, fmt.Errorf("Monitor route access denied; restore this device with `tinfoil monitor open %s`, then retry", monitor.Name)
+			return nil, fmt.Errorf("Monitor route access denied; restore this device with `tinfoil monitor open %s`, then retry", monitor.Name)
 		}
 		return nil, fmt.Errorf("sandbox attestation through Monitor: %w", err)
 	}
@@ -435,6 +438,10 @@ func (s *sandboxSession) configureMonitor(scope accountScope, target *workloadTa
 	if err := readStorageJSON(filepath.Join(dir, monitorProfileFile), &profile); err != nil {
 		return err
 	}
+	agentKey, _, _, _, err := ssh.ParseAuthorizedKey([]byte(s.keys.agentKey))
+	if err != nil {
+		return fmt.Errorf("sandbox agent key: %w", err)
+	}
 	connect := func() error {
 		if profile.ConfigSource != target.source {
 			return errors.New("Monitor configuration needs fresh attestation")
@@ -452,10 +459,12 @@ func (s *sandboxSession) configureMonitor(scope accountScope, target *workloadTa
 		if err != nil {
 			return err
 		}
-		s.monitor, err = connectOwnerSigner(conn, profile.Domain, key, device, monitorSSHUser)
+		s.monitor, err = connectOwnerSigner(conn, profile.Domain, key, device, monitorSandboxUserPrefix+ssh.FingerprintSHA256(agentKey))
 		return err
 	}
-	if err := connect(); err != nil || !s.initialized || enroll {
+	connectErr := connect()
+	// Monitors without the handshake check require owner enrollment on every setup.
+	if connectErr != nil || !s.initialized || enroll || !slices.Contains(strings.Fields(string(s.monitor.ServerVersion())), monitorSandboxEnrollment) {
 		if s.monitor != nil {
 			s.monitor.Close()
 		}
