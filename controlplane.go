@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -13,6 +14,14 @@ import (
 )
 
 const controlplaneUserAgentPrefix = "tinfoil-cli/"
+
+// Controlplane error codes for account limits, and the hint shown after them.
+const (
+	containerLimitReached = "CONTAINER_LIMIT_REACHED"
+	sandboxLimitReached   = "SANDBOX_LIMIT_REACHED"
+	storageLimitExceeded  = "STORAGE_LIMIT_EXCEEDED"
+	accountLimitsHint     = "See your account limits in the Tinfoil dashboard."
+)
 
 type cpClient struct {
 	baseURL string
@@ -33,6 +42,7 @@ type cpError struct {
 	Status  int
 	Method  string
 	Path    string
+	Code    string
 	Message string
 	Body    []byte
 }
@@ -42,6 +52,21 @@ func (e *cpError) Error() string {
 		return fmt.Sprintf("%s %s: %d: %s", e.Method, e.Path, e.Status, humanVolumeMessage(secretDeliveryMessage(e.Message)))
 	}
 	return fmt.Sprintf("%s %s: %d", e.Method, e.Path, e.Status)
+}
+
+// errorHint returns a line to print after a failed command's error, or "".
+// Commands wrap controlplane errors in their own context, so the hint is
+// printed once at the end rather than inside the error text.
+func errorHint(err error) string {
+	var cp *cpError
+	if !errors.As(err, &cp) {
+		return ""
+	}
+	switch cp.Code {
+	case containerLimitReached, sandboxLimitReached, storageLimitExceeded:
+		return accountLimitsHint
+	}
+	return ""
 }
 
 // do performs an authenticated request against the controlplane. body may be
@@ -107,6 +132,7 @@ func (c *cpClient) doContext(ctx context.Context, method, path string, query url
 			Status:  resp.StatusCode,
 			Method:  method,
 			Path:    path,
+			Code:    extractErrorCode(respBody),
 			Message: extractErrorMessage(respBody),
 			Body:    respBody,
 		}
@@ -151,4 +177,16 @@ func extractErrorMessage(body []byte) string {
 		s = s[:240] + "…"
 	}
 	return s
+}
+
+// extractErrorCode returns the machine-readable code of a controlplane error
+// payload such as {"error":"...","code":"SANDBOX_LIMIT_REACHED"}, or "".
+func extractErrorCode(body []byte) string {
+	var detail struct {
+		Code string `json:"code"`
+	}
+	if json.Unmarshal(body, &detail) != nil {
+		return ""
+	}
+	return detail.Code
 }

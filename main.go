@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 
 	log "github.com/sirupsen/logrus"
@@ -50,6 +51,9 @@ func main() {
 	}
 
 	err := rootCmd.Execute()
+	if hint := errorHint(err); hint != "" {
+		fmt.Fprintln(os.Stderr, hint)
+	}
 
 	if latest, ok := waitForUpdateCheck(); ok {
 		printUpdateNotice(latest)

@@ -36,7 +36,25 @@ const (
 	sandboxBootTimeout   = 10 * time.Minute
 	sandboxEnrollTimeout = 2 * time.Minute
 	maxEnrollReplyBytes  = 1 << 12
+
+	// Controlplane gives a new sandbox this workspace size when none is chosen.
+	defaultWorkspaceSizeGB = 16
 )
+
+// sandboxWorkspaceSizesGB are the workspace volume sizes Controlplane accepts,
+// in decimal gigabytes.
+var sandboxWorkspaceSizesGB = []int{2, 4, 8, 16, 32, 64}
+
+// workspaceSizeChoices lists the allowed workspace sizes as "2, 4, ..., or
+// 64", with unit after each size.
+func workspaceSizeChoices(unit string) string {
+	sizes := make([]string, len(sandboxWorkspaceSizesGB))
+	for i, size := range sandboxWorkspaceSizesGB {
+		sizes[i] = strconv.Itoa(size) + unit
+	}
+	last := len(sizes) - 1
+	return strings.Join(sizes[:last], ", ") + ", or " + sizes[last]
+}
 
 // Restrict names used by older credential directories to one path component.
 var sandboxNamePattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,62}$`)
