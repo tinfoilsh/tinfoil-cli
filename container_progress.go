@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -131,13 +130,7 @@ func postLifecycleUpdate(client *cpClient, path string, body map[string]any, out
 
 func needsDowntimeReplan(err error) bool {
 	var cp *cpError
-	if !errors.As(err, &cp) || cp.Status != http.StatusConflict {
-		return false
-	}
-	var detail struct {
-		Code string `json:"code"`
-	}
-	return json.Unmarshal(cp.Body, &detail) == nil && detail.Code == downtimeConfirmationRequired
+	return errors.As(err, &cp) && cp.Status == http.StatusConflict && cp.Code == downtimeConfirmationRequired
 }
 
 // activeBootStage returns the name of the first stage still in progress.

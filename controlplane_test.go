@@ -2,9 +2,11 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -96,6 +98,39 @@ func TestControlplaneRequestsSendVersionedUserAgent(t *testing.T) {
 	}
 	if got := <-userAgent; got != "tinfoil-cli/0.16.0" {
 		t.Fatalf("User-Agent = %q, want %q", got, "tinfoil-cli/0.16.0")
+	}
+}
+
+func TestControlplaneErrorsKeepMessageAndHintAtLimits(t *testing.T) {
+	const message = "Your organization is using 5 of the 5 sandboxes allowed on Tier 1."
+	for _, tt := range []struct {
+		code     string
+		status   int
+		wantHint string
+	}{
+		{code: containerLimitReached, status: http.StatusConflict, wantHint: accountLimitsHint},
+		{code: sandboxLimitReached, status: http.StatusConflict, wantHint: accountLimitsHint},
+		{code: storageLimitExceeded, status: http.StatusConflict, wantHint: accountLimitsHint},
+		{code: "INSUFFICIENT_CREDITS", status: http.StatusPaymentRequired},
+		{status: http.StatusConflict},
+	} {
+		t.Run(tt.code, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(tt.status)
+				_, _ = io.WriteString(w, `{"error":"`+message+`","code":"`+tt.code+`","limit":5,"in_use":5,"tier":1}`)
+			}))
+			defer server.Close()
+
+			client := &cpClient{baseURL: server.URL, http: server.Client()}
+			_, err := client.do(http.MethodPost, "/api/containers", nil, map[string]any{}, nil)
+			err = fmt.Errorf("%w; inspect `tinfoil sandbox status` before retrying creation", err)
+			if !strings.Contains(err.Error(), message) {
+				t.Fatalf("error = %v, want the server's message %q", err, message)
+			}
+			if got := errorHint(err); got != tt.wantHint {
+				t.Fatalf("errorHint = %q, want %q", got, tt.wantHint)
+			}
+		})
 	}
 }
 
