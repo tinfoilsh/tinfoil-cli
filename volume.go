@@ -760,7 +760,7 @@ func parseSize(s string) (int64, error) {
 	}
 	unit, ok := sizeUnits[unitStr]
 	if !ok {
-		return 0, fmt.Errorf("invalid size %q: units are B, KB, MB, GB, TB", s)
+		return 0, fmt.Errorf("invalid size %q: units are B, KB, MB, GB, TB (KiB, MiB, GiB, TiB are also accepted)", s)
 	}
 	num.Mul(num, new(big.Rat).SetInt64(unit))
 	if !num.IsInt() || !num.Num().IsInt64() {
