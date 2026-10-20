@@ -236,6 +236,67 @@ func TestManagedCreateUsesContainerRecovery(t *testing.T) {
 	}
 }
 
+func TestSandboxCreateWorkspaceSize(t *testing.T) {
+	const monitorID = "11111111-1111-4111-8111-111111111111"
+	owner := testOwnerCredential(t).publicKey()
+	previousIdentity := attestSSHIdentity
+	attestSSHIdentity = ""
+	t.Cleanup(func() { attestSSHIdentity = previousIdentity })
+	for _, tt := range []struct {
+		name     string
+		args     []string
+		limitHit bool
+		wantSize json.RawMessage
+		wantErr  string
+	}{
+		{name: "omitted lets the server choose"},
+		{name: "chosen size is sent", args: []string{"--workspace-size", "32"}, wantSize: json.RawMessage("32")},
+		{name: "size outside the allowed list", args: []string{"--workspace-size", "16000"}, wantErr: "--workspace-size must be 2, 4, 8, 16, 32, or 64 (GB)"},
+		{name: "reused workspace keeps its size", args: []string{"--workspace-size", "8", "--workspace", "old"}, wantErr: "--workspace-size cannot be combined with --workspace"},
+		{name: "storage limit", args: []string{"--workspace-size", "64"}, limitHit: true, wantSize: json.RawMessage("64"), wantErr: "only 8 GB of your 32 GB storage limit (Tier 1) is free"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var sent map[string]json.RawMessage
+			managedTestAPI(t, func(w http.ResponseWriter, r *http.Request) {
+				switch r.Method + " " + r.URL.Path {
+				case "GET /api/auth/context":
+					w.Write([]byte(`{"context_type":"personal","organization":null,"user_id":"user_test"}`))
+				case "GET /api/containers/" + monitorID:
+					json.NewEncoder(w).Encode(containerView{ID: monitorID, Repo: monitorRepo, ClerkUserID: "user_test", Config: fmt.Sprintf("containers: [{env: [{MONITOR_OWNER_PUBLIC_KEY: %q}]}]", owner)})
+				case "POST /api/containers":
+					require.NoError(t, json.NewDecoder(r.Body).Decode(&sent))
+					if tt.limitHit {
+						w.WriteHeader(http.StatusConflict)
+						w.Write([]byte(`{"error":"Your new sandbox needs a 64 GB workspace, but only 8 GB of your 32 GB storage limit (Tier 1) is free.","code":"STORAGE_LIMIT_EXCEEDED"}`))
+						return
+					}
+					json.NewEncoder(w).Encode(containerView{ID: testContainerID, Name: "work", Status: statusDeploying})
+				default:
+					t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+					http.NotFound(w, r)
+				}
+			})
+			outputFormat = "table"
+			cmd := newManagedCreateCmd("sandbox")
+			require.NoError(t, cmd.ParseFlags(append([]string{"--tag", "v1", "--monitor", monitorID, "--no-wait", "work"}, tt.args...)))
+			_, err := captureTestStdout(func() error { return cmd.RunE(cmd, cmd.Flags().Args()) })
+			if tt.wantErr != "" {
+				require.ErrorContains(t, err, tt.wantErr)
+			} else {
+				require.NoError(t, err)
+			}
+			if tt.limitHit {
+				require.Equal(t, accountLimitsHint, errorHint(err))
+			}
+			if tt.wantErr != "" && !tt.limitHit {
+				require.Nil(t, sent, "invalid flags must be rejected before creation")
+				return
+			}
+			require.Equal(t, tt.wantSize, sent["workspace_size_gb"])
+		})
+	}
+}
+
 func TestSandboxWorkspaceIgnoresContainerVolumes(t *testing.T) {
 	workspace := volumeView{ID: "22222222-2222-4222-8222-222222222222", Name: "data", Sandbox: true}
 	managedTestAPI(t, func(w http.ResponseWriter, r *http.Request) {

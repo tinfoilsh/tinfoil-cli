@@ -64,12 +64,20 @@ func checkManagedKind(kind string, row containerView) error {
 
 func newManagedCreateCmd(kind string) *cobra.Command {
 	var tag, publicKey, monitor, workspace string
+	var workspaceSize int
 	cmd := &cobra.Command{
 		Use: "create NAME", Short: "Create a confidential " + kind + " and follow its deployment", Args: cobra.ExactArgs(1),
 		Long: "Create from a published release with an Ed25519 owner public key. Inspect interrupted creation with status; use start to retry a stopped or failed resource. Compute is billed while running; storage remains billable until deleted.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if strings.TrimSpace(tag) == "" {
 				return errors.New("choose --tag from `tinfoil repo build info " + managedRepo(kind) + "`")
+			}
+			sizeChosen := cmd.Flags().Changed("workspace-size")
+			if sizeChosen && workspace != "" {
+				return errors.New("--workspace-size cannot be combined with --workspace; a reused workspace keeps its size")
+			}
+			if sizeChosen && !slices.Contains(sandboxWorkspaceSizesGB, workspaceSize) {
+				return fmt.Errorf("--workspace-size must be %s (GB)", workspaceSizeChoices(""))
 			}
 			client, err := authedClient()
 			if err != nil {
@@ -107,6 +115,9 @@ func newManagedCreateCmd(kind string) *cobra.Command {
 					}
 					body["volumes"] = map[string]string{"workspace": volume.ID}
 				}
+				if sizeChosen {
+					body["workspace_size_gb"] = workspaceSize
+				}
 				fmt.Fprintf(cmd.ErrOrStderr(), "Monitor: %s (%s). Service access requires it to be running and unlocked.\n", selected.Name, statusLabel(selected.Status))
 			} else {
 				body["object_storage"] = map[string]any{}
@@ -132,6 +143,7 @@ func newManagedCreateCmd(kind string) *cobra.Command {
 	if kind == "sandbox" {
 		cmd.Flags().StringVar(&monitor, "monitor", "", "Monitor name or ID (required when more than one exists)")
 		cmd.Flags().StringVar(&workspace, "workspace", "", "Reuse an unattached workspace volume by name or ID")
+		cmd.Flags().IntVar(&workspaceSize, "workspace-size", 0, fmt.Sprintf("New workspace volume size in GB: %s (default %d)", workspaceSizeChoices(""), defaultWorkspaceSizeGB))
 	}
 	return cmd
 }
