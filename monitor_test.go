@@ -105,13 +105,12 @@ func TestMonitorUnlockAndSSHPanelAgainstRealMonitor(t *testing.T) {
 	require.Error(t, unlockMonitor(panel, dir, testOwnerCredential(t), true), "wrong storage key refused")
 	agentSigner := testSigner(t)
 	agent := authorizedLine(agentSigner)
-	require.NoError(t, pairSandboxMonitor(panel, dir, "work", device, agent))
-	require.NoError(t, pairSandboxMonitor(panel, dir, "work", device, agent))
 
 	// Exercise a sandbox reverse route through the real Monitor SSH server.
+	publisherSigner := testSigner(t)
 	conn, err = net.Dial("tcp", sshAddress)
 	require.NoError(t, err)
-	publisher, err := connectOwnerSigner(conn, "localhost", hostKey, agentSigner, "sandbox")
+	publisher, err := connectOwnerSigner(conn, "localhost", hostKey, publisherSigner, "sandbox")
 	require.NoError(t, err)
 	defer publisher.Close()
 	route, err := publisher.Listen("tcp", "127.0.0.1:22")
@@ -138,7 +137,7 @@ func TestMonitorUnlockAndSSHPanelAgainstRealMonitor(t *testing.T) {
 		client, err := connectOwnerSigner(conn, "localhost", hostKey, signer, monitorSSHUser)
 		require.NoError(t, err)
 		defer client.Close()
-		routed, err := client.DialContext(t.Context(), "tcp", net.JoinHostPort(routeName(agentSigner.PublicKey()), "22"))
+		routed, err := client.DialContext(t.Context(), "tcp", net.JoinHostPort(routeName(publisherSigner.PublicKey()), "22"))
 		if !allowed {
 			var channel *ssh.OpenChannelError
 			require.ErrorAs(t, err, &channel)
@@ -157,6 +156,63 @@ func TestMonitorUnlockAndSSHPanelAgainstRealMonitor(t *testing.T) {
 		require.Equal(t, "sandbox reachable", string(reply))
 	}
 	checkRoute(true)
+	// A reverse SSH route works even when the sandbox has no agent identity.
+	deviceSigner, err := loadSigner(filepath.Join(dir, monitorDeviceKeyName))
+	require.NoError(t, err)
+	checkEnrollment := func(enrolled bool) {
+		t.Helper()
+		conn, err := net.Dial("tcp", sshAddress)
+		require.NoError(t, err)
+		client, err := connectOwnerSigner(conn, "localhost", hostKey, deviceSigner, monitorSandboxUserPrefix+ssh.FingerprintSHA256(agentSigner.PublicKey()))
+		if !enrolled {
+			require.Error(t, err, "the setup handshake must reject a missing sandbox identity")
+			return
+		}
+		require.NoError(t, err)
+		defer client.Close()
+		require.Contains(t, strings.Fields(string(client.ServerVersion())), monitorSandboxEnrollment)
+	}
+	checkEnrollment(false)
+	enrollWithoutRestore := func() error {
+		return monitorOwnerRequest(panel, dir, "POST", "/enroll", map[string]any{
+			"device-" + storageHash([]byte(device))[:16]: map[string]any{"key": device, "routes": true},
+			"sandbox-work": map[string]any{"key": agent},
+		})
+	}
+	require.NoError(t, pairSandboxMonitor(panel, dir, "work", device, agent))
+	var beforeEnrollment, afterEnrollment monitorProfile
+	require.NoError(t, readStorageJSON(filepath.Join(dir, monitorProfileFile), &beforeEnrollment))
+	require.NoError(t, pairSandboxMonitor(panel, dir, "work", device, agent))
+	require.NoError(t, readStorageJSON(filepath.Join(dir, monitorProfileFile), &afterEnrollment))
+	require.Equal(t, beforeEnrollment.Generation, afterEnrollment.Generation, "repeated enrollment must not rewrite policy")
+	checkEnrollment(true)
+
+	// With a live registration, the cached connection needs no owner key.
+	t.Setenv(envConfigPath, filepath.Join(t.TempDir(), "config.json"))
+	scope := accountScope{ControlplaneURL: "https://cp.example", UserID: "owner"}
+	_, monitorPort, err := net.SplitHostPort(sshAddress)
+	require.NoError(t, err)
+	monitorPortNumber, err := strconv.Atoi(monitorPort)
+	require.NoError(t, err)
+	target := &workloadTarget{containerView: containerView{
+		ID: "11111111-1111-4111-8111-111111111111", Name: "test-monitor", Repo: monitorRepo,
+		Domain: "localhost", Status: statusRunning, SSHPort: monitorPortNumber}, source: monitorRepo,
+		env: map[string]string{monitorOwnerEnv: credential.publicKey()}}
+	cachedDir, err := monitorRecord(scope, target)
+	require.NoError(t, err)
+	devicePrivate, err := os.ReadFile(filepath.Join(dir, monitorDeviceKeyName))
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(cachedDir, monitorDeviceKeyName), devicePrivate, 0600))
+	_, err = updateProfile(cachedDir, func(p *monitorProfile) error {
+		p.Address, p.HostKey, p.ConfigSource, p.Generation = sshAddress, authorizedLine(hostSigner), monitorRepo, 1
+		return nil
+	})
+	require.NoError(t, err)
+	session := &sandboxSession{box: containerView{Name: "work"}, keys: &sandboxKeys{agentKey: agent}, initialized: true}
+	require.NoError(t, session.configureMonitor(scope, target, false))
+	session.close()
+	require.NoFileExists(t, filepath.Join(cachedDir, monitorOwnerKeyName))
+
 	name := "device-" + storageHash([]byte(device))[:16]
 	for _, change := range []map[string]any{
 		{"path": []string{"identities", name, "routes"}, "value": false},
@@ -166,15 +222,29 @@ func TestMonitorUnlockAndSSHPanelAgainstRealMonitor(t *testing.T) {
 		checkRoute(false)
 		require.NoError(t, unlockMonitor(panel, dir, credential, false))
 		checkRoute(false)
-		require.ErrorContains(t, pairSandboxMonitor(panel, dir, "work", device, agent), "revoked")
-		require.NoError(t, unlockMonitor(panel, dir, credential, true))
+		checkEnrollment(false)
+		require.ErrorContains(t, enrollWithoutRestore(), "revoked")
+		require.NoError(t, pairSandboxMonitor(panel, dir, "work", device, agent))
 		checkRoute(true)
+		checkEnrollment(true)
 		var before, after monitorProfile
 		require.NoError(t, readStorageJSON(filepath.Join(dir, monitorProfileFile), &before))
 		require.NoError(t, unlockMonitor(panel, dir, credential, true))
 		require.NoError(t, readStorageJSON(filepath.Join(dir, monitorProfileFile), &after))
 		require.Equal(t, before.Generation, after.Generation, "unchanged open must not rewrite Monitor state")
 	}
+	require.NoError(t, monitorOwnerRequest(panel, dir, "POST", "/policy/edits", map[string]any{
+		"changes": []any{map[string]any{"path": []string{"identities", "sandbox-work"}, "delete": true}},
+	}))
+	checkRoute(true)
+	checkEnrollment(false)
+	require.ErrorContains(t, enrollWithoutRestore(), "revoked")
+	session = &sandboxSession{box: containerView{Name: "work"}, keys: &sandboxKeys{agentKey: agent}, initialized: true}
+	defer session.close()
+	require.ErrorContains(t, session.configureMonitor(scope, target, false), "restore encryption credentials", "missing live registration must require owner enrollment despite the saved receipt")
+	require.NoError(t, pairSandboxMonitor(panel, dir, "work", device, agent))
+	checkEnrollment(true)
+	require.NoError(t, session.configureMonitor(scope, target, false))
 	identity := filepath.Join(dir, "owner")
 	require.NoError(t, ensureOwnerSSHKey(identity, credential.SigningSeed))
 	host, port, err := net.SplitHostPort(sshAddress)
@@ -237,6 +307,94 @@ func TestMonitorUnlockAndSSHPanelAgainstRealMonitor(t *testing.T) {
 		t.Fatal("panel did not stop after cancellation")
 	}
 	require.NotContains(t, stderr.String(), "Press Enter", "noninteractive forwarding must not prompt")
+}
+
+func TestMonitorSetupUsesOnlyHandshakeWhenEnrollmentIsChecked(t *testing.T) {
+	for _, checked := range []bool{true, false} {
+		t.Run(strconv.FormatBool(checked), func(t *testing.T) {
+			t.Setenv(envConfigPath, filepath.Join(t.TempDir(), "config.json"))
+			scope := accountScope{ControlplaneURL: "https://cp.example", UserID: "owner"}
+			target := &workloadTarget{containerView: containerView{
+				ID: "11111111-1111-4111-8111-111111111111", Name: "test-monitor", Domain: "localhost", Status: statusRunning, SSHPort: 22},
+				source: monitorRepo, env: map[string]string{monitorOwnerEnv: testOwnerCredential(t).publicKey()}}
+			dir, err := monitorRecord(scope, target)
+			require.NoError(t, err)
+			_, err = ensureSSHKey(filepath.Join(dir, monitorDeviceKeyName))
+			require.NoError(t, err)
+			host, agent := testSigner(t), testSigner(t)
+			listener, err := net.Listen("tcp", "127.0.0.1:0")
+			require.NoError(t, err)
+			defer listener.Close()
+			config := &ssh.ServerConfig{PublicKeyCallback: func(ssh.ConnMetadata, ssh.PublicKey) (*ssh.Permissions, error) { return nil, nil }}
+			if checked {
+				config.ServerVersion = "SSH-2.0-Go " + monitorSandboxEnrollment
+			}
+			config.AddHostKey(host)
+			type observation struct {
+				user     string
+				requests int
+				err      error
+			}
+			observed := make(chan observation, 1)
+			go func() {
+				conn, err := listener.Accept()
+				if err != nil {
+					observed <- observation{err: err}
+					return
+				}
+				defer conn.Close()
+				conn.SetDeadline(time.Now().Add(5 * time.Second))
+				server, channels, requests, err := ssh.NewServerConn(conn, config)
+				if err != nil {
+					observed <- observation{err: err}
+					return
+				}
+				defer server.Close()
+				result := observation{user: server.User()}
+				for channels != nil || requests != nil {
+					select {
+					case channel, ok := <-channels:
+						if !ok {
+							channels = nil
+							continue
+						}
+						result.requests++
+						channel.Reject(ssh.Prohibited, "unexpected setup request")
+					case request, ok := <-requests:
+						if !ok {
+							requests = nil
+							continue
+						}
+						result.requests++
+						request.Reply(false, nil)
+					}
+				}
+				observed <- result
+			}()
+			_, err = updateProfile(dir, func(p *monitorProfile) error {
+				p.Address, p.HostKey, p.ConfigSource, p.Generation = listener.Addr().String(), authorizedLine(host), monitorRepo, 1
+				return nil
+			})
+			require.NoError(t, err)
+			session := &sandboxSession{box: containerView{Name: "work"}, keys: &sandboxKeys{agentKey: authorizedLine(agent)}, initialized: true}
+			defer session.close()
+			err = session.configureMonitor(scope, target, false)
+			if checked {
+				require.NoError(t, err)
+			} else {
+				require.ErrorContains(t, err, "restore encryption credentials", "a Monitor that ignores the setup username must require owner enrollment")
+			}
+			session.close()
+			select {
+			case result := <-observed:
+				require.NoError(t, result.err)
+				require.Equal(t, monitorSandboxUserPrefix+ssh.FingerprintSHA256(agent.PublicKey()), result.user)
+				require.Zero(t, result.requests, "registration must be checked without another SSH channel or request")
+			case <-time.After(5 * time.Second):
+				t.Fatal("setup connection did not close")
+			}
+		})
+	}
 }
 
 func TestMonitorUnlockMissingDeviceKey(t *testing.T) {
