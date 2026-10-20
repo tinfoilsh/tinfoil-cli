@@ -247,9 +247,12 @@ func newManagedStatusCmd(kind string) *cobra.Command {
 				return err
 			}
 			if !watch {
-				attached, err := loadContainerVolumes(client, *row)
-				if err != nil {
-					return err
+				// JSON output carries no volume details, so it skips the volume list.
+				var attached map[string]volumeView
+				if outputFormat != "json" {
+					if attached, err = loadContainerVolumes(client, *row); err != nil {
+						return err
+					}
 				}
 				return renderContainerDetail(*row, attached)
 			}
