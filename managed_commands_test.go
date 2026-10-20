@@ -106,6 +106,28 @@ func TestManagedStatusFiltersAndWatches(t *testing.T) {
 	}
 }
 
+func TestSandboxStatusShowsWorkspaceSize(t *testing.T) {
+	const volumeID = "22222222-2222-4222-8222-222222222222"
+	row := containerView{ID: testContainerID, Name: "work", Repo: defaultSandboxRepo, Status: statusRunning,
+		VolumeSlots: []volumeSlot{{Name: "workspace"}}, Volumes: map[string]string{"workspace": volumeID}}
+	managedTestAPI(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method + " " + r.URL.Path {
+		case "GET /api/containers/" + testContainerID:
+			json.NewEncoder(w).Encode(row)
+		case "GET /api/volumes":
+			json.NewEncoder(w).Encode(volumeList{Volumes: []volumeView{{ID: volumeID, Name: "work-ws", SizeBytes: 32e9, Sandbox: true}}})
+		default:
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+			http.NotFound(w, r)
+		}
+	})
+	outputFormat = "table"
+	cmd := newManagedStatusCmd("sandbox")
+	out, err := captureTestStdout(func() error { return cmd.RunE(cmd, []string{testContainerID}) })
+	require.NoError(t, err)
+	require.Contains(t, string(out), "Volumes:      workspace ← work-ws (32 GB)\n")
+}
+
 func TestSandboxCreationOnlySelectsOwnMonitors(t *testing.T) {
 	own := containerView{ID: "11111111-1111-4111-8111-111111111111", Name: "mine", Repo: monitorRepo, ClerkUserID: "user_test"}
 	other := containerView{ID: "33333333-3333-4333-8333-333333333333", Name: "shared", Repo: monitorRepo, ClerkUserID: "user_other", Status: statusRunning}

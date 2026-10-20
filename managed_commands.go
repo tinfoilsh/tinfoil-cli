@@ -247,7 +247,11 @@ func newManagedStatusCmd(kind string) *cobra.Command {
 				return err
 			}
 			if !watch {
-				return renderContainer(*row)
+				attached, err := loadContainerVolumes(client, *row)
+				if err != nil {
+					return err
+				}
+				return renderContainerDetail(*row, attached)
 			}
 			ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 			defer cancel()
