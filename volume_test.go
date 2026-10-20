@@ -486,6 +486,80 @@ func TestVolumeDeleteConfirmation(t *testing.T) {
 	}
 }
 
+func TestVolumeCreateSandbox(t *testing.T) {
+	for _, tt := range []struct {
+		name      string
+		args      []string
+		wantBody  string
+		wantErr   string
+		wantPaths []string
+	}{
+		{
+			name:      "Controlplane picks the sandbox host",
+			args:      []string{"--sandbox", "--size", "8GB"},
+			wantBody:  `{"name":"ws","sandbox":true,"size_bytes":8000000000}`,
+			wantPaths: []string{"POST /api/volumes"},
+		},
+		{
+			name:      "chosen host",
+			args:      []string{"--sandbox", "--size", "8GB", "--host", "inf13"},
+			wantBody:  `{"host_id":"h1","name":"ws","sandbox":true,"size_bytes":8000000000}`,
+			wantPaths: []string{"GET /api/containers/hosts", "POST /api/volumes"},
+		},
+		{
+			name:    "binary size is not a workspace size",
+			args:    []string{"--sandbox", "--size", "16GiB"},
+			wantErr: "--size for a sandbox volume must be 2GB, 4GB, 8GB, 16GB, 32GB, or 64GB",
+		},
+		{
+			name:    "auto-unlock is for container volumes",
+			args:    []string{"--sandbox", "--size", "16GB", "--auto-unlock"},
+			wantErr: "--auto-unlock does not apply to sandbox volumes",
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var paths []string
+			var body string
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				paths = append(paths, r.Method+" "+r.URL.Path)
+				switch r.Method + " " + r.URL.Path {
+				case "GET /api/containers/hosts":
+					_, _ = io.WriteString(w, `[{"id":"h1","name":"inf13"},{"id":"h2","name":"inf14"}]`)
+				case "POST /api/volumes":
+					raw, _ := io.ReadAll(r.Body)
+					body = strings.TrimSpace(string(raw))
+					w.WriteHeader(http.StatusCreated)
+					_, _ = io.WriteString(w, `{"id":"`+testVolumeID+`","name":"ws","host_id":"h1","size_bytes":8000000000,"sandbox":true}`)
+				default:
+					t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+				}
+			}))
+			defer server.Close()
+
+			configureVolumeTest(t, server.URL)
+			out, err := captureTestStdout(func() error {
+				return executeLifecycleCLI(t, append([]string{"volume", "create", "ws"}, tt.args...)...)
+			})
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("error = %v, want containing %q", err, tt.wantErr)
+				}
+			} else if err != nil {
+				t.Fatalf("create: %v", err)
+			}
+			if got, want := strings.Join(paths, "\n"), strings.Join(tt.wantPaths, "\n"); got != want {
+				t.Fatalf("requests:\n%s\nwant:\n%s", got, want)
+			}
+			if body != tt.wantBody {
+				t.Fatalf("create body = %s, want %s", body, tt.wantBody)
+			}
+			if tt.wantErr == "" && !strings.Contains(string(out), "Kind:         sandbox\nSize:         8 GB\n") {
+				t.Fatalf("output %q does not show an 8 GB sandbox volume", out)
+			}
+		})
+	}
+}
+
 func configureVolumeTest(t *testing.T, serverURL string) {
 	t.Helper()
 	t.Setenv(envCPURL, serverURL)

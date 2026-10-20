@@ -50,11 +50,12 @@ type volumeRequest struct {
 }
 
 var (
-	volumeCreateSize string
-	volumeCreateHost string
-	volumeRenameName string
-	volumeAttachAs   string
-	volumeYes        bool
+	volumeCreateSize    string
+	volumeCreateHost    string
+	volumeCreateSandbox bool
+	volumeRenameName    string
+	volumeAttachAs      string
+	volumeYes           bool
 )
 
 func init() {
@@ -64,7 +65,8 @@ func init() {
 	volumeCmd.AddCommand(volumeListCmd, volumeGetCmd, volumeCreateCmd, volumeRenameCmd, volumeAttachCmd, volumeDetachCmd, volumeDeleteCmd)
 
 	volumeCreateCmd.Flags().StringVar(&volumeCreateSize, "size", "", "Volume size, e.g. 16GB or 2TB [required]")
-	volumeCreateCmd.Flags().StringVar(&volumeCreateHost, "host", "", "Host to store the volume on (see 'tinfoil container hosts'); required unless only one host is available")
+	volumeCreateCmd.Flags().StringVar(&volumeCreateHost, "host", "", "Host to store the volume on (see 'tinfoil container hosts'); required unless only one host is available or --sandbox is set")
+	volumeCreateCmd.Flags().BoolVar(&volumeCreateSandbox, "sandbox", false, "Create a sandbox workspace volume of "+workspaceSizeChoices("GB")+"; personal accounts only have sandbox volumes")
 	_ = volumeCreateCmd.MarkFlagRequired("size")
 	volumeRenameCmd.Flags().StringVar(&volumeRenameName, "name", "", "New volume name [required]")
 	_ = volumeRenameCmd.MarkFlagRequired("name")
@@ -129,6 +131,9 @@ var volumeCreateCmd = &cobra.Command{
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		autoUnlock, _ := cmd.Flags().GetBool("auto-unlock")
+		if autoUnlock && volumeCreateSandbox {
+			return errors.New("--auto-unlock does not apply to sandbox volumes, which are unlocked with their owner's credentials")
+		}
 		if autoUnlock {
 			return runAutoUnlockVolumeCreate(cmd, args[0], volumeStorageFactory)
 		}
@@ -141,27 +146,41 @@ var volumeCreateCmd = &cobra.Command{
 		if err != nil {
 			return fmt.Errorf("--size: %w", err)
 		}
+		if volumeCreateSandbox && !isWorkspaceSize(size) {
+			return fmt.Errorf("--size for a sandbox volume must be %s", workspaceSizeChoices("GB"))
+		}
 		client, err := authedClient()
 		if err != nil {
 			return err
 		}
-		hosts, err := listHosts(client)
-		if err != nil {
-			return err
+		body := map[string]any{"name": args[0], "size_bytes": size}
+		var host *hostInfo
+		// Controlplane places a sandbox volume on a sandbox host unless one
+		// is chosen.
+		if !volumeCreateSandbox || volumeCreateHost != "" {
+			hosts, err := listHosts(client)
+			if err != nil {
+				return err
+			}
+			host, err = pickVolumeHost(hosts, volumeCreateHost)
+			if err != nil {
+				return err
+			}
+			if volumeCreateHost == "" {
+				fmt.Fprintf(os.Stderr, "Using host %s (the only host available).\n", host.Name)
+			}
+			body["host_id"] = host.ID
 		}
-		host, err := pickVolumeHost(hosts, volumeCreateHost)
-		if err != nil {
-			return err
+		if volumeCreateSandbox {
+			body["sandbox"] = true
 		}
-		if volumeCreateHost == "" {
-			fmt.Fprintf(os.Stderr, "Using host %s (the only host available).\n", host.Name)
-		}
-		body := map[string]any{"name": args[0], "host_id": host.ID, "size_bytes": size}
 		var created volumeView
 		if _, err := client.do("POST", "/api/volumes", nil, body, &created); err != nil {
 			return err
 		}
-		created.HostName = host.Name
+		if host != nil {
+			created.HostName = host.Name
+		}
 		return renderVolume(created)
 	},
 }
@@ -719,6 +738,11 @@ var sizeUnits = map[string]int64{
 	"tb":  1e12,
 }
 
+// isWorkspaceSize reports whether size is one of the sandbox workspace sizes.
+func isWorkspaceSize(size int64) bool {
+	return slices.ContainsFunc(sandboxWorkspaceSizesGB, func(gb int) bool { return int64(gb)*sizeUnits["gb"] == size })
+}
+
 // parseSize reads a byte count with an optional unit: 16GB, 30 GB, 1.5TB,
 // or plain bytes. Decimal units are powers of 1000; binary units such as GiB
 // are still accepted as powers of 1024. The controlplane requires a positive
@@ -808,7 +832,9 @@ func renderVolume(v volumeView) error {
 	fmt.Printf("ID:           %s\n", v.ID)
 	fmt.Printf("Kind:         %s\n", volumeKind(v))
 	fmt.Printf("Size:         %s\n", formatSize(v.SizeBytes))
-	fmt.Printf("Host:         %s\n", v.HostName)
+	if v.HostName != "" {
+		fmt.Printf("Host:         %s\n", v.HostName)
+	}
 	if v.ContainerID == "" {
 		fmt.Printf("Attached to:  not attached\n")
 	} else {
