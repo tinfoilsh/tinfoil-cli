@@ -58,11 +58,12 @@ func TestFormatSize(t *testing.T) {
 		in   int64
 		want string
 	}{
-		{16 << 40, "16 TiB"},
-		{30 << 30, "30 GiB"},
-		{3 << 29, "1.5 GiB"},
-		{1536, "1.5 KiB"},
-		{1e12, "931.3 GiB"},
+		{16e12, "16 TB"},
+		{30e9, "30 GB"},
+		{1.5e9, "1.5 GB"},
+		{16 << 30, "17.2 GB"},
+		{2.5e6, "2.5 MB"},
+		{1536, "1.5 KB"},
 		{512, "512 B"},
 		{0, "0 B"},
 	} {
@@ -74,8 +75,8 @@ func TestFormatSize(t *testing.T) {
 
 func TestResolveVolume(t *testing.T) {
 	volumes := []volumeView{
-		{ID: "11111111-1111-1111-1111-111111111111", Name: "data", HostName: "inf13", SizeBytes: 16 << 40},
-		{ID: "22222222-2222-2222-2222-222222222222", Name: "data", HostName: "inf14", SizeBytes: 30 << 30},
+		{ID: "11111111-1111-1111-1111-111111111111", Name: "data", HostName: "inf13", SizeBytes: 16e12},
+		{ID: "22222222-2222-2222-2222-222222222222", Name: "data", HostName: "inf14", SizeBytes: 30e9},
 		{ID: "33333333-3333-3333-3333-333333333333", Name: "scratch", HostName: "inf13", SizeBytes: 1 << 30},
 	}
 	for _, tt := range []struct {
@@ -89,8 +90,8 @@ func TestResolveVolume(t *testing.T) {
 		{name: "by id when names collide", identifier: "22222222-2222-2222-2222-222222222222", wantID: "22222222-2222-2222-2222-222222222222"},
 		{name: "ambiguous name", identifier: "data", wantErr: []string{
 			`multiple volumes named "data"; use the volume ID`,
-			"11111111-1111-1111-1111-111111111111  16 TiB on inf13",
-			"22222222-2222-2222-2222-222222222222  30 GiB on inf14",
+			"11111111-1111-1111-1111-111111111111  16 TB on inf13",
+			"22222222-2222-2222-2222-222222222222  30 GB on inf14",
 		}},
 		{name: "unknown name", identifier: "missing", wantErr: []string{`no volume named "missing"`}},
 		{name: "unknown id", identifier: "44444444-4444-4444-4444-444444444444", wantErr: []string{"no volume with ID 44444444-4444-4444-4444-444444444444"}},
@@ -125,7 +126,7 @@ const (
 )
 
 func testVolumeRow(attached bool) string {
-	row := `{"id":"` + testVolumeID + `","name":"data-vol","host_id":"h1","host_name":"inf13","size_bytes":17592186044416,"created_at":"2026-09-21T10:00:00Z"`
+	row := `{"id":"` + testVolumeID + `","name":"data-vol","host_id":"h1","host_name":"inf13","size_bytes":16000000000000,"created_at":"2026-09-21T10:00:00Z"`
 	if attached {
 		row += `,"container_id":"` + testContainerID + `","container_name":"app","slot":"data"`
 	}
@@ -133,7 +134,7 @@ func testVolumeRow(attached bool) string {
 }
 
 func testVolumeList(attached bool) string {
-	return `{"volumes":[` + testVolumeRow(attached) + `],"allocated_storage_bytes":17592186044416,"max_storage_bytes":35184372088832,"available_storage_bytes":17592186044416}`
+	return `{"volumes":[` + testVolumeRow(attached) + `],"allocated_storage_bytes":16000000000000,"max_storage_bytes":32000000000000,"available_storage_bytes":16000000000000}`
 }
 
 func TestVolumeAttachSlotSelection(t *testing.T) {
@@ -217,7 +218,7 @@ func TestContainerCreateWithVolume(t *testing.T) {
 		{
 			name:    "attaches then starts",
 			volumes: []string{"data-vol"},
-			wantOut: []string{"Status:       Deploying", "Volumes:      data ← data-vol (16 TiB)"},
+			wantOut: []string{"Status:       Deploying", "Volumes:      data ← data-vol (16 TB)"},
 			wantPaths: []string{
 				"POST /api/containers/validate",
 				"GET /api/volumes",
@@ -512,5 +513,17 @@ func TestRenderVolumesShowsKind(t *testing.T) {
 		if fields := strings.Fields(lines[i]); len(fields) < 2 || fields[0] != want[0] || fields[1] != want[1] {
 			t.Errorf("line %d = %q, want %s then %s", i, lines[i], want[0], want[1])
 		}
+	}
+}
+
+func TestRenderVolumesStorageSummaryUsesDecimalUnits(t *testing.T) {
+	out, err := captureTestStdout(func() error {
+		return renderVolumes(volumeList{AllocatedBytes: 24e9, MaxBytes: 512e9, AvailableBytes: 488e9})
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "Storage: 24 GB of 512 GB used, 488 GB available\n"; !strings.HasSuffix(string(out), want) {
+		t.Fatalf("output %q does not end with %q", out, want)
 	}
 }

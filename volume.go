@@ -63,7 +63,7 @@ func init() {
 
 	volumeCmd.AddCommand(volumeListCmd, volumeGetCmd, volumeCreateCmd, volumeRenameCmd, volumeAttachCmd, volumeDetachCmd, volumeDeleteCmd)
 
-	volumeCreateCmd.Flags().StringVar(&volumeCreateSize, "size", "", "Volume size, e.g. 16TiB or 30GiB [required]")
+	volumeCreateCmd.Flags().StringVar(&volumeCreateSize, "size", "", "Volume size, e.g. 16GB or 2TB [required]")
 	volumeCreateCmd.Flags().StringVar(&volumeCreateHost, "host", "", "Host to store the volume on (see 'tinfoil container hosts'); required unless only one host is available")
 	_ = volumeCreateCmd.MarkFlagRequired("size")
 	volumeRenameCmd.Flags().StringVar(&volumeRenameName, "name", "", "New volume name [required]")
@@ -719,9 +719,10 @@ var sizeUnits = map[string]int64{
 	"tb":  1e12,
 }
 
-// parseSize reads a byte count with an optional unit: 16TiB, 30 GiB, 1.5TB,
-// or plain bytes. Binary units are powers of 1024, decimal ones powers of
-// 1000. The controlplane requires a positive multiple of 512.
+// parseSize reads a byte count with an optional unit: 16GB, 30 GB, 1.5TB,
+// or plain bytes. Decimal units are powers of 1000; binary units such as GiB
+// are still accepted as powers of 1024. The controlplane requires a positive
+// multiple of 512.
 func parseSize(s string) (int64, error) {
 	s = strings.TrimSpace(s)
 	i := strings.IndexFunc(s, func(r rune) bool { return !(r >= '0' && r <= '9' || r == '.') })
@@ -731,11 +732,11 @@ func parseSize(s string) (int64, error) {
 	}
 	num, ok := new(big.Rat).SetString(numStr)
 	if numStr == "" || !ok {
-		return 0, fmt.Errorf("invalid size %q: expected a number with an optional unit, e.g. 16TiB", s)
+		return 0, fmt.Errorf("invalid size %q: expected a number with an optional unit, e.g. 16GB", s)
 	}
 	unit, ok := sizeUnits[unitStr]
 	if !ok {
-		return 0, fmt.Errorf("invalid size %q: units are B, KiB, MiB, GiB, TiB, KB, MB, GB, TB", s)
+		return 0, fmt.Errorf("invalid size %q: units are B, KB, MB, GB, TB", s)
 	}
 	num.Mul(num, new(big.Rat).SetInt64(unit))
 	if !num.IsInt() || !num.Num().IsInt64() {
@@ -751,13 +752,13 @@ func parseSize(s string) (int64, error) {
 	return n, nil
 }
 
-// formatSize renders bytes in binary units, with one decimal only when the
+// formatSize renders bytes in decimal units, with one decimal only when the
 // value is not whole.
 func formatSize(n int64) string {
 	units := []struct {
 		suffix string
 		size   int64
-	}{{"TiB", 1 << 40}, {"GiB", 1 << 30}, {"MiB", 1 << 20}, {"KiB", 1 << 10}}
+	}{{"TB", 1e12}, {"GB", 1e9}, {"MB", 1e6}, {"KB", 1e3}}
 	for _, u := range units {
 		if n < u.size {
 			continue
