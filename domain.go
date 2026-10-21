@@ -10,6 +10,7 @@ import (
 type domainView struct {
 	ID                      string   `json:"id"`
 	Domain                  string   `json:"domain"`
+	Wildcard                bool     `json:"wildcard"`
 	VerificationNonce       string   `json:"verification_nonce"`
 	CnameHash               string   `json:"cname_hash"`
 	Verified                bool     `json:"verified"`
@@ -76,7 +77,13 @@ var domainListCmd = &cobra.Command{
 var domainAddCmd = &cobra.Command{
 	Use:   "add [domain]",
 	Short: "Register a new custom domain (returns DNS records to configure)",
-	Args:  cobra.ExactArgs(1),
+	Long: `Register a new custom domain and print the DNS records to configure.
+
+Most domains do not need a wildcard. Add the domain as '*.example.com'
+(quoted, so your shell does not expand it) only when one container serves its
+subdomains. This registers example.com and adds a wildcard record. Running it
+for an already registered domain adds the wildcard record to that domain.`,
+	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client, err := authedClient()
 		if err != nil {
@@ -138,6 +145,10 @@ func renderDomain(d domainView, verifyMode bool) error {
 	fmt.Printf("\nConfigure these DNS records on your domain:\n")
 	fmt.Printf("  CNAME  %s  =>  %s\n", d.Domain, d.CNAMETarget)
 	fmt.Printf("  CNAME  %s  =>  %s\n", d.ACMEChallengeHost, d.ACMEChallengeTarget)
+	if d.Wildcard {
+		fmt.Printf("  CNAME  *.%s  =>  %s\n", d.Domain, d.CNAMETarget)
+		fmt.Printf("\nSubdomains reach the same container, not different ones. Set\nshim.tls-wildcard: true in tinfoil-config.yml so its certificate covers them.\n")
+	}
 	if verifyMode && d.CNAMEConfigured != nil {
 		fmt.Printf("\nTraffic CNAME currently observed: %v\n", *d.CNAMEConfigured)
 	}
