@@ -130,6 +130,7 @@ func newSelfUpdateFixture(t *testing.T) *selfUpdateFixture {
 		executable: func() (string, error) { return f.target, nil }, rename: os.Rename,
 		validateExecutable: func(string) error { return nil },
 		inspectExecutable:  snapshotExecutable, chown: (*os.File).Chown,
+		verifyAttestation: func(context.Context, *http.Client, []byte, string) error { return nil },
 	}
 	return f
 }

@@ -84,6 +84,11 @@ type selfUpdater struct {
 	inspectExecutable     func(context.Context, string) (executableSnapshot, error)
 	chown                 func(*os.File, int, int) error
 	rename                func(string, string) error
+	// verifyAttestation authenticates the downloaded archive against the
+	// release's Sigstore attestations. Nil selects the real verifier; tests
+	// substitute it because synthetic archives cannot carry real
+	// attestations.
+	verifyAttestation func(context.Context, *http.Client, []byte, string) error
 }
 
 type selfUpdateResult struct {
@@ -100,6 +105,9 @@ func init() {
 			http: updateHTTPClient(updateTimeout), executable: os.Executable, rename: os.Rename,
 			validateExecutable: verifyRunningExecutable,
 			inspectExecutable:  snapshotExecutable, chown: (*os.File).Chown,
+			verifyAttestation: func(ctx context.Context, client *http.Client, archive []byte, tag string) error {
+				return verifyUpdateAttestation(ctx, client, archive, tag, attestationsBaseURL)
+			},
 		}
 	}))
 }
@@ -289,6 +297,15 @@ func (u *selfUpdater) run(ctx context.Context, check bool) (selfUpdateResult, er
 	}
 	if sha256.Sum256(archive) != expected {
 		return result, errors.New("update archive SHA-256 checksum mismatch")
+	}
+	verifyAttestation := u.verifyAttestation
+	if verifyAttestation == nil {
+		verifyAttestation = func(ctx context.Context, client *http.Client, archive []byte, tag string) error {
+			return verifyUpdateAttestation(ctx, client, archive, tag, attestationsBaseURL)
+		}
+	}
+	if err := verifyAttestation(ctx, u.http, archive, release.TagName); err != nil {
+		return result, fmt.Errorf("refusing update without a valid release attestation: %w", err)
 	}
 	if err := u.install(ctx, target, original, archive); err != nil {
 		return result, fmt.Errorf("cannot replace %s: %w; use your installer or an account with permission to replace this executable", target, err)
