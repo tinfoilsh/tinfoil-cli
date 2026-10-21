@@ -102,6 +102,15 @@ func verifyOneAttestation(ctx context.Context, client *http.Client, bundleURL st
 	if err != nil {
 		return false, fmt.Errorf("fetching attestation bundle: %w", err)
 	}
+	// The fetch limit bounds compressed bytes; snappy output can be far
+	// larger, so bound the decoded length before allocating.
+	decodedLen, err := snappy.DecodedLen(compressed)
+	if err != nil {
+		return false, fmt.Errorf("attestation bundle is not valid snappy data: %w", err)
+	}
+	if decodedLen > attestationsLimit {
+		return false, errors.New("attestation bundle exceeds decompressed size limit")
+	}
 	bundleJSON, err := snappy.Decode(nil, compressed)
 	if err != nil {
 		return false, fmt.Errorf("attestation bundle is not valid snappy data: %w", err)

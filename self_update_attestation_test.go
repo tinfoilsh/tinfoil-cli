@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	_ "embed"
@@ -12,6 +13,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/golang/snappy"
@@ -20,8 +22,9 @@ import (
 
 // The fixture is the real attestation bundle GitHub serves for the published
 // v0.19.9 linux/amd64 archive, captured snappy-compressed exactly as the
-// attestations API returns it. Its subject[0] digest is pinned in the test so
-// no network access is needed to exercise the verification path.
+// attestations API returns it. Its subject digest is pinned in the constant
+// below and asserted in the fixture test, so a replaced bundle or checksum
+// file cannot silently change what the fixture verifies.
 const fixtureSubjectDigest = "6c9bbaf8e7dc4cf1502cfa222cf8badf53386157dd8b433ac2855c4650babb77"
 
 //go:embed testdata/attestation/bundle.snappy
@@ -54,8 +57,11 @@ func fixtureArchiveDigest(t *testing.T) [sha256.Size]byte {
 	t.Helper()
 	data, err := os.ReadFile(filepath.Join("testdata", "attestation", "archive.sha256"))
 	require.NoError(t, err)
+	// Pin the checksum file to the digest the captured bundle attests, so
+	// the fixture pair cannot be swapped for a different release unnoticed.
+	require.Equal(t, fixtureSubjectDigest, strings.TrimSpace(string(data)))
 	var digest [sha256.Size]byte
-	raw, err := hex.DecodeString(string(data))
+	raw, err := hex.DecodeString(strings.TrimSpace(string(data)))
 	require.NoError(t, err)
 	copy(digest[:], raw)
 	return digest
@@ -176,6 +182,28 @@ func TestVerifyOneAttestationRejectsWrongDigest(t *testing.T) {
 	require.False(t, ok)
 }
 
+// TestVerifyOneAttestationRejectsOversizedDecodedBundle proves the decoded
+// bundle is size-bounded before allocation: a small compressed payload that
+// expands past the limit is refused without decoding it.
+func TestVerifyOneAttestationRejectsOversizedDecodedBundle(t *testing.T) {
+	// A highly compressible 16 MiB payload decodes far past the 4 MiB
+	// limit while staying small on the wire.
+	decoded := bytes.Repeat([]byte{0x20}, 16<<20)
+	compressed := snappy.Encode(nil, decoded)
+	require.Less(t, len(compressed), 1<<20, "fixture must fit the compressed fetch limit")
+
+	digest := fixtureArchiveDigest(t)
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(compressed)
+	}))
+	defer server.Close()
+
+	ok, err := verifyOneAttestation(context.Background(), server.Client(), server.URL, digest, "x")
+	require.Error(t, err)
+	require.False(t, ok)
+	require.Contains(t, err.Error(), "decompressed size limit")
+}
+
 // TestSelfUpdateRefusesUpdateWhenAttestationFails proves the install path is
 // fail-closed: an archive that passes its checksum but fails attestation is
 // never installed.
@@ -191,20 +219,18 @@ func TestSelfUpdateRefusesUpdateWhenAttestationFails(t *testing.T) {
 	require.Equal(t, 3, f.requestCount())
 }
 
-// TestSelfUpdateAttendsBeforeInstall proves attestation runs on the downloaded
-// bytes and receives the release tag.
 func TestSelfUpdateAttestationSeesArchiveAndTag(t *testing.T) {
 	f := newSelfUpdateFixture(t)
 	var seenTag string
-	var seenLen int
+	var seenArchive []byte
 	f.u.verifyAttestation = func(_ context.Context, _ *http.Client, archive []byte, tag string) error {
 		seenTag = tag
-		seenLen = len(archive)
+		seenArchive = append([]byte(nil), archive...)
 		return nil
 	}
 	result, err := f.u.run(context.Background(), false)
 	require.NoError(t, err)
 	require.Equal(t, updateStatusInstalled, result.Status)
 	require.Equal(t, "v"+testUpdateVersion, seenTag)
-	require.Equal(t, len(f.archive), seenLen)
+	require.Equal(t, f.archive, seenArchive)
 }
