@@ -10,6 +10,7 @@ import (
 type domainView struct {
 	ID                      string   `json:"id"`
 	Domain                  string   `json:"domain"`
+	Wildcard                bool     `json:"wildcard"`
 	VerificationNonce       string   `json:"verification_nonce"`
 	CnameHash               string   `json:"cname_hash"`
 	Verified                bool     `json:"verified"`
@@ -23,6 +24,8 @@ type domainView struct {
 	ACMEChallengeHost       string   `json:"acme_challenge_host"`
 	ACMEChallengeTarget     string   `json:"acme_challenge_target"`
 	ACMEChallengeConfigured *bool    `json:"acme_challenge_configured"`
+	WildcardTLSMissing      []string `json:"wildcard_tls_missing"`
+	WildcardCNAMEConfigured *bool    `json:"wildcard_cname_configured"`
 }
 
 func init() {
@@ -76,7 +79,13 @@ var domainListCmd = &cobra.Command{
 var domainAddCmd = &cobra.Command{
 	Use:   "add [domain]",
 	Short: "Register a new custom domain (returns DNS records to configure)",
-	Args:  cobra.ExactArgs(1),
+	Long: `Register a new custom domain and print the DNS records to configure.
+
+Most domains do not need a wildcard. Add the domain as '*.example.com'
+(quoted, so your shell does not expand it) only when one container serves its
+subdomains. This registers example.com and adds a wildcard record. Running it
+for an already registered domain adds the wildcard record to that domain.`,
+	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client, err := authedClient()
 		if err != nil {
@@ -138,11 +147,21 @@ func renderDomain(d domainView, verifyMode bool) error {
 	fmt.Printf("\nConfigure these DNS records on your domain:\n")
 	fmt.Printf("  CNAME  %s  =>  %s\n", d.Domain, d.CNAMETarget)
 	fmt.Printf("  CNAME  %s  =>  %s\n", d.ACMEChallengeHost, d.ACMEChallengeTarget)
+	if d.Wildcard {
+		fmt.Printf("  CNAME  *.%s  =>  %s\n", d.Domain, d.CNAMETarget)
+		fmt.Printf("\nSubdomains reach the same container, not different ones. Set\nshim.tls-wildcard: true in tinfoil-config.yml so its certificate covers them.\n")
+	}
 	if verifyMode && d.CNAMEConfigured != nil {
 		fmt.Printf("\nTraffic CNAME currently observed: %v\n", *d.CNAMEConfigured)
 	}
 	if verifyMode && d.ACMEChallengeConfigured != nil {
 		fmt.Printf("Certificate CNAME currently observed: %v\n", *d.ACMEChallengeConfigured)
+	}
+	if verifyMode && d.WildcardCNAMEConfigured != nil {
+		fmt.Printf("Wildcard CNAME currently observed: %v\n", *d.WildcardCNAMEConfigured)
+	}
+	if len(d.WildcardTLSMissing) > 0 {
+		fmt.Printf("\nWarning: these containers do not request a wildcard certificate, so their\nsubdomains fail TLS: %s\n", strings.Join(d.WildcardTLSMissing, ", "))
 	}
 	if !d.Verified {
 		fmt.Printf("\nRun `tinfoil domain verify %s` after the %s CNAME propagates.\n", d.Domain, d.ACMEChallengeHost)
