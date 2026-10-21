@@ -58,7 +58,9 @@ func TestRenderDomainListsWildcardRecordForWildcardDomains(t *testing.T) {
 		"verified": true,
 		"cname_target": "abc123.tf-dns.com",
 		"acme_challenge_host": "_acme-challenge.tenants.example.com",
-		"acme_challenge_target": "acme-abc123.tf-dns.com"
+		"acme_challenge_target": "acme-abc123.tf-dns.com",
+		"wildcard_tls_missing": ["api", "web"],
+		"wildcard_cname_configured": false
 	}`), &d); err != nil {
 		t.Fatal(err)
 	}
@@ -66,12 +68,18 @@ func TestRenderDomainListsWildcardRecordForWildcardDomains(t *testing.T) {
 	outputFormat = "table"
 	t.Cleanup(func() { outputFormat = saved })
 	captured, err := captureTestStdout(func() error {
-		return renderDomain(d, false)
+		return renderDomain(d, true)
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := "  CNAME  *.tenants.example.com  =>  abc123.tf-dns.com\n"; !strings.Contains(string(captured), want) {
-		t.Errorf("output missing %q:\n%s", want, captured)
+	for _, want := range []string{
+		"  CNAME  *.tenants.example.com  =>  abc123.tf-dns.com\n",
+		"Wildcard CNAME currently observed: false\n",
+		"subdomains fail TLS: api, web\n",
+	} {
+		if !strings.Contains(string(captured), want) {
+			t.Errorf("output missing %q:\n%s", want, captured)
+		}
 	}
 }

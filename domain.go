@@ -24,6 +24,8 @@ type domainView struct {
 	ACMEChallengeHost       string   `json:"acme_challenge_host"`
 	ACMEChallengeTarget     string   `json:"acme_challenge_target"`
 	ACMEChallengeConfigured *bool    `json:"acme_challenge_configured"`
+	WildcardTLSMissing      []string `json:"wildcard_tls_missing"`
+	WildcardCNAMEConfigured *bool    `json:"wildcard_cname_configured"`
 }
 
 func init() {
@@ -154,6 +156,12 @@ func renderDomain(d domainView, verifyMode bool) error {
 	}
 	if verifyMode && d.ACMEChallengeConfigured != nil {
 		fmt.Printf("Certificate CNAME currently observed: %v\n", *d.ACMEChallengeConfigured)
+	}
+	if verifyMode && d.WildcardCNAMEConfigured != nil {
+		fmt.Printf("Wildcard CNAME currently observed: %v\n", *d.WildcardCNAMEConfigured)
+	}
+	if len(d.WildcardTLSMissing) > 0 {
+		fmt.Printf("\nWarning: these containers do not request a wildcard certificate, so their\nsubdomains fail TLS: %s\n", strings.Join(d.WildcardTLSMissing, ", "))
 	}
 	if !d.Verified {
 		fmt.Printf("\nRun `tinfoil domain verify %s` after the %s CNAME propagates.\n", d.Domain, d.ACMEChallengeHost)
