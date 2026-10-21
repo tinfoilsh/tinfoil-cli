@@ -129,28 +129,19 @@ main() {
   # -------------------------------
   # 8. Verify the Sigstore attestation before extracting anything.
   #    gh fetches the attestation from api.github.com by digest, checks the
-  #    signature against the Sigstore root of trust, and --signer-workflow
-  #    pins the identity to this repository's release workflow. The version
-  #    check ties the attestation to the release being installed.
+  #    signature against the Sigstore root of trust, and --cert-identity
+  #    enforces an exact SAN match on the signing workflow: the identity
+  #    must be this repository's release workflow run from this release
+  #    tag, so an attestation from a branch run or a different tag fails.
   # -------------------------------
+  EXPECTED_SAN="https://github.com/${WORKFLOW}@refs/tags/v${VERSION}"
   echo "Verifying release attestation..."
   if ! gh attestation verify tinfoil-cli.tar.gz \
       --repo "$REPO" \
-      --signer-workflow "$WORKFLOW" \
-      --predicate-type https://slsa.dev/provenance/v1 \
-      --format json > attestation.json 2>attestation.err; then
-      echo "Error: attestation verification failed. The download was not installed."
-      cat attestation.err >&2 || true
-      exit 1
-  fi
-
-  # Confirm the signing identity names this release tag, not merely the
-  # repository: a workflow run from a branch or a different tag must not
-  # authenticate this download.
-  EXPECTED_SAN="https://github.com/${WORKFLOW}@refs/tags/v${VERSION}"
-  if ! grep -q "\"subjectAlternativeName\":\"${EXPECTED_SAN}\"" attestation.json; then
-      echo "Error: attestation was signed by an unexpected release identity."
-      echo "Expected: ${EXPECTED_SAN}"
+      --cert-identity "$EXPECTED_SAN" \
+      --predicate-type https://slsa.dev/provenance/v1; then
+      echo "Error: attestation verification failed (expected identity: ${EXPECTED_SAN})."
+      echo "The download was not installed."
       exit 1
   fi
   echo "Attestation verified."
