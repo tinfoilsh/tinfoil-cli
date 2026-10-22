@@ -13,7 +13,7 @@ require (
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/pflag v1.0.10
 	github.com/stretchr/testify v1.11.1
-	github.com/tinfoilsh/tinfoil-go v0.17.0-rc.3.0.20261022180258-c740c1d85711
+	github.com/tinfoilsh/tinfoil-go v0.17.0-rc.3.0.20261022185933-a7d172714f49
 	go.yaml.in/yaml/v3 v3.0.4
 	golang.org/x/crypto v0.57.0
 	golang.org/x/mod v0.41.0
@@ -96,7 +96,6 @@ require (
 	github.com/tidwall/sjson v1.2.5 // indirect
 	github.com/tinfoilsh/encrypted-http-body-protocol v0.4.1 // indirect
 	github.com/tinfoilsh/go-sev-guest v0.0.0-20260818055935-bec7bdb637fd // indirect
-	github.com/tinfoilsh/tinfoil-config v0.1.19-0.20261022174819-29980dfc867c // indirect
 	github.com/transparency-dev/formats v0.1.1 // indirect
 	github.com/transparency-dev/merkle v0.0.2 // indirect
 	github.com/youmark/pkcs8 v0.0.0-20240726163527-a2c0da244d78 // indirect
