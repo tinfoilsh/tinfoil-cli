@@ -13,6 +13,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"golang.org/x/crypto/ssh"
@@ -21,6 +22,8 @@ import (
 )
 
 const maxOwnerCredentialBytes = 4096
+
+var resourceNamePattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,62}$`)
 
 // Owner signing and storage encryption use independent keys.
 type ownerCredential struct {
@@ -157,40 +160,88 @@ func measuredOwner(value string) (ssh.PublicKey, error) {
 	return ssh.NewPublicKey(ed25519.PublicKey(raw))
 }
 
-func resourceDir(scope accountScope, id string) (string, error) {
+// Names make new directories readable; UUIDs identify existing credentials even
+// after a resource is renamed. Keep saved paths stable for installed SSH profiles.
+func resourceDir(scope accountScope, id, name string) (string, error) {
 	if !looksLikeUUID(id) {
 		return "", errors.New("invalid resource UUID")
 	}
 	config, err := configPath()
+	if err != nil {
+		return "", err
+	}
 	data, _ := json.Marshal(scope)
-	return filepath.Join(filepath.Dir(config), "resources", storageHash(data), id), err
+	root, accountID := filepath.Join(filepath.Dir(config), "resources"), storageHash(data)
+	accountDir, err := existingCredentialDir(root, accountID)
+	if err != nil {
+		return "", err
+	}
+	if accountDir == "" {
+		accountDir = filepath.Join(root, accountDirectoryLabel(scope)+"-"+accountID)
+	}
+	dir, err := existingCredentialDir(accountDir, id)
+	if err != nil || dir != "" {
+		return dir, err
+	}
+	name = strings.TrimSpace(name)
+	if !resourceNamePattern.MatchString(name) {
+		// Readable labels are optional, including on the first connection.
+		return filepath.Join(accountDir, id), nil
+	}
+	return filepath.Join(accountDir, name+"-"+id), nil
 }
 
-// Existing Monitor credentials stay in place; sandbox credentials use resource UUIDs.
-func credentialDir(scope accountScope, row containerView) (string, error) {
-	dir, err := resourceDir(scope, row.ID)
-	if err != nil {
-		return "", err
+func accountDirectoryLabel(scope accountScope) string {
+	name := strings.TrimSpace(scope.UserName)
+	if name == "" {
+		name = scope.UserID
 	}
-	name, err := sandboxName(row.Name)
-	if err != nil {
-		return "", err
-	}
-	config, err := configPath()
-	if err != nil {
-		return "", err
-	}
-	switch row.Repo {
-	case monitorRepo:
-		data, _ := json.Marshal(scope)
-		legacy := filepath.Join(filepath.Dir(config), "monitors", storageHash(data), name)
-		if _, err := os.Stat(filepath.Join(legacy, monitorProfileFile)); err == nil {
-			return legacy, nil
-		} else if !errors.Is(err, os.ErrNotExist) {
-			return "", err
+	account := "user-" + name
+	if scope.OrgID != "" {
+		name := strings.TrimSpace(scope.OrgName)
+		if name == "" {
+			name = scope.OrgID
 		}
+		account = "org-" + name
 	}
-	return dir, nil
+	// Keep paths portable and bounded even when organization names contain
+	// separators or Unicode. The full scope hash retains their exact identity.
+	parts := strings.FieldsFunc(strings.ToLower(account), func(r rune) bool {
+		return !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '.' || r == '_')
+	})
+	label := strings.Join(parts, "-")
+	if len(label) > 120 {
+		label = label[:120]
+	}
+	return strings.Trim(label, ".-_")
+}
+
+// Resolve both readable directories and the deployed identifier-only layout.
+// A changed display name must not move credentials referenced by SSH profiles.
+func existingCredentialDir(parent, id string) (string, error) {
+	entries, err := os.ReadDir(parent)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return "", err
+	}
+	var saved string
+	for _, entry := range entries {
+		if entry.Name() != id && !strings.HasSuffix(entry.Name(), "-"+id) {
+			continue
+		}
+		path := filepath.Join(parent, entry.Name())
+		if !entry.IsDir() {
+			return "", fmt.Errorf("credential path %s must be a directory", path)
+		}
+		if saved != "" {
+			return "", fmt.Errorf("multiple credential directories for %s: %s and %s; restore a single original credential directory", id, saved, path)
+		}
+		saved = path
+	}
+	return saved, nil
+}
+
+func resourceDirMatches(name, id string) bool {
+	return looksLikeUUID(id) && (name == id || strings.HasSuffix(name, "-"+id))
 }
 
 // A public identity file selects an ssh-agent key without copying its private key.
@@ -300,32 +351,29 @@ func resourceCredential(dir, file, owner string, known bool) (*ownerCredential, 
 
 // A workspace keeps its encryption key when it moves to a new sandbox. Look
 // only in this account's saved resource records; never reuse the old VM identity.
-func sandboxWorkspaceCredential(scope accountScope, dir string, resource sandboxResource, known bool) (*ownerCredential, error) {
+func sandboxWorkspaceCredential(dir string, resource sandboxResource, known bool) (*ownerCredential, error) {
 	path := filepath.Join(dir, sandboxDiskKeyName)
 	if _, err := os.Stat(path); known || !errors.Is(err, os.ErrNotExist) {
 		return resourceCredential(dir, sandboxDiskKeyName, resource.Owner, known)
 	}
-	accountDir, err := resourceDir(scope, resource.ID)
-	if err != nil {
-		return nil, err
-	}
+	accountDir := filepath.Dir(dir)
 	volumeID, owner := resource.Volumes["workspace"], resource.Owner
 	if !looksLikeUUID(volumeID) {
 		return nil, errors.New("invalid workspace volume UUID")
 	}
-	entries, err := os.ReadDir(filepath.Dir(accountDir))
+	entries, err := os.ReadDir(accountDir)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, err
 	}
 	found := new(ownerCredential)
 	defer found.clear()
 	for _, entry := range entries {
-		if !entry.IsDir() || !looksLikeUUID(entry.Name()) {
+		if !entry.IsDir() {
 			continue
 		}
-		savedDir := filepath.Join(filepath.Dir(accountDir), entry.Name())
+		savedDir := filepath.Join(accountDir, entry.Name())
 		var saved sandboxResource
-		if readStorageJSON(filepath.Join(savedDir, "resource.json"), &saved) != nil || saved.ID != entry.Name() || saved.Volumes["workspace"] != volumeID {
+		if readStorageJSON(filepath.Join(savedDir, "resource.json"), &saved) != nil || !resourceDirMatches(entry.Name(), saved.ID) || saved.Volumes["workspace"] != volumeID {
 			continue
 		}
 		if saved.Owner != owner {

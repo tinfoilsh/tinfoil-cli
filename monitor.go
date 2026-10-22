@@ -49,6 +49,8 @@ type accountScope struct {
 	ControlplaneURL string `json:"controlplane_url"`
 	OrgID           string `json:"org_id,omitempty"`
 	UserID          string `json:"user_id"`
+	OrgName         string `json:"-"` // Display only; account identity must survive renames.
+	UserName        string `json:"-"`
 }
 
 // Persist the domain, boot key and minimum generation.
@@ -79,9 +81,10 @@ func currentScope() (accountScope, *cpClient, error) {
 	if err != nil {
 		return accountScope{}, nil, err
 	}
-	scope := accountScope{ControlplaneURL: cfg.ControlplaneURL, UserID: identity.UserID}
+	scope := accountScope{ControlplaneURL: cfg.ControlplaneURL, UserID: identity.UserID, UserName: identity.UserName}
 	if identity.Organization != nil {
 		scope.OrgID = identity.Organization.ID
+		scope.OrgName = identity.Organization.Name
 	}
 	return scope, newCPClient(cfg), nil
 }
@@ -215,7 +218,7 @@ func connectMonitorOwner(ctx context.Context, scope accountScope, row *workloadT
 }
 
 func monitorRecord(scope accountScope, row *workloadTarget) (string, error) {
-	dir, err := credentialDir(scope, row.containerView)
+	dir, err := resourceDir(scope, row.ID, row.Name)
 	if err != nil {
 		return "", err
 	}
