@@ -165,7 +165,8 @@ type authContext struct {
 		ID   string `json:"id"`
 		Name string `json:"name,omitempty"`
 	} `json:"organization"`
-	UserID string `json:"user_id"`
+	UserID   string `json:"user_id"`
+	UserName string `json:"user_name,omitempty"`
 }
 
 func authenticatedContext(cfg cliConfig) (authContext, error) {

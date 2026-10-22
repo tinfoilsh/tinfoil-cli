@@ -337,7 +337,7 @@ func connectSandbox(target *workloadTarget) (_ *sandboxSession, err error) {
 	if readErr == nil && !bytes.Equal(saved, raw) {
 		return nil, errors.New("sandbox instance, owner or storage binding changed")
 	}
-	credential, err := sandboxWorkspaceCredential(scope, dir, record, readErr == nil)
+	credential, err := sandboxWorkspaceCredential(dir, record, readErr == nil)
 	if err != nil {
 		return nil, err
 	}

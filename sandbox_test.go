@@ -138,7 +138,7 @@ func TestSandboxDeleteKeepsCredentialsAndRemovesOwnedProfile(t *testing.T) {
 	profile := filepath.Join(home, ".ssh", "tinfoil", "work.conf")
 	require.NoError(t, os.MkdirAll(filepath.Dir(profile), 0700))
 	require.NoError(t, os.WriteFile(profile, []byte("# tinfoil-resource: "+server.URL+"//owner/"+row.ID+"\n"), 0600))
-	dir, err := resourceDir(accountScope{ControlplaneURL: server.URL, UserID: "owner"}, row.ID)
+	dir, err := resourceDir(accountScope{ControlplaneURL: server.URL, UserID: "owner"}, row.ID, row.Name)
 	require.NoError(t, err)
 	credential := filepath.Join(dir, sandboxDiskKeyName)
 	require.NoError(t, writeStorageJSON(credential, testOwnerCredential(t), false))
