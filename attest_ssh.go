@@ -2,12 +2,16 @@ package main
 
 import (
 	"bufio"
+	"context"
+	"crypto/tls"
 	"crypto/x509"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
 	"net"
+	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -26,6 +30,12 @@ import (
 
 // attestedHostKeyID is the attested-keys declaration a workload serves as its sshd HostKey.
 const attestedHostKeyID = "host-ssh"
+
+const (
+	sshAttestationPath     = "/.well-known/tinfoil-attestation"
+	maxSSHAttestationBytes = 32 << 20
+	sshAttestationTimeout  = 2 * time.Minute
+)
 
 // managedSSHHost forwards controlplane-assigned SSH ports to their enclaves.
 const managedSSHHost = "console.tinfoil.sh"
@@ -172,16 +182,74 @@ func nativeSSHHost(target *tunnelTarget, override string) string {
 // attestedHostKey verifies host against source and returns the endorsed
 // host-ssh key, so a failed verification never falls back to unverified acceptance.
 func attestedHostKey(host, source, sealedTo string) (ssh.PublicKey, error) {
+	key, _, err := attestConnection(nil, host, source, sealedTo)
+	return key, err
+}
+
+// The transport carries only public evidence. Trust comes from fresh attestation
+// and the endorsed SSH key, not the HTTPS certificate or the Monitor relay.
+// A supplied dial reaches the sandbox's HTTP attestation route through Monitor;
+// direct connections fetch the same evidence over HTTPS.
+func attestConnection(dial func(context.Context, string, string) (net.Conn, error), host, source, sealedTo string) (ssh.PublicKey, time.Time, error) {
 	defer startConnectionProgress(os.Stderr, "Verifying attestation and SSH host key for "+host)()
-	secure, err := newVerifiedClient(host, source, sealedTo)
+	policy, err := verificationOptions(source, sealedTo)
 	if err != nil {
-		return nil, err
+		return nil, time.Time{}, err
 	}
-	verified, err := secure.Verify()
+	options := []verify.Option{verify.WithPinnedRegisters(policy.PinnedRegisters), verify.WithFreshnessMaxAge(policy.FreshnessMaxAge)}
+	if policy.EmbeddedConfig != nil {
+		options = append(options, verify.WithEmbeddedReferences(verify.EmbeddedReferences{Config: policy.EmbeddedConfig}))
+	}
+	verifier, err := verify.NewVerifier(options...)
 	if err != nil {
-		return nil, fmt.Errorf("verifying %s: %w", host, err)
+		return nil, time.Time{}, err
 	}
-	return endorsedHostKey(host, verified)
+	nonce, err := document.RandomNonce()
+	if err != nil {
+		return nil, time.Time{}, err
+	}
+	transport := &http.Transport{
+		Proxy: http.ProxyFromEnvironment,
+		// No credentials or application requests use this transport. VerifyV3
+		// authenticates the nonce-bound evidence before we accept an SSH key.
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+	}
+	scheme := "https"
+	if dial != nil {
+		transport = &http.Transport{DialContext: dial}
+		scheme = "http"
+	}
+	fetch := &http.Client{Transport: transport, Timeout: sshAttestationTimeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	defer fetch.CloseIdleConnections()
+	target := url.URL{Scheme: scheme, Host: host, Path: sshAttestationPath, RawQuery: "nonce=" + hex.EncodeToString(nonce)}
+	resp, err := fetch.Get(target.String())
+	if err != nil {
+		var requestError *url.Error
+		if errors.As(err, &requestError) {
+			err = requestError.Err
+		}
+		return nil, time.Time{}, fmt.Errorf("fetching the attestation of %s: %w", host, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, time.Time{}, fmt.Errorf("fetching the attestation of %s: %s", host, resp.Status)
+	}
+	doc, err := io.ReadAll(io.LimitReader(resp.Body, maxSSHAttestationBytes+1))
+	if err == nil && len(doc) > maxSSHAttestationBytes {
+		err = fmt.Errorf("it exceeds %d bytes", maxSSHAttestationBytes)
+	}
+	if err != nil {
+		return nil, time.Time{}, fmt.Errorf("reading the attestation of %s: %w", host, err)
+	}
+	verified, err := verifier.VerifyV3(doc, nonce, source)
+	if err != nil {
+		return nil, time.Time{}, fmt.Errorf("verifying %s: %w", host, err)
+	}
+	key, err := endorsedHostKey(host, verified)
+	if err != nil {
+		return nil, time.Time{}, err
+	}
+	return key, verified.FreshnessExpiresAt, nil
 }
 
 func endorsedHostKey(host string, verified *verify.Verification) (ssh.PublicKey, error) {

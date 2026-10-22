@@ -5,14 +5,10 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/base32"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net"
-	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -22,8 +18,6 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
-	"github.com/tinfoilsh/tinfoil-go/document"
-	"github.com/tinfoilsh/tinfoil-go/verify"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -252,9 +246,6 @@ const (
 	sandboxAgentKeyName    = "agent_ed25519"
 	sandboxEnrolledKeyName = "enrolled_host_key"
 
-	sandboxAttestationPath     = "/.well-known/tinfoil-attestation"
-	maxSandboxAttestationBytes = 32 << 20
-
 	// Monitor routes to a sandbox boot by a name derived from its SSH host key.
 	sandboxRouteSuffix = ".sandbox.invalid"
 	// The device key authorizes routes; setup also requires the sandbox identity.
@@ -378,20 +369,11 @@ func connectSandbox(target *workloadTarget) (_ *sandboxSession, err error) {
 	}
 	s.initialized = receipt.BootKey != ""
 	if noMonitor {
-		defer startConnectionProgress(os.Stderr, "Verifying sandbox attestation and SSH host key for "+row.Domain)()
-		secure, err := newVerifiedClient(row.Domain, target.source, "")
+		host, expires, err := attestConnection(nil, row.Domain, target.source, "")
 		if err != nil {
 			return nil, err
 		}
-		verified, err := secure.Verify()
-		if err != nil {
-			return nil, fmt.Errorf("verifying %s: %w", row.Domain, err)
-		}
-		host, err := endorsedHostKey(row.Domain, verified)
-		if err != nil {
-			return nil, err
-		}
-		s.expires = verified.FreshnessExpiresAt
+		s.expires = expires
 		s.profile = sshProfile{name: row.Name, hostName: row.Domain, port: row.SSHPort, hostKeyAlias: row.Domain,
 			user: sandboxLoginUser, identityFile: keys.sshKeyPath, hostKey: host, resourceID: scope.ControlplaneURL + "/" + scope.OrgID + "/" + scope.UserID + "/" + row.ID}
 		fmt.Fprintf(os.Stderr, "Sandbox %s attestation verified.\nWarning: sandbox has NO_MONITOR=1; its network traffic is not being tunneled through Monitor.\n", row.Name)
@@ -422,7 +404,7 @@ func connectSandbox(target *workloadTarget) (_ *sandboxSession, err error) {
 			}
 		}
 	}
-	host, expires, err := attestConnection(dial, row.Domain, target.source)
+	host, expires, err := attestConnection(dial, row.Domain, target.source, "")
 	if err != nil {
 		var denied *ssh.OpenChannelError
 		if errors.As(err, &denied) && denied.Reason == ssh.Prohibited {
@@ -588,52 +570,6 @@ func (s *sandboxSession) install() error {
 		return err
 	}
 	return installSandboxAlias(s.profile, home)
-}
-
-// Verify fresh evidence before pinning its endorsed key for SSH unlock.
-func attestConnection(dial func(context.Context, string, string) (net.Conn, error), host, source string) (ssh.PublicKey, time.Time, error) {
-	nonce, err := document.RandomNonce()
-	if err != nil {
-		return nil, time.Time{}, err
-	}
-	// Only a public nonce and attestation cross this untrusted relay. VerifyV3
-	// authenticates the evidence; owner SSH requires the endorsed boot key.
-	defer startConnectionProgress(os.Stderr, "Waiting for sandbox attestation through Monitor")()
-	fetch := &http.Client{Transport: &http.Transport{DialContext: dial}, Timeout: sandboxEnrollTimeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	defer fetch.CloseIdleConnections()
-	resp, err := fetch.Get("http://" + host + sandboxAttestationPath + "?nonce=" + hex.EncodeToString(nonce))
-	if err != nil {
-		var requestError *url.Error
-		if errors.As(err, &requestError) {
-			err = requestError.Err
-		}
-		return nil, time.Time{}, fmt.Errorf("fetching the attestation of %s through Monitor's SSH route: %w", host, err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, time.Time{}, fmt.Errorf("fetching the attestation of %s through Monitor's SSH route: %s", host, resp.Status)
-	}
-	doc, err := io.ReadAll(io.LimitReader(resp.Body, maxSandboxAttestationBytes+1))
-	if err == nil && len(doc) > maxSandboxAttestationBytes {
-		err = fmt.Errorf("it exceeds %d bytes", maxSandboxAttestationBytes)
-	}
-	if err != nil {
-		return nil, time.Time{}, fmt.Errorf("reading the attestation of %s: %w", host, err)
-	}
-	fmt.Fprintln(os.Stderr, "Verifying sandbox attestation and published configuration")
-	verifier, err := verify.NewVerifier()
-	if err != nil {
-		return nil, time.Time{}, err
-	}
-	verified, err := verifier.VerifyV3(doc, nonce, source)
-	if err != nil {
-		return nil, time.Time{}, fmt.Errorf("verifying %s: %w", host, err)
-	}
-	key, err := endorsedHostKey(host, verified)
-	if err != nil {
-		return nil, time.Time{}, err
-	}
-	return key, verified.FreshnessExpiresAt, nil
 }
 
 // Preserve aliases owned by another identity.

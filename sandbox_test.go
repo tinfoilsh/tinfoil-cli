@@ -153,53 +153,108 @@ func TestSandboxDeleteKeepsCredentialsAndRemovesOwnedProfile(t *testing.T) {
 	require.NoFileExists(t, profile)
 }
 
-func TestSandboxAttestationRejectsUntrustedRelayReplies(t *testing.T) {
+func TestSSHAttestationRejectsUntrustedEvidence(t *testing.T) {
 	nonces := map[string]bool{}
-	for _, tt := range []struct {
-		name, body, wantError string
-		status                int
-	}{
-		{"forged evidence", `{}`, "verifying sandbox.invalid", http.StatusOK},
-		{"redirect", "", "302 Found", http.StatusFound},
-		{"oversized evidence", strings.Repeat("x", maxSandboxAttestationBytes+1), "exceeds", http.StatusOK},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			requests := make(chan *http.Request, 1)
-			var count atomic.Int32
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if count.Add(1) == 1 {
-					requests <- r
+	for _, direct := range []bool{false, true} {
+		for _, tt := range []struct {
+			name, body, wantError string
+			status                int
+		}{
+			{"forged evidence", `{}`, "verifying ", http.StatusOK},
+			{"redirect", "", "302 Found", http.StatusFound},
+			{"oversized evidence", strings.Repeat("x", maxSSHAttestationBytes+1), "exceeds", http.StatusOK},
+		} {
+			t.Run(fmt.Sprintf("direct=%t/%s", direct, tt.name), func(t *testing.T) {
+				requests := make(chan *http.Request, 1)
+				var count atomic.Int32
+				server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					if count.Add(1) == 1 {
+						requests <- r
+					}
+					w.Header().Set("Location", "/redirected")
+					w.WriteHeader(tt.status)
+					io.WriteString(w, tt.body)
+				}))
+				if direct {
+					server.StartTLS()
+				} else {
+					server.Start()
 				}
-				w.Header().Set("Location", "/redirected")
-				w.WriteHeader(tt.status)
-				io.WriteString(w, tt.body)
-			}))
-			defer server.Close()
-			dial := func(ctx context.Context, _, _ string) (net.Conn, error) {
-				return (&net.Dialer{}).DialContext(ctx, "tcp", server.Listener.Addr().String())
-			}
-			key, expiry, err := attestConnection(dial, "sandbox.invalid", defaultSandboxRepo)
-			require.ErrorContains(t, err, tt.wantError)
-			require.Nil(t, key)
-			require.True(t, expiry.IsZero())
-			require.EqualValues(t, 1, count.Load(), "redirects must not be followed")
-			request := <-requests
-			require.Nil(t, request.TLS)
-			require.Equal(t, http.MethodGet, request.Method)
-			require.Equal(t, sandboxAttestationPath, request.URL.Path)
-			require.Zero(t, request.ContentLength)
-			for _, header := range []string{"Authorization", "Proxy-Authorization", "Cookie"} {
-				require.Empty(t, request.Header.Get(header))
-			}
-			require.Len(t, request.URL.Query(), 1)
-			nonce := request.URL.Query().Get("nonce")
-			raw, err := hex.DecodeString(nonce)
-			require.NoError(t, err)
-			require.Len(t, raw, 32)
-			require.False(t, nonces[nonce], "each attempt must use fresh evidence")
-			nonces[nonce] = true
-		})
+				defer server.Close()
+				dial := func(ctx context.Context, _, _ string) (net.Conn, error) {
+					return (&net.Dialer{}).DialContext(ctx, "tcp", server.Listener.Addr().String())
+				}
+				host := "sandbox.invalid"
+				if direct {
+					host, dial = server.Listener.Addr().String(), nil
+				}
+				key, expiry, err := attestConnection(dial, host, defaultSandboxRepo, "")
+				require.ErrorContains(t, err, tt.wantError)
+				require.Nil(t, key)
+				require.True(t, expiry.IsZero())
+				require.EqualValues(t, 1, count.Load(), "redirects must not be followed")
+				request := <-requests
+				require.Equal(t, direct, request.TLS != nil)
+				require.Equal(t, http.MethodGet, request.Method)
+				require.Equal(t, sshAttestationPath, request.URL.Path)
+				require.Zero(t, request.ContentLength)
+				for _, header := range []string{"Authorization", "Proxy-Authorization", "Cookie"} {
+					require.Empty(t, request.Header.Get(header))
+				}
+				require.Len(t, request.URL.Query(), 1)
+				nonce := request.URL.Query().Get("nonce")
+				raw, err := hex.DecodeString(nonce)
+				require.NoError(t, err)
+				require.Len(t, raw, 32)
+				require.False(t, nonces[nonce], "each attempt must use fresh evidence")
+				nonces[nonce] = true
+			})
+		}
 	}
+}
+
+// A CONNECT proxy must not reintroduce CA trust or make a successful TLS
+// handshake sufficient to accept an SSH key.
+func TestAttestSSHThroughHTTPSProxyVerifiesEvidence(t *testing.T) {
+	var requests, connects atomic.Int32
+	enclave := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		require.Equal(t, sshAttestationPath, r.URL.Path)
+		require.Len(t, r.URL.Query().Get("nonce"), 64)
+		require.Empty(t, r.Header.Get("Authorization"))
+		io.WriteString(w, `{}`)
+	}))
+	defer enclave.Close()
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, http.MethodConnect, r.Method)
+		require.Equal(t, "enclave.invalid:443", r.Host)
+		connects.Add(1)
+		upstream, err := net.Dial("tcp", enclave.Listener.Addr().String())
+		require.NoError(t, err)
+		defer upstream.Close()
+		client, _, err := w.(http.Hijacker).Hijack()
+		require.NoError(t, err)
+		defer client.Close()
+		_, err = io.WriteString(client, "HTTP/1.1 200 Connection Established\r\n\r\n")
+		require.NoError(t, err)
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			io.Copy(upstream, client)
+		}()
+		io.Copy(client, upstream)
+		client.Close()
+		<-done
+	}))
+	defer proxy.Close()
+	cmd := consentCLIProcess(t, "http://unused.invalid", "attest-ssh", "enclave.invalid", "--repo", defaultSandboxRepo)
+	cmd.Env = append(cmd.Env, "HTTPS_PROXY="+proxy.URL, "NO_PROXY=")
+	output, err := cmd.CombinedOutput()
+	require.Error(t, err)
+	require.Contains(t, string(output), "verifying enclave.invalid")
+	require.NotContains(t, string(output), "Attestation successful")
+	require.EqualValues(t, 1, connects.Load())
+	require.EqualValues(t, 1, requests.Load())
 }
 
 func TestContainedProfileJumpsThroughMonitorAndKeepsItsAlias(t *testing.T) {
