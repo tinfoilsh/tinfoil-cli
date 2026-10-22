@@ -1,43 +1,29 @@
 #!/bin/sh
 # tinfoil-cli install script
 # This script detects your OS/architecture, downloads the latest tinfoil-cli
-# release, and installs it to /usr/local/bin. Release verification is opt-in:
-# pass --verify-release to authenticate the download before installing.
+# release, verifies it against the SHA-256 digest published by the GitHub
+# release API, and installs it to /usr/local/bin.
 #
-# With --verify-release, the archive is authenticated against the release
-# workflow's Sigstore attestation before anything is installed: the
-# attestation is fetched from api.github.com and checked against a pinned
-# workflow identity, so a network-path attacker would need to compromise TLS
-# to two independent origins and forge a Sigstore certificate chain to serve
-# a tampered binary.
-#
-# Verification requires the GitHub CLI (gh). Without --verify-release, the
-# script installs the download without checking its attestation.
+# The digest comes from api.github.com, an origin independent of the release
+# download CDN, so a compromised download path cannot substitute a different
+# archive. For provenance verification against the release workflow identity,
+# download the archive and verify its Sigstore attestation with
+# `gh attestation verify` before installing.
 #
 # Usage: curl -fsSL https://github.com/tinfoilsh/tinfoil-cli/raw/main/install.sh | sh
-#        curl -fsSL https://github.com/tinfoilsh/tinfoil-cli/raw/main/install.sh | sh -s -- --verify-release
 
 set -eu
 
 REPO="tinfoilsh/tinfoil-cli"
-WORKFLOW="tinfoilsh/tinfoil-cli/.github/workflows/release.yml"
-VERIFY_RELEASE=false
 
 main() {
   echo "tinfoil-cli install script"
 
-  for arg in "$@"; do
-    case "$arg" in
-      --verify-release)
-        VERIFY_RELEASE=true
-        ;;
-      *)
-        echo "Error: unknown argument: $arg"
-        echo "Usage: install.sh [--verify-release]"
-        exit 1
-        ;;
-    esac
-  done
+  if [ "$#" -gt 0 ]; then
+    echo "Error: unknown argument: $1"
+    echo "Usage: install.sh"
+    exit 1
+  fi
 
   # -------------------------------
   # 1. Detect operating system
@@ -79,25 +65,7 @@ main() {
   echo "Detected OS: $OS, Architecture: $ARCH"
 
   # -------------------------------
-  # 3. Require the GitHub CLI for verification
-  # -------------------------------
-  if [ "$VERIFY_RELEASE" = "true" ]; then
-    if ! command -v gh >/dev/null 2>&1; then
-      echo "Error: --verify-release requires the GitHub CLI (gh)."
-      echo "Install gh from https://cli.github.com/ and re-run, or omit"
-      echo "--verify-release to install without attestation verification."
-      exit 1
-    fi
-    if ! gh attestation verify --help >/dev/null 2>&1; then
-      echo "Error: the installed gh does not support 'attestation verify'."
-      echo "Upgrade gh (https://cli.github.com/), or omit --verify-release"
-      echo "to install without attestation verification."
-      exit 1
-    fi
-  fi
-
-  # -------------------------------
-  # 4. Choose a downloader: curl or wget
+  # 3. Choose a downloader: curl or wget
   # -------------------------------
   if command -v curl >/dev/null 2>&1; then
       DOWNLOADER="curl -fsSL"
@@ -109,26 +77,38 @@ main() {
   fi
 
   # -------------------------------
-  # 5. Fetch the latest version using GitHub API
+  # 4. Fetch the release metadata and the published asset digest
   # -------------------------------
   API_URL="https://api.github.com/repos/${REPO}/releases/latest"
+  if ! RELEASE_JSON="$($DOWNLOADER "$API_URL")"; then
+      echo "Error: Could not fetch release metadata."
+      exit 1
+  fi
   # The tag_name might be like "v0.0.2". We remove a leading "v" if present.
-  VERSION="$($DOWNLOADER "$API_URL" | grep '"tag_name":' | sed -E 's/.*"v?([^"]+)".*/\1/')"
+  VERSION="$(printf '%s\n' "$RELEASE_JSON" | grep '"tag_name":' | sed -E 's/.*"v?([^"]+)".*/\1/')"
   if [ -z "$VERSION" ]; then
       echo "Error: Could not determine latest version."
       exit 1
   fi
   echo "Latest version: $VERSION"
 
+  ASSET="tinfoil-cli_${VERSION}_${OS}_${ARCH}.tar.gz"
+  ASSETS_JSON="$(printf '%s\n' "$RELEASE_JSON" | sed -n '/"assets": \[/,/^  \],/p')"
+  EXPECTED_DIGEST="$(printf '%s\n' "$ASSETS_JSON" | grep -A 80 "\"name\": \"${ASSET}\"" | grep -m1 '"digest": "sha256:' | sed -E 's/.*sha256:([0-9a-f]{64}).*/\1/')"
+  if [ -z "$EXPECTED_DIGEST" ]; then
+      echo "Error: No SHA-256 digest published for ${ASSET}."
+      echo "The download was not installed."
+      exit 1
+  fi
+
   # -------------------------------
-  # 6. Construct the download URL using the asset naming convention:
-  #    tinfoil-cli_<version>_<os>_<arch>.tar.gz
+  # 5. Construct the download URL using the asset naming convention
   # -------------------------------
-  URL="https://github.com/${REPO}/releases/latest/download/tinfoil-cli_${VERSION}_${OS}_${ARCH}.tar.gz"
+  URL="https://github.com/${REPO}/releases/download/v${VERSION}/${ASSET}"
   echo "Downloading tinfoil-cli from: $URL"
 
   # -------------------------------
-  # 7. Download the tarball
+  # 6. Download the tarball
   # -------------------------------
   TMPDIR="$(mktemp -d)"
   # Ensure cleanup on exit
@@ -137,42 +117,36 @@ main() {
 
   echo "Downloading tarball..."
   if command -v curl >/dev/null 2>&1; then
-      curl -fsSL "$URL" -o tinfoil-cli.tar.gz
+      curl -fsSL "$URL" -o "$ASSET"
   else
-      wget -qO tinfoil-cli.tar.gz "$URL"
+      wget -qO "$ASSET" "$URL"
   fi
 
   # -------------------------------
-  # 8. Optionally verify the Sigstore attestation before extracting anything.
-  #    gh fetches the attestation from api.github.com by digest, checks the
-  #    signature against the Sigstore root of trust, and --cert-identity
-  #    enforces an exact SAN match on the signing workflow: the identity
-  #    must be this repository's release workflow run from this release
-  #    tag, so an attestation from a branch run or a different tag fails.
+  # 7. Verify the download against the digest from the release API
   # -------------------------------
-  if [ "$VERIFY_RELEASE" = "true" ]; then
-      EXPECTED_SAN="https://github.com/${WORKFLOW}@refs/tags/v${VERSION}"
-      echo "Verifying release attestation..."
-      if ! gh attestation verify tinfoil-cli.tar.gz \
-          --repo "$REPO" \
-          --cert-identity "$EXPECTED_SAN" \
-          --predicate-type https://slsa.dev/provenance/v1; then
-          echo "Error: attestation verification failed (expected identity: ${EXPECTED_SAN})."
-          echo "The download was not installed."
+  echo "Verifying SHA-256 digest..."
+  if command -v sha256sum >/dev/null 2>&1; then
+      if ! printf '%s  %s\n' "$EXPECTED_DIGEST" "$ASSET" | sha256sum -c -; then
+          echo "Error: SHA-256 digest mismatch. The download was not installed."
           exit 1
       fi
-      echo "Attestation verified."
+  elif command -v shasum >/dev/null 2>&1; then
+      if ! printf '%s  %s\n' "$EXPECTED_DIGEST" "$ASSET" | shasum -a 256 -c -; then
+          echo "Error: SHA-256 digest mismatch. The download was not installed."
+          exit 1
+      fi
   else
-      echo "Installing without release verification; the download is only"
-      echo "protected by TLS. Re-run with --verify-release to authenticate it"
-      echo "(requires gh)."
+      echo "Error: sha256sum or shasum is required to verify the download."
+      exit 1
   fi
+  echo "Digest verified."
 
   # -------------------------------
-  # 9. Extract and install the binary
+  # 8. Extract and install the binary
   # -------------------------------
   echo "Extracting tarball..."
-  tar -xzf tinfoil-cli.tar.gz
+  tar -xzf "$ASSET"
 
   # The archive should contain the binary named "tinfoil"
   if [ ! -f "./tinfoil" ]; then
@@ -183,7 +157,7 @@ main() {
   chmod +x tinfoil
 
   # -------------------------------
-  # 10. Install the binary to /usr/local/bin
+  # 9. Install the binary to /usr/local/bin
   # -------------------------------
   echo "Installing tinfoil to /usr/local/bin..."
   if [ "$(id -u)" -ne 0 ]; then
