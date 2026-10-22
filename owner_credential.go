@@ -243,12 +243,8 @@ func resourceDirMatches(name, id string) bool {
 
 // Existing Monitor credentials stay in place; sandbox credentials use resource UUIDs.
 func credentialDir(scope accountScope, row containerView) (string, error) {
-	dir, err := resourceDir(scope, row.ID, row.Name)
-	if err != nil {
-		return "", err
-	}
-	if row.Repo != monitorRepo {
-		return dir, nil
+	if row.Repo != monitorRepo || !looksLikeUUID(row.ID) {
+		return resourceDir(scope, row.ID, row.Name)
 	}
 	config, err := configPath()
 	if err != nil {
@@ -274,13 +270,11 @@ func credentialDir(scope accountScope, row containerView) (string, error) {
 			}
 			return "", fmt.Errorf("read legacy Monitor profile %s: %w", candidate, err)
 		}
-		matches := profile.ContainerID == row.ID
-		if profile.ContainerID == "" {
-			// Older profiles may only record the domain. Retain the original
-			// name lookup too; monitorRecord still verifies saved bindings.
-			matches = profile.Domain != "" && profile.Domain == row.Domain || entry.Name() == name
-		}
-		if !matches {
+		// Profiles without an ID retain their domain/name lookup.
+		switch {
+		case profile.ContainerID == row.ID:
+		case profile.ContainerID == "" && (entry.Name() == name || profile.Domain != "" && profile.Domain == row.Domain):
+		default:
 			continue
 		}
 		if legacy != "" {
@@ -291,7 +285,7 @@ func credentialDir(scope accountScope, row containerView) (string, error) {
 	if legacy != "" {
 		return legacy, nil
 	}
-	return dir, nil
+	return resourceDir(scope, row.ID, row.Name)
 }
 
 // A public identity file selects an ssh-agent key without copying its private key.
