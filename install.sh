@@ -1,42 +1,39 @@
 #!/bin/sh
 # tinfoil-cli install script
 # This script detects your OS/architecture, downloads the latest tinfoil-cli
-# release, verifies its Sigstore attestation (unless --skip-verification is
-# passed), and installs it to /usr/local/bin.
+# release, and installs it to /usr/local/bin. Release verification is opt-in:
+# pass --verify-release to authenticate the download before installing.
 #
-# The downloaded archive is authenticated against the release workflow's
-# Sigstore attestation before anything is installed: the attestation is
-# fetched from api.github.com and checked against a pinned workflow identity,
-# so a network-path attacker would need to compromise TLS to two independent
-# origins and forge a Sigstore certificate chain to serve a tampered binary.
+# With --verify-release, the archive is authenticated against the release
+# workflow's Sigstore attestation before anything is installed: the
+# attestation is fetched from api.github.com and checked against a pinned
+# workflow identity, so a network-path attacker would need to compromise TLS
+# to two independent origins and forge a Sigstore certificate chain to serve
+# a tampered binary.
 #
-# Verification requires the GitHub CLI (gh). If gh is unavailable, or the
-# installed version does not support `gh attestation verify`, the script
-# refuses to install unless --skip-verification is passed. Prefer running
-# `tinfoil update` from an existing verified CLI or installing gh
-# (https://cli.github.com/); --skip-verification installs code that was not
-# authenticated and should only be used when those options are unavailable.
+# Verification requires the GitHub CLI (gh). Without --verify-release, the
+# script installs the download without checking its attestation.
 #
 # Usage: curl -fsSL https://github.com/tinfoilsh/tinfoil-cli/raw/main/install.sh | sh
-#        curl -fsSL https://github.com/tinfoilsh/tinfoil-cli/raw/main/install.sh | sh -s -- --skip-verification
+#        curl -fsSL https://github.com/tinfoilsh/tinfoil-cli/raw/main/install.sh | sh -s -- --verify-release
 
 set -eu
 
 REPO="tinfoilsh/tinfoil-cli"
 WORKFLOW="tinfoilsh/tinfoil-cli/.github/workflows/release.yml"
-SKIP_VERIFICATION=false
+VERIFY_RELEASE=false
 
 main() {
   echo "tinfoil-cli install script"
 
   for arg in "$@"; do
     case "$arg" in
-      --skip-verification)
-        SKIP_VERIFICATION=true
+      --verify-release)
+        VERIFY_RELEASE=true
         ;;
       *)
         echo "Error: unknown argument: $arg"
-        echo "Usage: install.sh [--skip-verification]"
+        echo "Usage: install.sh [--verify-release]"
         exit 1
         ;;
     esac
@@ -84,19 +81,17 @@ main() {
   # -------------------------------
   # 3. Require the GitHub CLI for verification
   # -------------------------------
-  if [ "$SKIP_VERIFICATION" != "true" ]; then
+  if [ "$VERIFY_RELEASE" = "true" ]; then
     if ! command -v gh >/dev/null 2>&1; then
-      echo "Error: gh (GitHub CLI) is required to verify the download."
-      echo "Install gh from https://cli.github.com/, or re-run with"
-      echo "--skip-verification to force the installation."
-      echo "An unverified install can run tampered code."
+      echo "Error: --verify-release requires the GitHub CLI (gh)."
+      echo "Install gh from https://cli.github.com/ and re-run, or omit"
+      echo "--verify-release to install without attestation verification."
       exit 1
     fi
     if ! gh attestation verify --help >/dev/null 2>&1; then
       echo "Error: the installed gh does not support 'attestation verify'."
-      echo "Upgrade gh (https://cli.github.com/), or re-run with"
-      echo "--skip-verification to force the installation."
-      echo "An unverified install can run tampered code."
+      echo "Upgrade gh (https://cli.github.com/), or omit --verify-release"
+      echo "to install without attestation verification."
       exit 1
     fi
   fi
@@ -148,18 +143,14 @@ main() {
   fi
 
   # -------------------------------
-  # 8. Verify the Sigstore attestation before extracting anything.
+  # 8. Optionally verify the Sigstore attestation before extracting anything.
   #    gh fetches the attestation from api.github.com by digest, checks the
   #    signature against the Sigstore root of trust, and --cert-identity
   #    enforces an exact SAN match on the signing workflow: the identity
   #    must be this repository's release workflow run from this release
   #    tag, so an attestation from a branch run or a different tag fails.
   # -------------------------------
-  if [ "$SKIP_VERIFICATION" = "true" ]; then
-      echo "WARNING: --skip-verification was passed; the download was not"
-      echo "authenticated against the release attestation. It could run"
-      echo "tampered code. Continuing anyway."
-  else
+  if [ "$VERIFY_RELEASE" = "true" ]; then
       EXPECTED_SAN="https://github.com/${WORKFLOW}@refs/tags/v${VERSION}"
       echo "Verifying release attestation..."
       if ! gh attestation verify tinfoil-cli.tar.gz \
@@ -171,6 +162,10 @@ main() {
           exit 1
       fi
       echo "Attestation verified."
+  else
+      echo "Installing without release verification; the download is only"
+      echo "protected by TLS. Re-run with --verify-release to authenticate it"
+      echo "(requires gh)."
   fi
 
   # -------------------------------
