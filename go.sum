@@ -322,6 +322,8 @@ github.com/tinfoilsh/tinfoil-go v0.17.0-rc.2.0.20261012221336-4e83c0ce632f h1:b2
 github.com/tinfoilsh/tinfoil-go v0.17.0-rc.2.0.20261012221336-4e83c0ce632f/go.mod h1:1zCk7XLvOEkVcb5sLTNf2oeNhzhLP+D8ESO07wXDI50=
 github.com/tinfoilsh/tinfoil-go v0.17.0-rc.3.0.20261022175118-555be8ae7aa1 h1:Jl51M0HlECdFFDA8iRqkiU9YPhC1X0CD6Li6ejVck8o=
 github.com/tinfoilsh/tinfoil-go v0.17.0-rc.3.0.20261022175118-555be8ae7aa1/go.mod h1:6d2kXqXqcXC13hA6IDoSR039BKxVmXCRKum90m4w+ek=
+github.com/tinfoilsh/tinfoil-go v0.17.0-rc.3.0.20261022180258-c740c1d85711 h1:2lBMMBdiGiVYnaDAScT6tQIMXjvFeBjF4ofPlcwOyAU=
+github.com/tinfoilsh/tinfoil-go v0.17.0-rc.3.0.20261022180258-c740c1d85711/go.mod h1:6d2kXqXqcXC13hA6IDoSR039BKxVmXCRKum90m4w+ek=
 github.com/tink-crypto/tink-go-awskms/v3 v3.0.0 h1:XSohRhCkXAVI0iaCnWB/GS05TEmpnKurQmzaY1jzt3Y=
 github.com/tink-crypto/tink-go-awskms/v3 v3.0.0/go.mod h1:+7MXsShLzVbSQ6dI0Pe4JuZM52jD1jQ1itAygd/MDsA=
 github.com/tink-crypto/tink-go-gcpkms/v2 v2.3.0 h1:3s6YMgMOBZRU8qG6ybpKSF2Sau+y3sMvxR911M59SwA=
