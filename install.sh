@@ -1,14 +1,29 @@
 #!/bin/sh
 # tinfoil-cli install script
-# This script detects your OS/architecture, downloads the latest tinfoil-cli binary,
-# and installs it to /usr/local/bin.
+# This script detects your OS/architecture, downloads the latest tinfoil-cli
+# release, verifies it against the SHA-256 digest published by the GitHub
+# release API, and installs it to /usr/local/bin.
+#
+# The digest comes from api.github.com, an origin independent of the release
+# download CDN, so a compromised download path cannot substitute a different
+# archive. For provenance verification against the release workflow identity,
+# download the archive and verify its Sigstore attestation with
+# `gh attestation verify` before installing.
 #
 # Usage: curl -fsSL https://github.com/tinfoilsh/tinfoil-cli/raw/main/install.sh | sh
 
 set -eu
 
+REPO="tinfoilsh/tinfoil-cli"
+
 main() {
   echo "tinfoil-cli install script"
+
+  if [ "$#" -gt 0 ]; then
+    echo "Error: unknown argument: $1"
+    echo "Usage: install.sh"
+    exit 1
+  fi
 
   # -------------------------------
   # 1. Detect operating system
@@ -62,26 +77,38 @@ main() {
   fi
 
   # -------------------------------
-  # 4. Fetch the latest version using GitHub API
+  # 4. Fetch the release metadata and the published asset digest
   # -------------------------------
-  API_URL="https://api.github.com/repos/tinfoilsh/tinfoil-cli/releases/latest"
+  API_URL="https://api.github.com/repos/${REPO}/releases/latest"
+  if ! RELEASE_JSON="$($DOWNLOADER "$API_URL")"; then
+      echo "Error: Could not fetch release metadata."
+      exit 1
+  fi
   # The tag_name might be like "v0.0.2". We remove a leading "v" if present.
-  VERSION="$($DOWNLOADER "$API_URL" | grep '"tag_name":' | sed -E 's/.*"v?([^"]+)".*/\1/')"
+  VERSION="$(printf '%s\n' "$RELEASE_JSON" | grep '"tag_name":' | sed -E 's/.*"v?([^"]+)".*/\1/')"
   if [ -z "$VERSION" ]; then
       echo "Error: Could not determine latest version."
       exit 1
   fi
   echo "Latest version: $VERSION"
 
+  ASSET="tinfoil-cli_${VERSION}_${OS}_${ARCH}.tar.gz"
+  ASSETS_JSON="$(printf '%s\n' "$RELEASE_JSON" | sed -n '/"assets": \[/,/^  \],/p')"
+  EXPECTED_DIGEST="$(printf '%s\n' "$ASSETS_JSON" | grep -A 80 "\"name\": \"${ASSET}\"" | grep -m1 '"digest": "sha256:' | sed -E 's/.*sha256:([0-9a-f]{64}).*/\1/')"
+  if [ -z "$EXPECTED_DIGEST" ]; then
+      echo "Error: No SHA-256 digest published for ${ASSET}."
+      echo "The download was not installed."
+      exit 1
+  fi
+
   # -------------------------------
-  # 5. Construct the download URL using the asset naming convention:
-  #    tinfoil-cli_<version>_<os>_<arch>.tar.gz
+  # 5. Construct the download URL using the asset naming convention
   # -------------------------------
-  URL="https://github.com/tinfoilsh/tinfoil-cli/releases/latest/download/tinfoil-cli_${VERSION}_${OS}_${ARCH}.tar.gz"
+  URL="https://github.com/${REPO}/releases/download/v${VERSION}/${ASSET}"
   echo "Downloading tinfoil-cli from: $URL"
 
   # -------------------------------
-  # 6. Download and extract the binary
+  # 6. Download the tarball
   # -------------------------------
   TMPDIR="$(mktemp -d)"
   # Ensure cleanup on exit
@@ -90,13 +117,36 @@ main() {
 
   echo "Downloading tarball..."
   if command -v curl >/dev/null 2>&1; then
-      curl -fsSL "$URL" -o tinfoil-cli.tar.gz
+      curl -fsSL "$URL" -o "$ASSET"
   else
-      wget -qO tinfoil-cli.tar.gz "$URL"
+      wget -qO "$ASSET" "$URL"
   fi
 
+  # -------------------------------
+  # 7. Verify the download against the digest from the release API
+  # -------------------------------
+  echo "Verifying SHA-256 digest..."
+  if command -v sha256sum >/dev/null 2>&1; then
+      if ! printf '%s  %s\n' "$EXPECTED_DIGEST" "$ASSET" | sha256sum -c -; then
+          echo "Error: SHA-256 digest mismatch. The download was not installed."
+          exit 1
+      fi
+  elif command -v shasum >/dev/null 2>&1; then
+      if ! printf '%s  %s\n' "$EXPECTED_DIGEST" "$ASSET" | shasum -a 256 -c -; then
+          echo "Error: SHA-256 digest mismatch. The download was not installed."
+          exit 1
+      fi
+  else
+      echo "Error: sha256sum or shasum is required to verify the download."
+      exit 1
+  fi
+  echo "Digest verified."
+
+  # -------------------------------
+  # 8. Extract and install the binary
+  # -------------------------------
   echo "Extracting tarball..."
-  tar -xzf tinfoil-cli.tar.gz
+  tar -xzf "$ASSET"
 
   # The archive should contain the binary named "tinfoil"
   if [ ! -f "./tinfoil" ]; then
@@ -107,7 +157,7 @@ main() {
   chmod +x tinfoil
 
   # -------------------------------
-  # 7. Install the binary to /usr/local/bin
+  # 9. Install the binary to /usr/local/bin
   # -------------------------------
   echo "Installing tinfoil to /usr/local/bin..."
   if [ "$(id -u)" -ne 0 ]; then
@@ -125,4 +175,4 @@ main() {
   echo "You can now run it with: tinfoil"
 }
 
-main
+main "$@"
