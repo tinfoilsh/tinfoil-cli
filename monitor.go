@@ -218,7 +218,7 @@ func connectMonitorOwner(ctx context.Context, scope accountScope, row *workloadT
 }
 
 func monitorRecord(scope accountScope, row *workloadTarget) (string, error) {
-	dir, err := credentialDir(scope, row.containerView)
+	dir, err := resourceDir(scope, row.ID, row.Name)
 	if err != nil {
 		return "", err
 	}

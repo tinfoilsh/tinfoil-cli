@@ -13,6 +13,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"golang.org/x/crypto/ssh"
@@ -21,6 +22,8 @@ import (
 )
 
 const maxOwnerCredentialBytes = 4096
+
+var resourceNamePattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,62}$`)
 
 // Owner signing and storage encryption use independent keys.
 type ownerCredential struct {
@@ -180,8 +183,8 @@ func resourceDir(scope accountScope, id, name string) (string, error) {
 	if err != nil || dir != "" {
 		return dir, err
 	}
-	name, err = sandboxName(name)
-	if err != nil {
+	name = strings.TrimSpace(name)
+	if !resourceNamePattern.MatchString(name) {
 		// Readable labels are optional, including on the first connection.
 		return filepath.Join(accountDir, id), nil
 	}
@@ -239,53 +242,6 @@ func existingCredentialDir(parent, id string) (string, error) {
 
 func resourceDirMatches(name, id string) bool {
 	return looksLikeUUID(id) && (name == id || strings.HasSuffix(name, "-"+id))
-}
-
-// Existing Monitor credentials stay in place; sandbox credentials use resource UUIDs.
-func credentialDir(scope accountScope, row containerView) (string, error) {
-	if row.Repo != monitorRepo || !looksLikeUUID(row.ID) {
-		return resourceDir(scope, row.ID, row.Name)
-	}
-	config, err := configPath()
-	if err != nil {
-		return "", err
-	}
-	data, _ := json.Marshal(scope)
-	root := filepath.Join(filepath.Dir(config), "monitors", storageHash(data))
-	entries, err := os.ReadDir(root)
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return "", err
-	}
-	name, _ := sandboxName(row.Name)
-	var legacy string
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-		candidate := filepath.Join(root, entry.Name())
-		var profile monitorProfile
-		if err := readStorageJSON(filepath.Join(candidate, monitorProfileFile), &profile); err != nil {
-			if errors.Is(err, os.ErrNotExist) {
-				continue
-			}
-			return "", fmt.Errorf("read legacy Monitor profile %s: %w", candidate, err)
-		}
-		// Profiles without an ID retain their domain/name lookup.
-		switch {
-		case profile.ContainerID == row.ID:
-		case profile.ContainerID == "" && (entry.Name() == name || profile.Domain != "" && profile.Domain == row.Domain):
-		default:
-			continue
-		}
-		if legacy != "" {
-			return "", fmt.Errorf("multiple legacy Monitor credential directories for %s: %s and %s; restore a single original credential directory", row.ID, legacy, candidate)
-		}
-		legacy = candidate
-	}
-	if legacy != "" {
-		return legacy, nil
-	}
-	return resourceDir(scope, row.ID, row.Name)
 }
 
 // A public identity file selects an ssh-agent key without copying its private key.

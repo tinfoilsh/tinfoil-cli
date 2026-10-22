@@ -15,7 +15,6 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -55,9 +54,6 @@ func workspaceSizeChoices(unit string) string {
 	last := len(sizes) - 1
 	return strings.Join(sizes[:last], ", ") + ", or " + sizes[last]
 }
-
-// Restrict names used by older credential directories to one path component.
-var sandboxNamePattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,62}$`)
 
 type sandboxKeys struct {
 	dir             string
@@ -240,14 +236,6 @@ func validateSandboxNetwork(row containerView) error {
 	return nil
 }
 
-func sandboxName(raw string) (string, error) {
-	name := strings.TrimSpace(raw)
-	if !sandboxNamePattern.MatchString(name) {
-		return "", fmt.Errorf("invalid sandbox name %q: use letters, digits, dashes or underscores, starting with a letter or digit, up to 63 characters", raw)
-	}
-	return name, nil
-}
-
 const (
 	sandboxAgentKeyName    = "agent_ed25519"
 	sandboxEnrolledKeyName = "enrolled_host_key"
@@ -324,7 +312,7 @@ func connectSandbox(target *workloadTarget) (_ *sandboxSession, err error) {
 			return nil, err
 		}
 	}
-	dir, err := credentialDir(scope, row)
+	dir, err := resourceDir(scope, row.ID, row.Name)
 	if err != nil {
 		return nil, err
 	}

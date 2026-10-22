@@ -170,20 +170,18 @@ func TestEncryptedOwnerIdentityFallsBackToAgent(t *testing.T) {
 	require.ErrorIs(t, <-done, io.EOF)
 }
 
-func TestSandboxCredentialsUseResourceUUID(t *testing.T) {
+func TestCredentialsUseOnlyResourcePaths(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv(envConfigPath, filepath.Join(home, "config.json"))
 	scope := accountScope{ControlplaneURL: "https://cp.example", UserID: "owner"}
-	row := containerView{ID: "11111111-1111-4111-8111-111111111111", Name: "work", Repo: defaultSandboxRepo}
-	dir := filepath.Join(home, "sandboxes", row.Name)
-	path := filepath.Join(dir, "monitor.json")
-	require.NoError(t, writeStorageJSON(path, map[string]any{"scope": scope, "monitor": "personal"}, false))
-	got, err := credentialDir(scope, row)
-	require.NoError(t, err)
+	row := containerView{ID: "11111111-1111-4111-8111-111111111111", Name: "work", Repo: monitorRepo}
 	data, err := json.Marshal(scope)
 	require.NoError(t, err)
+	require.NoError(t, writeStorageJSON(filepath.Join(home, "sandboxes", row.Name, "monitor.json"), map[string]any{"scope": scope, "monitor": "personal"}, false))
+	require.NoError(t, writeStorageJSON(filepath.Join(home, "monitors", storageHash(data), row.Name, monitorProfileFile), monitorProfile{ContainerID: row.ID, Generation: 7}, false))
+	got, err := monitorRecord(scope, &workloadTarget{containerView: row})
+	require.NoError(t, err)
 	require.Equal(t, filepath.Join(home, "resources", "user-owner-"+storageHash(data), "work-"+row.ID), got)
-	require.NotEqual(t, dir, got)
 }
 
 func TestAccountDirectoriesUseAuthenticatedDisplayNames(t *testing.T) {
@@ -210,7 +208,7 @@ func TestAccountDirectoriesUseAuthenticatedDisplayNames(t *testing.T) {
 			scope, _, err := currentScope()
 			require.NoError(t, err)
 			row := containerView{ID: "11111111-1111-4111-8111-111111111111", Name: "work", Repo: defaultSandboxRepo}
-			dir, err := credentialDir(scope, row)
+			dir, err := resourceDir(scope, row.ID, row.Name)
 			require.NoError(t, err)
 			data, err := json.Marshal(accountScope{ControlplaneURL: server.URL, OrgID: test.orgID, UserID: "user_1"})
 			require.NoError(t, err)
@@ -218,7 +216,7 @@ func TestAccountDirectoriesUseAuthenticatedDisplayNames(t *testing.T) {
 			owner := testOwnerCredential(t)
 			require.NoError(t, writeStorageJSON(filepath.Join(dir, sandboxDiskKeyName), owner, true))
 			scope.OrgName, scope.UserName, row.Name = "", "", ""
-			got, err := credentialDir(scope, row)
+			got, err := resourceDir(scope, row.ID, row.Name)
 			require.NoError(t, err)
 			require.Equal(t, dir, got, "lookup must not need either display name")
 		})
@@ -247,67 +245,57 @@ func TestAccountDirectoryLabelsAreSafeAndBounded(t *testing.T) {
 }
 
 func TestResourceCredentialsSurviveRenameAndSeparateRecreatedResources(t *testing.T) {
-	for _, repo := range []string{defaultSandboxRepo, monitorRepo} {
-		t.Run(repo, func(t *testing.T) {
-			t.Setenv(envConfigPath, filepath.Join(t.TempDir(), "config.json"))
-			scope := accountScope{ControlplaneURL: "https://cp.example", OrgID: "org", UserID: "owner", OrgName: "Acme"}
-			row := containerView{ID: "11111111-1111-4111-8111-111111111111", Name: "my-work", Repo: repo}
-			dir, err := credentialDir(scope, row)
-			require.NoError(t, err)
-			require.Equal(t, row.Name+"-"+row.ID, filepath.Base(dir))
-			require.True(t, strings.HasPrefix(filepath.Base(filepath.Dir(dir)), "org-acme-"))
-			file := sandboxDiskKeyName
-			if repo == monitorRepo {
-				file = monitorOwnerKeyName
-			}
-			owner := testOwnerCredential(t)
-			require.NoError(t, writeStorageJSON(filepath.Join(dir, file), owner, true))
+	t.Setenv(envConfigPath, filepath.Join(t.TempDir(), "config.json"))
+	scope := accountScope{ControlplaneURL: "https://cp.example", OrgID: "org", UserID: "owner", OrgName: "Acme"}
+	row := containerView{ID: "11111111-1111-4111-8111-111111111111", Name: "my-work"}
+	dir, err := resourceDir(scope, row.ID, row.Name)
+	require.NoError(t, err)
+	require.Equal(t, row.Name+"-"+row.ID, filepath.Base(dir))
+	require.True(t, strings.HasPrefix(filepath.Base(filepath.Dir(dir)), "org-acme-"))
+	owner := testOwnerCredential(t)
+	require.NoError(t, writeStorageJSON(filepath.Join(dir, sandboxDiskKeyName), owner, true))
 
-			row.Name, scope.OrgName = "renamed-work", "Renamed Acme"
-			renamed, err := credentialDir(scope, row)
-			require.NoError(t, err)
-			require.Equal(t, dir, renamed, "installed SSH identity paths must stay valid")
-			credential, err := resourceCredential(renamed, file, owner.publicKey(), true)
-			require.NoError(t, err)
-			defer credential.clear()
-			require.Equal(t, owner.Key, credential.Key)
-			row.Name, scope.OrgName = "", ""
-			unnamed, err := credentialDir(scope, row)
-			require.NoError(t, err)
-			require.Equal(t, dir, unnamed, "resource and account names are optional for lookup")
-			row.Name = "renamed-work"
-			scope.OrgName = "Acme"
+	row.Name, scope.OrgName = "renamed-work", "Renamed Acme"
+	renamed, err := resourceDir(scope, row.ID, row.Name)
+	require.NoError(t, err)
+	require.Equal(t, dir, renamed, "installed SSH identity paths must stay valid")
+	credential, err := resourceCredential(renamed, sandboxDiskKeyName, owner.publicKey(), true)
+	require.NoError(t, err)
+	defer credential.clear()
+	require.Equal(t, owner.Key, credential.Key)
+	row.Name, scope.OrgName = "", ""
+	unnamed, err := resourceDir(scope, row.ID, row.Name)
+	require.NoError(t, err)
+	require.Equal(t, dir, unnamed, "resource and account names are optional for lookup")
+	row.Name = "renamed-work"
+	scope.OrgName = "Acme"
 
-			for _, otherScope := range []accountScope{
-				{ControlplaneURL: "https://other.example", OrgID: scope.OrgID, UserID: scope.UserID, OrgName: scope.OrgName},
-				{ControlplaneURL: scope.ControlplaneURL + "/other", OrgID: scope.OrgID, UserID: scope.UserID, OrgName: scope.OrgName},
-				{ControlplaneURL: scope.ControlplaneURL, OrgID: "other", UserID: scope.UserID, OrgName: scope.OrgName},
-				{ControlplaneURL: scope.ControlplaneURL, OrgID: scope.OrgID, UserID: "other", OrgName: scope.OrgName},
-			} {
-				other, err := credentialDir(otherScope, row)
-				require.NoError(t, err)
-				require.NotEqual(t, filepath.Dir(dir), filepath.Dir(other))
-				require.NoDirExists(t, other)
-			}
-
-			row.Name, row.ID = "my-work", "22222222-2222-4222-8222-222222222222"
-			recreated, err := credentialDir(scope, row)
-			require.NoError(t, err)
-			require.Equal(t, filepath.Join(filepath.Dir(dir), row.Name+"-"+row.ID), recreated)
-			require.NoDirExists(t, recreated, "reusing a name must not reuse credentials")
-		})
+	for _, otherScope := range []accountScope{
+		{ControlplaneURL: "https://other.example", OrgID: scope.OrgID, UserID: scope.UserID, OrgName: scope.OrgName},
+		{ControlplaneURL: scope.ControlplaneURL + "/other", OrgID: scope.OrgID, UserID: scope.UserID, OrgName: scope.OrgName},
+		{ControlplaneURL: scope.ControlplaneURL, OrgID: "other", UserID: scope.UserID, OrgName: scope.OrgName},
+		{ControlplaneURL: scope.ControlplaneURL, OrgID: scope.OrgID, UserID: "other", OrgName: scope.OrgName},
+	} {
+		other, err := resourceDir(otherScope, row.ID, row.Name)
+		require.NoError(t, err)
+		require.NotEqual(t, filepath.Dir(dir), filepath.Dir(other))
+		require.NoDirExists(t, other)
 	}
+
+	row.Name, row.ID = "my-work", "22222222-2222-4222-8222-222222222222"
+	recreated, err := resourceDir(scope, row.ID, row.Name)
+	require.NoError(t, err)
+	require.Equal(t, filepath.Join(filepath.Dir(dir), row.Name+"-"+row.ID), recreated)
+	require.NoDirExists(t, recreated, "reusing a name must not reuse credentials")
 }
 
 func TestResourceCredentialsWithoutUsableName(t *testing.T) {
 	for _, test := range []struct {
-		name, repo, label string
-		existingAccount   bool
+		name, label     string
+		existingAccount bool
 	}{
-		{"sandbox new account", defaultSandboxRepo, "work.dev", false},
-		{"sandbox existing account", defaultSandboxRepo, "", true},
-		{"Monitor new account", monitorRepo, "", false},
-		{"Monitor existing account", monitorRepo, "../../outside", true},
+		{"new account", "../work", false},
+		{"existing account", "", true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			home := t.TempDir()
@@ -319,21 +307,17 @@ func TestResourceCredentialsWithoutUsableName(t *testing.T) {
 				accountDir = filepath.Join(home, "resources", "saved-label-"+hash)
 				require.NoError(t, os.MkdirAll(accountDir, 0700))
 			}
-			row := containerView{ID: "11111111-1111-4111-8111-111111111111", Name: test.label, Repo: test.repo}
-			dir, err := credentialDir(scope, row)
+			row := containerView{ID: "11111111-1111-4111-8111-111111111111", Name: test.label}
+			dir, err := resourceDir(scope, row.ID, row.Name)
 			require.NoError(t, err)
 			require.Equal(t, filepath.Join(accountDir, row.ID), dir)
-			file := sandboxDiskKeyName
-			if row.Repo == monitorRepo {
-				file = monitorOwnerKeyName
-			}
 			owner := testOwnerCredential(t)
-			require.NoError(t, writeStorageJSON(filepath.Join(dir, file), owner, true))
+			require.NoError(t, writeStorageJSON(filepath.Join(dir, sandboxDiskKeyName), owner, true))
 			row.Name = "readable-name"
-			got, err := credentialDir(scope, row)
+			got, err := resourceDir(scope, row.ID, row.Name)
 			require.NoError(t, err)
 			require.Equal(t, dir, got, "a later usable name must preserve the existing credential path")
-			credential, err := resourceCredential(got, file, owner.publicKey(), true)
+			credential, err := resourceCredential(got, sandboxDiskKeyName, owner.publicKey(), true)
 			require.NoError(t, err)
 			defer credential.clear()
 			require.Equal(t, owner.Key, credential.Key)
@@ -341,97 +325,45 @@ func TestResourceCredentialsWithoutUsableName(t *testing.T) {
 	}
 }
 
-func TestExistingCredentialPathsRemainUsable(t *testing.T) {
-	for _, layout := range []string{"sandbox UUID", "Monitor UUID", "Monitor name"} {
-		t.Run(layout, func(t *testing.T) {
-			home := t.TempDir()
-			t.Setenv(envConfigPath, filepath.Join(home, "config.json"))
-			scope := accountScope{ControlplaneURL: "https://cp.example", OrgID: "org", UserID: "owner", OrgName: "Acme"}
-			row := containerView{ID: "11111111-1111-4111-8111-111111111111", Name: "work", Repo: defaultSandboxRepo}
-			file := sandboxDiskKeyName
-			if strings.HasPrefix(layout, "Monitor") {
-				row.Repo, file = monitorRepo, monitorOwnerKeyName
-			}
-			named, err := credentialDir(scope, row)
-			require.NoError(t, err)
-			// These paths predate readable labels and must keep their original hash.
-			hash := storageHash([]byte(`{"controlplane_url":"https://cp.example","org_id":"org","user_id":"owner"}`))
-			dir := filepath.Join(home, "resources", hash, row.ID)
-			if layout == "Monitor name" {
-				dir = filepath.Join(home, "monitors", hash, row.Name)
-				require.NoError(t, writeStorageJSON(filepath.Join(dir, monitorProfileFile), monitorProfile{Domain: "work.example"}, true))
-			}
-			owner := testOwnerCredential(t)
-			require.NoError(t, writeStorageJSON(filepath.Join(dir, file), owner, true))
-			before, err := os.ReadFile(filepath.Join(dir, file))
-			require.NoError(t, err)
-			got, err := credentialDir(scope, row)
-			require.NoError(t, err)
-			require.Equal(t, dir, got)
-			credential, err := resourceCredential(got, file, owner.publicKey(), true)
-			require.NoError(t, err)
-			defer credential.clear()
-			require.Equal(t, owner.Key, credential.Key)
-			after, err := os.ReadFile(filepath.Join(dir, file))
-			require.NoError(t, err)
-			require.Equal(t, before, after)
-			require.NoDirExists(t, filepath.Dir(named))
-		})
-	}
-}
-
-func TestLegacyMonitorCredentialRecovery(t *testing.T) {
+func TestExistingResourcePathsRemainUsable(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv(envConfigPath, filepath.Join(home, "config.json"))
-	scope := accountScope{ControlplaneURL: "https://cp.example", UserID: "owner"}
+	scope := accountScope{ControlplaneURL: "https://cp.example", OrgID: "org", UserID: "owner", OrgName: "Acme"}
+	row := containerView{ID: "11111111-1111-4111-8111-111111111111", Name: "work"}
+	named, err := resourceDir(scope, row.ID, row.Name)
+	require.NoError(t, err)
+	// Resources saved without display labels keep their original hash and path.
+	hash := storageHash([]byte(`{"controlplane_url":"https://cp.example","org_id":"org","user_id":"owner"}`))
+	dir := filepath.Join(home, "resources", hash, row.ID)
 	owner := testOwnerCredential(t)
-	defer owner.clear()
-	target := &workloadTarget{containerView: containerView{
-		ID: "11111111-1111-4111-8111-111111111111", Repo: monitorRepo, Domain: "monitor.example"},
-		env: map[string]string{monitorOwnerEnv: owner.publicKey()}}
-	hash := storageHash([]byte(`{"controlplane_url":"https://cp.example","user_id":"owner"}`))
-	dir := filepath.Join(home, "monitors", hash, "old-monitor")
-	require.NoError(t, writeStorageJSON(filepath.Join(dir, monitorOwnerKeyName), owner, true))
-	profile := monitorProfile{Domain: target.Domain, Owner: owner.publicKey(), Generation: 7}
-	for _, id := range []string{target.ID, ""} {
-		profile.ContainerID = id
-		require.NoError(t, writeStorageJSON(filepath.Join(dir, monitorProfileFile), profile, false))
-		got, err := monitorRecord(scope, target)
-		require.NoError(t, err)
-		require.Equal(t, dir, got)
-		var saved monitorProfile
-		require.NoError(t, readStorageJSON(filepath.Join(got, monitorProfileFile), &saved))
-		require.Equal(t, target.ID, saved.ContainerID)
-		require.EqualValues(t, 7, saved.Generation)
-		credential, err := resourceCredential(got, monitorOwnerKeyName, owner.publicKey(), saved.Generation != 0)
-		require.NoError(t, err)
-		require.Equal(t, owner.Key, credential.Key)
-		credential.clear()
-	}
-
-	duplicate := filepath.Join(filepath.Dir(dir), "duplicate", monitorProfileFile)
-	require.NoError(t, writeStorageJSON(duplicate, profile, true))
-	_, err := monitorRecord(scope, target)
-	require.ErrorContains(t, err, "multiple legacy Monitor credential directories")
-	require.NoError(t, os.Remove(duplicate))
-	require.NoError(t, os.WriteFile(filepath.Join(dir, monitorProfileFile), []byte("{"), 0600))
-	_, err = monitorRecord(scope, target)
-	require.ErrorContains(t, err, "invalid storage metadata")
-	require.NoDirExists(t, filepath.Join(home, "resources"))
+	require.NoError(t, writeStorageJSON(filepath.Join(dir, sandboxDiskKeyName), owner, true))
+	before, err := os.ReadFile(filepath.Join(dir, sandboxDiskKeyName))
+	require.NoError(t, err)
+	got, err := resourceDir(scope, row.ID, row.Name)
+	require.NoError(t, err)
+	require.Equal(t, dir, got)
+	credential, err := resourceCredential(got, sandboxDiskKeyName, owner.publicKey(), true)
+	require.NoError(t, err)
+	defer credential.clear()
+	require.Equal(t, owner.Key, credential.Key)
+	after, err := os.ReadFile(filepath.Join(dir, sandboxDiskKeyName))
+	require.NoError(t, err)
+	require.Equal(t, before, after)
+	require.NoDirExists(t, filepath.Dir(named))
 }
 
 func TestResourceCredentialsRejectAmbiguousDirectories(t *testing.T) {
 	t.Setenv(envConfigPath, filepath.Join(t.TempDir(), "config.json"))
 	scope := accountScope{ControlplaneURL: "https://cp.example", UserID: "owner"}
 	row := containerView{ID: "11111111-1111-4111-8111-111111111111", Name: "work", Repo: defaultSandboxRepo}
-	dir, err := credentialDir(scope, row)
+	dir, err := resourceDir(scope, row.ID, row.Name)
 	require.NoError(t, err)
 	owner := testOwnerCredential(t)
 	require.NoError(t, writeStorageJSON(filepath.Join(dir, sandboxDiskKeyName), owner, true))
 	for _, name := range []string{row.ID, "old-name-" + row.ID} {
 		other := filepath.Join(filepath.Dir(dir), name)
 		require.NoError(t, os.Mkdir(other, 0700))
-		_, err := credentialDir(scope, row)
+		_, err := resourceDir(scope, row.ID, row.Name)
 		require.ErrorContains(t, err, "multiple credential directories")
 		require.NoError(t, os.Remove(other))
 	}
@@ -441,7 +373,7 @@ func TestResourceCredentialsRejectAmbiguousDirectories(t *testing.T) {
 	for _, name := range []string{storageHash(data), "other-label-" + storageHash(data)} {
 		other := filepath.Join(filepath.Dir(accountDir), name)
 		require.NoError(t, os.Mkdir(other, 0700))
-		_, err := credentialDir(scope, row)
+		_, err := resourceDir(scope, row.ID, row.Name)
 		require.ErrorContains(t, err, "multiple credential directories")
 		require.NoError(t, os.Remove(other))
 	}
