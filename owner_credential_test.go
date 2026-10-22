@@ -299,6 +299,48 @@ func TestResourceCredentialsSurviveRenameAndSeparateRecreatedResources(t *testin
 	}
 }
 
+func TestResourceCredentialsWithoutUsableName(t *testing.T) {
+	for _, test := range []struct {
+		name, repo, label string
+		existingAccount   bool
+	}{
+		{"sandbox new account", defaultSandboxRepo, "work.dev", false},
+		{"sandbox existing account", defaultSandboxRepo, "", true},
+		{"Monitor new account", monitorRepo, "", false},
+		{"Monitor existing account", monitorRepo, "../../outside", true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv(envConfigPath, filepath.Join(home, "config.json"))
+			scope := accountScope{ControlplaneURL: "https://cp.example", UserID: "owner"}
+			hash := storageHash([]byte(`{"controlplane_url":"https://cp.example","user_id":"owner"}`))
+			accountDir := filepath.Join(home, "resources", "user-owner-"+hash)
+			if test.existingAccount {
+				accountDir = filepath.Join(home, "resources", "saved-label-"+hash)
+				require.NoError(t, os.MkdirAll(accountDir, 0700))
+			}
+			row := containerView{ID: "11111111-1111-4111-8111-111111111111", Name: test.label, Repo: test.repo}
+			dir, err := credentialDir(scope, row)
+			require.NoError(t, err)
+			require.Equal(t, filepath.Join(accountDir, row.ID), dir)
+			file := sandboxDiskKeyName
+			if row.Repo == monitorRepo {
+				file = monitorOwnerKeyName
+			}
+			owner := testOwnerCredential(t)
+			require.NoError(t, writeStorageJSON(filepath.Join(dir, file), owner, true))
+			row.Name = "readable-name"
+			got, err := credentialDir(scope, row)
+			require.NoError(t, err)
+			require.Equal(t, dir, got, "a later usable name must preserve the existing credential path")
+			credential, err := resourceCredential(got, file, owner.publicKey(), true)
+			require.NoError(t, err)
+			defer credential.clear()
+			require.Equal(t, owner.Key, credential.Key)
+		})
+	}
+}
+
 func TestExistingCredentialPathsRemainUsable(t *testing.T) {
 	for _, layout := range []string{"sandbox UUID", "Monitor UUID", "Monitor name"} {
 		t.Run(layout, func(t *testing.T) {

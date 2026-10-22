@@ -182,7 +182,8 @@ func resourceDir(scope accountScope, id, name string) (string, error) {
 	}
 	name, err = sandboxName(name)
 	if err != nil {
-		return "", err
+		// Readable labels are optional, including on the first connection.
+		return filepath.Join(accountDir, id), nil
 	}
 	return filepath.Join(accountDir, name+"-"+id), nil
 }
