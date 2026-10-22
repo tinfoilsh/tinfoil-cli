@@ -250,21 +250,46 @@ func credentialDir(scope accountScope, row containerView) (string, error) {
 	if row.Repo != monitorRepo {
 		return dir, nil
 	}
-	name, err := sandboxName(row.Name)
-	if err != nil {
-		// A name is only needed to find the older Monitor layout.
-		return dir, nil
-	}
 	config, err := configPath()
 	if err != nil {
 		return "", err
 	}
 	data, _ := json.Marshal(scope)
-	legacy := filepath.Join(filepath.Dir(config), "monitors", storageHash(data), name)
-	if _, err := os.Stat(filepath.Join(legacy, monitorProfileFile)); err == nil {
-		return legacy, nil
-	} else if !errors.Is(err, os.ErrNotExist) {
+	root := filepath.Join(filepath.Dir(config), "monitors", storageHash(data))
+	entries, err := os.ReadDir(root)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return "", err
+	}
+	name, _ := sandboxName(row.Name)
+	var legacy string
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		candidate := filepath.Join(root, entry.Name())
+		var profile monitorProfile
+		if err := readStorageJSON(filepath.Join(candidate, monitorProfileFile), &profile); err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			return "", fmt.Errorf("read legacy Monitor profile %s: %w", candidate, err)
+		}
+		matches := profile.ContainerID == row.ID
+		if profile.ContainerID == "" {
+			// Older profiles may only record the domain. Retain the original
+			// name lookup too; monitorRecord still verifies saved bindings.
+			matches = profile.Domain != "" && profile.Domain == row.Domain || entry.Name() == name
+		}
+		if !matches {
+			continue
+		}
+		if legacy != "" {
+			return "", fmt.Errorf("multiple legacy Monitor credential directories for %s: %s and %s; restore a single original credential directory", row.ID, legacy, candidate)
+		}
+		legacy = candidate
+	}
+	if legacy != "" {
+		return legacy, nil
 	}
 	return dir, nil
 }

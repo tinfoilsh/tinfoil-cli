@@ -380,6 +380,102 @@ func TestExistingCredentialPathsRemainUsable(t *testing.T) {
 	}
 }
 
+func TestLegacyMonitorCredentialsSurviveNameChanges(t *testing.T) {
+	for _, test := range []struct {
+		name, currentName string
+		withoutID         bool
+	}{
+		{"missing name", "", false},
+		{"invalid name", "../monitor", false},
+		{"renamed", "new-monitor", false},
+		{"older profile without container ID", "", true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv(envConfigPath, filepath.Join(home, "config.json"))
+			scope := accountScope{ControlplaneURL: "https://cp.example", UserID: "owner"}
+			owner := testOwnerCredential(t)
+			defer owner.clear()
+			target := &workloadTarget{containerView: containerView{
+				ID: "11111111-1111-4111-8111-111111111111", Name: test.currentName, Repo: monitorRepo, Domain: "monitor.example"},
+				env: map[string]string{monitorOwnerEnv: owner.publicKey(), "TINFOIL_STORAGE_BUCKET": "monitor-state"}}
+			hash := storageHash([]byte(`{"controlplane_url":"https://cp.example","user_id":"owner"}`))
+			dir := filepath.Join(home, "monitors", hash, "old-monitor")
+			profile := monitorProfile{ContainerID: target.ID, Domain: target.Domain, Owner: owner.publicKey(), Storage: "monitor-state", Generation: 7}
+			if test.withoutID {
+				profile.ContainerID = ""
+			}
+			require.NoError(t, writeStorageJSON(filepath.Join(dir, monitorProfileFile), profile, true))
+			require.NoError(t, saveOwnerCredential(filepath.Join(dir, monitorOwnerKeyName), owner))
+			// Neither another account nor a different resource sharing the domain
+			// may supply the credentials for this Monitor.
+			require.NoError(t, writeStorageJSON(filepath.Join(home, "monitors", "other-account", "old-monitor", monitorProfileFile), profile, true))
+			other := profile
+			other.ContainerID = "22222222-2222-4222-8222-222222222222"
+			require.NoError(t, writeStorageJSON(filepath.Join(filepath.Dir(dir), "another-monitor", monitorProfileFile), other, true))
+
+			got, err := monitorRecord(scope, target)
+			require.NoError(t, err)
+			require.Equal(t, dir, got)
+			var saved monitorProfile
+			require.NoError(t, readStorageJSON(filepath.Join(got, monitorProfileFile), &saved))
+			require.Equal(t, target.ID, saved.ContainerID)
+			require.Equal(t, profile.Generation, saved.Generation, "saved state must not become an uninitialized Monitor")
+			credential, err := resourceCredential(got, monitorOwnerKeyName, owner.publicKey(), saved.Generation != 0)
+			require.NoError(t, err)
+			defer credential.clear()
+			require.Equal(t, owner.Key, credential.Key)
+			require.NoDirExists(t, filepath.Join(home, "resources"), "legacy credentials must be recovered in place")
+		})
+	}
+}
+
+func TestLegacyMonitorCredentialLookupFailsClosed(t *testing.T) {
+	for _, mode := range []string{"ambiguous", "corrupt profile", "missing key"} {
+		t.Run(mode, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv(envConfigPath, filepath.Join(home, "config.json"))
+			scope := accountScope{ControlplaneURL: "https://cp.example", UserID: "owner"}
+			owner := testOwnerCredential(t)
+			defer owner.clear()
+			target := &workloadTarget{containerView: containerView{
+				ID: "11111111-1111-4111-8111-111111111111", Repo: monitorRepo, Domain: "monitor.example"},
+				env: map[string]string{monitorOwnerEnv: owner.publicKey()}}
+			hash := storageHash([]byte(`{"controlplane_url":"https://cp.example","user_id":"owner"}`))
+			dir := filepath.Join(home, "monitors", hash, "old-monitor")
+			profile := monitorProfile{ContainerID: target.ID, Domain: target.Domain, Owner: owner.publicKey(), Generation: 7}
+			require.NoError(t, writeStorageJSON(filepath.Join(dir, monitorProfileFile), profile, true))
+			wantError := "restore encryption credentials"
+			if mode != "missing key" {
+				require.NoError(t, saveOwnerCredential(filepath.Join(dir, monitorOwnerKeyName), owner))
+			}
+			switch mode {
+			case "ambiguous":
+				require.NoError(t, writeStorageJSON(filepath.Join(filepath.Dir(dir), "duplicate", monitorProfileFile), profile, true))
+				wantError = "multiple legacy Monitor credential directories"
+			case "corrupt profile":
+				require.NoError(t, os.WriteFile(filepath.Join(dir, monitorProfileFile), []byte("{"), 0600))
+				wantError = "invalid storage metadata"
+			}
+			got, err := monitorRecord(scope, target)
+			if err == nil {
+				var saved monitorProfile
+				require.NoError(t, readStorageJSON(filepath.Join(got, monitorProfileFile), &saved))
+				credential, credentialErr := resourceCredential(got, monitorOwnerKeyName, owner.publicKey(), saved.Generation != 0)
+				if credential != nil {
+					credential.clear()
+				}
+				err = credentialErr
+			}
+			require.ErrorContains(t, err, wantError)
+			require.NoDirExists(t, filepath.Join(home, "resources"))
+			if mode == "missing key" {
+				require.NoFileExists(t, filepath.Join(dir, monitorOwnerKeyName))
+			}
+		})
+	}
+}
+
 func TestResourceCredentialsRejectAmbiguousDirectories(t *testing.T) {
 	t.Setenv(envConfigPath, filepath.Join(t.TempDir(), "config.json"))
 	scope := accountScope{ControlplaneURL: "https://cp.example", UserID: "owner"}
