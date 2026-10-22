@@ -21,8 +21,8 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
-	"github.com/tinfoilsh/tinfoil-go/document"
 	"github.com/tinfoilsh/tinfoil-go/verify"
+	"github.com/tinfoilsh/tinfoil-go/verify/document"
 	"golang.org/x/crypto/ssh"
 )
 
