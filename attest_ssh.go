@@ -208,20 +208,31 @@ func attestConnection(dial func(context.Context, string, string) (net.Conn, erro
 	if err != nil {
 		return nil, time.Time{}, err
 	}
-	transport := &http.Transport{
-		Proxy: http.ProxyFromEnvironment,
-		// No credentials or application requests use this transport. VerifyV3
-		// authenticates the nonce-bound evidence before we accept an SSH key.
+	// This transport retrieves untrusted public evidence, never owner credentials
+	// or application data. VerifyV3 authenticates it before we accept an SSH key.
+	unverifiedEvidenceTransport := &http.Transport{
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 	}
 	scheme := "https"
 	if dial != nil {
-		transport = &http.Transport{DialContext: dial}
+		unverifiedEvidenceTransport = &http.Transport{DialContext: dial}
 		scheme = "http"
 	}
-	fetch := &http.Client{Transport: transport, Timeout: sshAttestationTimeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	defer fetch.CloseIdleConnections()
 	target := url.URL{Scheme: scheme, Host: host, Path: sshAttestationPath, RawQuery: "nonce=" + hex.EncodeToString(nonce)}
+	if dial == nil {
+		proxyURL, err := http.ProxyFromEnvironment(&http.Request{URL: &target})
+		if err != nil {
+			return nil, time.Time{}, fmt.Errorf("resolving the attestation proxy: %w", err)
+		}
+		unverifiedEvidenceTransport.Proxy = http.ProxyURL(proxyURL)
+		if proxyURL != nil && proxyURL.Scheme == "https" {
+			// net/http uses this dialer for TLS to the proxy, then TLSClientConfig
+			// inside CONNECT. Authenticate the proxy before sending proxy credentials.
+			unverifiedEvidenceTransport.DialTLSContext = (&tls.Dialer{}).DialContext
+		}
+	}
+	fetch := &http.Client{Transport: unverifiedEvidenceTransport, Timeout: sshAttestationTimeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	defer fetch.CloseIdleConnections()
 	resp, err := fetch.Get(target.String())
 	if err != nil {
 		var requestError *url.Error

@@ -12,9 +12,11 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -213,21 +215,42 @@ func TestSSHAttestationRejectsUntrustedEvidence(t *testing.T) {
 	}
 }
 
-// A CONNECT proxy must not reintroduce CA trust or make a successful TLS
-// handshake sufficient to accept an SSH key.
-func TestAttestSSHThroughHTTPSProxyVerifiesEvidence(t *testing.T) {
+// CONNECT proxies retain their own TLS authentication, while the enclave's
+// self-signed HTTPS response still requires attestation verification.
+func TestAttestSSHThroughProxyVerifiesEvidence(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		tls, trusted bool
+	}{
+		{"HTTP proxy", false, false},
+		{"trusted HTTPS proxy", true, true},
+		{"untrusted HTTPS proxy", true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.trusted && (runtime.GOOS == "darwin" || runtime.GOOS == "ios" || runtime.GOOS == "windows") {
+				t.Skip("platform certificate verifier does not use SSL_CERT_FILE")
+			}
+			testAttestSSHThroughProxy(t, tc.tls, tc.trusted)
+		})
+	}
+}
+
+func testAttestSSHThroughProxy(t *testing.T, proxyTLS, trusted bool) {
+	t.Helper()
 	var requests, connects atomic.Int32
 	enclave := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests.Add(1)
 		require.Equal(t, sshAttestationPath, r.URL.Path)
 		require.Len(t, r.URL.Query().Get("nonce"), 64)
 		require.Empty(t, r.Header.Get("Authorization"))
+		require.Empty(t, r.Header.Get("Proxy-Authorization"))
 		io.WriteString(w, `{}`)
 	}))
 	defer enclave.Close()
-	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	proxy := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		require.Equal(t, http.MethodConnect, r.Method)
 		require.Equal(t, "enclave.invalid:443", r.Host)
+		require.Equal(t, "Basic cHJveHktdXNlcjpwcm94eS1wYXNz", r.Header.Get("Proxy-Authorization"))
 		connects.Add(1)
 		upstream, err := net.Dial("tcp", enclave.Listener.Addr().String())
 		require.NoError(t, err)
@@ -246,13 +269,32 @@ func TestAttestSSHThroughHTTPSProxyVerifiesEvidence(t *testing.T) {
 		client.Close()
 		<-done
 	}))
+	if proxyTLS {
+		proxy.StartTLS()
+	} else {
+		proxy.Start()
+	}
 	defer proxy.Close()
+	proxyURL, err := url.Parse(proxy.URL)
+	require.NoError(t, err)
+	proxyURL.User = url.UserPassword("proxy-user", "proxy-pass")
 	cmd := consentCLIProcess(t, "http://unused.invalid", "attest-ssh", "enclave.invalid", "--repo", defaultSandboxRepo)
-	cmd.Env = append(cmd.Env, "HTTPS_PROXY="+proxy.URL, "NO_PROXY=")
+	cmd.Env = append(cmd.Env, "HTTPS_PROXY="+proxyURL.String(), "NO_PROXY=")
+	if trusted {
+		certFile := filepath.Join(t.TempDir(), "proxy.pem")
+		require.NoError(t, os.WriteFile(certFile, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: proxy.Certificate().Raw}), 0600))
+		cmd.Env = append(cmd.Env, "SSL_CERT_FILE="+certFile, "SSL_CERT_DIR="+t.TempDir())
+	}
 	output, err := cmd.CombinedOutput()
 	require.Error(t, err)
-	require.Contains(t, string(output), "verifying enclave.invalid")
 	require.NotContains(t, string(output), "Attestation successful")
+	if proxyTLS && !trusted {
+		require.Contains(t, string(output), "failed to verify certificate")
+		require.Zero(t, connects.Load(), "an untrusted HTTPS proxy must not receive credentials")
+		require.Zero(t, requests.Load())
+		return
+	}
+	require.Contains(t, string(output), "verifying enclave.invalid")
 	require.EqualValues(t, 1, connects.Load())
 	require.EqualValues(t, 1, requests.Load())
 }
