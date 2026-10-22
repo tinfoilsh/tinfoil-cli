@@ -1,8 +1,8 @@
 #!/bin/sh
 # tinfoil-cli install script
 # This script detects your OS/architecture, downloads the latest tinfoil-cli
-# release, verifies its Sigstore attestation, and installs it to
-# /usr/local/bin.
+# release, verifies its Sigstore attestation (unless --skip-verification is
+# passed), and installs it to /usr/local/bin.
 #
 # The downloaded archive is authenticated against the release workflow's
 # Sigstore attestation before anything is installed: the attestation is
@@ -12,19 +12,35 @@
 #
 # Verification requires the GitHub CLI (gh). If gh is unavailable, or the
 # installed version does not support `gh attestation verify`, the script
-# refuses to install rather than installing an unverified binary. Run
-# `tinfoil update` from an existing verified CLI, or install gh
-# (https://cli.github.com/), to bootstrap on machines without it.
+# refuses to install unless --skip-verification is passed. Prefer running
+# `tinfoil update` from an existing verified CLI or installing gh
+# (https://cli.github.com/); --skip-verification installs code that was not
+# authenticated and should only be used when those options are unavailable.
 #
 # Usage: curl -fsSL https://github.com/tinfoilsh/tinfoil-cli/raw/main/install.sh | sh
+#        curl -fsSL https://github.com/tinfoilsh/tinfoil-cli/raw/main/install.sh | sh -s -- --skip-verification
 
 set -eu
 
 REPO="tinfoilsh/tinfoil-cli"
 WORKFLOW="tinfoilsh/tinfoil-cli/.github/workflows/release.yml"
+SKIP_VERIFICATION=false
 
 main() {
   echo "tinfoil-cli install script"
+
+  for arg in "$@"; do
+    case "$arg" in
+      --skip-verification)
+        SKIP_VERIFICATION=true
+        ;;
+      *)
+        echo "Error: unknown argument: $arg"
+        echo "Usage: install.sh [--skip-verification]"
+        exit 1
+        ;;
+    esac
+  done
 
   # -------------------------------
   # 1. Detect operating system
@@ -68,16 +84,21 @@ main() {
   # -------------------------------
   # 3. Require the GitHub CLI for verification
   # -------------------------------
-  if ! command -v gh >/dev/null 2>&1; then
-    echo "Error: gh (GitHub CLI) is required to verify the download."
-    echo "Install it from https://cli.github.com/ and re-run, or use an"
-    echo "existing verified CLI and run: tinfoil update"
-    exit 1
-  fi
-  if ! gh attestation verify --help >/dev/null 2>&1; then
-    echo "Error: the installed gh does not support 'attestation verify'."
-    echo "Upgrade gh (https://cli.github.com/) and re-run."
-    exit 1
+  if [ "$SKIP_VERIFICATION" != "true" ]; then
+    if ! command -v gh >/dev/null 2>&1; then
+      echo "Error: gh (GitHub CLI) is required to verify the download."
+      echo "Install gh from https://cli.github.com/, or re-run with"
+      echo "--skip-verification to force the installation."
+      echo "An unverified install can run tampered code."
+      exit 1
+    fi
+    if ! gh attestation verify --help >/dev/null 2>&1; then
+      echo "Error: the installed gh does not support 'attestation verify'."
+      echo "Upgrade gh (https://cli.github.com/), or re-run with"
+      echo "--skip-verification to force the installation."
+      echo "An unverified install can run tampered code."
+      exit 1
+    fi
   fi
 
   # -------------------------------
@@ -134,17 +155,23 @@ main() {
   #    must be this repository's release workflow run from this release
   #    tag, so an attestation from a branch run or a different tag fails.
   # -------------------------------
-  EXPECTED_SAN="https://github.com/${WORKFLOW}@refs/tags/v${VERSION}"
-  echo "Verifying release attestation..."
-  if ! gh attestation verify tinfoil-cli.tar.gz \
-      --repo "$REPO" \
-      --cert-identity "$EXPECTED_SAN" \
-      --predicate-type https://slsa.dev/provenance/v1; then
-      echo "Error: attestation verification failed (expected identity: ${EXPECTED_SAN})."
-      echo "The download was not installed."
-      exit 1
+  if [ "$SKIP_VERIFICATION" = "true" ]; then
+      echo "WARNING: --skip-verification was passed; the download was not"
+      echo "authenticated against the release attestation. It could run"
+      echo "tampered code. Continuing anyway."
+  else
+      EXPECTED_SAN="https://github.com/${WORKFLOW}@refs/tags/v${VERSION}"
+      echo "Verifying release attestation..."
+      if ! gh attestation verify tinfoil-cli.tar.gz \
+          --repo "$REPO" \
+          --cert-identity "$EXPECTED_SAN" \
+          --predicate-type https://slsa.dev/provenance/v1; then
+          echo "Error: attestation verification failed (expected identity: ${EXPECTED_SAN})."
+          echo "The download was not installed."
+          exit 1
+      fi
+      echo "Attestation verified."
   fi
-  echo "Attestation verified."
 
   # -------------------------------
   # 9. Extract and install the binary
@@ -179,4 +206,4 @@ main() {
   echo "You can now run it with: tinfoil"
 }
 
-main
+main "$@"
