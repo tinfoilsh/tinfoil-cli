@@ -67,10 +67,6 @@ func fixtureArchiveDigest(t *testing.T) [sha256.Size]byte {
 	return digest
 }
 
-// TestVerifyUpdateAttestationWalksListingToBundle proves the envelope walk
-// dispatches from the listing to the bundle URL the listing names: a server
-// that lists a bundle for any digest gets as far as bundle verification, which
-// then fails on the digest mismatch.
 func TestVerifyUpdateAttestationWalksListingToBundle(t *testing.T) {
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
@@ -78,7 +74,6 @@ func TestVerifyUpdateAttestationWalksListingToBundle(t *testing.T) {
 			w.Header().Set("Content-Type", "application/x-snappy")
 			_, _ = w.Write(fixtureBundleSnappy)
 		default:
-			// Listing for any digest: point at this server's bundle.
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode(attestationEnvelope{Attestations: []struct {
 				BundleURL string `json:"bundle_url"`
@@ -95,8 +90,6 @@ func TestVerifyUpdateAttestationWalksListingToBundle(t *testing.T) {
 	require.Contains(t, err.Error(), "attestation does not verify")
 }
 
-// TestVerifyUpdateAttestationFailsClosedOnMissingListing proves a digest with
-// no attestation listing is refused.
 func TestVerifyUpdateAttestationFailsClosedOnMissingListing(t *testing.T) {
 	digest := fixtureArchiveDigest(t)
 	server := attestationsFixtureServer(t, hex.EncodeToString(digest[:]), fixtureBundleSnappy)
@@ -108,8 +101,6 @@ func TestVerifyUpdateAttestationFailsClosedOnMissingListing(t *testing.T) {
 	require.Contains(t, err.Error(), "attestations")
 }
 
-// TestVerifyOneAttestationVerifiesRealBundle checks the bundle directly, so
-// the real archive digest is used end to end.
 func TestVerifyOneAttestationVerifiesRealBundle(t *testing.T) {
 	digest := fixtureArchiveDigest(t)
 	expectedSAN := `^https://github\.com/tinfoilsh/tinfoil-cli/\.github/workflows/release\.yml@refs/tags/v0\.19\.9$`
@@ -126,7 +117,6 @@ func TestVerifyOneAttestationVerifiesRealBundle(t *testing.T) {
 
 func TestVerifyOneAttestationRejectsWrongTag(t *testing.T) {
 	digest := fixtureArchiveDigest(t)
-	// The signer ran from v0.19.9; expecting any other tag must fail.
 	expectedSAN := `^https://github\.com/tinfoilsh/tinfoil-cli/\.github/workflows/release\.yml@refs/tags/v0\.19\.10$`
 
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -143,8 +133,6 @@ func TestVerifyOneAttestationRejectsTamperedBundle(t *testing.T) {
 	digest := fixtureArchiveDigest(t)
 	expectedSAN := `^https://github\.com/tinfoilsh/tinfoil-cli/\.github/workflows/release\.yml@refs/tags/v0\.19\.9$`
 
-	// Corrupt one byte inside the decoded bundle, re-encode, and expect the
-	// signature or transparency-log check to fail.
 	decoded, err := snappy.Decode(nil, fixtureBundleSnappy)
 	require.NoError(t, err)
 	decoded[len(decoded)-8] ^= 0x01
@@ -182,9 +170,6 @@ func TestVerifyOneAttestationRejectsWrongDigest(t *testing.T) {
 	require.False(t, ok)
 }
 
-// TestVerifyOneAttestationRejectsOversizedDecodedBundle proves the decoded
-// bundle is size-bounded before allocation: a small compressed payload that
-// expands past the limit is refused without decoding it.
 func TestVerifyOneAttestationRejectsOversizedDecodedBundle(t *testing.T) {
 	// A highly compressible 16 MiB payload decodes far past the 4 MiB
 	// limit while staying small on the wire.
@@ -204,9 +189,6 @@ func TestVerifyOneAttestationRejectsOversizedDecodedBundle(t *testing.T) {
 	require.Contains(t, err.Error(), "decompressed size limit")
 }
 
-// TestSelfUpdateRefusesUpdateWhenAttestationFails proves the install path is
-// fail-closed: an archive that passes its checksum but fails attestation is
-// never installed.
 func TestSelfUpdateRefusesUpdateWhenAttestationFails(t *testing.T) {
 	f := newSelfUpdateFixture(t)
 	f.u.verifyAttestation = func(context.Context, *http.Client, []byte, string) error {
