@@ -323,9 +323,9 @@ func newTunnel(target *tunnelTarget) (*tunnel, error) {
 	}
 	address := net.JoinHostPort(host, port)
 	transport, err := secure.NewTransport(func(verified *verify.Verification) (http.RoundTripper, error) {
-		fingerprint, err := verified.TLSPublicKeyFP()
-		if err != nil {
-			return nil, err
+		fingerprint, ok := verified.TLSPublicKeyFP()
+		if !ok {
+			return nil, fmt.Errorf("attestation has no TLS public key fingerprint")
 		}
 		return &http2.Transport{
 			ReadIdleTimeout: tunnelReadIdleTimeout,

@@ -8,8 +8,8 @@ import (
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 
-	"github.com/tinfoilsh/tinfoil-go/document"
 	"github.com/tinfoilsh/tinfoil-go/enclave"
+	"github.com/tinfoilsh/tinfoil-go/verify/document"
 	"github.com/tinfoilsh/tinfoil-go/verify/measurement"
 )
 
@@ -107,9 +107,10 @@ func verifyAttestation(l *log.Logger) (*auditRecord, error) {
 	}
 	record.Measurements.Sigstore = *verified.CodeMeasurement
 	record.Measurements.Enclave = verified.EnclaveMeasurement
-	record.Keys.Enclave, err = verified.TLSPublicKeyFP()
-	if err != nil {
-		return nil, err
+	var ok bool
+	record.Keys.Enclave, ok = verified.TLSPublicKeyFP()
+	if !ok {
+		return nil, fmt.Errorf("attestation has no TLS public key fingerprint")
 	}
 
 	// Get remote pubkey fingerprint
