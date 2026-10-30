@@ -333,7 +333,7 @@ func clerkLogin(cmd *cobra.Command, syncKeys bool) error {
 	defer server.Close()
 
 	launch := clerkAuthorizationURL(ceremony.state, ceremony.verifier, scopes)
-	fmt.Fprintf(cmd.ErrOrStderr(), "Opening Clerk sign-in: %s\nIf no browser opens, visit that URL. Waiting for sign-in (Ctrl-C cancels)...\n", launch)
+	fmt.Fprintf(cmd.ErrOrStderr(), "Opening Clerk sign-in. If no browser opens, visit:\n\n  %s\n\nWaiting for sign-in (Ctrl-C cancels)...\n", launch)
 	go func() {
 		if err := openBrowser(launch); err != nil {
 			fmt.Fprintf(cmd.ErrOrStderr(), "Could not open your browser: %v\n", err)
@@ -351,8 +351,8 @@ func clerkLogin(cmd *cobra.Command, syncKeys bool) error {
 	if ceremony.authErr == nil {
 		fmt.Fprintf(cmd.OutOrStdout(), "Signed in as %s (account %s).\n", ceremony.grant.UserID, ceremony.grant.Account)
 		if syncKeys && ceremony.private != nil {
-			fmt.Fprintf(cmd.ErrOrStderr(), "Key sync confirmation code: %s\nType this code at %s. Ctrl-C skips key sync and keeps your login.\n",
-				confirmationCode(canonicalKeySyncRequest(ceremony.request, targets)), keySyncLaunchURL(ceremony.request, targets))
+			fmt.Fprintf(cmd.ErrOrStderr(), "\nEnter this code in the browser tab that just opened:\n\n    %s\n\nCtrl-C skips key sync and keeps your login.\n",
+				confirmationCode(canonicalKeySyncRequest(ceremony.request, targets)))
 		}
 	}
 	select {
