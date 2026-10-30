@@ -87,6 +87,9 @@ type containerView struct {
 	// slot to the attached volume ID. Only the single-container view has them.
 	VolumeSlots []volumeSlot      `json:"volume_slots,omitempty"`
 	Volumes     map[string]string `json:"volumes,omitempty"`
+	// Custody is immutable: "tmk" keys live in the user's key bundle, "umk" keys with the user.
+	OwnerKeyMode   string `json:"owner_key_mode,omitempty"`
+	OwnerPublicKey string `json:"owner_public_key,omitempty"`
 }
 
 type candidateConfig struct {

@@ -93,12 +93,16 @@ attestation always uses the enclave hostname.`,
 				if attestSSHName != "" && !sshProfileNamePattern.MatchString(attestSSHName) {
 					return errors.New("invalid SSH profile name")
 				}
-				s, err := connectSandbox(target.workload)
+				workload, err := managedWorkload(*target.container, defaultSandboxRepo)
+				if err != nil {
+					return err
+				}
+				s, err := connectSandbox(cmd.Context(), workload)
 				if err != nil {
 					return err
 				}
 				defer s.close()
-				if err := s.enroll(); err != nil {
+				if err := s.enroll(cmd.Context()); err != nil {
 					return err
 				}
 				if attestSSHName != "" {

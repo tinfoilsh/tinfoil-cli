@@ -26,6 +26,7 @@ const (
 type cpClient struct {
 	baseURL string
 	apiKey  string
+	login   *clerkGrant
 	http    *http.Client
 }
 
@@ -33,8 +34,20 @@ func newCPClient(cfg cliConfig) *cpClient {
 	return &cpClient{
 		baseURL: strings.TrimRight(cfg.ControlplaneURL, "/"),
 		apiKey:  cfg.APIKey,
-		http:    &http.Client{Timeout: 60 * time.Second},
+		login:   cfg.login,
+		http:    &http.Client{Timeout: 60 * time.Second, CheckRedirect: sameOriginRedirect},
 	}
+}
+
+// Authenticated requests never follow a redirect to another origin.
+func sameOriginRedirect(req *http.Request, via []*http.Request) error {
+	if req.URL.Scheme != via[0].URL.Scheme || req.URL.Host != via[0].URL.Host {
+		return fmt.Errorf("refusing a redirect from %s to another origin", via[0].URL.Host)
+	}
+	if len(via) >= 10 {
+		return errors.New("stopped after 10 redirects")
+	}
+	return nil
 }
 
 // cpError carries a structured error from the controlplane.
@@ -104,8 +117,14 @@ func (c *cpClient) doContext(ctx context.Context, method, path string, query url
 	if err != nil {
 		return 0, fmt.Errorf("building request: %w", err)
 	}
-	if c.apiKey != "" {
-		req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	token := c.apiKey
+	if c.login != nil {
+		if token, err = c.login.accessToken(ctx); err != nil {
+			return 0, err
+		}
+	}
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
 	}
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")

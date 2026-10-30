@@ -43,6 +43,20 @@ func resolveWorkload(row containerView, repository, assertion string) (*workload
 	return &workloadTarget{containerView: row, source: target.source, env: env}, nil
 }
 
+// managedWorkload keeps a Monitor or sandbox record with its measured environment.
+// The environment only locates expected bindings; trust comes from checking the
+// attested configuration against the compiled-in profile before any secret leaves.
+func managedWorkload(row containerView, repository string) (*workloadTarget, error) {
+	if row.Repo != repository || row.Debug || row.Config == "" {
+		return nil, errors.New("unexpected workload configuration")
+	}
+	env, err := measuredEnvironment(row.Config)
+	if err != nil {
+		return nil, err
+	}
+	return &workloadTarget{containerView: row, env: env}, nil
+}
+
 func missingContainer(err error) bool {
 	var missing *cpError
 	return errors.As(err, &missing) && missing.Status == http.StatusNotFound

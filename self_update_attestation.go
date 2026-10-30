@@ -116,25 +116,46 @@ func verifyOneAttestation(ctx context.Context, client *http.Client, bundleURL st
 		return false, fmt.Errorf("attestation bundle is not valid snappy data: %w", err)
 	}
 
+	// runner_environment comes from the OIDC token, so a workflow retargeted
+	// to self-hosted (operator-controlled) infrastructure cannot claim
+	// github-hosted.
+	result, err := verifySigstoreBundle(bundleJSON, digest[:], expectedSAN, certificate.Extensions{RunnerEnvironment: "github-hosted"})
+	if err != nil {
+		return false, err
+	}
+	// WithArtifactDigest matches the digest against any subject in the
+	// statement, which is the right semantics here: the release workflow
+	// attests every platform archive in one SLSA provenance statement, so
+	// the downloaded archive's digest must appear among the subjects.
+	if len(result.Statement.Subject) == 0 {
+		return false, errors.New("verified attestation carries no in-toto subject")
+	}
+	return true, nil
+}
+
+// verifySigstoreBundle verifies one v0.3 DSSE bundle against the embedded trust
+// root, requiring a transparency-log inclusion proof, the artifact digest and the
+// signer identity. Self-update and workload image provenance share it.
+func verifySigstoreBundle(bundleJSON, digest []byte, expectedSAN string, extensions certificate.Extensions) (*verify.VerificationResult, error) {
 	var b bundle.Bundle
 	b.Bundle = new(protobundle.Bundle)
 	if err := b.UnmarshalJSON(bundleJSON); err != nil {
-		return false, fmt.Errorf("parsing attestation bundle: %w", err)
+		return nil, fmt.Errorf("parsing attestation bundle: %w", err)
 	}
 	// Only the v0.3 single-certificate layout is accepted, matching the
 	// SDKs: the legacy x509CertificateChain layout can carry extra CA
 	// certificates under the signing certificate.
 	if b.GetVerificationMaterial().GetX509CertificateChain() != nil {
-		return false, errors.New("legacy bundle format not supported")
+		return nil, errors.New("legacy bundle format not supported")
 	}
 	env := b.GetDsseEnvelope()
 	if env == nil || len(env.GetSignatures()) != 1 {
-		return false, errors.New("attestation bundle must carry exactly one DSSE signature")
+		return nil, errors.New("attestation bundle must carry exactly one DSSE signature")
 	}
 
 	trustRoot, err := root.NewTrustedRootFromJSON(updateTrustedRoot)
 	if err != nil {
-		return false, fmt.Errorf("loading embedded trust root: %w", err)
+		return nil, fmt.Errorf("loading embedded trust root: %w", err)
 	}
 	verifier, err := verify.NewSignedEntityVerifier(
 		trustRoot,
@@ -143,45 +164,34 @@ func verifyOneAttestation(ctx context.Context, client *http.Client, bundleURL st
 		verify.WithObserverTimestamps(1),
 	)
 	if err != nil {
-		return false, fmt.Errorf("creating verifier: %w", err)
+		return nil, fmt.Errorf("creating verifier: %w", err)
 	}
 
 	sanMatcher, err := verify.NewSANMatcher("", expectedSAN)
 	if err != nil {
-		return false, fmt.Errorf("creating SAN matcher: %w", err)
+		return nil, fmt.Errorf("creating SAN matcher: %w", err)
 	}
 	issuerMatcher, err := verify.NewIssuerMatcher(attestationOIDC, "")
 	if err != nil {
-		return false, fmt.Errorf("creating issuer matcher: %w", err)
+		return nil, fmt.Errorf("creating issuer matcher: %w", err)
 	}
-	// runner_environment comes from the OIDC token, so a workflow retargeted
-	// to self-hosted (operator-controlled) infrastructure cannot claim
-	// github-hosted.
-	certID, err := verify.NewCertificateIdentity(
-		sanMatcher,
-		issuerMatcher,
-		certificate.Extensions{RunnerEnvironment: "github-hosted"},
-	)
+	certID, err := verify.NewCertificateIdentity(sanMatcher, issuerMatcher, extensions)
 	if err != nil {
-		return false, fmt.Errorf("creating certificate identity: %w", err)
+		return nil, fmt.Errorf("creating certificate identity: %w", err)
 	}
 
 	result, err := verifier.Verify(
 		&b,
 		verify.NewPolicy(
-			verify.WithArtifactDigest("sha256", digest[:]),
+			verify.WithArtifactDigest("sha256", digest),
 			verify.WithCertificateIdentity(certID),
 		),
 	)
 	if err != nil {
-		return false, fmt.Errorf("attestation does not verify: %w", err)
+		return nil, fmt.Errorf("attestation does not verify: %w", err)
 	}
-	// WithArtifactDigest matches the digest against any subject in the
-	// statement, which is the right semantics here: the release workflow
-	// attests every platform archive in one SLSA provenance statement, so
-	// the downloaded archive's digest must appear among the subjects.
-	if result == nil || result.Statement == nil || len(result.Statement.Subject) == 0 {
-		return false, errors.New("verified attestation carries no in-toto subject")
+	if result == nil || result.Statement == nil || result.Signature == nil || result.Signature.Certificate == nil {
+		return nil, errors.New("verified attestation carries no statement or certificate")
 	}
-	return true, nil
+	return result, nil
 }

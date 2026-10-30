@@ -26,9 +26,30 @@ func init() {
 	monitorCmd.AddCommand(newManagedStatusCmd("monitor"))
 	start := newManagedContainerCmd("monitor", "start", containerDeployCmd, "no-wait")
 	start.Short = "Start a stopped or failed Monitor using its saved configuration"
-	monitorCmd.AddCommand(start,
-		newManagedContainerCmd("monitor", "stop", containerStopCmd),
-		newManagedContainerCmd("monitor", "delete", containerDeleteCmd, "yes"))
+	remove := newManagedContainerCmd("monitor", "delete", containerDeleteCmd, "yes")
+	deleteMonitor := remove.RunE
+	remove.RunE = func(cmd *cobra.Command, args []string) error {
+		client, err := authedClient()
+		if err != nil {
+			return err
+		}
+		row, err := managedRow(client, "monitor", args[0])
+		if err != nil {
+			return err
+		}
+		if err := deleteMonitor(cmd, args); err != nil {
+			return err
+		}
+		scope, _, err := currentScope()
+		if err == nil {
+			err = forgetDeletedResource(cmd.Context(), client, scope, *row)
+		}
+		if err != nil {
+			fmt.Fprintf(cmd.OutOrStdout(), "Its keys are kept: %v\n", err)
+		}
+		return nil
+	}
+	monitorCmd.AddCommand(start, newManagedContainerCmd("monitor", "stop", containerStopCmd), remove)
 	for _, group := range []*cobra.Command{sandboxCmd, monitorCmd} {
 		group.PersistentFlags().StringVarP(&outputFormat, "output", "o", "table", "Output format: table or json")
 		group.PersistentFlags().StringVar(&attestSSHIdentity, "identity", "", "Owner SSH identity file")
@@ -67,7 +88,7 @@ func newManagedCreateCmd(kind string) *cobra.Command {
 	var workspaceSize int
 	cmd := &cobra.Command{
 		Use: "create NAME", Short: "Create a confidential " + kind + " and follow its deployment", Args: cobra.ExactArgs(1),
-		Long: "Create from a published release with an Ed25519 owner public key. Inspect interrupted creation with status; use start to retry a stopped or failed resource. Compute is billed while running; storage remains billable until deleted.",
+		Long: "Create from a published release. By default the CLI generates the resource's own owner, storage and agent keys and saves them in your synced key bundle (requires `tinfoil login --sync`) before creating it. With --owner-public-key or --identity, the resource uses your own Ed25519 key (one distinct key per resource), and its storage keys are generated and kept only on this machine; back them up. Inspect interrupted creation with status; use start to retry a stopped or failed resource. Compute is billed while running; storage remains billable until deleted.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if strings.TrimSpace(tag) == "" {
 				return errors.New("choose --tag from `tinfoil repo build info " + managedRepo(kind) + "`")
@@ -79,29 +100,20 @@ func newManagedCreateCmd(kind string) *cobra.Command {
 			if sizeChosen && !slices.Contains(sandboxWorkspaceSizesGB, workspaceSize) {
 				return fmt.Errorf("--workspace-size must be %s (GB)", workspaceSizeChoices(""))
 			}
-			client, err := authedClient()
+			scope, client, err := currentScope()
 			if err != nil {
 				return err
 			}
 			variables := map[string]string{}
 			body := map[string]any{"name": strings.TrimSpace(args[0]), "repo": managedRepo(kind), "tag": strings.TrimSpace(tag), "variables": variables}
-			fallbackOwner := ""
+			userKeys := publicKey != "" || attestSSHIdentity != ""
 			if kind == "sandbox" {
-				scope, _, err := currentScope()
-				if err != nil {
-					return err
-				}
 				selected, err := selectCreationMonitor(client, monitor, scope.UserID)
 				if err != nil {
 					return err
 				}
-				env, err := measuredEnvironment(selected.Config)
-				if err != nil {
-					return err
-				}
-				fallbackOwner = env[monitorOwnerEnv]
-				if _, err := measuredOwner(fallbackOwner); err != nil {
-					return err
+				if selected.OwnerKeyMode == "umk" && !userKeys {
+					return fmt.Errorf("Monitor %s uses your own keys, so its sandboxes must too; pass --owner-public-key FILE", selected.Name)
 				}
 				variables["SANDBOX_INSTANCE_ID"] = uuid.NewString()
 				body["network_policy"] = sandboxNetworkPolicy(selected.ID)
@@ -122,12 +134,14 @@ func newManagedCreateCmd(kind string) *cobra.Command {
 			} else {
 				body["object_storage"] = map[string]any{}
 			}
-			owner, err := creationOwnerKey(publicKey, attestSSHIdentity, fallbackOwner)
+			// Keys are saved before allocation; a lost create reply is reconciled
+			// through inventory by this owner key, never by resubmitting.
+			mode, owner, err := prepareResourceKeys(cmd.Context(), client, scope, kind, userKeys, publicKey)
 			if err != nil {
 				return err
 			}
-			variables[strings.ToUpper(kind)+"_OWNER_PUBLIC_KEY"] = owner
-			fmt.Fprintln(cmd.ErrOrStderr(), "Creating and publishing configuration. Storage remains billable until deleted; keep the original encryption credentials when reusing a workspace.")
+			body["owner_key_mode"], body["owner_public_key"] = mode, owner
+			fmt.Fprintln(cmd.ErrOrStderr(), "Creating and publishing configuration. Storage remains billable until deleted.")
 			var created containerView
 			if _, err := client.do("POST", "/api/containers", nil, body, &created); err != nil {
 				return fmt.Errorf("%w; inspect `tinfoil %s status` before retrying creation", err, kind)
@@ -138,7 +152,7 @@ func newManagedCreateCmd(kind string) *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&tag, "tag", "", "Published release tag [required]")
-	cmd.Flags().StringVar(&publicKey, "owner-public-key", "", "Ed25519 public key file (default: Monitor owner for sandbox, otherwise ~/.ssh/id_ed25519.pub)")
+	cmd.Flags().StringVar(&publicKey, "owner-public-key", "", "Use your own Ed25519 public key file instead of synced keys (one distinct key per resource)")
 	cmd.Flags().BoolVar(&noWait, "no-wait", false, "Return after creation without following boot progress")
 	if kind == "sandbox" {
 		cmd.Flags().StringVar(&monitor, "monitor", "", "Monitor name or ID (required when more than one exists)")
@@ -182,10 +196,44 @@ func selectCreationMonitor(client *cpClient, identifier, userID string) (*contai
 	return row, err
 }
 
-func creationOwnerKey(publicFile, identity, fallback string) (string, error) {
-	if publicFile == "" && identity == "" && fallback != "" {
-		return fallback, nil
+// prepareResourceKeys saves a new resource's keys before it is created: synced keys
+// in the key bundle, or a registered user key with locally generated storage keys.
+func prepareResourceKeys(ctx context.Context, client *cpClient, scope accountScope, kind string, userKeys bool, publicKey string) (string, string, error) {
+	if !userKeys {
+		mk, err := newMKSession(client, scope)
+		if err != nil {
+			return "", "", fmt.Errorf("%w, or create it with your own key using --owner-public-key FILE", err)
+		}
+		key := newResourceKey(kind)
+		defer clear(key.OwnerSeed)
+		defer clear(key.StorageKey)
+		defer clear(key.AgentSeed)
+		if _, err := mk.update(ctx, func(p *mkPayload) error { return addKey(p, key) }); err != nil {
+			return "", "", err
+		}
+		return "tmk", key.OwnerPublicKey, nil
 	}
+	owner, err := creationOwnerKey(publicKey, attestSSHIdentity)
+	if err != nil {
+		return "", "", err
+	}
+	if err := registerUMK(ctx, client, kind, owner); err != nil {
+		return "", "", err
+	}
+	path, err := umkRecordPath(scope, owner)
+	if err != nil {
+		return "", "", err
+	}
+	record := newUMKRecord(kind, owner)
+	defer clear(record.StorageKey)
+	defer clear(record.AgentSeed)
+	if _, err := saveUMKRecord(path, record); err != nil {
+		return "", "", err
+	}
+	return "umk", owner, nil
+}
+
+func creationOwnerKey(publicFile, identity string) (string, error) {
 	if publicFile == "" {
 		publicFile = "~/.ssh/id_ed25519.pub"
 		if identity != "" {
@@ -233,6 +281,10 @@ func newManagedStatusCmd(kind string) *cobra.Command {
 		Use: "status [id|name]", Aliases: []string{"get", "list", "ls"}, Short: "Show status, boot details and connection instructions", Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			client, err := authedClient()
+			if len(args) == 0 && errors.Is(err, errNotLoggedIn) {
+				fmt.Fprintf(cmd.OutOrStdout(), "No %ss are stored on this machine. Run `tinfoil login` to list your account's %ss.\n", kind, kind)
+				return nil
+			}
 			if err != nil {
 				return err
 			}

@@ -18,7 +18,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"strconv"
-	"strings"
 	"syscall"
 	"time"
 
@@ -31,12 +30,11 @@ const (
 	monitorRepo     = "tinfoilsh/confidential-agent-monitor"
 	monitorOwnerEnv = "MONITOR_OWNER_PUBLIC_KEY"
 
-	monitorOwnerKeyName  = "owner.key"
 	monitorDeviceKeyName = "device_ed25519"
 	monitorProfileFile   = "profile.json"
 
-	// Monitor's owner API accepts and returns documents up to this size.
-	maxMonitorReplyBytes = 16 << 20
+	// A relayed sandbox attestation is up to 32 MiB before base64 and JSON.
+	maxMonitorReplyBytes = 48 << 20
 
 	monitorRequestTimeout = time.Minute
 
@@ -55,14 +53,23 @@ type accountScope struct {
 
 // Persist the domain, boot key and minimum generation.
 type monitorProfile struct {
-	Domain       string `json:"domain"`
-	Address      string `json:"address,omitempty"`
-	ContainerID  string `json:"container_id,omitempty"`
-	Owner        string `json:"owner_public_key,omitempty"`
-	Storage      string `json:"storage,omitempty"`
-	HostKey      string `json:"host_key,omitempty"`
-	ConfigSource string `json:"config_source,omitempty"`
-	Generation   uint64 `json:"generation"`
+	Domain      string `json:"domain"`
+	Address     string `json:"address,omitempty"`
+	ContainerID string `json:"container_id,omitempty"`
+	Owner       string `json:"owner_public_key,omitempty"`
+	Storage     string `json:"storage,omitempty"`
+	HostKey     string `json:"host_key,omitempty"`
+	Generation  uint64 `json:"generation"`
+	// Custody "tmk" marks the device key as CLI-managed material that logout removes.
+	Custody string `json:"custody,omitempty"`
+}
+
+// account is the key-bundle binding form: the organization ID or "personal".
+func (s accountScope) account() string {
+	if s.OrgID != "" {
+		return s.OrgID
+	}
+	return "personal"
 }
 
 var monitorCmd = &cobra.Command{
@@ -87,27 +94,6 @@ func currentScope() (accountScope, *cpClient, error) {
 		scope.OrgName = identity.Organization.Name
 	}
 	return scope, newCPClient(cfg), nil
-}
-
-// SSH authenticates the owner; the storage key only decrypts the state.
-func unlockMonitor(client *ssh.Client, dir string, credential *ownerCredential, restoreDevice bool) error {
-	var profile monitorProfile
-	if err := readStorageJSON(filepath.Join(dir, monitorProfileFile), &profile); err != nil {
-		return err
-	}
-	var device string
-	if restoreDevice {
-		var err error
-		device, err = loadSSHKey(filepath.Join(dir, monitorDeviceKeyName))
-		if err != nil {
-			return fmt.Errorf("restore Monitor device key: %w", err)
-		}
-	}
-	return monitorOwnerRequest(client, dir, http.MethodPost, "/unlock", struct {
-		StorageKey []byte `json:"storage_key"`
-		Initialize bool   `json:"initialize"`
-		DeviceKey  string `json:"device_key,omitempty"`
-	}{credential.Key, profile.Generation == 0, device})
 }
 
 // Serialize updates to preserve boot-key pins and the maximum generation.
@@ -141,80 +127,221 @@ type ownerChannelOptions struct {
 	Generation uint64
 }
 
-func connectMonitorOwner(ctx context.Context, scope accountScope, row *workloadTarget, restoreDevice bool) (*ssh.Client, string, error) {
+// monitorSession is an unlocked Monitor reached over owner SSH pinned to the host
+// key endorsed by the same verification that authorized its configuration.
+type monitorSession struct {
+	client *ssh.Client
+	// request is the owner API over client.
+	request func(method, path string, input, out any) error
+	dir     string
+	domain  string
+	address string
+	hostKey ssh.PublicKey
+	view    monitorView
+	keys    *resourceKeys
+}
+
+type monitorView struct {
+	Generation uint64 `json:"generation"`
+	HostKey    string `json:"host_key"`
+	Config     struct {
+		Identities map[string]struct {
+			Key string `json:"key"`
+		} `json:"identities"`
+	} `json:"config"`
+}
+
+func connectMonitorOwner(ctx context.Context, scope accountScope, cp *cpClient, row *workloadTarget, restoreDevice bool) (_ *monitorSession, err error) {
 	if err := requireRunningConnection("Monitor", row.containerView); err != nil {
-		return nil, "", err
+		return nil, err
 	}
 	if row.SSHPort < 1 || row.SSHPort > maxConnectionPort {
-		return nil, "", errors.New("Monitor has no published SSH port")
+		return nil, errors.New("Monitor has no published SSH port")
 	}
 	fmt.Fprintf(os.Stderr, "Monitor %s: running.\n", row.Name)
+	bucket := row.env["TINFOIL_STORAGE_BUCKET"]
+	if len(bucket) > maxBucketChars || !bucketOwnedBy(bucket, scope.account(), scope.UserID) {
+		return nil, errors.New("Monitor storage does not belong to this account")
+	}
 	dir, err := monitorRecord(scope, row)
 	if err != nil {
-		return nil, "", err
+		return nil, err
 	}
-	var profile monitorProfile
-	if err := readStorageJSON(filepath.Join(dir, monitorProfileFile), &profile); err != nil {
-		return nil, "", err
-	}
-	credential, err := resourceCredential(dir, monitorOwnerKeyName, row.env[monitorOwnerEnv], profile.Generation != 0)
-	if err != nil {
-		return nil, "", err
-	}
-	defer credential.clear()
-	if profile.Generation == 0 {
-		if _, err := ensureSSHKey(filepath.Join(dir, monitorDeviceKeyName)); err != nil {
-			return nil, "", err
+	m := &monitorSession{dir: dir, domain: row.Domain, address: net.JoinHostPort(row.Domain, strconv.Itoa(row.SSHPort))}
+	defer func() {
+		if err != nil {
+			m.close()
 		}
+	}()
+	binding := mkBinding{Account: scope.account(), ContainerID: row.ID, Bucket: &bucket}
+	if m.keys, err = resolveResourceKeys(ctx, cp, scope, row.containerView, "monitor", binding, dir, true); err != nil {
+		return nil, err
 	}
-	if row.Domain != profile.Domain {
-		return nil, "", errors.New("Monitor no longer matches its saved domain")
+	// Open with the larger of the recovered and locally observed minimum generation.
+	if _, err := updateProfile(dir, func(p *monitorProfile) error {
+		p.Generation, p.Custody = max(p.Generation, m.keys.minGeneration), m.keys.mode
+		return nil
+	}); err != nil {
+		return nil, err
 	}
-	hostKey, err := attestedHostKey(row.Domain, row.source, "")
+	device := func() error { _, err := ensureSSHKey(filepath.Join(dir, monitorDeviceKeyName)); return err }
+	if m.keys.mode == "tmk" {
+		err = whileSignedIn(cp.login, device)
+	} else {
+		err = device()
+	}
 	if err != nil {
-		return nil, "", err
+		return nil, err
 	}
-	attested := strings.TrimSpace(string(ssh.MarshalAuthorizedKey(hostKey)))
-	if profile.HostKey != attested || profile.ConfigSource != row.source {
-		if _, err := updateProfile(dir, func(p *monitorProfile) error {
-			if p.HostKey != profile.HostKey || p.ConfigSource != profile.ConfigSource {
-				return errors.New("another command changed the pinned Monitor SSH host key; run this again")
-			}
-			p.HostKey = attested
-			p.ConfigSource = row.source
-			return nil
-		}); err != nil {
-			return nil, "", err
-		}
+	stop := startConnectionProgress(os.Stderr, "Verifying Monitor attestation, configuration and build provenance for "+row.Domain)
+	verified, err := verifyWorkload(ctx, row.Domain, monitorPolicy(row.OwnerPublicKey, bucket))
+	stop()
+	if err != nil {
+		return nil, err
+	}
+	if m.hostKey, err = endorsedHostKey(row.Domain, verified); err != nil {
+		return nil, err
+	}
+	if _, err := updateProfile(dir, func(p *monitorProfile) error {
+		p.HostKey, p.Address = authorizedKeyLine(m.hostKey), m.address
+		return nil
+	}); err != nil {
+		return nil, err
 	}
 	fmt.Fprintf(os.Stderr, "Monitor %s attestation verified.\n", row.Name)
-	signer, _, close, err := ownerSigner(credential, dir)
-	if err != nil {
-		return nil, "", err
-	}
-	defer close()
 	fmt.Fprintln(os.Stderr, "Connecting to Monitor "+row.Name+" over attested SSH")
-	address := net.JoinHostPort(row.Domain, strconv.Itoa(row.SSHPort))
-	conn, err := (&net.Dialer{Timeout: 30 * time.Second}).DialContext(ctx, "tcp", address)
+	conn, err := (&net.Dialer{Timeout: 30 * time.Second}).DialContext(ctx, "tcp", m.address)
 	if err != nil {
-		return nil, "", err
+		return nil, err
 	}
-	client, err := connectOwnerSigner(conn, row.Domain, hostKey, signer, "owner")
-	if err != nil {
-		return nil, "", err
+	if m.client, err = connectOwnerSigner(conn, row.Domain, m.hostKey, m.keys.signer, "owner"); err != nil {
+		return nil, err
 	}
-	fmt.Fprintln(os.Stderr, "Unlocking Monitor "+row.Name+" encrypted state")
-	err = unlockMonitor(client, dir, credential, restoreDevice)
-	if err != nil {
-		client.Close()
-		return nil, "", fmt.Errorf("unlock Monitor: %w", err)
+	m.request = func(method, path string, input, out any) error {
+		return monitorOwnerRequest(m.client, m.dir, method, path, input, out)
 	}
-	if _, err := updateProfile(dir, func(p *monitorProfile) error { p.Address = address; return nil }); err != nil {
-		client.Close()
-		return nil, "", err
+	if err := m.open(ctx, row.Name, row.OwnerPublicKey, binding, restoreDevice); err != nil {
+		return nil, err
 	}
 	fmt.Fprintf(os.Stderr, "Monitor %s unlocked.\n", row.Name)
-	return client, dir, nil
+	return m, nil
+}
+
+// open checks that Monitor speaks the current owner protocol before any state key
+// leaves, generates web-provisioned UMK keys only for confirmed-absent state, then unlocks.
+func (m *monitorSession) open(ctx context.Context, name, owner string, binding mkBinding, restoreDevice bool) error {
+	var health struct {
+		State string `json:"state"`
+	}
+	if err := m.request(http.MethodGet, "/healthz", nil, &health); err != nil {
+		return err
+	}
+	if health.State != "present" && health.State != "absent" {
+		return fmt.Errorf("Monitor %s does not implement the current owner protocol; update it before opening", name)
+	}
+	if m.keys.storageKey == nil {
+		if health.State != "absent" {
+			return fmt.Errorf("Monitor %s has saved state, but this machine has no storage key for it; restore its UMK keys file %s", name, m.keys.umkPath)
+		}
+		if err := m.keys.generateUMKKeys("monitor", owner, binding); err != nil {
+			return err
+		}
+	}
+	fmt.Fprintln(os.Stderr, "Unlocking Monitor "+name+" encrypted state")
+	if err := m.unlock(restoreDevice); err != nil {
+		return fmt.Errorf("unlock Monitor: %w", err)
+	}
+	m.checkpoint(ctx)
+	return nil
+}
+
+func (m *monitorSession) close() {
+	if m.client != nil {
+		m.client.Close()
+	}
+	if m.keys != nil {
+		m.keys.close()
+	}
+}
+
+// unlock delivers the state key; Monitor itself initializes only confirmed-absent state at generation 0.
+func (m *monitorSession) unlock(restoreDevice bool) error {
+	var profile monitorProfile
+	if err := readStorageJSON(filepath.Join(m.dir, monitorProfileFile), &profile); err != nil {
+		return err
+	}
+	input := struct {
+		Generation uint64 `json:"generation"`
+		StorageKey []byte `json:"storage_key"`
+		DeviceKey  string `json:"device_key,omitempty"`
+	}{Generation: profile.Generation, StorageKey: m.keys.storageKey}
+	if restoreDevice {
+		device, err := loadSSHKey(filepath.Join(m.dir, monitorDeviceKeyName))
+		if err != nil {
+			return fmt.Errorf("restore Monitor device key: %w", err)
+		}
+		input.DeviceKey = device
+	}
+	var view monitorView
+	if err := m.request(http.MethodPost, "/unlock", input, &view); err != nil {
+		return err
+	}
+	reported, _, _, _, err := ssh.ParseAuthorizedKey([]byte(view.HostKey))
+	if err != nil || !bytes.Equal(reported.Marshal(), m.hostKey.Marshal()) {
+		return errors.New("Monitor reports a host key other than its attested one")
+	}
+	m.view = view
+	return nil
+}
+
+func (m *monitorSession) authorizes(agent string) bool {
+	want, _, _, _, err := ssh.ParseAuthorizedKey([]byte(agent))
+	for _, identity := range m.view.Config.Identities {
+		key, _, _, _, keyErr := ssh.ParseAuthorizedKey([]byte(identity.Key))
+		if err == nil && keyErr == nil && bytes.Equal(key.Marshal(), want.Marshal()) {
+			return true
+		}
+	}
+	return false
+}
+
+// enrollAgent registers only the public agent key; Monitor refuses a previously removed identity.
+func (m *monitorSession) enrollAgent(ctx context.Context, name, agent string) error {
+	var view monitorView
+	if err := m.request(http.MethodPost, "/enroll", map[string]any{name: map[string]any{"key": agent}}, &view); err != nil {
+		return err
+	}
+	m.view = view
+	m.checkpoint(ctx)
+	return nil
+}
+
+// checkpoint persists the locally observed generation into the key bundle. Until it
+// succeeds only this machine holds the raised minimum, and the warning says so.
+func (m *monitorSession) checkpoint(ctx context.Context) {
+	if m.keys.mk == nil {
+		return
+	}
+	var profile monitorProfile
+	err := readStorageJSON(filepath.Join(m.dir, monitorProfileFile), &profile)
+	if err == nil && profile.Generation <= m.keys.minGeneration {
+		return
+	}
+	if err == nil {
+		_, err = m.keys.mk.update(ctx, func(p *mkPayload) error {
+			r := findKey(p, func(r *mkResource) bool { return r.KeyID == m.keys.keyID })
+			if r == nil || r.MinGeneration == nil {
+				return errors.New("the Monitor key is no longer in your key bundle")
+			}
+			*r.MinGeneration = max(*r.MinGeneration, profile.Generation)
+			return nil
+		})
+	}
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: Monitor generation %d is saved only on this machine; synchronizing it to your key bundle failed: %v\n", profile.Generation, err)
+		return
+	}
+	m.keys.minGeneration = profile.Generation
 }
 
 func monitorRecord(scope accountScope, row *workloadTarget) (string, error) {
@@ -234,12 +361,15 @@ func monitorRecord(scope accountScope, row *workloadTarget) (string, error) {
 }
 
 // Owner API calls use the UI's attested channel and persist its generation acknowledgments.
-func monitorOwnerRequest(client *ssh.Client, dir, method, path string, input any) error {
-	data, err := json.Marshal(input)
-	if err != nil {
-		return err
+func monitorOwnerRequest(client *ssh.Client, dir, method, path string, input, out any) error {
+	var data []byte
+	if input != nil {
+		var err error
+		if data, err = json.Marshal(input); err != nil {
+			return err
+		}
+		defer clear(data)
 	}
-	defer clear(data)
 	timer := time.AfterFunc(monitorRequestTimeout, func() { client.Close() })
 	defer timer.Stop()
 	token := panelToken()
@@ -252,7 +382,9 @@ func monitorOwnerRequest(client *ssh.Client, dir, method, path string, input any
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Content-Type", "application/json")
+	if input != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
 	req.Header.Set("X-Tinfoil-Session", token)
 	if err := req.Write(ch); err != nil {
 		return err
@@ -272,7 +404,10 @@ func monitorOwnerRequest(client *ssh.Client, dir, method, path string, input any
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("Monitor: %s: %s", resp.Status, extractErrorMessage(reply))
 	}
-	return nil
+	if out == nil {
+		return nil
+	}
+	return json.Unmarshal(reply, out)
 }
 
 // Authenticate only against the SSH host key endorsed by attestation.
@@ -320,19 +455,11 @@ func openOwnerChannel(client *ssh.Client, dir, host, token string) (ssh.Channel,
 	return ch, nil
 }
 
-// Owner-initiated sandbox setup restores the requested identities and route access.
-func pairSandboxMonitor(client *ssh.Client, dir, name, device, agent string) error {
-	return monitorOwnerRequest(client, dir, "POST", "/enroll", map[string]any{
-		"device-" + storageHash([]byte(device))[:16]: map[string]any{"key": device, "routes": true, "restore": true},
-		"sandbox-" + name: map[string]any{"key": agent, "restore": true},
-	})
-}
-
 func init() {
 	rootCmd.AddCommand(monitorCmd)
 	command := &cobra.Command{
 		Use: "open [id|name]", Short: "Unlock and forward the Monitor UI over attested SSH", Args: cobra.ExactArgs(1),
-		Long: "Unlock the Monitor, restore this device's sandbox connectivity, and forward its UI over attested SSH. Requires a Monitor release supporting device restoration during unlock.",
+		Long: "Verify the Monitor against its trusted profile and build provenance, unlock it with its saved key and minimum generation, restore this device's sandbox connectivity, and forward its UI over attested SSH.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
 			fmt.Fprintln(cmd.ErrOrStderr(), "Looking up Monitor "+name)
@@ -344,19 +471,21 @@ func init() {
 			if err != nil {
 				return err
 			}
-			target, err := resolveWorkload(*row, monitorRepo, repo)
+			target, err := managedWorkload(*row, monitorRepo)
 			if err != nil {
 				return err
 			}
-			client, dir, err := connectMonitorOwner(cmd.Context(), scope, target, true)
+			m, err := connectMonitorOwner(cmd.Context(), scope, cp, target, true)
 			if err != nil {
 				return err
 			}
-			defer client.Close()
-			return serveMonitorPanel(cmd, client, dir, "127.0.0.1:0")
+			defer m.close()
+			for _, failure := range relinkSandboxes(cmd.Context(), scope, cp, m, row.ID) {
+				fmt.Fprintf(cmd.ErrOrStderr(), "Could not re-link %v\n", failure)
+			}
+			return serveMonitorPanel(cmd, m.client, m.dir, "127.0.0.1:0")
 		},
 	}
-	addTrustDangerousFlag(command)
 	monitorCmd.AddCommand(command)
 }
 
@@ -431,9 +560,13 @@ func openMonitorBrowserOnEnter(ctx context.Context, input io.Reader, url string)
 	if _, err := bufio.NewReader(input).ReadString('\n'); err != nil || ctx.Err() != nil {
 		return nil
 	}
+	return openBrowser(url)
+}
+
+var openBrowser = func(url string) error {
 	opener := "xdg-open"
 	if runtime.GOOS == "darwin" {
 		opener = "open"
 	}
-	return exec.CommandContext(ctx, opener, url).Run()
+	return exec.Command(opener, url).Run()
 }
