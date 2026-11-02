@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"syscall"
 )
 
 const (
@@ -30,6 +31,7 @@ var storageRepoPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*/[a-z0-9_.-]+$`)
 var storageRegionPattern = regexp.MustCompile(`^[a-z]{2}(-[a-z]+)+-[0-9]+$`)
 var storageNamePattern = regexp.MustCompile(`^[A-Za-z0-9/_+=.@-]+$`)
 var storageDomainLabel = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?$`)
+var errStorageLocked = errors.New("locked by another running tinfoil command")
 
 type storageScope struct {
 	ControlplaneURL string `json:"controlplane_url"`
@@ -296,14 +298,19 @@ func acquireStorageLock(path string) (func(), error) {
 	if err := prepareStorageDirectory(filepath.Dir(path)); err != nil {
 		return nil, err
 	}
-	f, err := os.OpenFile(path+".lock", os.O_CREATE|os.O_EXCL|os.O_WRONLY, storageFileMode)
+	f, err := os.OpenFile(path+".lock", os.O_CREATE|os.O_WRONLY|syscall.O_NOFOLLOW, storageFileMode)
 	if err != nil {
-		return nil, fmt.Errorf("storage operation is locked; after verifying no other command is running, remove %s.lock: %w", path, err)
-	}
-	if err := f.Close(); err != nil {
 		return nil, err
 	}
-	return func() { _ = os.Remove(path + ".lock") }, nil
+	// The kernel releases the lock when the process exits; removing the file would race a waiting locker.
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		f.Close()
+		if errors.Is(err, syscall.EWOULDBLOCK) {
+			return nil, fmt.Errorf("%s is %w", path, errStorageLocked)
+		}
+		return nil, err
+	}
+	return func() { _ = f.Close() }, nil
 }
 
 func loadStorageReceipt(scope storageScope, volume string) (storageReceipt, error) {

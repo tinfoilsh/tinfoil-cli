@@ -195,7 +195,7 @@ func withCredentialLock(fn func() error) error {
 		return err
 	}
 	unlock, err := acquireStorageLock(path)
-	for deadline := time.Now().Add(credentialLockWait); errors.Is(err, os.ErrExist) && time.Now().Before(deadline); {
+	for deadline := time.Now().Add(credentialLockWait); errors.Is(err, errStorageLocked) && time.Now().Before(deadline); {
 		time.Sleep(credentialLockRetry)
 		unlock, err = acquireStorageLock(path)
 	}
