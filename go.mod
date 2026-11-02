@@ -8,6 +8,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/credentials v1.20.6
 	github.com/aws/aws-sdk-go-v2/service/secretsmanager v1.50.1
 	github.com/aws/smithy-go v1.28.1
+	github.com/fatih/color v1.18.0
 	github.com/golang/snappy v0.0.4
 	github.com/google/uuid v1.6.0
 	github.com/sigstore/protobuf-specs v0.5.1
@@ -83,6 +84,8 @@ require (
 	github.com/in-toto/attestation v1.2.0 // indirect
 	github.com/in-toto/in-toto-golang v0.11.0 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
+	github.com/mattn/go-colorable v0.1.14 // indirect
+	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/oklog/ulid/v2 v2.1.1 // indirect
 	github.com/openai/openai-go/v3 v3.80.0 // indirect
 	github.com/opencontainers/go-digest v1.0.0 // indirect
