@@ -449,7 +449,7 @@ func relinkSandbox(ctx context.Context, scope accountScope, cp *cpClient, m *mon
 	if err != nil {
 		return err
 	}
-	if !m.authorizes(agentPublicKey(keys.agentSeed)) {
+	if !m.authorizes(monitorIdentity(keys.monitorIdentitySeed)) {
 		keys.close()
 		return nil
 	}
@@ -462,8 +462,8 @@ func relinkSandbox(ctx context.Context, scope accountScope, cp *cpClient, m *mon
 	if err != nil {
 		return err
 	}
-	if status.AgentPublicKey == nil || *status.AgentPublicKey != agentPublicKey(keys.agentSeed) {
-		return fmt.Errorf("its saved agent identity is not active; run `tinfoil sandbox enroll %s`", row.Name)
+	if status.MonitorIdentity == nil || *status.MonitorIdentity != monitorIdentity(keys.monitorIdentitySeed) {
+		return fmt.Errorf("its saved Monitor identity is not active; run `tinfoil sandbox enroll %s`", row.Name)
 	}
 	if host := authorizedKeyLine(m.hostKey); status.MonitorHostKey == nil || *status.MonitorHostKey != host {
 		fmt.Fprintln(os.Stderr, "Re-linking sandbox "+row.Name+" to the current Monitor boot")
@@ -493,11 +493,11 @@ func monitorJump(sandbox, host string, port int, dir string, hostKey ssh.PublicK
 }
 
 type sandboxStatus struct {
-	Protocol       string  `json:"protocol"`
-	InstanceID     string  `json:"instance_id"`
-	Volume         string  `json:"volume"`
-	AgentPublicKey *string `json:"agent_public_key"`
-	MonitorHostKey *string `json:"monitor_host_key"`
+	Protocol        string  `json:"protocol"`
+	InstanceID      string  `json:"instance_id"`
+	Volume          string  `json:"volume"`
+	MonitorIdentity *string `json:"monitor_identity"`
+	MonitorHostKey  *string `json:"monitor_host_key"`
 }
 
 // enroll decides from the actual Monitor identities and the sandbox's authenticated
@@ -516,19 +516,19 @@ func (s *sandboxSession) enroll(ctx context.Context) error {
 		return err
 	}
 	agent := ""
-	if s.keys.agentSeed != nil {
-		agent = agentPublicKey(s.keys.agentSeed)
+	if s.keys.monitorIdentitySeed != nil {
+		agent = monitorIdentity(s.keys.monitorIdentitySeed)
 	}
 	host := authorizedKeyLine(s.monitor.hostKey)
 	switch {
-	case status.AgentPublicKey != nil && *status.AgentPublicKey != agent:
-		return fmt.Errorf("sandbox %s holds a different agent identity than its saved keys", name)
-	case status.AgentPublicKey == nil && (agent == "" || !s.monitor.authorizes(agent)):
+	case status.MonitorIdentity != nil && *status.MonitorIdentity != agent:
+		return fmt.Errorf("sandbox %s holds a different Monitor identity than its saved keys", name)
+	case status.MonitorIdentity == nil && (agent == "" || !s.monitor.authorizes(agent)):
 		if s.keys.storageKey == nil {
 			if err := s.keys.generateUMKKeys("sandbox", s.box.OwnerPublicKey, s.binding); err != nil {
 				return err
 			}
-			agent = agentPublicKey(s.keys.agentSeed)
+			agent = monitorIdentity(s.keys.monitorIdentitySeed)
 		}
 		fmt.Fprintln(os.Stderr, "Registering sandbox "+name+" with Monitor")
 		// Monitor itself refuses an identity the owner removed earlier.
@@ -538,7 +538,7 @@ func (s *sandboxSession) enroll(ctx context.Context) error {
 		return s.enrollSandbox(ctx, status.Volume, host)
 	case !s.monitor.authorizes(agent):
 		return fmt.Errorf("Monitor no longer authorizes sandbox %s; restore its identity in the Monitor UI, then retry", name)
-	case status.AgentPublicKey == nil || status.Volume != "unlocked":
+	case status.MonitorIdentity == nil || status.Volume != "unlocked":
 		return s.enrollSandbox(ctx, status.Volume, host)
 	case status.MonitorHostKey == nil || *status.MonitorHostKey != host:
 		fmt.Fprintln(os.Stderr, "Re-linking sandbox "+name+" to the current Monitor boot")
@@ -547,7 +547,7 @@ func (s *sandboxSession) enroll(ctx context.Context) error {
 	return nil
 }
 
-// status is the sandbox's own authenticated report of its volume, agent identity and Monitor pin.
+// status is the sandbox's own authenticated report of its volume, Monitor identity and Monitor pin.
 func (s *sandboxSession) status(ctx context.Context) (sandboxStatus, error) {
 	var status sandboxStatus
 	if err := s.owner.call(ctx, http.MethodGet, "/status", nil, &status); err != nil {
@@ -559,7 +559,7 @@ func (s *sandboxSession) status(ctx context.Context) (sandboxStatus, error) {
 	return status, nil
 }
 
-// enrollSandbox sends the agent identity, verified Monitor host key and disk key to
+// enrollSandbox sends the Monitor identity, verified Monitor host key and disk key to
 // the attested sandbox only. The volume worker formats only blank storage and
 // otherwise unlocks it.
 func (s *sandboxSession) enrollSandbox(ctx context.Context, volume, host string) error {
@@ -567,11 +567,11 @@ func (s *sandboxSession) enrollSandbox(ctx context.Context, volume, host string)
 		fmt.Fprintln(os.Stderr, "Unlocking sandbox "+s.box.Name+" encrypted workspace")
 	}
 	input := struct {
-		AgentSeed       b64u   `json:"agent_seed"`
-		MonitorHostKey  string `json:"monitor_host_key"`
-		DiskKey         b64u   `json:"disk_key"`
-		AllowInitialize bool   `json:"allow_initialize"`
-	}{s.keys.agentSeed, host, s.keys.storageKey, true}
+		MonitorIdentitySeed b64u   `json:"monitor_identity_seed"`
+		MonitorHostKey      string `json:"monitor_host_key"`
+		DiskKey             b64u   `json:"disk_key"`
+		AllowInitialize     bool   `json:"allow_initialize"`
+	}{s.keys.monitorIdentitySeed, host, s.keys.storageKey, true}
 	var status sandboxStatus
 	if err := s.owner.call(ctx, http.MethodPost, "/enroll", input, &status); err != nil {
 		return fmt.Errorf("%w; rerun `tinfoil sandbox enroll %s` to reconcile", err, s.box.Name)
@@ -583,7 +583,7 @@ func (s *sandboxSession) enrollSandbox(ctx context.Context, volume, host string)
 	return nil
 }
 
-func agentPublicKey(seed []byte) string {
+func monitorIdentity(seed []byte) string {
 	private := ed25519.NewKeyFromSeed(seed)
 	defer clear(private)
 	public, _ := ssh.NewPublicKey(private.Public())

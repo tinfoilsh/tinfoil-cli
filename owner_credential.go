@@ -27,7 +27,6 @@ var resourceNamePattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,62}$`)
 
 const (
 	keyStatePath         = "/api/sandboxes/owner-key"
-	keyUMKPath           = "/api/sandboxes/owner-key/umk"
 	maxKeyStateConflicts = 8
 )
 
@@ -36,19 +35,12 @@ var (
 	errNoLocalKeys = errors.New("this machine has no keys for it")
 )
 
-// keyState is the authenticated user's key state; controlplane stores only ciphertext and public keys.
+// keyState is the authenticated user's key state; controlplane stores only ciphertext.
 type keyState struct {
 	Revision    uint64          `json:"revision"`
 	DEKID       *string         `json:"dek_id"`
 	EncryptedMK *string         `json:"encrypted_mk"`
 	Recovery    json.RawMessage `json:"recovery"`
-	UMK         []umkEntry      `json:"umk"`
-}
-
-type umkEntry struct {
-	KeyID     string `json:"key_id"`
-	Kind      string `json:"kind"`
-	PublicKey string `json:"public_key"`
 }
 
 // keyStateWrite replaces the whole key state from the revision it was read at.
@@ -163,7 +155,7 @@ func addKey(p *mkPayload, r mkResource) error {
 	}
 	e := p.Resources[i]
 	if e.Kind != r.Kind || e.AttemptID != r.AttemptID || e.OwnerPublicKey != r.OwnerPublicKey || !bytes.Equal(e.OwnerSeed, r.OwnerSeed) ||
-		!bytes.Equal(e.StorageKey, r.StorageKey) || !bytes.Equal(e.AgentSeed, r.AgentSeed) {
+		!bytes.Equal(e.StorageKey, r.StorageKey) || !bytes.Equal(e.MonitorIdentitySeed, r.MonitorIdentitySeed) {
 		return fmt.Errorf("key %s already holds different key material", r.KeyID)
 	}
 	return nil
@@ -179,7 +171,7 @@ func newResourceKey(kind string) mkResource {
 	r := mkResource{KeyID: randomB64U(16), Kind: kind, AttemptID: randomB64U(16), OwnerSeed: random(), StorageKey: random()}
 	r.OwnerPublicKey = ed25519PublicKeyString(r.OwnerSeed)
 	if kind == "sandbox" {
-		r.AgentSeed = random()
+		r.MonitorIdentitySeed = random()
 	} else {
 		r.MinGeneration = new(uint64)
 	}
@@ -188,31 +180,31 @@ func newResourceKey(kind string) mkResource {
 
 // resourceKeys are one resource's owner signer and independent secrets for this command.
 type resourceKeys struct {
-	mode          string
-	signer        ssh.Signer
-	identity      string
-	ownerPrivate  ed25519.PrivateKey
-	ownerSeed     []byte
-	storageKey    []byte
-	agentSeed     []byte
-	minGeneration uint64
-	closeSigner   func()
-	mk            *mkSession
-	keyID         string
-	umkPath       string
+	mode                string
+	signer              ssh.Signer
+	identity            string
+	ownerPrivate        ed25519.PrivateKey
+	ownerSeed           []byte
+	storageKey          []byte
+	monitorIdentitySeed []byte
+	minGeneration       uint64
+	closeSigner         func()
+	mk                  *mkSession
+	keyID               string
+	umkPath             string
 }
 
 func (k *resourceKeys) close() {
 	clear(k.ownerPrivate)
 	clear(k.ownerSeed)
 	clear(k.storageKey)
-	clear(k.agentSeed)
+	clear(k.monitorIdentitySeed)
 	if k.closeSigner != nil {
 		k.closeSigner()
 	}
 }
 
-// resolveResourceKeys finds the saved keys of a resource by its measured owner key
+// resolveResourceKeys finds the saved keys of a resource
 // and, with bind, binds its allocated IDs before first initialization. A missing or
 // wrong key fails: an existing resource never gets replacement keys. With bind, a UMK
 // resource without a local record returns no secrets, which the caller generates only
@@ -249,7 +241,7 @@ func resolveResourceKeys(ctx context.Context, cp *cpClient, scope accountScope, 
 			return nil, err
 		}
 		keys.mk, keys.keyID = mk, saved.KeyID
-		keys.ownerSeed, keys.storageKey, keys.agentSeed = bytes.Clone(saved.OwnerSeed), bytes.Clone(saved.StorageKey), bytes.Clone(saved.AgentSeed)
+		keys.ownerSeed, keys.storageKey, keys.monitorIdentitySeed = bytes.Clone(saved.OwnerSeed), bytes.Clone(saved.StorageKey), bytes.Clone(saved.MonitorIdentitySeed)
 		if saved.MinGeneration != nil {
 			keys.minGeneration = *saved.MinGeneration
 		}
@@ -259,7 +251,7 @@ func resolveResourceKeys(ctx context.Context, cp *cpClient, scope accountScope, 
 		return keys, err
 	case "umk":
 		var err error
-		if keys.umkPath, err = umkRecordPath(scope, row.OwnerPublicKey); err != nil {
+		if keys.umkPath, err = umkRecordPath(scope, row.ID); err != nil {
 			return nil, err
 		}
 		var record umkRecord
@@ -287,28 +279,28 @@ func resolveResourceKeys(ctx context.Context, cp *cpClient, scope accountScope, 
 	return nil, fmt.Errorf("%s has no supported owner key custody; recreate it", row.Name)
 }
 
-// umkRecord holds a UMK resource's locally generated storage and agent keys; its owner key stays the user's.
+// umkRecord holds a UMK resource's locally generated storage key and Monitor identity seed; its owner key stays the user's.
 type umkRecord struct {
-	Version    int        `json:"version"`
-	Kind       string     `json:"kind"`
-	Owner      string     `json:"owner_public_key"`
-	StorageKey b64u       `json:"storage_key"`
-	AgentSeed  b64u       `json:"agent_seed"`
-	Binding    *mkBinding `json:"binding"`
+	Version             int        `json:"version"`
+	Kind                string     `json:"kind"`
+	Owner               string     `json:"owner_public_key"`
+	StorageKey          b64u       `json:"storage_key"`
+	MonitorIdentitySeed b64u       `json:"monitor_identity_seed"`
+	Binding             *mkBinding `json:"binding"`
 }
 
-func umkRecordPath(scope accountScope, owner string) (string, error) {
+func umkRecordPath(scope accountScope, containerID string) (string, error) {
 	dir, err := accountDir(scope)
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(dir, "umk-"+storageHash([]byte(owner))[:32]+".json"), nil
+	return filepath.Join(dir, "umk-"+storageHash([]byte(containerID))[:32]+".json"), nil
 }
 
 func newUMKRecord(kind, owner string) *umkRecord {
 	r := newResourceKey(kind)
 	clear(r.OwnerSeed)
-	return &umkRecord{Version: 1, Kind: kind, Owner: owner, StorageKey: r.StorageKey, AgentSeed: r.AgentSeed}
+	return &umkRecord{Version: 1, Kind: kind, Owner: owner, StorageKey: r.StorageKey, MonitorIdentitySeed: r.MonitorIdentitySeed}
 }
 
 // saveUMKRecord publishes new keys exclusively; a concurrent creator's record wins and is returned.
@@ -331,7 +323,7 @@ func saveUMKRecord(path string, record *umkRecord) (*umkRecord, error) {
 }
 
 func (r *umkRecord) use(keys *resourceKeys, kind, owner string, binding mkBinding, bind bool) error {
-	if r.Version != 1 || r.Kind != kind || r.Owner != owner || len(r.StorageKey) != 32 || (kind == "sandbox") != (len(r.AgentSeed) == 32) {
+	if r.Version != 1 || r.Kind != kind || r.Owner != owner || len(r.StorageKey) != 32 || (kind == "sandbox") != (len(r.MonitorIdentitySeed) == 32) {
 		return errors.New("the local storage keys belong to another resource or are damaged; restore the original file")
 	}
 	if r.Binding != nil && !reflect.DeepEqual(*r.Binding, binding) {
@@ -346,39 +338,21 @@ func (r *umkRecord) use(keys *resourceKeys, kind, owner string, binding mkBindin
 			return err
 		}
 	}
-	keys.storageKey, keys.agentSeed = bytes.Clone(r.StorageKey), bytes.Clone(r.AgentSeed)
+	keys.storageKey, keys.monitorIdentitySeed = bytes.Clone(r.StorageKey), bytes.Clone(r.MonitorIdentitySeed)
 	return nil
 }
 
-// generateUMKKeys creates and saves a web-provisioned UMK resource's keys once its storage is proven unused.
+// generateUMKKeys creates and saves a UMK resource's keys once its storage is proven unused.
 func (k *resourceKeys) generateUMKKeys(kind, owner string, binding mkBinding) error {
 	record := newUMKRecord(kind, owner)
 	record.Binding = &binding
 	saved, err := saveUMKRecord(k.umkPath, record)
 	clear(record.StorageKey)
-	clear(record.AgentSeed)
+	clear(record.MonitorIdentitySeed)
 	if err != nil {
 		return err
 	}
 	return saved.use(k, kind, owner, binding, true)
-}
-
-// registerUMK records a UMK public key before provisioning; no MK or passkey is involved.
-func registerUMK(ctx context.Context, cp *cpClient, kind, owner string) error {
-	state, err := fetchKeyState(ctx, cp)
-	if err != nil {
-		return err
-	}
-	for _, entry := range state.UMK {
-		if entry.PublicKey == owner {
-			if entry.Kind != kind {
-				return fmt.Errorf("this owner key is registered for a %s; choose a distinct key for each resource", entry.Kind)
-			}
-			return nil
-		}
-	}
-	_, err = cp.doContext(ctx, "POST", keyUMKPath, nil, nil, map[string][]umkEntry{"umk": {{KeyID: randomB64U(16), Kind: kind, PublicKey: owner}}}, nil)
-	return err
 }
 
 // whileSignedIn writes CLI-managed TMK material only while the login that synced it
@@ -478,17 +452,6 @@ func forgetDeletedResource(ctx context.Context, cp *cpClient, scope accountScope
 			return nil
 		})
 		return err
-	case "umk":
-		state, err := fetchKeyState(ctx, cp)
-		if err != nil {
-			return err
-		}
-		for _, entry := range state.UMK {
-			if entry.PublicKey == row.OwnerPublicKey {
-				_, err := cp.doContext(ctx, "DELETE", pathf(keyUMKPath+"/%s", entry.KeyID), nil, nil, nil, nil)
-				return err
-			}
-		}
 	}
 	return nil
 }

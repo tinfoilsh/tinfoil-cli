@@ -35,13 +35,12 @@ func ensureOwnerSSHKey(path string, seed []byte) error {
 }
 
 // keyStateServer is an in-memory controlplane key-state owner: whole-state writes
-// by revision CAS under one DEK, and UMK registration.
+// by revision CAS under one DEK.
 type keyStateServer struct {
 	mu         sync.Mutex
 	revision   uint64
 	dekID      *string
 	mk         *string
-	umk        []umkEntry
 	dropReply  int                   // drop the reply of this many committed writes
 	interpose  func(*keyStateServer) // runs once before the next write is checked
 	containers map[string]bool
@@ -53,18 +52,11 @@ func (s *keyStateServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	switch {
 	case r.Method == "GET" && r.URL.Path == keyStatePath:
-		state := keyState{Revision: s.revision, DEKID: s.dekID, EncryptedMK: s.mk, Recovery: json.RawMessage("[]"), UMK: s.umk}
+		state := keyState{Revision: s.revision, DEKID: s.dekID, EncryptedMK: s.mk, Recovery: json.RawMessage("[]")}
 		s.mu.Unlock()
 		json.NewEncoder(w).Encode(state)
 		return
 	case r.Method == "PUT" && r.URL.Path == keyStatePath:
-	case r.Method == "POST" && r.URL.Path == keyUMKPath:
-		defer s.mu.Unlock()
-		var body struct{ UMK []umkEntry }
-		json.NewDecoder(r.Body).Decode(&body)
-		s.umk = append(s.umk, body.UMK...)
-		w.WriteHeader(http.StatusNoContent)
-		return
 	case r.Method == "GET" && r.URL.Path == "/api/volumes":
 		list, failed := volumeList{Volumes: s.volumes}, s.volumesErr
 		s.mu.Unlock()
@@ -232,7 +224,7 @@ func TestResourceKeysBindOnceAndNeverRegenerate(t *testing.T) {
 	resolved, err := resolveResourceKeys(t.Context(), cp, scope, row, "sandbox", binding, dir, true)
 	require.NoError(t, err)
 	require.Equal(t, []byte(saved.StorageKey), resolved.storageKey)
-	require.Equal(t, []byte(saved.AgentSeed), resolved.agentSeed)
+	require.Equal(t, []byte(saved.MonitorIdentitySeed), resolved.monitorIdentitySeed)
 	require.Equal(t, saved.OwnerPublicKey, ownerKeyString(resolved.signer.PublicKey().(ssh.CryptoPublicKey).CryptoPublicKey().(ed25519.PublicKey)))
 	signature, err := resolved.signer.Sign(rand.Reader, []byte("owner request"))
 	require.NoError(t, err)
@@ -276,12 +268,8 @@ func TestUMKKeysStayLocalAndAreGeneratedOnlyOnce(t *testing.T) {
 	t.Cleanup(func() { attestSSHIdentity = previousIdentity })
 	require.NoError(t, ensureOwnerSSHKey(attestSSHIdentity, seed))
 
-	require.NoError(t, registerUMK(t.Context(), cp, "sandbox", owner))
-	require.NoError(t, registerUMK(t.Context(), cp, "sandbox", owner))
-	require.Len(t, keys.umk, 1, "a repeated registration reuses the entry")
-	require.ErrorContains(t, registerUMK(t.Context(), cp, "monitor", owner), "distinct key")
-
-	path, err := umkRecordPath(scope, owner)
+	row := containerView{ID: "11111111-1111-4111-8111-111111111111", Name: "work", OwnerKeyMode: "umk", OwnerPublicKey: owner}
+	path, err := umkRecordPath(scope, row.ID)
 	require.NoError(t, err)
 	results := make(chan *umkRecord, 8)
 	var wait sync.WaitGroup
@@ -300,7 +288,6 @@ func TestUMKKeysStayLocalAndAreGeneratedOnlyOnce(t *testing.T) {
 	}
 
 	instance, volume := "22222222-2222-4222-8222-222222222222", "33333333-3333-4333-8333-333333333333"
-	row := containerView{ID: "11111111-1111-4111-8111-111111111111", Name: "work", OwnerKeyMode: "umk", OwnerPublicKey: owner}
 	binding := mkBinding{Account: "personal", ContainerID: row.ID, InstanceID: &instance, VolumeID: &volume}
 	resolved, err := resolveResourceKeys(t.Context(), cp, scope, row, "sandbox", binding, t.TempDir(), true)
 	require.NoError(t, err)
@@ -318,7 +305,7 @@ func TestUMKKeysStayLocalAndAreGeneratedOnlyOnce(t *testing.T) {
 	resolved, err = resolveResourceKeys(t.Context(), cp, scope, row, "sandbox", binding, t.TempDir(), true)
 	require.NoError(t, err)
 	require.Nil(t, resolved.storageKey)
-	require.Nil(t, resolved.agentSeed)
+	require.Nil(t, resolved.monitorIdentitySeed)
 	require.NoError(t, resolved.generateUMKKeys("sandbox", owner, binding))
 	require.Len(t, resolved.storageKey, 32)
 	require.FileExists(t, path)
@@ -628,7 +615,7 @@ func TestResourceDirectoriesRejectAmbiguity(t *testing.T) {
 		require.NoError(t, os.Mkdir(other, 0700))
 		_, err := resourceDir(scope, row.ID, row.Name)
 		require.ErrorContains(t, err, "multiple credential directories")
-		_, err = umkRecordPath(scope, "ed25519:x")
+		_, err = umkRecordPath(scope, row.ID)
 		require.ErrorContains(t, err, "multiple credential directories")
 		require.NoError(t, os.Remove(other))
 	}

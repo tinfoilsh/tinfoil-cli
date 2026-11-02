@@ -228,7 +228,7 @@ func connectMonitorOwner(ctx context.Context, scope accountScope, cp *cpClient, 
 }
 
 // open checks that Monitor speaks the current owner protocol before any state key
-// leaves, generates web-provisioned UMK keys only for confirmed-absent state, then unlocks.
+// leaves, generates UMK keys only for confirmed-absent state, then unlocks.
 func (m *monitorSession) open(ctx context.Context, name, owner string, binding mkBinding, restoreDevice bool) error {
 	var health struct {
 		State string `json:"state"`

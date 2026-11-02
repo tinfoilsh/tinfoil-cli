@@ -646,7 +646,7 @@ func TestLogoutRemovesSyncedMaterialAndKeepsUserKeys(t *testing.T) {
 		return filepath.Join(dir, monitorDeviceKeyName)
 	}
 	tmkDevice, umkDevice := device("22222222-2222-4222-8222-222222222222", "tmk"), device("33333333-3333-4333-8333-333333333333", "umk")
-	umkRecord, err := umkRecordPath(scope, ed25519PublicKeyString(ownSeed))
+	umkRecord, err := umkRecordPath(scope, "44444444-4444-4444-8444-444444444444")
 	require.NoError(t, err)
 	_, err = saveUMKRecord(umkRecord, newUMKRecord("sandbox", ed25519PublicKeyString(ownSeed)))
 	require.NoError(t, err)
@@ -1147,7 +1147,7 @@ func TestLogoutRemovesSavedAdminKeyDespiteCredentialServiceOutage(t *testing.T) 
 	require.NoError(t, writeCredential(loginRecordName, &clerkGrant{Version: 1, Grant: randomB64U(16), Issuer: "https://api.example", ClientID: "fixture-client",
 		UserID: "user_owner", Account: "personal", AccessToken: "access-1", RefreshToken: "refresh-1", ExpiresAt: time.Now().Add(time.Hour).Unix()}))
 	owner := ed25519PublicKeyString(testSeed(t))
-	umk, err := umkRecordPath(accountScope{ControlplaneURL: "https://api.example", UserID: "user_owner"}, owner)
+	umk, err := umkRecordPath(accountScope{ControlplaneURL: "https://api.example", UserID: "user_owner"}, testContainerID)
 	require.NoError(t, err)
 	_, err = saveUMKRecord(umk, newUMKRecord("sandbox", owner))
 	require.NoError(t, err)

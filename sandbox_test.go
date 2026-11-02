@@ -156,7 +156,7 @@ func TestSandboxDeleteKeepsWorkspaceKeysAndRemovesOwnedProfile(t *testing.T) {
 	profile := filepath.Join(home, ".ssh", "tinfoil", "work.conf")
 	require.NoError(t, os.MkdirAll(filepath.Dir(profile), 0700))
 	require.NoError(t, os.WriteFile(profile, []byte("# tinfoil-resource: "+server.URL+"//owner/"+row.ID+"\n"), 0600))
-	record, err := umkRecordPath(accountScope{ControlplaneURL: server.URL, UserID: "owner"}, owner)
+	record, err := umkRecordPath(accountScope{ControlplaneURL: server.URL, UserID: "owner"}, row.ID)
 	require.NoError(t, err)
 	_, err = saveUMKRecord(record, newUMKRecord("sandbox", owner))
 	require.NoError(t, err)
@@ -242,7 +242,7 @@ type fakeSandboxOwner struct {
 func (f *fakeSandboxOwner) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var envelope ownerEnvelope
 	data, _ := io.ReadAll(r.Body)
-	if err := decodeCanonical(data, &envelope); err != nil || !ed25519.Verify(f.owner, append([]byte(ownerRequestContext), envelope.Request...), envelope.Signature) {
+	if err := decodeCanonical(data, &envelope); err != nil || !ed25519.Verify(f.owner, ownerRequestMessage(envelope.Request), envelope.Signature) {
 		http.Error(w, `{"error":"invalid_signature"}`, http.StatusUnauthorized)
 		return
 	}
@@ -408,12 +408,12 @@ func (f *fakeOwnerTransport) RoundTrip(r *http.Request) (*http.Response, error) 
 	switch request.Path {
 	case "/enroll":
 		var in struct {
-			AgentSeed      b64u   `json:"agent_seed"`
-			MonitorHostKey string `json:"monitor_host_key"`
+			MonitorIdentitySeed b64u   `json:"monitor_identity_seed"`
+			MonitorHostKey      string `json:"monitor_host_key"`
 		}
 		json.Unmarshal(body, &in)
-		agent := agentPublicKey(in.AgentSeed)
-		f.status.AgentPublicKey, f.status.MonitorHostKey, f.status.Volume = &agent, &in.MonitorHostKey, "unlocked"
+		agent := monitorIdentity(in.MonitorIdentitySeed)
+		f.status.MonitorIdentity, f.status.MonitorHostKey, f.status.Volume = &agent, &in.MonitorHostKey, "unlocked"
 	}
 	reply, _ := json.Marshal(f.status)
 	return &http.Response{StatusCode: 200, Body: io.NopCloser(bytes.NewReader(reply)), Request: r}, nil
@@ -422,8 +422,8 @@ func (f *fakeOwnerTransport) RoundTrip(r *http.Request) (*http.Response, error) 
 func TestSandboxEnrollDecidesFromMonitorIdentityAndSandboxStatus(t *testing.T) {
 	instance := "22222222-2222-4222-8222-222222222222"
 	volume := "33333333-3333-4333-8333-333333333333"
-	agentSeed, otherSeed := testSeed(t), testSeed(t)
-	agent, other := agentPublicKey(agentSeed), agentPublicKey(otherSeed)
+	monitorIdentitySeed, otherSeed := testSeed(t), testSeed(t)
+	agent, other := monitorIdentity(monitorIdentitySeed), monitorIdentity(otherSeed)
 	monitorHost, oldHost := testSigner(t).PublicKey(), authorizedLine(testSigner(t))
 	host := authorizedKeyLine(monitorHost)
 	for _, test := range []struct {
@@ -444,7 +444,7 @@ func TestSandboxEnrollDecidesFromMonitorIdentityAndSandboxStatus(t *testing.T) {
 		{name: "Monitor-only restart", agent: &agent, volume: "unlocked", pinned: &oldHost, monitorKnows: true, calls: []string{"GET /status", "POST /enroll"}, initialize: true},
 		{name: "interrupted unlock", agent: &agent, volume: "locked", pinned: &host, monitorKnows: true, calls: []string{"GET /status", "POST /enroll"}, initialize: true},
 		{name: "already enrolled", agent: &agent, volume: "unlocked", pinned: &host, monitorKnows: true, calls: []string{"GET /status"}},
-		{name: "another identity", agent: &other, volume: "unlocked", monitorKnows: true, calls: []string{"GET /status"}, err: "different agent identity"},
+		{name: "another identity", agent: &other, volume: "unlocked", monitorKnows: true, calls: []string{"GET /status"}, err: "different Monitor identity"},
 		{name: "web-provisioned UMK", volume: "locked", noLocalKeys: true, monitorEnroll: true, calls: []string{"GET /status", "POST /enroll"}, initialize: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -453,7 +453,7 @@ func TestSandboxEnrollDecidesFromMonitorIdentityAndSandboxStatus(t *testing.T) {
 			signer, err := ssh.NewSignerFromKey(ed25519.NewKeyFromSeed(seed))
 			require.NoError(t, err)
 			owner := ed25519PublicKeyString(seed)
-			transport := &fakeOwnerTransport{status: sandboxStatus{Protocol: sandboxOwnerProtocol, InstanceID: instance, Volume: test.volume, AgentPublicKey: test.agent, MonitorHostKey: test.pinned}}
+			transport := &fakeOwnerTransport{status: sandboxStatus{Protocol: sandboxOwnerProtocol, InstanceID: instance, Volume: test.volume, MonitorIdentity: test.agent, MonitorHostKey: test.pinned}}
 			var monitorCalls []string
 			m := &monitorSession{dir: t.TempDir(), hostKey: monitorHost, keys: &resourceKeys{}}
 			if test.monitorKnows {
@@ -466,11 +466,11 @@ func TestSandboxEnrollDecidesFromMonitorIdentityAndSandboxStatus(t *testing.T) {
 				monitorCalls = append(monitorCalls, method+" "+path+" "+string(data))
 				return nil
 			}
-			keys := &resourceKeys{mode: "tmk", signer: signer, agentSeed: bytes.Clone(agentSeed), storageKey: testSeed(t)}
+			keys := &resourceKeys{mode: "tmk", signer: signer, monitorIdentitySeed: bytes.Clone(monitorIdentitySeed), storageKey: testSeed(t)}
 			scope := accountScope{ControlplaneURL: "https://cp.example", UserID: "user_owner"}
 			if test.noLocalKeys {
 				keys = &resourceKeys{mode: "umk", signer: signer}
-				keys.umkPath, err = umkRecordPath(scope, owner)
+				keys.umkPath, err = umkRecordPath(scope, "11111111-1111-4111-8111-111111111111")
 				require.NoError(t, err)
 			}
 			s := &sandboxSession{box: containerView{Name: "work", OwnerPublicKey: owner}, keys: keys, monitor: m, expires: time.Now().Add(time.Hour),
@@ -487,16 +487,16 @@ func TestSandboxEnrollDecidesFromMonitorIdentityAndSandboxStatus(t *testing.T) {
 			if test.monitorEnroll {
 				enrolled := agent
 				if test.noLocalKeys {
-					enrolled = agentPublicKey(keys.agentSeed)
+					enrolled = monitorIdentity(keys.monitorIdentitySeed)
 				}
 				require.Equal(t, `POST /enroll {"sandbox-work":{"key":"`+enrolled+`"}}`, monitorCalls[0], "only the public agent key goes to Monitor, never restored")
 			}
 			if enroll, ok := transport.bodies["/enroll"]; ok {
 				var in struct {
-					AgentSeed       b64u   `json:"agent_seed"`
-					MonitorHostKey  string `json:"monitor_host_key"`
-					DiskKey         b64u   `json:"disk_key"`
-					AllowInitialize bool   `json:"allow_initialize"`
+					MonitorIdentitySeed b64u   `json:"monitor_identity_seed"`
+					MonitorHostKey      string `json:"monitor_host_key"`
+					DiskKey             b64u   `json:"disk_key"`
+					AllowInitialize     bool   `json:"allow_initialize"`
 				}
 				require.NoError(t, json.Unmarshal(enroll, &in))
 				require.Equal(t, test.initialize, in.AllowInitialize)
@@ -581,7 +581,7 @@ func TestDirectProfileUnlocksOverAttestedOwnerSSH(t *testing.T) {
 			keys := &resourceKeys{mode: "tmk", signer: signer, storageKey: bytes.Repeat([]byte{0, 1, 2, 10}, 8)}
 			if test.noLocalKeys {
 				keys = &resourceKeys{mode: "umk", signer: signer}
-				keys.umkPath, err = umkRecordPath(accountScope{ControlplaneURL: "https://cp.example", UserID: "user_owner"}, owner)
+				keys.umkPath, err = umkRecordPath(accountScope{ControlplaneURL: "https://cp.example", UserID: "user_owner"}, "11111111-1111-4111-8111-111111111111")
 				require.NoError(t, err)
 			}
 			instance, volumeID := "22222222-2222-4222-8222-222222222222", "33333333-3333-4333-8333-333333333333"
@@ -636,10 +636,10 @@ func TestMonitorRestartRelinksOnlyAuthorizedSandboxes(t *testing.T) {
 		var err error
 		f.ehbp, err = identity.NewIdentity()
 		require.NoError(t, err)
-		agent := agentPublicKey(f.key.AgentSeed)
-		f.status = sandboxStatus{Protocol: sandboxOwnerProtocol, InstanceID: f.instance, Volume: "unlocked", AgentPublicKey: &agent, MonitorHostKey: &oldHost}
+		agent := monitorIdentity(f.key.MonitorIdentitySeed)
+		f.status = sandboxStatus{Protocol: sandboxOwnerProtocol, InstanceID: f.instance, Volume: "unlocked", MonitorIdentity: &agent, MonitorHostKey: &oldHost}
 		if name == "rebooted" {
-			f.status.AgentPublicKey = nil
+			f.status.MonitorIdentity = nil
 		}
 		if name == "elsewhere" {
 			f.monitor = "88888888-8888-4888-8888-888888888888"
@@ -741,7 +741,7 @@ func TestMonitorRestartRelinksOnlyAuthorizedSandboxes(t *testing.T) {
 	for _, name := range []string{"a", "b", "nokeys", "unbound", "wrongbinding", "rebooted", "elsewhere"} {
 		m.view.Config.Identities["sandbox-"+name] = struct {
 			Key string `json:"key"`
-		}{agentPublicKey(fixtures[name].key.AgentSeed)}
+		}{monitorIdentity(fixtures[name].key.MonitorIdentitySeed)}
 	}
 	m.request = func(method, path string, input, out any) error {
 		raw, _ := json.Marshal(input)
@@ -782,7 +782,7 @@ func TestMonitorRestartRelinksOnlyAuthorizedSandboxes(t *testing.T) {
 	require.Len(t, failures, 2, "%v", reported)
 	require.Contains(t, reported[0]+reported[1], "sandbox wrongbinding:")
 	require.Contains(t, reported[0]+reported[1], "no longer matches")
-	require.Contains(t, reported[0]+reported[1], "sandbox rebooted: its saved agent identity is not active")
+	require.Contains(t, reported[0]+reported[1], "sandbox rebooted: its saved Monitor identity is not active")
 	host := authorizedKeyLine(newHost)
 	for _, name := range []string{"a", "b"} {
 		f := fixtures[name]

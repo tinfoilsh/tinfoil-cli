@@ -486,7 +486,7 @@ func TestMonitorOpenRequiresTheCurrentHealthContract(t *testing.T) {
 			if test.noLocalKeys {
 				keys = &resourceKeys{mode: "umk"}
 				var err error
-				keys.umkPath, err = umkRecordPath(accountScope{ControlplaneURL: "https://cp.example", UserID: "user_owner"}, owner)
+				keys.umkPath, err = umkRecordPath(accountScope{ControlplaneURL: "https://cp.example", UserID: "user_owner"}, testContainerID)
 				require.NoError(t, err)
 			}
 			var calls []string

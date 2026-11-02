@@ -191,7 +191,7 @@ func TestManagedCreateUsesContainerRecovery(t *testing.T) {
 					switch r.Method + " " + r.URL.Path {
 					case "GET /api/auth/context":
 						w.Write([]byte(`{"context_type":"personal","organization":null,"user_id":"user_test"}`))
-					case "GET " + keyStatePath, "PUT " + keyStatePath, "POST " + keyUMKPath:
+					case "GET " + keyStatePath, "PUT " + keyStatePath:
 						keys.ServeHTTP(w, r)
 					case "GET /api/containers/11111111-1111-4111-8111-111111111111":
 						json.NewEncoder(w).Encode(containerView{ID: "11111111-1111-4111-8111-111111111111", Repo: monitorRepo, ClerkUserID: "user_test", OwnerKeyMode: "umk"})
@@ -199,7 +199,6 @@ func TestManagedCreateUsesContainerRecovery(t *testing.T) {
 						json.NewEncoder(w).Encode(volumeList{Volumes: []volumeView{volume}})
 					case "POST /api/containers":
 						posts++
-						require.Equal(t, []umkEntry{{KeyID: keys.umk[0].KeyID, Kind: kind, PublicKey: owner}}, keys.umk, "the UMK key is registered before creation")
 						var body map[string]json.RawMessage
 						require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
 						require.JSONEq(t, `"umk"`, string(body["owner_key_mode"]))
@@ -257,15 +256,6 @@ func TestManagedCreateUsesContainerRecovery(t *testing.T) {
 				}
 				require.Equal(t, 1, posts)
 				require.Equal(t, state == "follow", polls == 1)
-				scope := accountScope{ControlplaneURL: strings.TrimRight(os.Getenv(envCPURL), "/"), UserID: "user_test"}
-				path, err := umkRecordPath(scope, owner)
-				require.NoError(t, err)
-				var record umkRecord
-				require.NoError(t, readStorageJSON(path, &record), "UMK storage keys are saved locally before creation")
-				require.Equal(t, owner, record.Owner)
-				require.Len(t, record.StorageKey, 32)
-				require.Equal(t, kind == "sandbox", len(record.AgentSeed) == 32)
-				require.Nil(t, record.Binding)
 			})
 		}
 	}
@@ -289,7 +279,7 @@ func TestSyncedCreateSavesKeysBeforeAllocation(t *testing.T) {
 		switch r.Method + " " + r.URL.Path {
 		case "GET /api/auth/context":
 			w.Write([]byte(`{"context_type":"personal","organization":null,"user_id":"user_owner"}`))
-		case "GET " + keyStatePath, "PUT " + keyStatePath, "POST " + keyUMKPath:
+		case "GET " + keyStatePath, "PUT " + keyStatePath:
 			keys.ServeHTTP(w, r)
 		case "GET /api/containers/" + monitor.ID:
 			json.NewEncoder(w).Encode(monitor)
@@ -358,7 +348,7 @@ func TestSandboxCreateWorkspaceSize(t *testing.T) {
 				switch r.Method + " " + r.URL.Path {
 				case "GET /api/auth/context":
 					w.Write([]byte(`{"context_type":"personal","organization":null,"user_id":"user_test"}`))
-				case "GET " + keyStatePath, "PUT " + keyStatePath, "POST " + keyUMKPath:
+				case "GET " + keyStatePath, "PUT " + keyStatePath:
 					keys.ServeHTTP(w, r)
 				case "GET /api/containers/" + monitorID:
 					json.NewEncoder(w).Encode(containerView{ID: monitorID, Repo: monitorRepo, ClerkUserID: "user_test", OwnerKeyMode: "umk"})

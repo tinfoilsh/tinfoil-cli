@@ -218,7 +218,7 @@ func TestOwnerContractSignedRequestsMatchFixtureBytes(t *testing.T) {
 			require.NoError(t, err, fixture.Name)
 			require.Equal(t, fixture.Envelope, string(envelope), fixture.Name)
 		}
-		require.True(t, ed25519.Verify(owner, []byte(ownerRequestContext+fixture.Bytes), fixtureBytes(t, fixture.Signature)), fixture.Name)
+		require.True(t, ed25519.Verify(owner, ownerRequestMessage([]byte(fixture.Bytes)), fixtureBytes(t, fixture.Signature)), fixture.Name)
 	}
 	for _, invalid := range f.InvalidRequests {
 		var request ownerRequest
@@ -236,7 +236,7 @@ func TestOwnerContractSignedRequestsMatchFixtureBytes(t *testing.T) {
 	for _, reject := range f.ServerRejects {
 		measured, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(reject.Server["owner"].(string), "ed25519:"))
 		require.NoError(t, err)
-		valid := ed25519.Verify(measured, []byte(ownerRequestContext+reject.Bytes), fixtureBytes(t, reject.Signature))
+		valid := ed25519.Verify(measured, ownerRequestMessage([]byte(reject.Bytes)), fixtureBytes(t, reject.Signature))
 		require.Equal(t, reject.Error == nil || *reject.Error != "invalid_signature", valid, reject.Case)
 	}
 }

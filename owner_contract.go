@@ -35,7 +35,7 @@ const (
 	maxBucketChars         = 512
 	maxKeySyncPayloadChars = 8192
 	maxSafeInteger         = 1<<53 - 1
-	ownerRequestContext    = "tinfoil owner request v2\x00"
+	ownerRequestContext    = "tinfoil owner request v3\x00"
 	ownerNonceBytes        = 24
 	keySyncRequestLabel    = "tinfoil-cli-key-sync-v1"
 	keySyncConfirmLabel    = "tinfoil-cli-confirm-v1"
@@ -140,15 +140,15 @@ type mkBinding struct {
 }
 
 type mkResource struct {
-	KeyID          string     `json:"key_id"`
-	Kind           string     `json:"kind"`
-	AttemptID      string     `json:"attempt_id"`
-	OwnerSeed      b64u       `json:"owner_seed"`
-	OwnerPublicKey string     `json:"owner_public_key"`
-	StorageKey     b64u       `json:"storage_key"`
-	AgentSeed      b64u       `json:"agent_seed"`
-	MinGeneration  *uint64    `json:"min_generation"`
-	Binding        *mkBinding `json:"binding"`
+	KeyID               string     `json:"key_id"`
+	Kind                string     `json:"kind"`
+	AttemptID           string     `json:"attempt_id"`
+	OwnerSeed           b64u       `json:"owner_seed"`
+	OwnerPublicKey      string     `json:"owner_public_key"`
+	StorageKey          b64u       `json:"storage_key"`
+	MonitorIdentitySeed b64u       `json:"monitor_identity_seed"`
+	MinGeneration       *uint64    `json:"min_generation"`
+	Binding             *mkBinding `json:"binding"`
 }
 
 type mkPayload struct {
@@ -161,7 +161,7 @@ func (r *mkResource) validate() error {
 	if !validID16(r.KeyID) || !validID16(r.AttemptID) || (!sandbox && r.Kind != "monitor") ||
 		len(r.OwnerSeed) != ed25519.SeedSize || len(r.StorageKey) != 32 ||
 		r.OwnerPublicKey != ed25519PublicKeyString(r.OwnerSeed) ||
-		sandbox != (len(r.AgentSeed) == ed25519.SeedSize) || (!sandbox && r.AgentSeed != nil) ||
+		sandbox != (len(r.MonitorIdentitySeed) == ed25519.SeedSize) || (!sandbox && r.MonitorIdentitySeed != nil) ||
 		sandbox != (r.MinGeneration == nil) || (r.MinGeneration != nil && *r.MinGeneration > maxSafeInteger) {
 		return fmt.Errorf("key %q is invalid", r.KeyID)
 	}
@@ -307,6 +307,12 @@ type ownerEnvelope struct {
 	Signature b64u `json:"signature"`
 }
 
+// ownerRequestMessage is what an owner key signs: a digest, since hardware keys cap the message size.
+func ownerRequestMessage(request []byte) []byte {
+	digest := sha256.Sum256(request)
+	return append([]byte(ownerRequestContext), digest[:]...)
+}
+
 // signOwnerRequest signs with an Ed25519 SSH signer: a TMK seed, a UMK key file or an agent key.
 func signOwnerRequest(signer ssh.Signer, request ownerRequest) ([]byte, error) {
 	var owner string
@@ -329,7 +335,7 @@ func signOwnerRequest(signer ssh.Signer, request ownerRequest) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	signature, err := signer.Sign(rand.Reader, append([]byte(ownerRequestContext), raw...))
+	signature, err := signer.Sign(rand.Reader, ownerRequestMessage(raw))
 	if err != nil {
 		return nil, err
 	}
