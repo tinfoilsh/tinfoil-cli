@@ -116,7 +116,7 @@ func newSelfUpdateCommand(newUpdater func() *selfUpdater) *cobra.Command {
 	var check bool
 	var output string
 	cmd := &cobra.Command{
-		Use: selfUpdateName, Short: "Update the CLI to the latest stable release (no login required)",
+		Use: selfUpdateName, Short: "Update the CLI to the latest stable release",
 		Args: cobra.NoArgs, SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if output != "text" && output != "json" {

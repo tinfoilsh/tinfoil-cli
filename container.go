@@ -208,7 +208,7 @@ func init() {
 	containerCmd.AddCommand(containerConnectCmd)
 
 	for _, c := range []*cobra.Command{containerCreateCmd, containerDeployCmd, containerUpdateCmd, containerPromoteCmd} {
-		c.Flags().BoolVar(&noWait, "no-wait", false, "Return as soon as the request is accepted instead of following progress")
+		c.Flags().BoolVar(&noWait, "no-wait", false, "Return once the request is accepted")
 	}
 	containerCancelCmd.Flags().BoolVar(&cancelRollbackLatest, "rollback-latest", false, "Request restoring the repository's latest release to the current production tag")
 
@@ -217,7 +217,7 @@ func init() {
 	containerCreateCmd.Flags().StringVar(&createSource, "source", containerSourceGitHub, "Config source: github, registry, or local (implied by --config)")
 	containerCreateCmd.Flags().StringVar(&createRevision, "revision", "", "GitHub release tag, or registry version or sha256:<config digest>")
 	containerCreateCmd.Flags().BoolVar(&createDebug, "debug", false, "Enable debug mode (allows SSH into the enclave)")
-	containerCreateCmd.Flags().StringVar(&createMarkLatestRelease, "mark-latest", "", "Mark the deployed tag as the repository's latest GitHub release once it is running (default true; pass false to leave the latest release unchanged)")
+	containerCreateCmd.Flags().StringVar(&createMarkLatestRelease, "mark-latest", "", "Mark the tag as the repo's latest GitHub release once running (default true)")
 	containerCreateCmd.Flags().BoolVar(&createDisableCC, "disable-cc-mode", false, "EXPERIMENTAL: disable confidential computing (benchmarks only; requires org entitlement)")
 	containerCreateCmd.Flags().BoolVar(&createYes, "yes", false, "Skip interactive confirmation for --disable-cc-mode")
 	containerCreateCmd.Flags().StringVar(&createCustomDomain, "custom-domain", "", "Verified custom domain to expose the container on")
@@ -239,7 +239,7 @@ func init() {
 	containerDeployCmd.Flags().StringArrayVar(&deploySecrets, "secret", nil, "Replace the saved Tinfoil-managed secrets list (specify all; --secret=\"\" clears it)")
 	containerDeployCmd.Flags().StringArrayVar(&deploySSHKeys, "ssh-key", nil, "Replace the saved SSH keys list")
 	containerDeployCmd.Flags().StringVar(&deployDebug, "debug", "", "Deploy in debug mode (true/false)")
-	containerDeployCmd.Flags().StringVar(&deployMarkLatestRelease, "mark-latest", "", "Mark the deployed tag as the repository's latest GitHub release once it is running (default true; pass false to leave the latest release unchanged)")
+	containerDeployCmd.Flags().StringVar(&deployMarkLatestRelease, "mark-latest", "", "Mark the tag as the repo's latest GitHub release once running (default true)")
 	containerDeployCmd.Flags().StringVar(&deployCustomDomain, "custom-domain", "", "Replace the custom domain (empty string clears it)")
 	containerDeployCmd.Flags().StringVar(&deployHost, "host", "", "Deploy on a different host (see 'tinfoil container hosts')")
 	containerDeployCmd.Flags().StringArrayVar(&deployVolumes, "volume", nil, "Volume to attach before deploying, as <id|name>[:<mount name>]; may be repeated")
@@ -249,17 +249,17 @@ func init() {
 	containerUpdateCmd.Flags().StringArrayVar(&updateSecrets, "secret", nil, "Replace the saved Tinfoil-managed secrets list (specify all; --secret=\"\" clears it)")
 	containerUpdateCmd.Flags().StringArrayVar(&updateSSHKeys, "ssh-key", nil, "Replace the saved SSH keys list")
 	containerUpdateCmd.Flags().StringVar(&updateDebug, "debug", "", "Switch debug mode on or off (true/false)")
-	containerUpdateCmd.Flags().StringVar(&updateHold, "hold", "", "Hold the new version for review instead of switching traffic automatically (true/false)")
+	containerUpdateCmd.Flags().StringVar(&updateHold, "hold", "", "Hold the new version for review (default: the project's setting)")
 	containerUpdateCmd.Flags().Lookup("hold").NoOptDefVal = "true"
-	containerUpdateCmd.Flags().StringVar(&updateMarkLatestRelease, "mark-latest", "", "Mark the deployed tag as the repository's latest GitHub release once it is running (default true; pass false to leave the latest release unchanged)")
+	containerUpdateCmd.Flags().StringVar(&updateMarkLatestRelease, "mark-latest", "", "Mark the tag as the repo's latest GitHub release once running (default true)")
 	containerUpdateCmd.Flags().StringVar(&updateCustomDomain, "custom-domain", "", "Replace the custom domain (empty string clears it)")
-	containerUpdateCmd.Flags().BoolVar(&updateYes, "yes", false, "Automatically approve displayed update plans, including changes and downtime")
+	containerUpdateCmd.Flags().BoolVar(&updateYes, "yes", false, "Approve the update plan, including any downtime")
 
 	containerMetricsCmd.Flags().StringVar(&metricsTime, "time", "24h", "Time window (e.g. 1h, 24h, 7d)")
 
 	containerConnectCmd.Flags().UintVarP(&connectPort, "port", "p", 8080, "Local port for the verified proxy")
 	containerConnectCmd.Flags().StringVarP(&connectBindAddr, "bind", "b", "127.0.0.1", "Address to bind to")
-	containerConnectCmd.Flags().BoolVar(&connectReview, "review", false, "Connect to the available blue/green review candidate, pinned to its release (never production)")
+	containerConnectCmd.Flags().BoolVar(&connectReview, "review", false, "Connect to the update held for review instead of production")
 	addTrustDangerousFlag(containerConnectCmd)
 	silenceUsageRecursive(containerCmd)
 }
@@ -331,17 +331,15 @@ var containerGetCmd = &cobra.Command{
 var containerCreateCmd = &cobra.Command{
 	Use:   "create [name]",
 	Short: "Create a new container",
-	Long: `Create and launch a container from a GitHub release, an approved registry config, or a local file.
-
+	Long:  "With --config, keep the file: later connections are verified against it.",
+	Example: `  From a GitHub release
   tinfoil container create app --repo org/repo --tag v1.2.3
-  tinfoil container create app --source registry --repo org/project --revision v1.2.3
-  tinfoil container create app --config tinfoil-config.yml
 
-Registry revisions also accept sha256:<config digest>. The organization must
-have registry access enabled. Registry and local configs do not support --replace.
-A new revision requires a new container; deploy without revision flags
-restarts the saved config. Local config bytes are sent to Tinfoil for deployment
-without registry publication; keep the exact file to verify subsequent connections.`,
+  From a registry config
+  tinfoil container create app --source registry --repo org/project --revision v1.2.3
+
+  From a local config file
+  tinfoil container create app --config tinfoil-config.yml`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if localConfigFile != "" {
@@ -592,10 +590,8 @@ var containerDeleteCmd = &cobra.Command{
 var containerDeployCmd = &cobra.Command{
 	Use:   "deploy [id|name]",
 	Short: "Deploy a stopped or failed container",
-	Long: `Boot a new enclave for a container that has none. Works on stopped and
-failed containers, and on a stopping container (the deploy runs once the stop
-finishes). Without flags the saved configuration is used; flags replace parts
-of it. To change a running container, use "tinfoil container update".`,
+	Long: `Without flags the saved configuration is used; flags replace parts of it.
+To change a running container, use "tinfoil container update".`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		body, err := buildLifecycleBody(cmd,
@@ -697,16 +693,8 @@ var containerStopCmd = &cobra.Command{
 var containerUpdateCmd = &cobra.Command{
 	Use:   "update [id|name]",
 	Short: "Update a running container to a new tag or configuration",
-	Long: `Replace the running version of a container. Single-GPU containers without
-persistent volumes boot the new version alongside the current one and switch
-traffic when it is running (no downtime); pass --hold=true to hold the new
-version for review until "tinfoil container promote". Multi-GPU containers and
-containers with persistent volumes must stop the current version first, so the
-command asks you to confirm the downtime unless --yes is given.
-
-Every update first prints a read-only server plan. --yes and --no-wait do not
-skip it. Omit --hold to inherit the project's default; --hold is true and
---hold=false explicitly disables it (use equals, not --hold false).`,
+	Long: `Multi-GPU containers and those with persistent volumes stop first, so their
+update has downtime.`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		body, err := buildLifecycleBody(cmd,
@@ -869,15 +857,13 @@ var containerCancelCmd = &cobra.Command{
 var containerConnectCmd = &cobra.Command{
 	Use:   "connect [id|name]",
 	Short: "Run a verified proxy to a deployed container",
-	Long: `Resolve a deployed container by name (or ID), look up its enclave domain
-and source repository, then start a local proxy that verifies the enclave's
-attestation and forwards HTTP requests to it. Pass --review to select the real
-blue/green candidate instead of production. Verification is pinned to the selected
-release. An explicit --repo retains its verification pins; in review mode it must
-match the candidate's repository and tag.
-
+	Example: `  Proxy to a container
   tinfoil container connect my-container
+
+  Proxy to the update held for review
   tinfoil container connect my-container --review
+
+  Verify against a local config file
   tinfoil container connect my-container --config tinfoil-config.yml`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {

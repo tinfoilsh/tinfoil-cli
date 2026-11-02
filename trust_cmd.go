@@ -25,17 +25,19 @@ func init() {
 	trustCmd.AddCommand(trustSetCmd)
 	trustSetCmd.Flags().StringVar(&trustSetMode, "mode", "", "prompt (unknown configs ask) or frozen (unknown configs fail)")
 	trustSetCmd.Flags().StringVar(&trustSetRecord, "record", "", "what a yes records: org, project, or pin")
-	trustSetCmd.Flags().BoolVar(&trustSetPrune, "prune", false, "when tightening the record granularity, also remove the broader allow entries so it is the only pass")
+	trustSetCmd.Flags().BoolVar(&trustSetPrune, "prune", false, "also remove broader allow entries when tightening --record")
 }
 
 var trustCmd = &cobra.Command{
 	Use:   "trust",
 	Short: "Show the known-configs trust store",
-	Long: `Show which configs this machine trusts for container connections, the
-store's mode and record granularity, and where the file lives (it is yours to edit).
-
+	Example: `  Show the trust store
   tinfoil trust
+
+  Fail on unknown configs instead of asking
   tinfoil trust set --mode frozen
+
+  Record only the exact config when you approve one
   tinfoil trust set --record pin`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {

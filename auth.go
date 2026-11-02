@@ -54,18 +54,16 @@ const (
 
 var loginCmd = &cobra.Command{
 	Use:   "login",
-	Short: "Sign in to Tinfoil in your browser, or with an admin API key",
-	Long: `Sign in directly with Clerk in your browser using PKCE. Clerk returns to the
-CLI at http://127.0.0.1:49152/oauth/callback, and the CLI saves your login.
-With --sync, terminal.tinfoil.sh then asks you to confirm a code and unlock your
-sandbox keys. It sends their key encrypted to this machine, which stores it in
-the OS credential service or, without one, in ~/.tinfoil/credentials (mode 0600).
-Cancelling key sync keeps your login. Without sync, terminal.tinfoil.sh is not used.
+	Short: "Sign in to Tinfoil",
+	Long:  "TINFOIL_ADMIN_KEY and TINFOIL_CONTROLPLANE_URL override a saved admin key.",
+	Example: `  Sign in with your browser
+  tinfoil login
 
-With --api-key, store an admin API key (Settings → API Keys → Admin keys) at
-~/.tinfoil/config.json (mode 0600) for automation. The TINFOIL_ADMIN_KEY and
-TINFOIL_CONTROLPLANE_URL environment variables override saved admin keys.
-TINFOIL_API_KEY is also honored when it holds an admin_ key.`,
+  Sign in and sync your sandbox keys to this machine
+  tinfoil login --sync
+
+  Store an admin API key for automation
+  tinfoil login --api-key admin_...`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		urlFlag, _ := cmd.Flags().GetString("url")
 		keyFlag, _ := cmd.Flags().GetString("api-key")
@@ -137,8 +135,8 @@ TINFOIL_API_KEY is also honored when it holds an admin_ key.`,
 
 var logoutCmd = &cobra.Command{
 	Use:   "logout",
-	Short: "Sign out and remove stored Tinfoil credentials and synced keys",
-	Long:  "Revoke the Clerk login when possible, then remove its tokens, the synced key, and the SSH keys this CLI exported from synced resources, even if revocation fails. Your own SSH keys and locally generated resource keys stay.",
+	Short: "Sign out and remove credentials and synced keys",
+	Long:  "Your own SSH keys and locally generated resource keys are kept.",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		clerkErr := clerkLogout(cmd.OutOrStdout())
 		path, removed, err := deleteConfig()

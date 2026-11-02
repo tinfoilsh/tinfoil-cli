@@ -50,7 +50,7 @@ func init() {
 var registryCmd = &cobra.Command{
 	Use:          "registry",
 	Aliases:      []string{"registries"},
-	Short:        "Manage container registry credentials (ghcr, gcr, dockerhub)",
+	Short:        "Manage container registry credentials",
 	SilenceUsage: true,
 }
 

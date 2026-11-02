@@ -60,21 +60,21 @@ func init() {
 		&projectSettingsHoldByDefault,
 		"hold-by-default",
 		"",
-		"Hold new versions for review by default instead of switching traffic automatically (true/false)",
+		"Hold new versions for review by default (true/false)",
 	)
 	projectSettingsCmd.Flags().Lookup("hold-by-default").NoOptDefVal = "true"
 
 	projectUpdateCmd.Flags().StringVar(&projectUpdateTag, "tag", "", "Release tag to update to")
-	projectUpdateCmd.Flags().StringVar(&projectUpdateHold, "hold", "", "Hold the new version for review instead of switching traffic automatically (true/false)")
+	projectUpdateCmd.Flags().StringVar(&projectUpdateHold, "hold", "", "Hold the new version for review (default: the project's setting)")
 	projectUpdateCmd.Flags().Lookup("hold").NoOptDefVal = "true"
-	projectUpdateCmd.Flags().StringVar(&projectUpdateMarkLatestRelease, "mark-latest", "", "Mark the deployed tag as the repository's latest GitHub release once it is running (default true; pass false to leave the latest release unchanged)")
+	projectUpdateCmd.Flags().StringVar(&projectUpdateMarkLatestRelease, "mark-latest", "", "Mark the tag as the repo's latest GitHub release once running (default true)")
 	projectUpdateCmd.Flags().StringArrayVar(
 		&projectUpdateInstanceIDs,
 		"instance",
 		nil,
-		"Running container instance ID to update; may be repeated (default: all running instances)",
+		"Instance ID to update; may be repeated (default: all running)",
 	)
-	projectUpdateCmd.Flags().BoolVar(&projectUpdateYes, "yes", false, "Automatically approve displayed update plans, including changes and downtime")
+	projectUpdateCmd.Flags().BoolVar(&projectUpdateYes, "yes", false, "Approve the update plan, including any downtime")
 	_ = projectUpdateCmd.MarkFlagRequired("tag")
 
 	silenceUsageRecursive(projectCmd)
@@ -83,7 +83,7 @@ func init() {
 var projectCmd = &cobra.Command{
 	Use:          "project",
 	Aliases:      []string{"projects"},
-	Short:        "Manage projects (the instances that share one config repository)",
+	Short:        "Manage groups of containers that share a config repo",
 	SilenceUsage: true,
 }
 
@@ -159,16 +159,8 @@ var projectSettingsCmd = &cobra.Command{
 var projectUpdateCmd = &cobra.Command{
 	Use:   "update [id|owner/repo]",
 	Short: "Update every running instance of a project to a tag",
-	Long: `Update all running instances of this project, or only those named with
---instance. Instances that must be replaced (multi-GPU or
-persistent volumes) go down while they redeploy; the command lists them and
-asks for confirmation unless --yes is given. Stopped and failed instances are
-skipped; bring those up with "tinfoil container deploy".
-
-The read-only server plan is printed before execution, even with --yes. Omit
---hold to inherit the project's default; --hold is true and --hold=false
-explicitly disables it (use equals, not --hold false).`,
-	Args: cobra.ExactArgs(1),
+	Long:  `Stopped and failed instances are skipped; start them with "tinfoil container deploy".`,
+	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		body := map[string]any{
 			"tag": projectUpdateTag,

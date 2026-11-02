@@ -79,11 +79,11 @@ var sandboxCmd = &cobra.Command{
 var sandboxStatusCmd = newManagedStatusCmd("sandbox")
 
 var sandboxStartCmd = &cobra.Command{
-	Use: "start [id|name]", Short: "Start a sandbox if stopped and enroll this machine's keys into it",
+	Use: "start [id|name]", Short: "Start a sandbox and enroll this machine's keys",
 	Args: cobra.ExactArgs(1), RunE: runSandboxAction("start"),
 }
 var sandboxRestartCmd = &cobra.Command{
-	Use: "restart [id|name]", Short: "Restart a sandbox and enroll this machine's keys into it",
+	Use: "restart [id|name]", Short: "Restart a sandbox and enroll this machine's keys",
 	Args: cobra.ExactArgs(1), RunE: runSandboxAction("restart"),
 }
 var sandboxStopCmd = &cobra.Command{

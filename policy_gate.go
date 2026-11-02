@@ -23,7 +23,7 @@ import (
 var trustDangerous bool
 
 func addTrustDangerousFlag(cmd *cobra.Command) {
-	cmd.Flags().BoolVar(&trustDangerous, "dangerous", false, "Skip the known-configs check and accept whatever config the controlplane returns; records nothing")
+	cmd.Flags().BoolVar(&trustDangerous, "dangerous", false, "Trust whatever config the controlplane returns, without recording it")
 }
 
 func enforceConnectionPolicy(source string) error {

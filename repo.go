@@ -118,7 +118,7 @@ var repoConfigCmd = &cobra.Command{
 
 var repoConfigGetCmd = &cobra.Command{
 	Use:   "get [owner/repo]",
-	Short: "Fetch tinfoil-config.yml through the installed GitHub App",
+	Short: "Fetch a repo's tinfoil-config.yml",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if repoConfigRaw && outputFormat == "json" {
@@ -153,7 +153,7 @@ var repoConfigGetCmd = &cobra.Command{
 var repoConfigPRCmd = &cobra.Command{
 	Use:   "pr [owner/repo]",
 	Short: "Open a pull request with a local tinfoil-config.yml",
-	Long:  "Open a pull request through the installed GitHub App. Do not put secret values in the config because the repository must be public.",
+	Long:  "The repository is public, so keep secret values out of the config.",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		repository, client, err := repositoryCommand(args[0])

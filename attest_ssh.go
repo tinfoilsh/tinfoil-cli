@@ -61,17 +61,9 @@ func init() {
 
 var attestSSHCmd = &cobra.Command{
 	Use:   "attest-ssh [container|hostname]",
-	Short: "Print or install a native ssh profile pinned to an enclave's attested host key",
-	Long: `Resolve a container name or enclave hostname, verify it against its recorded
-repo or --repo, read the attested "host-ssh" key its quote endorses, and print an
-ssh profile pinned to it. With --install the profile is written to
-~/.ssh/tinfoil/<name>.conf. If ~/.ssh/config is missing a top-level
-` + sshIncludeLine() + ` line, you are asked whether to add it. A CVM reboot
-rotates the key, so rerun this command after one.
-
-Containers with a published SSH port connect through console.tinfoil.sh.
-Bare hostname targets connect directly. --ssh-host overrides the SSH endpoint;
-attestation always uses the enclave hostname.`,
+	Short: "Pin an enclave's attested SSH host key for native ssh",
+	Long: `Print an ssh profile pinned to the attested host key, or write it with --install.
+A reboot rotates the key, so rerun this after one.`,
 	Args:         cobra.ExactArgs(1),
 	SilenceUsage: true,
 	RunE: func(cmd *cobra.Command, args []string) error {

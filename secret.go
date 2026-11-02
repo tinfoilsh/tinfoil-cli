@@ -30,7 +30,7 @@ func init() {
 	secretCmd.AddCommand(secretListCmd, secretGetCmd, secretCreateCmd, secretSetCmd, secretDeleteCmd)
 
 	for _, cmd := range []*cobra.Command{secretCreateCmd, secretSetCmd} {
-		cmd.Flags().StringVar(&secretValue, "value", "", "Secret value (use --value-file or stdin to avoid leaking via process listing)")
+		cmd.Flags().StringVar(&secretValue, "value", "", "Secret value (visible in ps; prefer --value-file or stdin)")
 		cmd.Flags().StringVar(&secretValueFile, "value-file", "", "Read the secret value from this file (use - for stdin)")
 	}
 	silenceUsageRecursive(secretCmd)
@@ -62,7 +62,7 @@ var secretListCmd = &cobra.Command{
 
 var secretGetCmd = &cobra.Command{
 	Use:   "get [name]",
-	Short: "Show secret metadata (the value itself is never returned)",
+	Short: "Show secret metadata",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client, err := authedClient()
@@ -124,7 +124,7 @@ var secretSetCmd = &cobra.Command{
 var secretDeleteCmd = &cobra.Command{
 	Use:     "delete [name]",
 	Aliases: []string{"rm", "remove"},
-	Short:   "Delete a secret (fails if any container references it)",
+	Short:   "Delete a secret",
 	Args:    cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client, err := authedClient()

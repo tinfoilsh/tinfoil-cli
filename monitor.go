@@ -462,7 +462,7 @@ func init() {
 	rootCmd.AddCommand(monitorCmd)
 	command := &cobra.Command{
 		Use: "open [id|name]", Short: "Unlock and forward the Monitor UI over attested SSH", Args: cobra.ExactArgs(1),
-		Long: "Unlock the Monitor, restore this device's sandbox connectivity, and forward its UI over attested SSH. Requires a Monitor release supporting device restoration during unlock.",
+		Long: "Also restores this device's sandbox connectivity.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
 			fmt.Fprintln(cmd.ErrOrStderr(), "Looking up Monitor "+name)

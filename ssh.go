@@ -30,31 +30,24 @@ var (
 func init() {
 	rootCmd.AddCommand(sshCmd)
 	sshCmd.Flags().StringVarP(&sshUser, "user", "l", "root", "Remote user to log in as")
-	sshCmd.Flags().UintVarP(&sshPort, "port", "p", 0, "Enclave-side SSH port (default: the container's published SSH port, else 22)")
+	sshCmd.Flags().UintVarP(&sshPort, "port", "p", 0, "Enclave SSH port (default: the published SSH port, else 22)")
 	addTunnelFlags(sshCmd)
 	sshCmd.SilenceUsage = true
 }
 
 var sshCmd = &cobra.Command{
 	Use:   "ssh [container|hostname] [-- ssh arguments...]",
-	Short: "SSH into a container through the verified enclave tunnel",
-	Long: `Open an SSH session over the enclave's attested TLS connection.
-
-This runs your local ssh with a ProxyCommand of "tinfoil forward --stdio",
-so the session is tunnelled through the shim's CONNECT endpoint rather than
-exposed on the public internet.
-
-The target is a container name or an enclave hostname (anything containing a
-dot), so enclaves with no controlplane record work too. The container must
-publish an SSH port in its tinfoil-config.yml, since the shim tunnels nowhere
-else; the reserved debug toolbox on 2222 is out of reach and still needs tinctl.
-
-Anything after -- is handed to ssh unchanged, as either options or a remote
-command:
-
+	Short: "SSH into a container over its attested connection",
+	Example: `  Open a shell
   tinfoil ssh my-container
+
+  Connect to an enclave hostname on another port
   tinfoil ssh otter-4s7ut6c3.box2.tinfoil.sh -p 2022
+
+  Run a remote command
   tinfoil ssh my-container -- systemctl status
+
+  Pass options through to ssh
   tinfoil ssh my-container -- -A -L 5432:localhost:5432`,
 	Args: cobra.ArbitraryArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {

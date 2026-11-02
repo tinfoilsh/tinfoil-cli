@@ -41,8 +41,8 @@ func init() {
 var sshKeyCmd = &cobra.Command{
 	Use:          "ssh-key",
 	Aliases:      []string{"ssh-keys"},
-	Short:        "Manage SSH public keys for debug containers, or for sandboxes with --sandbox",
-	Long:         "Container keys grant SSH access to debug containers. Sandbox keys (--sandbox) must be Ed25519 and can be chosen as the owner when creating a sandbox or Monitor in the dashboard. Personal accounts only have sandbox keys.",
+	Short:        "Manage SSH keys",
+	Long:         "Container keys open debug containers. Sandbox keys (--sandbox, Ed25519) can own sandboxes and Monitors.",
 	SilenceUsage: true,
 }
 
@@ -112,8 +112,8 @@ var sshKeyCreateCmd = &cobra.Command{
 var sshKeyDeleteCmd = &cobra.Command{
 	Use:     "delete [name]",
 	Aliases: []string{"rm", "remove"},
-	Short:   "Delete an SSH key (fails if any container references it)",
-	Long:    "Delete an SSH key. A container key cannot be deleted while a container references it. Sandboxes and Monitors created with a sandbox key keep accepting it.",
+	Short:   "Delete an SSH key",
+	Long:    "Sandboxes and Monitors that use a deleted sandbox key keep accepting it.",
 	Args:    cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client, err := authedClient()

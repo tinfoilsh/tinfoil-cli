@@ -65,7 +65,7 @@ func init() {
 	volumeCmd.AddCommand(volumeListCmd, volumeGetCmd, volumeCreateCmd, volumeRenameCmd, volumeAttachCmd, volumeDetachCmd, volumeDeleteCmd)
 
 	volumeCreateCmd.Flags().StringVar(&volumeCreateSize, "size", "", "Volume size, e.g. 16GB or 2TB [required]")
-	volumeCreateCmd.Flags().StringVar(&volumeCreateHost, "host", "", "Host to store the volume on (see 'tinfoil container hosts'); required unless only one host is available or --sandbox is set")
+	volumeCreateCmd.Flags().StringVar(&volumeCreateHost, "host", "", "Host to store the volume on (see 'tinfoil container hosts')")
 	volumeCreateCmd.Flags().BoolVar(&volumeCreateSandbox, "sandbox", false, "Create a sandbox workspace volume of "+workspaceSizeChoices("GB")+"; personal accounts only have sandbox volumes")
 	_ = volumeCreateCmd.MarkFlagRequired("size")
 	volumeRenameCmd.Flags().StringVar(&volumeRenameName, "name", "", "New volume name [required]")

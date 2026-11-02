@@ -25,7 +25,7 @@ const managedKindAnnotation = "managed-kind"
 func init() {
 	monitorCmd.AddCommand(newManagedStatusCmd("monitor"))
 	start := newManagedContainerCmd("monitor", "start", containerDeployCmd, "no-wait")
-	start.Short = "Start a stopped or failed Monitor using its saved configuration"
+	start.Short = "Start a stopped or failed Monitor"
 	monitorCmd.AddCommand(start,
 		newManagedContainerCmd("monitor", "stop", containerStopCmd),
 		newManagedContainerCmd("monitor", "delete", containerDeleteCmd, "yes"))
@@ -67,7 +67,8 @@ func newManagedCreateCmd(kind string) *cobra.Command {
 	var workspaceSize int
 	cmd := &cobra.Command{
 		Use: "create NAME", Short: "Create a confidential " + kind + " and follow its deployment", Args: cobra.ExactArgs(1),
-		Long: "Create from a published release. By default the CLI generates the resource's own owner, storage and agent keys and saves them in your synced key bundle (requires `tinfoil login --sync`) before creating it. With --owner-public-key or --identity, the resource uses your own Ed25519 key, and its storage keys are generated on first open and kept only on that machine; back them up. Inspect interrupted creation with status; use start to retry a stopped or failed resource. Compute is billed while running; storage remains billable until deleted.",
+		Long: `Needs "tinfoil login --sync" unless --owner-public-key or --identity is set;
+with those, storage keys are created on first open and kept only on that machine.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if strings.TrimSpace(tag) == "" {
 				return errors.New("choose --tag from `tinfoil repo build info " + managedRepo(kind) + "`")
