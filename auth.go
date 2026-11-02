@@ -34,7 +34,6 @@ func init() {
 	loginCmd.Flags().String("url", "", "Controlplane URL for --api-key (default https://api.tinfoil.sh)")
 	loginCmd.Flags().String("api-key", "", "Sign in with an admin API key (admin_...) instead of the browser")
 	loginCmd.Flags().Bool("sync", false, "Sync your sandbox keys to this machine")
-	loginCmd.Flags().Bool("no-sync", false, "Sign in without syncing your sandbox keys")
 }
 
 const (
@@ -65,10 +64,7 @@ var loginCmd = &cobra.Command{
 		urlFlag, _ := cmd.Flags().GetString("url")
 		keyFlag, _ := cmd.Flags().GetString("api-key")
 		if keyFlag == "" && urlFlag == "" {
-			sync, err := loginSyncChoice(cmd)
-			if err != nil {
-				return err
-			}
+			sync, _ := cmd.Flags().GetBool("sync")
 			return clerkLogin(cmd, sync)
 		}
 
@@ -228,24 +224,6 @@ func authenticatedContext(cfg cliConfig) (authContext, error) {
 	return identity, nil
 }
 
-func loginSyncChoice(cmd *cobra.Command) (bool, error) {
-	sync, _ := cmd.Flags().GetBool("sync")
-	noSync, _ := cmd.Flags().GetBool("no-sync")
-	if sync && noSync {
-		return false, errors.New("choose either --sync or --no-sync")
-	}
-	if sync || noSync || !term.IsTerminal(int(os.Stdin.Fd())) {
-		return sync, nil
-	}
-	fmt.Fprint(cmd.ErrOrStderr(), "Sync your sandbox keys to this machine? [y/N] ")
-	answer, err := bufio.NewReader(os.Stdin).ReadString('\n')
-	if err != nil && !errors.Is(err, io.EOF) {
-		return false, err
-	}
-	answer = strings.ToLower(strings.TrimSpace(answer))
-	return answer == "y" || answer == "yes", nil
-}
-
 func randomB64U(n int) string {
 	data := make([]byte, n)
 	rand.Read(data)
@@ -307,6 +285,9 @@ func clerkLogin(cmd *cobra.Command, syncKeys bool) error {
 	defer server.Close()
 
 	launch := clerkAuthorizationURL(ceremony.state, ceremony.verifier, scopes)
+	if !syncKeys {
+		fmt.Fprintln(cmd.ErrOrStderr(), "Tip: run `tinfoil login --sync` to also sync your sandbox keys.")
+	}
 	fmt.Fprintf(cmd.ErrOrStderr(), "Opening Clerk sign-in. If no browser opens, visit:\n\n  %s\n\nWaiting for sign-in (Ctrl-C cancels)...\n", launch)
 	go func() {
 		if err := openBrowser(launch); err != nil {
