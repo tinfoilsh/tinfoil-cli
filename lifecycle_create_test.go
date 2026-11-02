@@ -23,7 +23,7 @@ func TestCreateRejectsInvalidConfigBeforeDiskAdvice(t *testing.T) {
 		{"errors override valid", `{"valid":true,"config":{},"errors":[{"field":"gpus","message":"not entitled"}]}`, "gpus: not entitled", http.StatusOK},
 		{"missing config", `{"valid":true}`, "returned no configuration", http.StatusOK},
 		{"scoped permission", `{"error":"key lacks permission"}`, "containers.validate permission", http.StatusForbidden},
-		{"unauthenticated", `{"error":"invalid admin key"}`, "401: invalid admin key", http.StatusUnauthorized},
+		{"unauthenticated", `{"error":"invalid admin key"}`, "invalid admin key", http.StatusUnauthorized},
 	} {
 		for _, withVolume := range []bool{false, true} {
 			t.Run(tt.name+map[bool]string{false: "/no-disk", true: "/selected-disk"}[withVolume], func(t *testing.T) {

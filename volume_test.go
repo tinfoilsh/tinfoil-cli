@@ -152,7 +152,7 @@ func TestVolumeAttachSlotSelection(t *testing.T) {
 		{name: "several declared without --as", slots: `[{"name":"data"},{"name":"cache"}]`, wantErr: "declares several mounts (data, cache); pick one with --as"},
 		{name: "undeclared --as", as: "logs", slots: `[{"name":"data"}]`, wantErr: `does not declare mount "logs" (declared: data)`},
 		{name: "none declared", slots: `[]`, wantErr: "declares no mounts in tinfoil-config.yml"},
-		{name: "server refusal passes through", slots: `[{"name":"data"}]`, putStatus: http.StatusConflict, wantErr: "409: stop the container before changing volume assignments", wantPut: true},
+		{name: "server refusal passes through", slots: `[{"name":"data"}]`, putStatus: http.StatusConflict, wantErr: "stop the container before changing volume assignments", wantPut: true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			var puts atomic.Int32

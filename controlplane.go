@@ -21,6 +21,7 @@ const (
 	sandboxLimitReached   = "SANDBOX_LIMIT_REACHED"
 	storageLimitExceeded  = "STORAGE_LIMIT_EXCEEDED"
 	accountLimitsHint     = "See your account limits in the Tinfoil dashboard."
+	reloginHint           = "Run `tinfoil login` to sign in again."
 )
 
 type cpClient struct {
@@ -53,9 +54,9 @@ type cpError struct {
 
 func (e *cpError) Error() string {
 	if e.Message != "" {
-		return fmt.Sprintf("%s %s: %d: %s", e.Method, e.Path, e.Status, humanVolumeMessage(secretDeliveryMessage(e.Message)))
+		return humanVolumeMessage(secretDeliveryMessage(e.Message))
 	}
-	return fmt.Sprintf("%s %s: %d", e.Method, e.Path, e.Status)
+	return fmt.Sprintf("controlplane returned HTTP %d for %s", e.Status, e.Path)
 }
 
 // errorHint returns a line to print after a failed command's error, or "".
@@ -69,6 +70,12 @@ func errorHint(err error) string {
 	switch cp.Code {
 	case containerLimitReached, sandboxLimitReached, storageLimitExceeded:
 		return accountLimitsHint
+	}
+	if cp.Status == http.StatusUnauthorized {
+		if source := credentialEnvSource(); source != "" {
+			return fmt.Sprintf("Update or unset %s to sign in again.", source)
+		}
+		return reloginHint
 	}
 	return ""
 }

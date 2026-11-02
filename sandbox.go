@@ -270,7 +270,7 @@ func connectSandbox(ctx context.Context, target *workloadTarget) (_ *sandboxSess
 		fmt.Fprintln(os.Stderr, "Checking the selected Monitor for sandbox "+row.Name)
 		peer, err := resolveContainerDetail(cp, row.NetworkPolicy.Egress[0].ContainerID)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("sandbox %s's Monitor: %w", row.Name, err)
 		}
 		selected, err := resolveWorkload(*peer, monitorRepo, "")
 		if err != nil {

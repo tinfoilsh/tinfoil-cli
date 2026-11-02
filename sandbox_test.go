@@ -129,6 +129,10 @@ func TestSandboxDeleteKeepsCredentialsAndRemovesOwnedProfile(t *testing.T) {
 				json.NewEncoder(w).Encode([]containerView{row})
 			}
 		case "GET /api/containers/" + row.ID:
+			if deleted {
+				http.NotFound(w, r)
+				return
+			}
 			json.NewEncoder(w).Encode(row)
 		case "DELETE /api/containers/" + row.ID:
 			deleted = true
@@ -155,8 +159,8 @@ func TestSandboxDeleteKeepsCredentialsAndRemovesOwnedProfile(t *testing.T) {
 	require.NoError(t, err)
 	before, err := os.ReadFile(credential)
 	require.NoError(t, err)
-	for range 2 {
-		require.NoError(t, sandboxDeleteCmd.RunE(sandboxDeleteCmd, []string{row.Name}))
+	for _, identifier := range []string{row.Name, row.ID} {
+		require.NoError(t, sandboxDeleteCmd.RunE(sandboxDeleteCmd, []string{identifier}))
 	}
 	after, err := os.ReadFile(credential)
 	require.NoError(t, err)

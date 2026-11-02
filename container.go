@@ -943,7 +943,7 @@ func resolveContainer(client *cpClient, identifier string) (*containerView, erro
 	}
 	switch len(matches) {
 	case 0:
-		return nil, &cpError{Status: http.StatusNotFound, Method: "GET", Path: "/api/containers", Message: fmt.Sprintf("no container named %q (use the container ID or `tinfoil container list`)", id)}
+		return nil, fmt.Errorf("no container named %q; see `tinfoil container list`", id)
 	case 1:
 		c := matches[0]
 		return &c, nil
