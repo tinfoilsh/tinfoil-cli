@@ -1009,21 +1009,34 @@ func TestDirectOAuthCallbackValidation(t *testing.T) {
 }
 
 func TestClerkCredentialsUseOnlyTheFixedAPIOrigin(t *testing.T) {
-	fixed, other := "https://api.example", "https://other.example"
-	useTestClerk(t, fixed)
-	t.Setenv(envCPURL, other)
-	require.NoError(t, writeCredential(loginRecordName, &clerkGrant{Version: 1, Grant: randomB64U(16), Issuer: fixed, ClientID: "fixture-client",
+	requests := 0
+	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		io.WriteString(w, `{"context_type":"personal","organization":null,"user_id":"user_owner"}`)
+	}))
+	defer other.Close()
+	fixed := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "Bearer access-1", r.Header.Get("Authorization"))
+		http.Redirect(w, r, other.URL+r.URL.Path, http.StatusTemporaryRedirect)
+	}))
+	defer fixed.Close()
+	useTestClerk(t, fixed.URL)
+	t.Setenv(envCPURL, other.URL)
+	require.NoError(t, writeCredential(loginRecordName, &clerkGrant{Version: 1, Grant: randomB64U(16), Issuer: fixed.URL, ClientID: "fixture-client",
 		UserID: "user_owner", Account: "personal", AccessToken: "access-1", RefreshToken: "refresh-1", ExpiresAt: time.Now().Add(time.Hour).Unix()}))
 	cfg, err := requireAuth()
 	require.NoError(t, err)
-	require.Equal(t, fixed, cfg.ControlplaneURL, "saved or environment URLs never retarget a Clerk login")
+	require.Equal(t, fixed.URL, cfg.ControlplaneURL, "saved or environment URLs never retarget a Clerk login")
+	_, err = authenticatedContext(cfg)
+	require.ErrorContains(t, err, "refusing a controlplane redirect")
+	require.Zero(t, requests, "the bearer token never follows a redirect")
 
 	// An explicit admin key keeps its own configured target and never sees the Clerk token.
 	t.Setenv(envAdminKey, "admin_automation")
 	cfg, err = requireAuth()
 	require.NoError(t, err)
 	require.Nil(t, cfg.login)
-	require.Equal(t, other, cfg.ControlplaneURL)
+	require.Equal(t, other.URL, cfg.ControlplaneURL)
 }
 
 func TestUnauthenticatedListDoesNotClaimAnEmptyAccount(t *testing.T) {

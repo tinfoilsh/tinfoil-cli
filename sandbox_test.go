@@ -616,7 +616,7 @@ func TestMonitorRestartRelinksOnlyAuthorizedSandboxes(t *testing.T) {
 	newHost, oldHost := testSigner(t).PublicKey(), authorizedLine(testSigner(t))
 	fixtures := map[string]*fixture{}
 	var rows []containerView
-	for i, name := range []string{"a", "b", "removed", "nokeys", "unbound", "wrongbinding", "rebooted", "elsewhere"} {
+	for i, name := range []string{"a", "b", "removed", "nokeys", "unbound", "wrongbinding", "rebooted", "elsewhere", "untrusted"} {
 		f := &fixture{name: name, id: fmt.Sprintf("1111111%d-1111-4111-8111-111111111111", i), instance: fmt.Sprintf("2222222%d-2222-4222-8222-222222222222", i),
 			volume: fmt.Sprintf("3333333%d-3333-4333-8333-333333333333", i), key: newResourceKey("sandbox"), host: testSigner(t), monitor: monitorID}
 		var err error
@@ -675,7 +675,7 @@ func TestMonitorRestartRelinksOnlyAuthorizedSandboxes(t *testing.T) {
 	mk, err := newMKSession(cp, scope)
 	require.NoError(t, err)
 	_, err = mk.update(t.Context(), func(p *mkPayload) error {
-		for _, name := range []string{"a", "b", "removed", "unbound", "wrongbinding", "rebooted", "elsewhere"} {
+		for _, name := range []string{"a", "b", "removed", "unbound", "wrongbinding", "rebooted", "elsewhere", "untrusted"} {
 			f := fixtures[name]
 			key := f.key
 			if name != "unbound" {
@@ -694,9 +694,18 @@ func TestMonitorRestartRelinksOnlyAuthorizedSandboxes(t *testing.T) {
 	require.NoError(t, err)
 	revision := keys.revision
 
-	previousDangerous := trustDangerous
-	trustDangerous = true
-	t.Cleanup(func() { trustDangerous = previousDangerous })
+	var trusted []string
+	for _, row := range rows {
+		if row.Name != "untrusted" {
+			target, err := parseConnectionDescriptor(connectionDescriptor{URL: "https://" + row.Domain, ConfigName: row.ConfigName, ConfigDigest: storageHash([]byte(row.Config))})
+			require.NoError(t, err)
+			trusted = append(trusted, target.source)
+		}
+	}
+	policy, err := json.Marshal(map[string]any{"mode": "frozen", "allow": map[string]any{"pins": trusted}})
+	require.NoError(t, err)
+	t.Setenv(envKnownConfigs, filepath.Join(t.TempDir(), "known-configs.json"))
+	require.NoError(t, os.WriteFile(os.Getenv(envKnownConfigs), policy, 0o600))
 	previous := verifySandboxEvidence
 	verifySandboxEvidence = func(doc, _ []byte, source string) (*verify.Verification, error) {
 		for _, f := range fixtures {
@@ -723,7 +732,7 @@ func TestMonitorRestartRelinksOnlyAuthorizedSandboxes(t *testing.T) {
 	m.view.Config.Identities = map[string]struct {
 		Key string `json:"key"`
 	}{}
-	for _, name := range []string{"a", "b", "nokeys", "unbound", "wrongbinding", "rebooted", "elsewhere"} {
+	for _, name := range []string{"a", "b", "nokeys", "unbound", "wrongbinding", "rebooted", "elsewhere", "untrusted"} {
 		m.view.Config.Identities["sandbox-"+name] = struct {
 			Key string `json:"key"`
 		}{monitorIdentity(fixtures[name].key.MonitorIdentitySeed)}
@@ -764,10 +773,13 @@ func TestMonitorRestartRelinksOnlyAuthorizedSandboxes(t *testing.T) {
 	for _, failure := range failures {
 		reported = append(reported, failure.Error())
 	}
-	require.Len(t, failures, 2, "%v", reported)
-	require.Contains(t, reported[0]+reported[1], "sandbox wrongbinding:")
-	require.Contains(t, reported[0]+reported[1], "no longer matches")
-	require.Contains(t, reported[0]+reported[1], "sandbox rebooted: its saved Monitor identity is not active")
+	require.Len(t, failures, 3, "%v", reported)
+	all := strings.Join(reported, "\n")
+	require.Contains(t, all, "sandbox wrongbinding:")
+	require.Contains(t, all, "no longer matches")
+	require.Contains(t, all, "sandbox rebooted: its saved Monitor identity is not active")
+	require.Contains(t, all, "sandbox untrusted: config")
+	require.Contains(t, all, "is not allowed")
 	host := authorizedKeyLine(newHost)
 	for _, name := range []string{"a", "b"} {
 		f := fixtures[name]
@@ -780,7 +792,7 @@ func TestMonitorRestartRelinksOnlyAuthorizedSandboxes(t *testing.T) {
 	}
 	require.Equal(t, []string{"GET /status"}, []string{fixtures["rebooted"].owner.requests[0].Method + " " + fixtures["rebooted"].owner.requests[0].Path})
 	require.Len(t, fixtures["rebooted"].owner.requests, 1, "a rebooted sandbox is not enrolled or unlocked here")
-	for _, name := range []string{"removed", "nokeys", "unbound", "wrongbinding", "elsewhere"} {
+	for _, name := range []string{"removed", "nokeys", "unbound", "wrongbinding", "elsewhere", "untrusted"} {
 		require.Zero(t, relayed[name], "%s is not contacted", name)
 	}
 	require.Empty(t, monitorCalls, "no Monitor enrollment, unlock or restore")
@@ -798,7 +810,7 @@ func TestMonitorRestartRelinksOnlyAuthorizedSandboxes(t *testing.T) {
 	for _, name := range []string{"a", "b"} {
 		fixtures[name].owner.requests = nil
 	}
-	require.Len(t, relinkSandboxes(t.Context(), scope, cp, m, monitorID), 2)
+	require.Len(t, relinkSandboxes(t.Context(), scope, cp, m, monitorID), 3)
 	for _, name := range []string{"a", "b"} {
 		require.Len(t, fixtures[name].owner.requests, 1, "%s: status only", name)
 	}

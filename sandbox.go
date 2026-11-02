@@ -620,15 +620,7 @@ func (o *sandboxOwner) attest(source string) (*verify.Verification, error) {
 	if err != nil {
 		return nil, err
 	}
-	public, err := endorsedKey("sandbox", verified, sandboxEHBPKeyID)
-	if err != nil {
-		return nil, err
-	}
-	raw, ok := public.(*ecdh.PublicKey)
-	if !ok {
-		return nil, fmt.Errorf("attested %q key is not X25519", sandboxEHBPKeyID)
-	}
-	key, err := identity.FromPublicKeyBytes(raw.Bytes())
+	key, err := sandboxEHBPKey(verified)
 	if err != nil {
 		return nil, err
 	}
@@ -639,6 +631,18 @@ func (o *sandboxOwner) attest(source string) (*verify.Verification, error) {
 	o.client = &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	o.expires = verified.FreshnessExpiresAt
 	return verified, nil
+}
+
+func sandboxEHBPKey(verified *verify.Verification) (*identity.Identity, error) {
+	public, err := endorsedKey("sandbox", verified, sandboxEHBPKeyID)
+	if err != nil {
+		return nil, err
+	}
+	key, ok := public.(*ecdh.PublicKey)
+	if !ok {
+		return nil, fmt.Errorf("attested %q key is not X25519", sandboxEHBPKeyID)
+	}
+	return identity.FromPublicKeyBytes(key.Bytes())
 }
 
 // Never retried: a repeated ciphertext would repeat its nonce; call re-signs instead.

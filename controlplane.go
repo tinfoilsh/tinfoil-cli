@@ -35,7 +35,9 @@ func newCPClient(cfg cliConfig) *cpClient {
 		baseURL: strings.TrimRight(cfg.ControlplaneURL, "/"),
 		apiKey:  cfg.APIKey,
 		login:   cfg.login,
-		http:    &http.Client{Timeout: 60 * time.Second},
+		http: &http.Client{Timeout: 60 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error {
+			return errors.New("refusing a controlplane redirect")
+		}},
 	}
 }
 
