@@ -32,14 +32,12 @@ func init() {
 	rootCmd.AddCommand(domainCmd)
 	domainCmd.PersistentFlags().StringVarP(&outputFormat, "output", "o", "table", "Output format: table or json")
 	domainCmd.AddCommand(domainListCmd, domainAddCmd, domainVerifyCmd, domainDeleteCmd)
-	silenceUsageRecursive(domainCmd)
 }
 
 var domainCmd = &cobra.Command{
-	Use:          "domain",
-	Aliases:      []string{"domains"},
-	Short:        "Manage custom domains for containers",
-	SilenceUsage: true,
+	Use:     "domain",
+	Aliases: []string{"domains"},
+	Short:   "Manage custom domains for containers",
 }
 
 var domainListCmd = &cobra.Command{

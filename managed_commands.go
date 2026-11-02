@@ -45,7 +45,7 @@ func newManagedContainerCmd(kind, name string, source *cobra.Command, flags ...s
 	cmd := &cobra.Command{
 		Use: name + " [id|name]", Short: strings.ReplaceAll(source.Short, "container", kind),
 		Aliases: source.Aliases, Args: source.Args, RunE: source.RunE,
-		Annotations: map[string]string{managedKindAnnotation: kind}, SilenceUsage: true,
+		Annotations: map[string]string{managedKindAnnotation: kind},
 	}
 	for _, name := range flags {
 		flag := *source.Flags().Lookup(name)

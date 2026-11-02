@@ -69,11 +69,10 @@ func init() {
 	for _, cmd := range []*cobra.Command{sandboxStartCmd, sandboxRestartCmd} {
 		cmd.Flags().Bool("no-enroll", false, "Boot without unlocking or enrolling this machine's keys")
 	}
-	silenceUsageRecursive(sandboxCmd)
 }
 
 var sandboxCmd = &cobra.Command{
-	Use: "sandbox", Aliases: []string{"sandboxes"}, Short: "Manage your confidential sandboxes", SilenceUsage: true,
+	Use: "sandbox", Aliases: []string{"sandboxes"}, Short: "Manage your confidential sandboxes",
 }
 
 var sandboxStatusCmd = newManagedStatusCmd("sandbox")

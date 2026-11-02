@@ -19,7 +19,6 @@ func init() {
 		cmd.Flags().StringVar(&secretValue, "value", "", "Secret value (visible in ps; prefer --value-file or stdin)")
 		cmd.Flags().StringVar(&secretValueFile, "value-file", "", "Read the secret value from this file (use - for stdin)")
 	}
-	silenceUsageRecursive(repoSecretCmd)
 }
 
 var repoSecretCmd = &cobra.Command{

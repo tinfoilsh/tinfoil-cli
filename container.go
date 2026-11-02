@@ -261,23 +261,12 @@ func init() {
 	containerConnectCmd.Flags().StringVarP(&connectBindAddr, "bind", "b", "127.0.0.1", "Address to bind to")
 	containerConnectCmd.Flags().BoolVar(&connectReview, "review", false, "Connect to the update held for review instead of production")
 	addTrustDangerousFlag(containerConnectCmd)
-	silenceUsageRecursive(containerCmd)
-}
-
-// silenceUsageRecursive walks the command tree and sets SilenceUsage so that
-// runtime errors (auth, network, validation) don't dump the help banner.
-func silenceUsageRecursive(cmd *cobra.Command) {
-	cmd.SilenceUsage = true
-	for _, c := range cmd.Commands() {
-		silenceUsageRecursive(c)
-	}
 }
 
 var containerCmd = &cobra.Command{
-	Use:          "container",
-	Aliases:      []string{"containers", "ct"},
-	Short:        "Manage Tinfoil containers",
-	SilenceUsage: true,
+	Use:     "container",
+	Aliases: []string{"containers", "ct"},
+	Short:   "Manage Tinfoil containers",
 }
 
 var containerListCmd = &cobra.Command{

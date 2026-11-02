@@ -117,7 +117,7 @@ func newSelfUpdateCommand(newUpdater func() *selfUpdater) *cobra.Command {
 	var output string
 	cmd := &cobra.Command{
 		Use: selfUpdateName, Short: "Update the CLI to the latest stable release",
-		Args: cobra.NoArgs, SilenceUsage: true,
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if output != "text" && output != "json" {
 				return fmt.Errorf("unsupported output format %q: use text or json", output)

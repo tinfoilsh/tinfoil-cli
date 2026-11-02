@@ -32,7 +32,6 @@ func init() {
 	sshCmd.Flags().StringVarP(&sshUser, "user", "l", "root", "Remote user to log in as")
 	sshCmd.Flags().UintVarP(&sshPort, "port", "p", 0, "Enclave SSH port (default: the published SSH port, else 22)")
 	addTunnelFlags(sshCmd)
-	sshCmd.SilenceUsage = true
 }
 
 var sshCmd = &cobra.Command{

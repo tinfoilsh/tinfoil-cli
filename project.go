@@ -76,15 +76,12 @@ func init() {
 	)
 	projectUpdateCmd.Flags().BoolVar(&projectUpdateYes, "yes", false, "Approve the update plan, including any downtime")
 	_ = projectUpdateCmd.MarkFlagRequired("tag")
-
-	silenceUsageRecursive(projectCmd)
 }
 
 var projectCmd = &cobra.Command{
-	Use:          "project",
-	Aliases:      []string{"projects"},
-	Short:        "Manage groups of containers that share a config repo",
-	SilenceUsage: true,
+	Use:     "project",
+	Aliases: []string{"projects"},
+	Short:   "Manage groups of containers that share a config repo",
 }
 
 var projectListCmd = &cobra.Command{

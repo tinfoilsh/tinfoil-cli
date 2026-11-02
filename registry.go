@@ -44,14 +44,12 @@ func init() {
 	registrySetCmd.Flags().StringVar(&registryUsername, "username", "", "Registry username (ghcr, dockerhub)")
 	registrySetCmd.Flags().StringVar(&registryToken, "token", "", "Registry token / password (ghcr, dockerhub)")
 	registrySetCmd.Flags().StringVar(&registryKeyFile, "key-file", "", "Path to GCP service account JSON (gcr); use - for stdin")
-	silenceUsageRecursive(registryCmd)
 }
 
 var registryCmd = &cobra.Command{
-	Use:          "registry",
-	Aliases:      []string{"registries"},
-	Short:        "Manage container registry credentials",
-	SilenceUsage: true,
+	Use:     "registry",
+	Aliases: []string{"registries"},
+	Short:   "Manage container registry credentials",
 }
 
 var registryListCmd = &cobra.Command{

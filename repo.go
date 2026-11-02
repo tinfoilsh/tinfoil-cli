@@ -100,15 +100,12 @@ func init() {
 	_ = repoBuildStatusCmd.MarkFlagRequired("version")
 	_ = repoConfigPRCmd.MarkFlagRequired("file")
 	_ = repoBuildRunCmd.MarkFlagRequired("version")
-
-	silenceUsageRecursive(repoCmd)
 }
 
 var repoCmd = &cobra.Command{
-	Use:          "repo",
-	Aliases:      []string{"repository", "repositories"},
-	Short:        "Manage container config repositories",
-	SilenceUsage: true,
+	Use:     "repo",
+	Aliases: []string{"repository", "repositories"},
+	Short:   "Manage container config repositories",
 }
 
 var repoConfigCmd = &cobra.Command{

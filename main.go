@@ -81,9 +81,10 @@ var (
 
 func newRootCommand() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:     "tinfoil",
-		Short:   "Verify, connect to, and manage Tinfoil enclaves",
-		Version: version,
+		Use:          "tinfoil",
+		Short:        "Verify, connect to, and manage Tinfoil enclaves",
+		Version:      version,
+		SilenceUsage: true,
 	}
 	cmd.PersistentFlags().StringVar(&localConfigFile, "config", "", "Local config file to launch or trust for verification")
 	return cmd

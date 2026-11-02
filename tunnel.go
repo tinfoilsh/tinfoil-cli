@@ -45,7 +45,6 @@ func init() {
 	forwardCmd.Flags().StringVar(&forwardSealedTo, "sealed-to", "", "RTMR3 the enclave must carry")
 	forwardCmd.Flags().MarkHidden("sealed-to")
 	addTunnelFlags(forwardCmd)
-	forwardCmd.SilenceUsage = true
 }
 
 func addTunnelFlags(cmd *cobra.Command) {

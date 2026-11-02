@@ -72,14 +72,12 @@ func init() {
 	_ = volumeRenameCmd.MarkFlagRequired("name")
 	volumeAttachCmd.Flags().StringVar(&volumeAttachAs, "as", "", "Mount name declared in tinfoil-config.yml (defaults to the only declared mount)")
 	volumeDeleteCmd.Flags().BoolVar(&volumeYes, "yes", false, "Skip interactive confirmation")
-	silenceUsageRecursive(volumeCmd)
 }
 
 var volumeCmd = &cobra.Command{
-	Use:          "volume",
-	Aliases:      []string{"volumes"},
-	Short:        "Manage persistent volumes for containers and sandboxes",
-	SilenceUsage: true,
+	Use:     "volume",
+	Aliases: []string{"volumes"},
+	Short:   "Manage persistent volumes for containers and sandboxes",
 }
 
 var volumeListCmd = &cobra.Command{

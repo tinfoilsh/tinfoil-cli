@@ -75,15 +75,12 @@ func init() {
 
 	modelStatusCmd.Flags().BoolVar(&modelStatusWait, "wait", false, "Poll until the wrap job finishes")
 	modelStatusCmd.Flags().BoolVar(&modelStatusLogs, "logs", false, "Include the wrap job logs")
-
-	silenceUsageRecursive(modelCmd)
 }
 
 var modelCmd = &cobra.Command{
-	Use:          "model",
-	Aliases:      []string{"models"},
-	Short:        "Prepare verified model weights for containers",
-	SilenceUsage: true,
+	Use:     "model",
+	Aliases: []string{"models"},
+	Short:   "Prepare verified model weights for containers",
 }
 
 var modelWrapCmd = &cobra.Command{

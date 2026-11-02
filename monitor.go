@@ -86,10 +86,9 @@ func bucketOwnedBy(bucket, account, user string) bool {
 }
 
 var monitorCmd = &cobra.Command{
-	Use:          "monitor",
-	Aliases:      []string{"monitors"},
-	Short:        "Manage the Monitor your sandboxes connect through",
-	SilenceUsage: true,
+	Use:     "monitor",
+	Aliases: []string{"monitors"},
+	Short:   "Manage the Monitor your sandboxes connect through",
 }
 
 func currentScope() (accountScope, *cpClient, error) {

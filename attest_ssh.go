@@ -64,8 +64,7 @@ var attestSSHCmd = &cobra.Command{
 	Short: "Pin an enclave's attested SSH host key for native ssh",
 	Long: `Print an ssh profile pinned to the attested host key, or write it with --install.
 A reboot rotates the key, so rerun this after one.`,
-	Args:         cobra.ExactArgs(1),
-	SilenceUsage: true,
+	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		resolved := startConnectionProgress(cmd.ErrOrStderr(), "Looking up "+args[0])
 		target, err := resolveTunnelTarget(args[0])

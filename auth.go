@@ -31,9 +31,6 @@ import (
 
 func init() {
 	rootCmd.AddCommand(loginCmd, logoutCmd, whoamiCmd)
-	for _, cmd := range []*cobra.Command{loginCmd, logoutCmd, whoamiCmd} {
-		cmd.SilenceUsage = true
-	}
 	loginCmd.Flags().String("url", "", "Controlplane URL for --api-key (default https://api.tinfoil.sh)")
 	loginCmd.Flags().String("api-key", "", "Sign in with an admin API key (admin_...) instead of the browser")
 	loginCmd.Flags().Bool("sync", false, "Sync your sandbox keys to this machine")

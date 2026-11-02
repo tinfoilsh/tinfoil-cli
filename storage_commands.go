@@ -32,8 +32,8 @@ func init() {
 }
 
 func newProjectStorageCommand() *cobra.Command {
-	parent := &cobra.Command{Use: "storage", Short: "Configure customer-owned project storage", SilenceUsage: true}
-	cmd := &cobra.Command{Use: "configure [id|owner/repo]", Short: "Save a local AWS keyserver profile without provisioning infrastructure", Args: cobra.MaximumNArgs(1), SilenceUsage: true}
+	parent := &cobra.Command{Use: "storage", Short: "Configure customer-owned project storage"}
+	cmd := &cobra.Command{Use: "configure [id|owner/repo]", Short: "Save a local AWS keyserver profile without provisioning infrastructure", Args: cobra.MaximumNArgs(1)}
 	cmd.Flags().String("keyserver-url", "", "Customer keyserver HTTPS origin [required]")
 	cmd.Flags().String("aws-region", "", "Customer AWS Secrets Manager region [required]")
 	cmd.Flags().String("aws-prefix", "", "Keyserver AWS_SECRETS_PREFIX; pass an explicit empty value for no prefix [required]")
@@ -145,8 +145,8 @@ func storageOptions(cmd *cobra.Command) storageArtifactOptions {
 }
 
 func newVolumeAutoUnlockCommand(factory storageStoreFactory) *cobra.Command {
-	parent := &cobra.Command{Use: "auto-unlock", Short: "Prepare or inspect private volume unlock configuration", SilenceUsage: true}
-	configure := &cobra.Command{Use: "configure <existing-volume>", Short: "Prepare an existing disk using only its original AWS key", Args: cobra.ExactArgs(1), SilenceUsage: true}
+	parent := &cobra.Command{Use: "auto-unlock", Short: "Prepare or inspect private volume unlock configuration"}
+	configure := &cobra.Command{Use: "configure <existing-volume>", Short: "Prepare an existing disk using only its original AWS key", Args: cobra.ExactArgs(1)}
 	addStorageArtifactFlags(configure, true)
 	configure.RunE = func(cmd *cobra.Command, args []string) error {
 		o := storageOptions(cmd)
@@ -177,7 +177,7 @@ func newVolumeAutoUnlockCommand(factory storageStoreFactory) *cobra.Command {
 		}
 		return configureVolumeStorage(cmd, store, *v, p, o, config, policy, false)
 	}
-	status := &cobra.Command{Use: "status <volume>", Short: "Show local configuration evidence, not guest unlock state", Args: cobra.ExactArgs(1), SilenceUsage: true}
+	status := &cobra.Command{Use: "status <volume>", Short: "Show local configuration evidence, not guest unlock state", Args: cobra.ExactArgs(1)}
 	status.Flags().String("project", "", "Project ID or owner/repo [required]")
 	status.RunE = func(cmd *cobra.Command, args []string) error {
 		project, _ := cmd.Flags().GetString("project")

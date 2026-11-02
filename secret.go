@@ -33,14 +33,12 @@ func init() {
 		cmd.Flags().StringVar(&secretValue, "value", "", "Secret value (visible in ps; prefer --value-file or stdin)")
 		cmd.Flags().StringVar(&secretValueFile, "value-file", "", "Read the secret value from this file (use - for stdin)")
 	}
-	silenceUsageRecursive(secretCmd)
 }
 
 var secretCmd = &cobra.Command{
-	Use:          "secret",
-	Aliases:      []string{"secrets"},
-	Short:        "Manage organization-level secrets",
-	SilenceUsage: true,
+	Use:     "secret",
+	Aliases: []string{"secrets"},
+	Short:   "Manage organization-level secrets",
 }
 
 var secretListCmd = &cobra.Command{

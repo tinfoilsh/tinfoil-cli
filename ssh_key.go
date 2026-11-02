@@ -35,15 +35,13 @@ func init() {
 
 	sshKeyCreateCmd.Flags().StringVar(&sshPublicKey, "public-key", "", "Public key contents (e.g. \"ssh-ed25519 AAAA...\")")
 	sshKeyCreateCmd.Flags().StringVar(&sshPublicKeyFile, "public-key-file", "", "Read the public key from this file (use - for stdin)")
-	silenceUsageRecursive(sshKeyCmd)
 }
 
 var sshKeyCmd = &cobra.Command{
-	Use:          "ssh-key",
-	Aliases:      []string{"ssh-keys"},
-	Short:        "Manage SSH keys",
-	Long:         "Container keys open debug containers. Sandbox keys (--sandbox, Ed25519) can own sandboxes and Monitors.",
-	SilenceUsage: true,
+	Use:     "ssh-key",
+	Aliases: []string{"ssh-keys"},
+	Short:   "Manage SSH keys",
+	Long:    "Container keys open debug containers. Sandbox keys (--sandbox, Ed25519) can own sandboxes and Monitors.",
 }
 
 // sshKeyQuery selects the key list; personal accounts always get sandbox keys.

@@ -35,8 +35,7 @@ Put native scp options after --; -p before -- is the enclave SSH port.`,
 
   Choose the enclave with --enclave
   tinfoil scp --enclave enclave.example.com ./file.txt :/tmp/`,
-		Args:         cobra.ArbitraryArgs,
-		SilenceUsage: true,
+		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			var options []string
 			if dash := cmd.ArgsLenAtDash(); dash >= 0 {
