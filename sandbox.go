@@ -386,7 +386,7 @@ func relinkSandboxes(ctx context.Context, scope accountScope, cp *cpClient, m *m
 			!sandboxNetworkMatches(listed) || listed.NetworkPolicy.Egress[0].ContainerID != monitorID {
 			continue
 		}
-		if err := relinkSandbox(ctx, scope, cp, m, monitorID, listed.ID); err != nil && !errors.Is(err, errNoLocalKeys) {
+		if err := relinkSandbox(ctx, scope, cp, m, monitorID, listed.ID); err != nil && !errors.As(err, new(noLocalKeys)) {
 			failures = append(failures, fmt.Errorf("sandbox %s: %w", listed.Name, err))
 		}
 	}

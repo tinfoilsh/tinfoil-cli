@@ -225,10 +225,10 @@ func TestResourceKeysBindOnceAndNeverRegenerate(t *testing.T) {
 	revision := keys.revision
 	row.OwnerPublicKey = ed25519PublicKeyString(testSeed(t))
 	_, err = resolveResourceKeys(t.Context(), cp, scope, row, "sandbox", binding, dir, true)
-	require.ErrorContains(t, err, "has no sandbox key")
+	require.ErrorContains(t, err, "no key for sandbox work")
 	row.OwnerPublicKey = saved.OwnerPublicKey
 	_, err = resolveResourceKeys(t.Context(), cp, scope, row, "monitor", binding, dir, true)
-	require.ErrorContains(t, err, "has no monitor key")
+	require.ErrorContains(t, err, "no key for monitor work")
 	require.Equal(t, revision, keys.revision, "missing keys are never manufactured")
 }
 
@@ -322,7 +322,7 @@ func TestEncryptedOwnerIdentityFallsBackToAgent(t *testing.T) {
 		defer conn.Close()
 		done <- agent.ServeAgent(keyring, conn)
 	}()
-	signer, path, closeSigner, err := userSigner(ed25519PublicKeyString(seed), home)
+	signer, path, closeSigner, err := userSigner("sandbox test", ed25519PublicKeyString(seed), home)
 	require.NoError(t, err)
 	defer closeSigner()
 	require.Equal(t, filepath.Join(home, "owner.pub"), path)

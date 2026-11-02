@@ -30,10 +30,11 @@ const (
 	maxKeyStateConflicts = 8
 )
 
-var (
-	errStaleDEK    = errors.New("the synced key no longer matches your key bundle; run `tinfoil login --sync`")
-	errNoLocalKeys = errors.New("this machine has no keys for it")
-)
+var errStaleDEK = errors.New("the synced key no longer matches your key bundle; run `tinfoil login --sync`")
+
+type noLocalKeys string
+
+func (e noLocalKeys) Error() string { return string(e) }
 
 type keyState struct {
 	Revision    uint64          `json:"revision"`
@@ -77,7 +78,14 @@ func newMKSession(cp *cpClient, scope accountScope) (*mkSession, error) {
 		return nil, err
 	}
 	if dek == nil {
-		return nil, fmt.Errorf("%w: synced resources need your sandbox keys on this machine; run `tinfoil login --sync`", errNoLocalKeys)
+		reason, next := "this machine doesn't have your synced keys", "run `tinfoil login --sync`"
+		if cp.login == nil {
+			reason = "synced keys need a browser login, not an admin API key"
+			if source := credentialEnvSource(); source != "" {
+				next = "unset " + source + ", then " + next
+			}
+		}
+		return nil, noLocalKeys(reason + "; " + next)
 	}
 	return &mkSession{cp, dek.DEK, mkContext{fixedAPIOrigin, scope.UserID, dek.DEKID}}, nil
 }
@@ -210,10 +218,10 @@ func resolveResourceKeys(ctx context.Context, cp *cpClient, scope accountScope, 
 		_, err = mk.update(ctx, func(p *mkPayload) error {
 			r := findKey(p, func(r *mkResource) bool { return r.OwnerPublicKey == row.OwnerPublicKey })
 			if r == nil || r.Kind != kind {
-				return fmt.Errorf("%w: your key bundle has no %s key for %s; it was created by another user or its keys were lost", errNoLocalKeys, kind, row.Name)
+				return noLocalKeys(fmt.Sprintf("your synced keys have no key for %s %s; it was created by another user or its keys were lost", kind, row.Name))
 			}
 			if r.Binding == nil && !bind {
-				return fmt.Errorf("%w: %s was never opened", errNoLocalKeys, row.Name)
+				return noLocalKeys(row.Name + " was never opened")
 			}
 			if r.Binding == nil {
 				r.Binding = &binding
@@ -242,7 +250,7 @@ func resolveResourceKeys(ctx context.Context, cp *cpClient, scope accountScope, 
 		var record umkRecord
 		switch err := readStorageJSON(keys.umkPath, &record); {
 		case errors.Is(err, os.ErrNotExist) && !bind:
-			return nil, fmt.Errorf("%w: %s has no local storage keys", errNoLocalKeys, row.Name)
+			return nil, noLocalKeys(fmt.Sprintf("%s %s has no storage keys on this machine (expected %s)", kind, row.Name, keys.umkPath))
 		case errors.Is(err, os.ErrNotExist):
 		case err != nil:
 			return nil, err
@@ -254,7 +262,7 @@ func resolveResourceKeys(ctx context.Context, cp *cpClient, scope accountScope, 
 		if err := prepareStorageDirectory(dir); err != nil {
 			return nil, err
 		}
-		keys.signer, keys.identity, keys.closeSigner, err = userSigner(row.OwnerPublicKey, dir)
+		keys.signer, keys.identity, keys.closeSigner, err = userSigner(kind+" "+row.Name, row.OwnerPublicKey, dir)
 		if err != nil {
 			keys.close()
 			return nil, err
@@ -313,7 +321,7 @@ func (r *umkRecord) use(keys *resourceKeys, kind, owner string, binding mkBindin
 		return errors.New("the resource no longer matches the account, resource, volume or storage its keys are bound to")
 	}
 	if r.Binding == nil && !bind {
-		return fmt.Errorf("%w: it was never opened", errNoLocalKeys)
+		return noLocalKeys("it was never opened")
 	}
 	if r.Binding == nil {
 		r.Binding = &binding
@@ -546,7 +554,7 @@ func existingCredentialDir(parent, id string) (string, error) {
 }
 
 // A public identity file selects an ssh-agent key without copying its private key.
-func userSigner(owner, dir string) (ssh.Signer, string, func(), error) {
+func userSigner(name, owner, dir string) (ssh.Signer, string, func(), error) {
 	close := func() {}
 	public, err := measuredOwner(owner)
 	if err != nil {
@@ -557,6 +565,7 @@ func userSigner(owner, dir string) (ssh.Signer, string, func(), error) {
 		return nil, "", close, err
 	}
 	paths := []string{attestSSHIdentity, filepath.Join(home, ".ssh", "id_ed25519")}
+	var skipped []string
 	for _, path := range paths {
 		if path == "" {
 			continue
@@ -570,6 +579,7 @@ func userSigner(owner, dir string) (ssh.Signer, string, func(), error) {
 		}
 		raw, readErr := os.ReadFile(path)
 		if readErr != nil {
+			skipped = append(skipped, readErr.Error())
 			continue
 		}
 		signer, parseErr := ssh.ParsePrivateKey(raw)
@@ -577,6 +587,7 @@ func userSigner(owner, dir string) (ssh.Signer, string, func(), error) {
 		if errors.As(parseErr, &encrypted) && encrypted.PublicKey != nil && bytes.Equal(encrypted.PublicKey.Marshal(), public.Marshal()) {
 			if !term.IsTerminal(int(os.Stdin.Fd())) {
 				clear(raw)
+				skipped = append(skipped, path+" needs a passphrase, and there is no terminal to ask for it")
 				continue
 			}
 			fmt.Fprintf(os.Stderr, "Passphrase for %s: ", path)
@@ -589,15 +600,28 @@ func userSigner(owner, dir string) (ssh.Signer, string, func(), error) {
 			}
 			signer, parseErr = ssh.ParsePrivateKeyWithPassphrase(raw, password)
 			clear(password)
+			if parseErr != nil {
+				clear(raw)
+				skipped = append(skipped, "the passphrase for "+path+" was rejected")
+				continue
+			}
 		}
 		clear(raw)
 		if parseErr == nil && bytes.Equal(signer.PublicKey().Marshal(), public.Marshal()) {
 			return signer, path, close, nil
 		}
+		if parseErr == nil || encrypted != nil {
+			skipped = append(skipped, path+" holds a different key")
+		} else {
+			skipped = append(skipped, path+" is not a private key")
+		}
 	}
+	agentState := "no ssh-agent is running"
 	if socket := os.Getenv("SSH_AUTH_SOCK"); socket != "" {
+		agentState = "ssh-agent is unreachable"
 		conn, dialErr := net.Dial("unix", socket)
 		if dialErr == nil {
+			agentState = "ssh-agent doesn't hold it"
 			signers, _ := agent.NewClient(conn).Signers()
 			for _, signer := range signers {
 				if bytes.Equal(signer.PublicKey().Marshal(), public.Marshal()) {
@@ -612,5 +636,6 @@ func userSigner(owner, dir string) (ssh.Signer, string, func(), error) {
 			conn.Close()
 		}
 	}
-	return nil, "", close, fmt.Errorf("%w: owner %s requires its Ed25519 key through --identity or ssh-agent", errNoLocalKeys, ssh.FingerprintSHA256(public))
+	return nil, "", close, noLocalKeys(fmt.Sprintf("%s is owned by SSH key %s, which this machine doesn't have (%s); pass --identity PATH or ssh-add the key",
+		name, ssh.FingerprintSHA256(public), strings.Join(append(skipped, agentState), "; ")))
 }
