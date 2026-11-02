@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/base64"
@@ -9,11 +10,12 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
+	"slices"
 	"strings"
 
 	"golang.org/x/crypto/ssh"
@@ -21,84 +23,390 @@ import (
 	"golang.org/x/term"
 )
 
-const maxOwnerCredentialBytes = 4096
-
 var resourceNamePattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,62}$`)
 
-// Owner signing and storage encryption use independent keys.
-type ownerCredential struct {
-	Version     int    `json:"version"`
-	Key         []byte `json:"key"`
-	SigningSeed []byte `json:"signing_seed,omitempty"`
-	Owner       string `json:"owner_public_key,omitempty"`
+const (
+	keyStatePath         = "/api/sandboxes/owner-key"
+	maxKeyStateConflicts = 8
+)
+
+var errStaleDEK = errors.New("the synced key no longer matches your key bundle; run `tinfoil login --sync`")
+
+type noLocalKeys string
+
+func (e noLocalKeys) Error() string { return string(e) }
+
+type keyState struct {
+	Revision    uint64          `json:"revision"`
+	DEKID       *string         `json:"dek_id"`
+	EncryptedMK *string         `json:"encrypted_mk"`
+	Recovery    json.RawMessage `json:"recovery"`
 }
 
-func readOwnerCredential(path string) (*ownerCredential, error) {
-	file, err := os.Open(path)
+type keyStateWrite struct {
+	ExpectedRevision uint64          `json:"expected_revision"`
+	DEKID            string          `json:"dek_id"`
+	EncryptedMK      string          `json:"encrypted_mk"`
+	Recovery         json.RawMessage `json:"recovery"`
+}
+
+func fetchKeyState(ctx context.Context, cp *cpClient) (*keyState, error) {
+	var state keyState
+	if _, err := cp.doContext(ctx, "GET", keyStatePath, nil, nil, nil, &state); err != nil {
+		return nil, fmt.Errorf("reading your key state: %w", err)
+	}
+	if state.DEKID != nil && !validID16(*state.DEKID) || (state.DEKID == nil) != (state.EncryptedMK == nil) {
+		return nil, errors.New("controlplane returned an invalid key state")
+	}
+	return &state, nil
+}
+
+func keyStateConflict(err error, code string) bool {
+	var conflict *cpError
+	return errors.As(err, &conflict) && conflict.Status == 409 && conflict.Message == code
+}
+
+type mkSession struct {
+	cp      *cpClient
+	dek     []byte
+	context mkContext
+}
+
+func newMKSession(cp *cpClient, scope accountScope) (*mkSession, error) {
+	dek, err := syncedKey(cp.login, scope.UserID)
 	if err != nil {
 		return nil, err
 	}
-	defer file.Close()
-	raw, err := io.ReadAll(io.LimitReader(file, maxOwnerCredentialBytes+1))
-	if err != nil {
-		return nil, err
-	}
-	defer clear(raw)
-	if len(raw) > maxOwnerCredentialBytes {
-		return nil, fmt.Errorf("owner credential %s exceeds 4096 bytes", path)
-	}
-	trimmed := bytes.TrimSpace(raw)
-	key := make([]byte, base64.StdEncoding.DecodedLen(len(trimmed)))
-	defer clear(key)
-	if n, err := base64.StdEncoding.Strict().Decode(key, trimmed); err == nil {
-		if n == 32 || n == 64 {
-			return nil, errors.New("legacy encryption-only key; this CLI requires an owner SSH credential. Keep this file for the existing deployment and use a new name for a fresh deployment")
+	if dek == nil {
+		reason, next := "this machine doesn't have your synced keys", "run `tinfoil login --sync`"
+		if cp.login == nil {
+			reason = "synced keys need a browser login, not an admin API key"
+			if source := credentialEnvSource(); source != "" {
+				next = "unset " + source + ", then " + next
+			}
 		}
+		return nil, noLocalKeys(reason + "; " + next)
 	}
-	var credential ownerCredential
-	decoder := json.NewDecoder(bytes.NewReader(raw))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&credential); err != nil {
-		return nil, errors.New("invalid owner SSH credential JSON; restore the original credential file")
-	}
-	if err := decoder.Decode(new(any)); err != io.EOF || len(credential.Key) != 32 || !(credential.Version == 2 && len(credential.SigningSeed) == ed25519.SeedSize || credential.Version == 3 && credential.Owner != "" && len(credential.SigningSeed) == 0) {
-		return nil, errors.New("invalid owner credential version or keys; restore the original credential file")
-	}
-	return &credential, nil
+	return &mkSession{cp, dek.DEK, mkContext{fixedAPIOrigin, scope.UserID, dek.DEKID}}, nil
 }
 
-func (c *ownerCredential) clear() { clear(c.Key); clear(c.SigningSeed) }
+func (s *mkSession) load(ctx context.Context) (*keyState, *mkPayload, error) {
+	state, err := fetchKeyState(ctx, s.cp)
+	if err != nil {
+		return nil, nil, err
+	}
+	if state.DEKID == nil || *state.DEKID != s.context.DEKID {
+		return nil, nil, errStaleDEK
+	}
+	payload, err := openMK(*state.EncryptedMK, s.dek, s.context)
+	return state, payload, err
+}
 
-func saveOwnerCredential(path string, credential *ownerCredential) error {
-	old, err := readOwnerCredential(path)
-	if err == nil {
-		defer old.clear()
-		if !bytes.Equal(old.Key, credential.Key) || !bytes.Equal(old.SigningSeed, credential.SigningSeed) || old.Owner != credential.Owner {
-			return fmt.Errorf("%s already holds a different credential; refusing to replace it: %w", path, os.ErrExist)
+func (s *mkSession) update(ctx context.Context, change func(*mkPayload) error) (*mkPayload, error) {
+	for range maxKeyStateConflicts {
+		state, payload, err := s.load(ctx)
+		if err != nil {
+			return nil, err
 		}
+		before, err := contractJSON(payload)
+		if err != nil {
+			return nil, err
+		}
+		err = change(payload)
+		after, encodeErr := contractJSON(payload)
+		unchanged := bytes.Equal(before, after)
+		clear(before)
+		clear(after)
+		if err != nil || encodeErr != nil || unchanged {
+			return payload, errors.Join(err, encodeErr)
+		}
+		sealed, err := sealMK(payload, s.dek, s.context)
+		if err != nil {
+			return nil, err
+		}
+		_, err = s.cp.doContext(ctx, "PUT", keyStatePath, nil, nil, keyStateWrite{state.Revision, s.context.DEKID, sealed, state.Recovery}, nil)
+		var definite *cpError
+		if err == nil {
+			return payload, nil
+		}
+		if !keyStateConflict(err, "stale_revision") && errors.As(err, &definite) && definite.Status < 500 {
+			return nil, err
+		}
+	}
+	return nil, errors.New("your key bundle kept changing; retry")
+}
+
+func findKey(p *mkPayload, match func(*mkResource) bool) *mkResource {
+	for i := range p.Resources {
+		if match(&p.Resources[i]) {
+			return &p.Resources[i]
+		}
+	}
+	return nil
+}
+
+func addKey(p *mkPayload, r mkResource) error {
+	i, found := slices.BinarySearchFunc(p.Resources, r.KeyID, func(e mkResource, id string) int { return strings.Compare(e.KeyID, id) })
+	if !found {
+		if len(p.Resources) >= maxMKResources {
+			return errors.New("your key bundle is full; delete unused resources first")
+		}
+		p.Resources = slices.Insert(p.Resources, i, r)
 		return nil
 	}
-	if !errors.Is(err, os.ErrNotExist) {
-		return err
+	e := p.Resources[i]
+	if e.Kind != r.Kind || e.AttemptID != r.AttemptID || e.OwnerPublicKey != r.OwnerPublicKey || !bytes.Equal(e.OwnerSeed, r.OwnerSeed) ||
+		!bytes.Equal(e.StorageKey, r.StorageKey) || !bytes.Equal(e.MonitorIdentitySeed, r.MonitorIdentitySeed) {
+		return fmt.Errorf("key %s already holds different key material", r.KeyID)
 	}
-	data, err := json.MarshalIndent(credential, "", "  ")
+	return nil
+}
+
+func newResourceKey(kind string) mkResource {
+	random := func() b64u {
+		key := make(b64u, 32)
+		rand.Read(key)
+		return key
+	}
+	r := mkResource{KeyID: randomB64U(16), Kind: kind, AttemptID: randomB64U(16), OwnerSeed: random(), StorageKey: random()}
+	r.OwnerPublicKey = ed25519PublicKeyString(r.OwnerSeed)
+	if kind == "sandbox" {
+		r.MonitorIdentitySeed = random()
+	} else {
+		r.MinGeneration = new(uint64)
+	}
+	return r
+}
+
+type resourceKeys struct {
+	mode                string
+	signer              ssh.Signer
+	identity            string
+	ownerPrivate        ed25519.PrivateKey
+	ownerSeed           []byte
+	storageKey          []byte
+	monitorIdentitySeed []byte
+	minGeneration       uint64
+	closeSigner         func()
+	mk                  *mkSession
+	keyID               string
+	umkPath             string
+}
+
+func (k *resourceKeys) close() {
+	clear(k.ownerPrivate)
+	clear(k.ownerSeed)
+	clear(k.storageKey)
+	clear(k.monitorIdentitySeed)
+	if k.closeSigner != nil {
+		k.closeSigner()
+	}
+}
+
+func resolveResourceKeys(ctx context.Context, cp *cpClient, scope accountScope, row containerView, kind string, binding mkBinding, dir string, bind bool) (*resourceKeys, error) {
+	if _, err := measuredOwner(row.OwnerPublicKey); err != nil {
+		return nil, err
+	}
+	keys := &resourceKeys{mode: row.OwnerKeyMode}
+	switch row.OwnerKeyMode {
+	case "tmk":
+		mk, err := newMKSession(cp, scope)
+		if err != nil {
+			return nil, err
+		}
+		var saved mkResource
+		_, err = mk.update(ctx, func(p *mkPayload) error {
+			r := findKey(p, func(r *mkResource) bool { return r.OwnerPublicKey == row.OwnerPublicKey })
+			if r == nil || r.Kind != kind {
+				return noLocalKeys(fmt.Sprintf("your synced keys have no key for %s %s; it was created by another user or its keys were lost", kind, row.Name))
+			}
+			if r.Binding == nil && !bind {
+				return noLocalKeys(row.Name + " was never opened")
+			}
+			if r.Binding == nil {
+				r.Binding = &binding
+			} else if !reflect.DeepEqual(*r.Binding, binding) {
+				return fmt.Errorf("%s no longer matches the account, resource, volume or storage its keys are bound to", row.Name)
+			}
+			saved = *r
+			return nil
+		})
+		if err != nil {
+			return nil, err
+		}
+		keys.mk, keys.keyID = mk, saved.KeyID
+		keys.ownerSeed, keys.storageKey, keys.monitorIdentitySeed = bytes.Clone(saved.OwnerSeed), bytes.Clone(saved.StorageKey), bytes.Clone(saved.MonitorIdentitySeed)
+		if saved.MinGeneration != nil {
+			keys.minGeneration = *saved.MinGeneration
+		}
+		keys.ownerPrivate = ed25519.NewKeyFromSeed(keys.ownerSeed)
+		keys.signer, err = ssh.NewSignerFromKey(keys.ownerPrivate)
+		return keys, err
+	case "umk":
+		var err error
+		if keys.umkPath, err = umkRecordPath(scope, row.ID); err != nil {
+			return nil, err
+		}
+		var record umkRecord
+		switch err := readStorageJSON(keys.umkPath, &record); {
+		case errors.Is(err, os.ErrNotExist) && !bind:
+			return nil, noLocalKeys(fmt.Sprintf("%s %s has no storage keys on this machine (expected %s)", kind, row.Name, keys.umkPath))
+		case errors.Is(err, os.ErrNotExist):
+		case err != nil:
+			return nil, err
+		default:
+			if err := record.use(keys, kind, row.OwnerPublicKey, binding, bind); err != nil {
+				return nil, fmt.Errorf("%s: %w", keys.umkPath, err)
+			}
+		}
+		if err := prepareStorageDirectory(dir); err != nil {
+			return nil, err
+		}
+		keys.signer, keys.identity, keys.closeSigner, err = userSigner(kind+" "+row.Name, row.OwnerPublicKey, dir)
+		if err != nil {
+			keys.close()
+			return nil, err
+		}
+		return keys, nil
+	}
+	return nil, fmt.Errorf("%s has no supported owner key custody; recreate it", row.Name)
+}
+
+type umkRecord struct {
+	Version             int        `json:"version"`
+	Kind                string     `json:"kind"`
+	Owner               string     `json:"owner_public_key"`
+	StorageKey          b64u       `json:"storage_key"`
+	MonitorIdentitySeed b64u       `json:"monitor_identity_seed"`
+	Binding             *mkBinding `json:"binding"`
+}
+
+func umkRecordPath(scope accountScope, containerID string) (string, error) {
+	dir, err := accountDir(scope)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "umk-"+storageHash([]byte(containerID))[:32]+".json"), nil
+}
+
+func newUMKRecord(kind, owner string) *umkRecord {
+	r := newResourceKey(kind)
+	clear(r.OwnerSeed)
+	return &umkRecord{Version: 1, Kind: kind, Owner: owner, StorageKey: r.StorageKey, MonitorIdentitySeed: r.MonitorIdentitySeed}
+}
+
+func saveUMKRecord(path string, record *umkRecord) (*umkRecord, error) {
+	err := writeStorageJSON(path, record, true)
+	if err != nil && !errors.Is(err, os.ErrExist) {
+		return nil, err
+	}
+	var saved umkRecord
+	if err := readStorageJSON(path, &saved); err != nil {
+		return nil, err
+	}
+	if saved.Owner != record.Owner || saved.Kind != record.Kind {
+		return nil, fmt.Errorf("%s holds keys of another resource", path)
+	}
+	if err == nil {
+		fmt.Fprintf(os.Stderr, "Back up %s: it holds this resource's storage keys, which your SSH key cannot recover.\n", path)
+	}
+	return &saved, nil
+}
+
+func (r *umkRecord) use(keys *resourceKeys, kind, owner string, binding mkBinding, bind bool) error {
+	if r.Version != 1 || r.Kind != kind || r.Owner != owner || len(r.StorageKey) != 32 || (kind == "sandbox") != (len(r.MonitorIdentitySeed) == 32) {
+		return errors.New("the local storage keys belong to another resource or are damaged; restore the original file")
+	}
+	if r.Binding != nil && !reflect.DeepEqual(*r.Binding, binding) {
+		return errors.New("the resource no longer matches the account, resource, volume or storage its keys are bound to")
+	}
+	if r.Binding == nil && !bind {
+		return noLocalKeys("it was never opened")
+	}
+	if r.Binding == nil {
+		r.Binding = &binding
+		if err := writeStorageJSON(keys.umkPath, r, false); err != nil {
+			return err
+		}
+	}
+	keys.storageKey, keys.monitorIdentitySeed = bytes.Clone(r.StorageKey), bytes.Clone(r.MonitorIdentitySeed)
+	return nil
+}
+
+func (k *resourceKeys) generateUMKKeys(kind, owner string, binding mkBinding) error {
+	record := newUMKRecord(kind, owner)
+	record.Binding = &binding
+	saved, err := saveUMKRecord(k.umkPath, record)
+	clear(record.StorageKey)
+	clear(record.MonitorIdentitySeed)
 	if err != nil {
 		return err
 	}
-	defer clear(data)
-	return writeStorageFile(path, data, true)
+	return saved.use(k, kind, owner, binding, true)
 }
 
-func (c *ownerCredential) publicKey() string {
-	if c.Version == 3 {
-		return c.Owner
+func whileSignedIn(login *clerkGrant, write func() error) error {
+	return withCredentialLock(func() error {
+		current, err := currentGrant()
+		if err != nil {
+			return err
+		}
+		if login == nil || current == nil || current.Grant != login.Grant {
+			return errors.New("you signed out while connecting; run `tinfoil login --sync`")
+		}
+		return write()
+	})
+}
+
+func exportTMKIdentity(login *clerkGrant, dir string, seed []byte) (string, error) {
+	path := filepath.Join(dir, tmkOwnerKeyName)
+	return path, whileSignedIn(login, func() error {
+		if err := prepareStorageDirectory(dir); err != nil {
+			return err
+		}
+		_, err := ensureSSHIdentity(path, seed)
+		return err
+	})
+}
+
+func removeExportedKeys() error {
+	config, err := configPath()
+	if err != nil {
+		return err
 	}
-	if len(c.SigningSeed) != ed25519.SeedSize {
-		return ""
+	resources := filepath.Join(filepath.Dir(config), "resources")
+	exported, err := filepath.Glob(filepath.Join(resources, "*", "*", tmkOwnerKeyName))
+	if err != nil {
+		return err
 	}
-	private := ed25519.NewKeyFromSeed(c.SigningSeed)
-	defer clear(private)
-	return "ed25519:" + base64.StdEncoding.EncodeToString(private.Public().(ed25519.PublicKey))
+	profiles, _ := filepath.Glob(filepath.Join(resources, "*", "*", monitorProfileFile))
+	for _, path := range profiles {
+		var profile monitorProfile
+		if readStorageJSON(path, &profile) == nil && profile.Custody == "tmk" {
+			exported = append(exported, filepath.Join(filepath.Dir(path), monitorDeviceKeyName))
+		}
+	}
+	var keys agent.ExtendedAgent
+	var loaded []*agent.Key
+	if socket := os.Getenv("SSH_AUTH_SOCK"); socket != "" {
+		if conn, dialErr := net.Dial("unix", socket); dialErr == nil {
+			defer conn.Close()
+			keys = agent.NewClient(conn)
+			loaded, _ = keys.List()
+		}
+	}
+	for _, path := range exported {
+		if signer, loadErr := loadSigner(path); loadErr == nil {
+			public := signer.PublicKey()
+			if slices.ContainsFunc(loaded, func(key *agent.Key) bool { return bytes.Equal(key.Marshal(), public.Marshal()) }) {
+				err = errors.Join(err, keys.Remove(public))
+			}
+		}
+		if removeErr := os.Remove(path); !errors.Is(removeErr, os.ErrNotExist) {
+			err = errors.Join(err, removeErr)
+		}
+	}
+	return err
 }
 
 func ensureSSHKey(path string) (string, error) {
@@ -166,18 +474,9 @@ func resourceDir(scope accountScope, id, name string) (string, error) {
 	if !looksLikeUUID(id) {
 		return "", errors.New("invalid resource UUID")
 	}
-	config, err := configPath()
+	accountDir, err := accountDir(scope)
 	if err != nil {
 		return "", err
-	}
-	data, _ := json.Marshal(scope)
-	root, accountID := filepath.Join(filepath.Dir(config), "resources"), storageHash(data)
-	accountDir, err := existingCredentialDir(root, accountID)
-	if err != nil {
-		return "", err
-	}
-	if accountDir == "" {
-		accountDir = filepath.Join(root, accountDirectoryLabel(scope)+"-"+accountID)
 	}
 	dir, err := existingCredentialDir(accountDir, id)
 	if err != nil || dir != "" {
@@ -189,6 +488,20 @@ func resourceDir(scope accountScope, id, name string) (string, error) {
 		return filepath.Join(accountDir, id), nil
 	}
 	return filepath.Join(accountDir, name+"-"+id), nil
+}
+
+func accountDir(scope accountScope) (string, error) {
+	config, err := configPath()
+	if err != nil {
+		return "", err
+	}
+	data, _ := json.Marshal(scope)
+	root, accountID := filepath.Join(filepath.Dir(config), "resources"), storageHash(data)
+	dir, err := existingCredentialDir(root, accountID)
+	if err != nil || dir != "" {
+		return dir, err
+	}
+	return filepath.Join(root, accountDirectoryLabel(scope)+"-"+accountID), nil
 }
 
 func accountDirectoryLabel(scope accountScope) string {
@@ -240,19 +553,10 @@ func existingCredentialDir(parent, id string) (string, error) {
 	return saved, nil
 }
 
-func resourceDirMatches(name, id string) bool {
-	return looksLikeUUID(id) && (name == id || strings.HasSuffix(name, "-"+id))
-}
-
 // A public identity file selects an ssh-agent key without copying its private key.
-func ownerSigner(c *ownerCredential, dir string) (ssh.Signer, string, func(), error) {
+func userSigner(name, owner, dir string) (ssh.Signer, string, func(), error) {
 	close := func() {}
-	if len(c.SigningSeed) == ed25519.SeedSize {
-		path := filepath.Join(dir, sandboxSSHKeyName)
-		signer, err := ensureSSHIdentity(path, c.SigningSeed)
-		return signer, path, close, err
-	}
-	public, err := measuredOwner(c.Owner)
+	public, err := measuredOwner(owner)
 	if err != nil {
 		return nil, "", close, err
 	}
@@ -261,6 +565,7 @@ func ownerSigner(c *ownerCredential, dir string) (ssh.Signer, string, func(), er
 		return nil, "", close, err
 	}
 	paths := []string{attestSSHIdentity, filepath.Join(home, ".ssh", "id_ed25519")}
+	var skipped []string
 	for _, path := range paths {
 		if path == "" {
 			continue
@@ -274,6 +579,7 @@ func ownerSigner(c *ownerCredential, dir string) (ssh.Signer, string, func(), er
 		}
 		raw, readErr := os.ReadFile(path)
 		if readErr != nil {
+			skipped = append(skipped, readErr.Error())
 			continue
 		}
 		signer, parseErr := ssh.ParsePrivateKey(raw)
@@ -281,6 +587,7 @@ func ownerSigner(c *ownerCredential, dir string) (ssh.Signer, string, func(), er
 		if errors.As(parseErr, &encrypted) && encrypted.PublicKey != nil && bytes.Equal(encrypted.PublicKey.Marshal(), public.Marshal()) {
 			if !term.IsTerminal(int(os.Stdin.Fd())) {
 				clear(raw)
+				skipped = append(skipped, path+" needs a passphrase, and there is no terminal to ask for it")
 				continue
 			}
 			fmt.Fprintf(os.Stderr, "Passphrase for %s: ", path)
@@ -293,16 +600,31 @@ func ownerSigner(c *ownerCredential, dir string) (ssh.Signer, string, func(), er
 			}
 			signer, parseErr = ssh.ParsePrivateKeyWithPassphrase(raw, password)
 			clear(password)
+			if parseErr != nil {
+				clear(raw)
+				skipped = append(skipped, "the passphrase for "+path+" was rejected")
+				continue
+			}
 		}
 		clear(raw)
 		if parseErr == nil && bytes.Equal(signer.PublicKey().Marshal(), public.Marshal()) {
 			return signer, path, close, nil
 		}
+		if parseErr == nil || encrypted != nil {
+			skipped = append(skipped, path+" holds a different key")
+		} else {
+			skipped = append(skipped, path+" is not a private key")
+		}
 	}
+	agentState := "no ssh-agent is running"
 	if socket := os.Getenv("SSH_AUTH_SOCK"); socket != "" {
+		agentState = "ssh-agent is unreachable"
 		conn, dialErr := net.Dial("unix", socket)
 		if dialErr == nil {
-			signers, _ := agent.NewClient(conn).Signers()
+			signers, signersErr := agent.NewClient(conn).Signers()
+			if signersErr == nil {
+				agentState = "ssh-agent doesn't hold it"
+			}
 			for _, signer := range signers {
 				if bytes.Equal(signer.PublicKey().Marshal(), public.Marshal()) {
 					path := filepath.Join(dir, "owner.pub")
@@ -316,91 +638,6 @@ func ownerSigner(c *ownerCredential, dir string) (ssh.Signer, string, func(), er
 			conn.Close()
 		}
 	}
-	return nil, "", close, fmt.Errorf("owner %s requires its Ed25519 key through --identity or ssh-agent", ssh.FingerprintSHA256(public))
-}
-
-func resourceCredential(dir, file, owner string, known bool) (*ownerCredential, error) {
-	if _, err := measuredOwner(owner); err != nil {
-		return nil, err
-	}
-	c, err := readOwnerCredential(filepath.Join(dir, file))
-	if errors.Is(err, os.ErrNotExist) && !known {
-		c = &ownerCredential{Version: 3, Owner: owner, Key: make([]byte, 32)}
-		defer c.clear()
-		rand.Read(c.Key)
-		if err = prepareStorageDirectory(dir); err != nil {
-			return nil, err
-		}
-		err = saveOwnerCredential(filepath.Join(dir, file), c)
-		if err == nil {
-			fmt.Fprintf(os.Stderr, "Back up the encryption credentials in %s. Your SSH key alone cannot recover this resource.\n", dir)
-		}
-		if err == nil || errors.Is(err, os.ErrExist) {
-			c, err = readOwnerCredential(filepath.Join(dir, file))
-		}
-	}
-	if err != nil {
-		return nil, fmt.Errorf("restore encryption credentials in %s: %w", dir, err)
-	}
-	if c.publicKey() != owner {
-		c.clear()
-		return nil, errors.New("measured owner changed")
-	}
-	return c, nil
-}
-
-// A workspace keeps its encryption key when it moves to a new sandbox. Look
-// only in this account's saved resource records; never reuse the old VM identity.
-func sandboxWorkspaceCredential(dir string, resource sandboxResource, known bool) (*ownerCredential, error) {
-	path := filepath.Join(dir, sandboxDiskKeyName)
-	if _, err := os.Stat(path); known || !errors.Is(err, os.ErrNotExist) {
-		return resourceCredential(dir, sandboxDiskKeyName, resource.Owner, known)
-	}
-	accountDir := filepath.Dir(dir)
-	volumeID, owner := resource.Volumes["workspace"], resource.Owner
-	if !looksLikeUUID(volumeID) {
-		return nil, errors.New("invalid workspace volume UUID")
-	}
-	entries, err := os.ReadDir(accountDir)
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return nil, err
-	}
-	found := new(ownerCredential)
-	defer found.clear()
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-		savedDir := filepath.Join(accountDir, entry.Name())
-		var saved sandboxResource
-		if readStorageJSON(filepath.Join(savedDir, "resource.json"), &saved) != nil || !resourceDirMatches(entry.Name(), saved.ID) || saved.Volumes["workspace"] != volumeID {
-			continue
-		}
-		if saved.Owner != owner {
-			return nil, fmt.Errorf("workspace volume %s was used with a different owner; create the sandbox with its original owner public key", volumeID)
-		}
-		credential, err := readOwnerCredential(filepath.Join(savedDir, sandboxDiskKeyName))
-		if err != nil {
-			return nil, fmt.Errorf("restore the original workspace encryption credentials in %s: %w", savedDir, err)
-		}
-		if credential.publicKey() != owner || len(found.Key) != 0 && !bytes.Equal(found.Key, credential.Key) {
-			credential.clear()
-			return nil, fmt.Errorf("conflicting saved encryption credentials for workspace volume %s; restore the original credentials", volumeID)
-		}
-		if len(found.Key) != 0 {
-			credential.clear()
-		} else {
-			*found = *credential
-		}
-	}
-	if len(found.Key) != 0 {
-		if err := prepareStorageDirectory(dir); err != nil {
-			return nil, err
-		}
-		if err := saveOwnerCredential(path, found); err != nil {
-			return nil, err
-		}
-		fmt.Fprintf(os.Stderr, "Reusing the saved encryption key for workspace volume %s. Back up the credentials in %s.\n", volumeID, dir)
-	}
-	return resourceCredential(dir, sandboxDiskKeyName, owner, len(found.Key) != 0)
+	return nil, "", close, noLocalKeys(fmt.Sprintf("%s is owned by SSH key %s, which this machine doesn't have (%s); pass --identity PATH or ssh-add the key",
+		name, ssh.FingerprintSHA256(public), strings.Join(append(skipped, agentState), "; ")))
 }

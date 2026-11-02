@@ -32,14 +32,12 @@ func init() {
 	rootCmd.AddCommand(domainCmd)
 	domainCmd.PersistentFlags().StringVarP(&outputFormat, "output", "o", "table", "Output format: table or json")
 	domainCmd.AddCommand(domainListCmd, domainAddCmd, domainVerifyCmd, domainDeleteCmd)
-	silenceUsageRecursive(domainCmd)
 }
 
 var domainCmd = &cobra.Command{
-	Use:          "domain",
-	Aliases:      []string{"domains"},
-	Short:        "Manage custom domains for containers",
-	SilenceUsage: true,
+	Use:     "domain",
+	Aliases: []string{"domains"},
+	Short:   "Manage custom domains for containers",
 }
 
 var domainListCmd = &cobra.Command{
@@ -78,13 +76,12 @@ var domainListCmd = &cobra.Command{
 
 var domainAddCmd = &cobra.Command{
 	Use:   "add [domain]",
-	Short: "Register a new custom domain (returns DNS records to configure)",
-	Long: `Register a new custom domain and print the DNS records to configure.
+	Short: "Register a custom domain and print its DNS records",
+	Example: `  Add a domain
+  tinfoil domain add example.com
 
-Most domains do not need a wildcard. Add the domain as '*.example.com'
-(quoted, so your shell does not expand it) only when one container serves its
-subdomains. This registers example.com and adds a wildcard record. Running it
-for an already registered domain adds the wildcard record to that domain.`,
+  Add a wildcard, only when one container serves every subdomain
+  tinfoil domain add '*.example.com'`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client, err := authedClient()
@@ -120,7 +117,7 @@ var domainVerifyCmd = &cobra.Command{
 var domainDeleteCmd = &cobra.Command{
 	Use:     "delete [domain]",
 	Aliases: []string{"rm", "remove"},
-	Short:   "Delete a custom domain (fails if any container uses it)",
+	Short:   "Delete a custom domain",
 	Args:    cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client, err := authedClient()

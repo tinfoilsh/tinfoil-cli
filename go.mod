@@ -8,6 +8,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/credentials v1.20.6
 	github.com/aws/aws-sdk-go-v2/service/secretsmanager v1.50.1
 	github.com/aws/smithy-go v1.28.1
+	github.com/fatih/color v1.18.0
 	github.com/golang/snappy v0.0.4
 	github.com/google/uuid v1.6.0
 	github.com/sigstore/protobuf-specs v0.5.1
@@ -16,7 +17,9 @@ require (
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/pflag v1.0.10
 	github.com/stretchr/testify v1.11.1
+	github.com/tinfoilsh/encrypted-http-body-protocol v0.4.1
 	github.com/tinfoilsh/tinfoil-go v0.17.0-rc.4
+	github.com/zalando/go-keyring v0.2.8
 	go.yaml.in/yaml/v3 v3.0.4
 	golang.org/x/crypto v0.57.0
 	golang.org/x/mod v0.41.0
@@ -43,6 +46,7 @@ require (
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/coder/websocket v1.8.15 // indirect
 	github.com/cyberphone/json-canonicalization v0.0.0-20241213102144-19d51d7fe467 // indirect
+	github.com/danieljoos/wincred v1.2.3 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/digitorus/pkcs7 v0.0.0-20250730155240-ffadbf3f398c // indirect
 	github.com/digitorus/timestamp v0.0.0-20250524132541-c45532741eea // indirect
@@ -71,6 +75,7 @@ require (
 	github.com/go-openapi/swag/yamlutils v0.27.0 // indirect
 	github.com/go-openapi/validate v0.26.0 // indirect
 	github.com/go-viper/mapstructure/v2 v2.5.0 // indirect
+	github.com/godbus/dbus/v5 v5.2.2 // indirect
 	github.com/google/certificate-transparency-go v1.3.3 // indirect
 	github.com/google/go-containerregistry v0.21.7 // indirect
 	github.com/google/go-tdx-guest v0.3.1 // indirect
@@ -79,6 +84,8 @@ require (
 	github.com/in-toto/attestation v1.2.0 // indirect
 	github.com/in-toto/in-toto-golang v0.11.0 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
+	github.com/mattn/go-colorable v0.1.14 // indirect
+	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/oklog/ulid/v2 v2.1.1 // indirect
 	github.com/openai/openai-go/v3 v3.80.0 // indirect
 	github.com/opencontainers/go-digest v1.0.0 // indirect
@@ -95,7 +102,6 @@ require (
 	github.com/tidwall/match v1.2.0 // indirect
 	github.com/tidwall/pretty v1.2.1 // indirect
 	github.com/tidwall/sjson v1.2.5 // indirect
-	github.com/tinfoilsh/encrypted-http-body-protocol v0.4.1 // indirect
 	github.com/tinfoilsh/go-sev-guest v0.0.0-20260818055935-bec7bdb637fd // indirect
 	github.com/transparency-dev/formats v0.1.1 // indirect
 	github.com/transparency-dev/merkle v0.0.2 // indirect

@@ -61,19 +61,10 @@ func init() {
 
 var attestSSHCmd = &cobra.Command{
 	Use:   "attest-ssh [container|hostname]",
-	Short: "Print or install a native ssh profile pinned to an enclave's attested host key",
-	Long: `Resolve a container name or enclave hostname, verify it against its recorded
-repo or --repo, read the attested "host-ssh" key its quote endorses, and print an
-ssh profile pinned to it. With --install the profile is written to
-~/.ssh/tinfoil/<name>.conf. If ~/.ssh/config is missing a top-level
-` + sshIncludeLine() + ` line, you are asked whether to add it. A CVM reboot
-rotates the key, so rerun this command after one.
-
-Containers with a published SSH port connect through console.tinfoil.sh.
-Bare hostname targets connect directly. --ssh-host overrides the SSH endpoint;
-attestation always uses the enclave hostname.`,
-	Args:         cobra.ExactArgs(1),
-	SilenceUsage: true,
+	Short: "Pin an enclave's attested SSH host key for native ssh",
+	Long: `Print an ssh profile pinned to the attested host key, or write it with --install.
+A reboot rotates the key, so rerun this after one.`,
+	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		resolved := startConnectionProgress(cmd.ErrOrStderr(), "Looking up "+args[0])
 		target, err := resolveTunnelTarget(args[0])
@@ -93,12 +84,12 @@ attestation always uses the enclave hostname.`,
 				if attestSSHName != "" && !sshProfileNamePattern.MatchString(attestSSHName) {
 					return errors.New("invalid SSH profile name")
 				}
-				s, err := connectSandbox(target.workload)
+				s, err := connectSandbox(cmd.Context(), target.workload)
 				if err != nil {
 					return err
 				}
 				defer s.close()
-				if err := s.enroll(); err != nil {
+				if err := s.enroll(cmd.Context()); err != nil {
 					return err
 				}
 				if attestSSHName != "" {
@@ -185,19 +176,27 @@ func attestedHostKey(host, source, sealedTo string) (ssh.PublicKey, error) {
 }
 
 func endorsedHostKey(host string, verified *verify.Verification) (ssh.PublicKey, error) {
-	data, ok := verified.CryptoMaterialData(attestedHostKeyID, document.KeySPKIV1Format)
+	public, err := endorsedKey(host, verified, attestedHostKeyID)
+	if err != nil {
+		return nil, err
+	}
+	return ssh.NewPublicKey(public)
+}
+
+func endorsedKey(host string, verified *verify.Verification, id string) (any, error) {
+	data, ok := verified.CryptoMaterialData(id, document.KeySPKIV1Format)
 	if !ok {
-		return nil, fmt.Errorf("%s endorses no attested %q key", host, attestedHostKeyID)
+		return nil, fmt.Errorf("%s endorses no attested %q key", host, id)
 	}
 	der, err := hex.DecodeString(data)
 	if err != nil {
-		return nil, fmt.Errorf("attested %q key is not hex: %w", attestedHostKeyID, err)
+		return nil, fmt.Errorf("attested %q key is not hex: %w", id, err)
 	}
 	public, err := x509.ParsePKIXPublicKey(der)
 	if err != nil {
-		return nil, fmt.Errorf("attested %q key is not SPKI: %w", attestedHostKeyID, err)
+		return nil, fmt.Errorf("attested %q key is not SPKI: %w", id, err)
 	}
-	return ssh.NewPublicKey(public)
+	return public, nil
 }
 
 type sshProfile struct {

@@ -59,14 +59,14 @@ func init() {
 
 	modelWrapCmd.Flags().StringVar(&modelWrapHost, "host", "", "Host to wrap the model on (see 'tinfoil container hosts') [required]")
 	modelWrapCmd.Flags().StringVar(&modelWrapCommit, "commit", "", "Hugging Face commit SHA to pin (defaults to the repo's latest commit)")
-	modelWrapCmd.Flags().StringVar(&modelWrapHFToken, "hf-token", "", "Hugging Face token for gated or private repos (use --hf-token-file or stdin to avoid leaking via process listing)")
+	modelWrapCmd.Flags().StringVar(&modelWrapHFToken, "hf-token", "", "Hugging Face token (visible in ps; prefer --hf-token-file or stdin)")
 	modelWrapCmd.Flags().StringVar(&modelWrapHFTokenFile, "hf-token-file", "", "Read the Hugging Face token from this file (use - for stdin)")
 	modelWrapCmd.Flags().BoolVar(&modelWrapWait, "wait", false, "Poll until the wrap job finishes and print the config block")
 	_ = modelWrapCmd.MarkFlagRequired("host")
 
 	modelUpdateCmd.Flags().StringVar(&modelUpdateHost, "host", "", "Host the model was wrapped on (see 'tinfoil container hosts') [required]")
 	modelUpdateCmd.Flags().StringVar(&modelUpdateCommit, "commit", "", "Hugging Face commit SHA to update to (defaults to the repo's latest commit)")
-	modelUpdateCmd.Flags().StringVar(&modelUpdateHFToken, "hf-token", "", "Hugging Face token for gated or private repos (use --hf-token-file or stdin to avoid leaking via process listing)")
+	modelUpdateCmd.Flags().StringVar(&modelUpdateHFToken, "hf-token", "", "Hugging Face token (visible in ps; prefer --hf-token-file or stdin)")
 	modelUpdateCmd.Flags().StringVar(&modelUpdateHFTokenFile, "hf-token-file", "", "Read the Hugging Face token from this file (use - for stdin)")
 	modelUpdateCmd.Flags().BoolVar(&modelUpdateWait, "wait", false, "Poll until the wrap job finishes and print the config block")
 	_ = modelUpdateCmd.MarkFlagRequired("host")
@@ -75,20 +75,17 @@ func init() {
 
 	modelStatusCmd.Flags().BoolVar(&modelStatusWait, "wait", false, "Poll until the wrap job finishes")
 	modelStatusCmd.Flags().BoolVar(&modelStatusLogs, "logs", false, "Include the wrap job logs")
-
-	silenceUsageRecursive(modelCmd)
 }
 
 var modelCmd = &cobra.Command{
-	Use:          "model",
-	Aliases:      []string{"models"},
-	Short:        "Prepare verified model weights for containers",
-	SilenceUsage: true,
+	Use:     "model",
+	Aliases: []string{"models"},
+	Short:   "Prepare verified model weights for containers",
 }
 
 var modelWrapCmd = &cobra.Command{
 	Use:   "wrap [owner/model]",
-	Short: "Wrap Hugging Face model weights into a verified artifact on a host",
+	Short: "Wrap Hugging Face weights into a verified artifact",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client, err := authedClient()
@@ -116,10 +113,8 @@ var modelWrapCmd = &cobra.Command{
 var modelUpdateCmd = &cobra.Command{
 	Use:   "update [owner/model]",
 	Short: "Wrap a newer revision of a previously wrapped model",
-	Long: `Wrap a newer Hugging Face revision of a model that already has a completed
-wrap job on the host. The previous artifact is left in place: point your
-tinfoil-config.yml at the new repo/mpk values, release, then delete the old
-wrap job to reclaim its disk.`,
+	Long: `The old artifact is kept. Point tinfoil-config.yml at the new repo/mpk values,
+release, then delete the old wrap job.`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client, err := authedClient()
@@ -215,7 +210,7 @@ var modelStatusCmd = &cobra.Command{
 var modelDeleteCmd = &cobra.Command{
 	Use:     "delete [host] [job-id]",
 	Aliases: []string{"rm", "remove"},
-	Short:   "Delete a wrap job, and its artifact once nothing references it",
+	Short:   "Delete a wrap job and its artifact once unused",
 	Args:    cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client, err := authedClient()

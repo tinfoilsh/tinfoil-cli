@@ -19,27 +19,23 @@ func newSCPCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "scp <source>... <destination> [-- scp options...]",
 		Short: "Copy files through the verified enclave tunnel",
-		Long: `Copy files between your machine and a container over the enclave's
-attested TLS connection, using your local scp and the same tunnel as tinfoil ssh.
-
-Use [user@]container:path or [user@]hostname:path for remote files. The target
-and SSH port are resolved just as for tinfoil ssh. The default user is root;
--l changes it, and an explicit user@ in a path takes precedence. Use :path
-with --enclave to select the remote enclave separately.
-
-The container must publish its SSH port in tinfoil-config.yml. Transfers may
-use multiple sources, but must be between your machine and one enclave.
-
-Put native scp options after --. As with tinfoil ssh, -p before -- sets the
-enclave-side port; scp's -p after -- preserves file times and permissions.
-
+		Long: `Remote paths are [user@]container:path or [user@]hostname:path.
+Put native scp options after --; -p before -- is the enclave SSH port.`,
+		Example: `  Upload a file
   tinfoil scp ./file.txt my-container:/tmp/
+
+  Download a file
   tinfoil scp my-container:/var/log/app.log ./app.log
+
+  Copy a directory, passing -r to scp
   tinfoil scp ./data my-container:/data -- -r
+
+  Copy to an enclave hostname as another user and port
   tinfoil scp ./file.txt ubuntu@enclave.example.com:/tmp/ -p 2022
+
+  Choose the enclave with --enclave
   tinfoil scp --enclave enclave.example.com ./file.txt :/tmp/`,
-		Args:         cobra.ArbitraryArgs,
-		SilenceUsage: true,
+		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			var options []string
 			if dash := cmd.ArgsLenAtDash(); dash >= 0 {
@@ -59,7 +55,7 @@ enclave-side port; scp's -p after -- preserves file times and permissions.
 		},
 	}
 	cmd.Flags().StringVarP(&user, "user", "l", "root", "Remote user to log in as")
-	cmd.Flags().UintVarP(&port, "port", "p", 0, "Enclave-side SSH port (default: the container's published SSH port, else 22)")
+	cmd.Flags().UintVarP(&port, "port", "p", 0, "Enclave SSH port (default: the published SSH port, else 22)")
 	addTunnelFlags(cmd)
 	return cmd
 }

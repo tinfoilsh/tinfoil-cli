@@ -16,10 +16,9 @@ func init() {
 		repoSecretDeleteCmd,
 	)
 	for _, cmd := range []*cobra.Command{repoSecretCreateCmd, repoSecretSetCmd} {
-		cmd.Flags().StringVar(&secretValue, "value", "", "Secret value (use --value-file or stdin to avoid leaking via process listing)")
+		cmd.Flags().StringVar(&secretValue, "value", "", "Secret value (visible in ps; prefer --value-file or stdin)")
 		cmd.Flags().StringVar(&secretValueFile, "value-file", "", "Read the secret value from this file (use - for stdin)")
 	}
-	silenceUsageRecursive(repoSecretCmd)
 }
 
 var repoSecretCmd = &cobra.Command{

@@ -138,10 +138,10 @@ func TestUpdateTargetDowntimeConfirmation(t *testing.T) {
 			{name: "target 8GPU requires explicit confirmation", status: 409, wantPosts: 1, wantErr: "requires interactive confirmation"},
 			{name: "target 8GPU with yes", yes: true, status: 409, wantPosts: 2},
 			{name: "mixed current replace and target 8GPU", yes: true, currentReplace: true, status: 409, wantPosts: 2},
-			{name: "yes cannot loop", yes: true, status: 409, repeat: true, wantPosts: 2, wantErr: "409"},
+			{name: "yes cannot loop", yes: true, status: 409, repeat: true, wantPosts: 2, wantErr: "target requires replacement"},
 			{name: "unrelated conflict", yes: true, status: 409, response: `{"code":"INVALID_CONTAINER_STATE","error":"already updating"}`, wantPosts: 1, wantErr: "already updating"},
 			{name: "unstructured conflict", yes: true, status: 409, response: `{"error":"confirm downtime"}`, wantPosts: 1, wantErr: "confirm downtime"},
-			{name: "forbidden", yes: true, status: 403, wantPosts: 1, wantErr: "403"},
+			{name: "forbidden", yes: true, status: 403, wantPosts: 1, wantErr: "target requires replacement"},
 			{name: "hold unavailable", yes: true, status: 400, response: `{"code":"HOLD_UNAVAILABLE","error":"cannot hold"}`, wantPosts: 1, wantErr: "cannot hold"},
 		} {
 			name := "container/"

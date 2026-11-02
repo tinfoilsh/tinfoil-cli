@@ -20,7 +20,7 @@ func init() {
 var attestationCmd = &cobra.Command{
 	Use:     "attestation",
 	Aliases: []string{"att"},
-	Short:   "Attestation commands",
+	Short:   "Verify enclave attestations",
 }
 
 func tlsConnection(enclaveHost string) (*tls.ConnectionState, error) {

@@ -65,21 +65,19 @@ func init() {
 	volumeCmd.AddCommand(volumeListCmd, volumeGetCmd, volumeCreateCmd, volumeRenameCmd, volumeAttachCmd, volumeDetachCmd, volumeDeleteCmd)
 
 	volumeCreateCmd.Flags().StringVar(&volumeCreateSize, "size", "", "Volume size, e.g. 16GB or 2TB [required]")
-	volumeCreateCmd.Flags().StringVar(&volumeCreateHost, "host", "", "Host to store the volume on (see 'tinfoil container hosts'); required unless only one host is available or --sandbox is set")
+	volumeCreateCmd.Flags().StringVar(&volumeCreateHost, "host", "", "Host to store the volume on (see 'tinfoil container hosts')")
 	volumeCreateCmd.Flags().BoolVar(&volumeCreateSandbox, "sandbox", false, "Create a sandbox workspace volume of "+workspaceSizeChoices("GB")+"; personal accounts only have sandbox volumes")
 	_ = volumeCreateCmd.MarkFlagRequired("size")
 	volumeRenameCmd.Flags().StringVar(&volumeRenameName, "name", "", "New volume name [required]")
 	_ = volumeRenameCmd.MarkFlagRequired("name")
 	volumeAttachCmd.Flags().StringVar(&volumeAttachAs, "as", "", "Mount name declared in tinfoil-config.yml (defaults to the only declared mount)")
 	volumeDeleteCmd.Flags().BoolVar(&volumeYes, "yes", false, "Skip interactive confirmation")
-	silenceUsageRecursive(volumeCmd)
 }
 
 var volumeCmd = &cobra.Command{
-	Use:          "volume",
-	Aliases:      []string{"volumes"},
-	Short:        "Manage persistent volumes for containers and sandboxes",
-	SilenceUsage: true,
+	Use:     "volume",
+	Aliases: []string{"volumes"},
+	Short:   "Manage persistent volumes for containers and sandboxes",
 }
 
 var volumeListCmd = &cobra.Command{

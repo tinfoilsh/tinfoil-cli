@@ -159,12 +159,18 @@ func TestSandboxCreationOnlySelectsOwnMonitors(t *testing.T) {
 	require.EqualError(t, err, "choose one of your Monitors with --monitor: spare, spare-copy")
 }
 
-func TestManagedCreateUsesContainerRecovery(t *testing.T) {
-	owner := testOwnerCredential(t).publicKey()
+// testUserKey writes a fresh Ed25519 public key file for UMK creation.
+func testUserKey(t *testing.T) (string, string) {
+	t.Helper()
+	owner := ed25519PublicKeyString(testSeed(t))
 	key, err := measuredOwner(owner)
 	require.NoError(t, err)
-	publicFile := filepath.Join(t.TempDir(), "owner.pub")
-	require.NoError(t, os.WriteFile(publicFile, ssh.MarshalAuthorizedKey(key), 0600))
+	path := filepath.Join(t.TempDir(), "owner.pub")
+	require.NoError(t, os.WriteFile(path, ssh.MarshalAuthorizedKey(key), 0600))
+	return owner, path
+}
+
+func TestManagedCreateUsesContainerRecovery(t *testing.T) {
 	previousIdentity, previousInterval := attestSSHIdentity, followInterval
 	attestSSHIdentity, followInterval = "", 0
 	t.Cleanup(func() { attestSSHIdentity, followInterval = previousIdentity, previousInterval })
@@ -174,7 +180,9 @@ func TestManagedCreateUsesContainerRecovery(t *testing.T) {
 				continue
 			}
 			t.Run(kind+"/"+state, func(t *testing.T) {
+				owner, publicFile := testUserKey(t)
 				posts, polls := 0, 0
+				keys := &keyStateServer{}
 				volume := volumeView{ID: "22222222-2222-4222-8222-222222222222", Sandbox: true}
 				if state == "attached" {
 					volume.ContainerID = "another-sandbox"
@@ -183,17 +191,22 @@ func TestManagedCreateUsesContainerRecovery(t *testing.T) {
 					switch r.Method + " " + r.URL.Path {
 					case "GET /api/auth/context":
 						w.Write([]byte(`{"context_type":"personal","organization":null,"user_id":"user_test"}`))
+					case "GET " + keyStatePath, "PUT " + keyStatePath:
+						keys.ServeHTTP(w, r)
 					case "GET /api/containers/11111111-1111-4111-8111-111111111111":
-						json.NewEncoder(w).Encode(containerView{ID: "11111111-1111-4111-8111-111111111111", Repo: monitorRepo, ClerkUserID: "user_test", Config: fmt.Sprintf("containers: [{env: [{MONITOR_OWNER_PUBLIC_KEY: %q}]}]", owner)})
+						json.NewEncoder(w).Encode(containerView{ID: "11111111-1111-4111-8111-111111111111", Repo: monitorRepo, ClerkUserID: "user_test", OwnerKeyMode: "umk"})
 					case "GET /api/volumes":
 						json.NewEncoder(w).Encode(volumeList{Volumes: []volumeView{volume}})
 					case "POST /api/containers":
 						posts++
 						var body map[string]json.RawMessage
 						require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+						require.JSONEq(t, `"umk"`, string(body["owner_key_mode"]))
+						require.JSONEq(t, fmt.Sprintf("%q", owner), string(body["owner_public_key"]))
 						var variables map[string]string
 						require.NoError(t, json.Unmarshal(body["variables"], &variables))
-						require.Equal(t, owner, variables[map[string]string{"monitor": monitorOwnerEnv, "sandbox": sandboxOwnerEnv}[kind]])
+						require.NotContains(t, variables, monitorOwnerEnv, "controlplane renders the measured owner key")
+						require.NotContains(t, variables, sandboxOwnerEnv, "controlplane renders the measured owner key")
 						if kind == "sandbox" {
 							require.True(t, looksLikeUUID(variables["SANDBOX_INSTANCE_ID"]))
 							var policy containerNetworkPolicy
@@ -221,14 +234,13 @@ func TestManagedCreateUsesContainerRecovery(t *testing.T) {
 					outputFormat = "json"
 				}
 				cmd := newManagedCreateCmd(kind)
-				args := []string{"--tag", "v1", "work"}
+				cmd.SetContext(t.Context())
+				args := []string{"--tag", "v1", "work", "--owner-public-key", publicFile}
 				if state == "no-wait" {
 					args = append(args, "--no-wait")
 				}
 				if kind == "sandbox" {
 					args = append(args, "--monitor", "11111111-1111-4111-8111-111111111111", "--workspace", "22222222-2222-4222-8222-222222222222")
-				} else {
-					args = append(args, "--owner-public-key", publicFile)
 				}
 				require.NoError(t, cmd.ParseFlags(args))
 				_, err := captureTestStdout(func() error { return cmd.RunE(cmd, cmd.Flags().Args()) })
@@ -244,23 +256,74 @@ func TestManagedCreateUsesContainerRecovery(t *testing.T) {
 				}
 				require.Equal(t, 1, posts)
 				require.Equal(t, state == "follow", polls == 1)
-				path, err := configPath()
-				require.NoError(t, err)
-				require.NoDirExists(t, filepath.Join(filepath.Dir(path), "resources"))
 			})
 		}
 	}
-	public := string(ssh.MarshalAuthorizedKey(key))
+	_, publicFile := testUserKey(t)
+	raw, err := os.ReadFile(publicFile)
+	require.NoError(t, err)
+	public := string(raw)
 	for _, invalid := range []string{public + public, "restrict " + public, "-----BEGIN OPENSSH PRIVATE KEY-----", "ssh-ed25519 YQ=="} {
 		require.NoError(t, os.WriteFile(publicFile, []byte(invalid), 0600))
-		_, err := creationOwnerKey(publicFile, "", "")
+		_, err := creationOwnerKey(publicFile, "")
 		require.Error(t, err, strings.TrimSpace(invalid))
 	}
 }
 
+func TestSyncedCreateSavesKeysBeforeAllocation(t *testing.T) {
+	keys := &keyStateServer{}
+	var dek []byte
+	monitor := containerView{ID: "11111111-1111-4111-8111-111111111111", Repo: monitorRepo, ClerkUserID: "user_owner", OwnerKeyMode: "umk"}
+	var created []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method + " " + r.URL.Path {
+		case "GET /api/auth/context":
+			w.Write([]byte(`{"context_type":"personal","organization":null,"user_id":"user_owner"}`))
+		case "GET " + keyStatePath, "PUT " + keyStatePath:
+			keys.ServeHTTP(w, r)
+		case "GET /api/containers/" + monitor.ID:
+			json.NewEncoder(w).Encode(monitor)
+		case "POST /api/containers":
+			var body struct {
+				Mode  string `json:"owner_key_mode"`
+				Owner string `json:"owner_public_key"`
+			}
+			require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+			require.Equal(t, "tmk", body.Mode)
+			payload := keys.payload(t, dek, mkContext{fixedAPIOrigin, "user_owner", *keys.dekID})
+			saved := findKey(payload, func(k *mkResource) bool { return k.OwnerPublicKey == body.Owner })
+			require.NotNil(t, saved, "the key bundle holds the owner key before allocation")
+			require.Nil(t, saved.Binding)
+			created = append(created, saved.Kind)
+			json.NewEncoder(w).Encode(containerView{ID: testContainerID, Name: "work", Status: statusDeploying})
+		default:
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	_, _, dek = testLogin(t, server, keys)
+	outputFormat = "table"
+	cmd := newManagedCreateCmd("monitor")
+	cmd.SetContext(t.Context())
+	require.NoError(t, cmd.ParseFlags([]string{"--tag", "v1", "--no-wait", "work"}))
+	_, err := captureTestStdout(func() error { return cmd.RunE(cmd, cmd.Flags().Args()) })
+	require.NoError(t, err)
+	require.Equal(t, []string{"monitor"}, created)
+
+	cmd = newManagedCreateCmd("sandbox")
+	cmd.SetContext(t.Context())
+	require.NoError(t, cmd.ParseFlags([]string{"--tag", "v1", "--no-wait", "--monitor", monitor.ID, "work"}))
+	_, err = captureTestStdout(func() error { return cmd.RunE(cmd, cmd.Flags().Args()) })
+	require.ErrorContains(t, err, "uses your own keys", "a UMK Monitor cannot serve a synced sandbox")
+	monitor.OwnerKeyMode = "tmk"
+	_, err = captureTestStdout(func() error { return cmd.RunE(cmd, cmd.Flags().Args()) })
+	require.NoError(t, err)
+	require.Equal(t, []string{"monitor", "sandbox"}, created)
+}
+
 func TestSandboxCreateWorkspaceSize(t *testing.T) {
 	const monitorID = "11111111-1111-4111-8111-111111111111"
-	owner := testOwnerCredential(t).publicKey()
 	previousIdentity := attestSSHIdentity
 	attestSSHIdentity = ""
 	t.Cleanup(func() { attestSSHIdentity = previousIdentity })
@@ -279,12 +342,16 @@ func TestSandboxCreateWorkspaceSize(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			var sent map[string]json.RawMessage
+			keys := &keyStateServer{}
+			_, publicFile := testUserKey(t)
 			managedTestAPI(t, func(w http.ResponseWriter, r *http.Request) {
 				switch r.Method + " " + r.URL.Path {
 				case "GET /api/auth/context":
 					w.Write([]byte(`{"context_type":"personal","organization":null,"user_id":"user_test"}`))
+				case "GET " + keyStatePath, "PUT " + keyStatePath:
+					keys.ServeHTTP(w, r)
 				case "GET /api/containers/" + monitorID:
-					json.NewEncoder(w).Encode(containerView{ID: monitorID, Repo: monitorRepo, ClerkUserID: "user_test", Config: fmt.Sprintf("containers: [{env: [{MONITOR_OWNER_PUBLIC_KEY: %q}]}]", owner)})
+					json.NewEncoder(w).Encode(containerView{ID: monitorID, Repo: monitorRepo, ClerkUserID: "user_test", OwnerKeyMode: "umk"})
 				case "POST /api/containers":
 					require.NoError(t, json.NewDecoder(r.Body).Decode(&sent))
 					if tt.limitHit {
@@ -300,7 +367,8 @@ func TestSandboxCreateWorkspaceSize(t *testing.T) {
 			})
 			outputFormat = "table"
 			cmd := newManagedCreateCmd("sandbox")
-			require.NoError(t, cmd.ParseFlags(append([]string{"--tag", "v1", "--monitor", monitorID, "--no-wait", "work"}, tt.args...)))
+			cmd.SetContext(t.Context())
+			require.NoError(t, cmd.ParseFlags(append([]string{"--tag", "v1", "--monitor", monitorID, "--no-wait", "--owner-public-key", publicFile, "work"}, tt.args...)))
 			_, err := captureTestStdout(func() error { return cmd.RunE(cmd, cmd.Flags().Args()) })
 			if tt.wantErr != "" {
 				require.ErrorContains(t, err, tt.wantErr)

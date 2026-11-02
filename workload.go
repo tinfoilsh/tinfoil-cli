@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"go.yaml.in/yaml/v3"
 )
@@ -70,8 +71,12 @@ func measuredEnvironment(raw string) (map[string]string, error) {
 }
 
 func requireRunningConnection(kind string, row containerView) error {
-	if row.Status != statusRunning {
-		return fmt.Errorf("%s %s is %s; inspect `tinfoil container get %s` before connecting", kind, row.Name, statusLabel(row.Status), row.ID)
+	if row.Status == statusRunning {
+		return nil
 	}
-	return nil
+	next := "status " + row.Name + " --watch"
+	if row.Status == statusStopped || row.Status == statusFailed {
+		next = "start " + row.Name
+	}
+	return fmt.Errorf("%s %s is %s; run `tinfoil %s %s`", kind, row.Name, statusLabel(row.Status), strings.ToLower(kind), next)
 }

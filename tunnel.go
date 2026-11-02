@@ -45,12 +45,11 @@ func init() {
 	forwardCmd.Flags().StringVar(&forwardSealedTo, "sealed-to", "", "RTMR3 the enclave must carry")
 	forwardCmd.Flags().MarkHidden("sealed-to")
 	addTunnelFlags(forwardCmd)
-	forwardCmd.SilenceUsage = true
 }
 
 func addTunnelFlags(cmd *cobra.Command) {
-	cmd.Flags().StringVar(&tunnelAPIKey, "api-key", "", "Inference API key (tk_...) the enclave validates for tunnels (default $"+envTunnelAPIKey+")")
-	cmd.Flags().BoolVar(&allowDebug, "allow-debug", false, "Tunnel into an enclave running in debug mode, which has a shell inside it")
+	cmd.Flags().StringVar(&tunnelAPIKey, "api-key", "", "API key (tk_...) for the tunnel (default $"+envTunnelAPIKey+")")
+	cmd.Flags().BoolVar(&allowDebug, "allow-debug", false, "Allow debug-mode enclaves, which have a shell inside")
 	addTrustDangerousFlag(cmd)
 }
 
@@ -68,20 +67,18 @@ func enclaveAPIKey() string {
 var forwardCmd = &cobra.Command{
 	Use:   "forward [container|hostname]",
 	Short: "Forward local TCP ports into a verified enclave",
-	Long: `Tunnel raw TCP into an enclave over its attested TLS connection.
-
-The enclave's shim accepts a tunnel only to a port one of its containers
-publishes in tinfoil-config.yml, so a forward reaches exactly what the
-deployment declared and nothing else.
-
-The target is a container name, whose domain and repo are looked up through the
-controlplane, or an enclave hostname (anything containing a dot), which needs no
-controlplane record. A hostname requires --repo owner/name[@tag][@sha256:digest]
-or --config FILE to select the expected workload. All connections require v3 code verification.
-
+	Long: `Only ports the deployment publishes in tinfoil-config.yml can be forwarded.
+A hostname target needs --repo or --config to select the expected workload.`,
+	Example: `  Forward one port
   tinfoil forward my-server -L 25565:25565
+
+  Forward several ports
   tinfoil forward my-server -L 5432:5432 -L 8080:8080
+
+  Forward to an enclave hostname, verified against a repo
   tinfoil forward enclave.example.com --repo org/workload -L 2022:2022
+
+  Verify against a local config file
   tinfoil forward my-server --config tinfoil-config.yml -L 8080:8080`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
