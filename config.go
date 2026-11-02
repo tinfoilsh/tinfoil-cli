@@ -15,8 +15,6 @@ import (
 	"github.com/zalando/go-keyring"
 )
 
-// Trusted production defaults, overridable only at build time with -ldflags -X.
-// Nothing at runtime selects another destination for a Clerk login.
 var (
 	cliTargets       = "production"
 	clerkCLIClientID = "DdvUHrDeHCxEqZnN"
@@ -41,7 +39,6 @@ var (
 	errNotLoggedIn       = errors.New("not logged in")
 )
 
-// fixedKeySyncTargets are bound locally into a key transfer after Clerk login.
 func fixedKeySyncTargets() (keySyncTargets, error) {
 	terminal, ok := map[string]string{"production": "https://terminal.tinfoil.sh", "development": "https://local.tinfoil.sh"}[cliTargets]
 	if !ok {
@@ -51,7 +48,6 @@ func fixedKeySyncTargets() (keySyncTargets, error) {
 		Callback: keySyncCallback, Completion: terminal + "/cli/complete"}, nil
 }
 
-// clerkScopes is the scope set every CLI grant must carry; an unconfigured build cannot sign in.
 func clerkScopes() ([]string, error) {
 	if !clerkClientIDPattern.MatchString(clerkCLIClientID) || !clerkScopePattern.MatchString(clerkCLIAPIScope) || slices.Contains(clerkLoginScopes, clerkCLIAPIScope) {
 		return nil, errors.New("Clerk sign-in is not configured in this build (it needs the registered CLI OAuth client and API scope); use `tinfoil login --api-key` instead")
@@ -59,7 +55,6 @@ func clerkScopes() ([]string, error) {
 	return append(slices.Clone(clerkLoginScopes), clerkCLIAPIScope), nil
 }
 
-// clerkGrant is one Clerk login, scoped to its issuer, client, user and granted account.
 type clerkGrant struct {
 	Version      int    `json:"version"`
 	Grant        string `json:"grant"`
@@ -72,7 +67,6 @@ type clerkGrant struct {
 	ExpiresAt    int64  `json:"expires_at"`
 }
 
-// syncedDEK is the key-bundle DEK synced to this machine for one API origin and user.
 type syncedDEK struct {
 	Version   int    `json:"version"`
 	APIOrigin string `json:"api_origin"`
@@ -93,13 +87,6 @@ func credentialFile(name string) (string, error) {
 	return filepath.Join(filepath.Dir(config), "credentials", name+".json"), nil
 }
 
-// credentialSlot is the file that selects where one credential record lives, so the
-// newest write wins and a deletion cannot be undone when an OS credential service
-// recovers. Keyring means the service holds the record, or may still hold an older
-// copy that a deletion must remove; Record is the record itself, in a 0600 file under
-// a 0700 directory, when the service failed; Deleted marks a removed record whose
-// service copy still awaits deletion.
-// osCredentials is the OS credential service; tests substitute outages.
 var osCredentials interface {
 	Get(service, user string) (string, error)
 	Set(service, user, secret string) error
@@ -132,8 +119,6 @@ func readCredentialSlot(name string) (string, *credentialSlot, error) {
 	return path, &slot, nil
 }
 
-// readCredential never substitutes another copy for the selected one: an unavailable
-// service is an error, not an empty or older record.
 func readCredential(name string, out any) (bool, error) {
 	_, slot, err := readCredentialSlot(name)
 	if err != nil || slot == nil || slot.Deleted {
@@ -162,7 +147,6 @@ func writeCredential(name string, value any) error {
 	if err := prepareStorageDirectory(filepath.Dir(path)); err != nil {
 		return err
 	}
-	// Make a service copy discoverable before creating it, keeping the current selection.
 	if previous == nil || !previous.Keyring {
 		marker := credentialSlot{Keyring: true, Deleted: previous == nil}
 		if previous != nil {
@@ -188,7 +172,6 @@ func writeCredentialSlot(path string, slot credentialSlot) error {
 	return writeStorageFile(path, encoded, false)
 }
 
-// deleteCredential leaves a tombstone selected, and fails, while the service still holds a copy.
 func deleteCredential(name string) error {
 	path, slot, err := readCredentialSlot(name)
 	if slot == nil && err == nil {
@@ -206,7 +189,6 @@ func deleteCredential(name string) error {
 	return nil
 }
 
-// withCredentialLock serializes login commits, token rotation, key exports and logout.
 func withCredentialLock(fn func() error) error {
 	path, err := credentialFile("credentials")
 	if err != nil {
@@ -224,7 +206,6 @@ func withCredentialLock(fn func() error) error {
 	return fn()
 }
 
-// currentGrant returns this build's Clerk login, or nil when there is none.
 func currentGrant() (*clerkGrant, error) {
 	var grant clerkGrant
 	found, err := readCredential(loginRecordName, &grant)
@@ -238,7 +219,6 @@ func currentGrant() (*clerkGrant, error) {
 	return &grant, nil
 }
 
-// syncedKey returns the DEK this login synced for user, or nil when keys were not synced.
 func syncedKey(login *clerkGrant, userID string) (*syncedDEK, error) {
 	if login == nil || login.UserID != userID {
 		return nil, nil
@@ -269,8 +249,7 @@ const (
 type cliConfig struct {
 	ControlplaneURL string `json:"controlplane_url"`
 	APIKey          string `json:"api_key"`
-	// login authenticates when no admin key is configured; it always targets fixedAPIOrigin.
-	login *clerkGrant
+	login           *clerkGrant
 }
 
 func configPath() (string, error) {

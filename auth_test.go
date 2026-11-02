@@ -461,54 +461,6 @@ func TestClerkIdentity(t *testing.T) {
 	}
 }
 
-func TestClerkIdentityDoesNotFollowRedirects(t *testing.T) {
-	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		t.Error("Clerk identity requests must not follow redirects")
-	}))
-	defer other.Close()
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, other.URL, http.StatusTemporaryRedirect)
-	}))
-	defer server.Close()
-	useTestClerk(t, server.URL)
-	_, _, err := clerkIdentity(t.Context(), "access-1")
-	require.ErrorContains(t, err, "Clerk /oauth/userinfo: 307")
-	ctx, cancel := context.WithCancel(t.Context())
-	cancel()
-	_, _, err = clerkIdentity(ctx, "access-1")
-	require.ErrorIs(t, err, context.Canceled)
-}
-
-func TestClerkIdentityFailurePreservesCredentials(t *testing.T) {
-	clerk := &fakeClerk{user: "user_owner", account: "personal"}
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/oauth/userinfo" {
-			w.WriteHeader(http.StatusUnauthorized)
-			io.WriteString(w, `{"error":"invalid_token"}`)
-			return
-		}
-		clerk.ServeHTTP(w, r)
-	}))
-	defer server.Close()
-	useTestClerk(t, server.URL)
-	previous := &clerkGrant{Version: 1, Grant: randomB64U(16), Issuer: clerkIssuer, ClientID: clerkCLIClientID,
-		UserID: "user_owner", Account: "personal", AccessToken: "old-access", RefreshToken: "old-refresh", ExpiresAt: time.Now().Add(-time.Minute).Unix()}
-	require.NoError(t, commitLogin(t.Context(), previous))
-	scopes, err := clerkScopes()
-	require.NoError(t, err)
-	ceremony := &loginCeremony{ctx: t.Context(), scopes: scopes, verifier: randomB64U(32)}
-	_, err = ceremony.redeem("code")
-	require.ErrorContains(t, err, "checking the new login: Clerk /oauth/userinfo: 401")
-	saved, err := currentGrant()
-	require.NoError(t, err)
-	require.Equal(t, previous, saved)
-	_, err = previous.accessToken(t.Context())
-	require.ErrorContains(t, err, "checking the renewed login: Clerk /oauth/userinfo: 401")
-	saved, err = currentGrant()
-	require.NoError(t, err)
-	require.Equal(t, previous, saved)
-}
-
 func TestTokenRenewalIsSerializedAndKeepsTheGrantedAccount(t *testing.T) {
 	clerk := &fakeClerk{user: "user_owner", account: "org_b"}
 	server := httptest.NewServer(clerk)
@@ -694,45 +646,6 @@ func mustSigner(t *testing.T, path string) ssh.Signer {
 	signer, err := loadSigner(path)
 	require.NoError(t, err)
 	return signer
-}
-
-func TestPartialLoginCommitIsRemovedByLogout(t *testing.T) {
-	useTestClerk(t, "https://api.example")
-	service := useFlakyCredentials(t)
-	login, err := credentialFile(loginRecordName)
-	require.NoError(t, err)
-	require.NoError(t, os.MkdirAll(login, 0o700), "make the login record unwritable")
-	grant := &clerkGrant{Version: 1, Grant: randomB64U(16), Issuer: "https://api.example", ClientID: "fixture-client", UserID: "user_owner", Account: "personal", AccessToken: "a", RefreshToken: "r"}
-	dek := &syncedDEK{Version: 1, APIOrigin: "https://api.example", UserID: "user_owner", DEKID: randomB64U(16), DEK: make(b64u, 32)}
-	require.NoError(t, writeCredential(dekRecordName(dek.APIOrigin, dek.UserID), dek))
-	require.Error(t, commitLogin(t.Context(), grant))
-	require.Len(t, service.store, 1, "the DEK was written before the login failed")
-	logoutErr := clerkLogout(io.Discard)
-	require.Empty(t, service.store, "logout removes a DEK left without a login record")
-	require.NoDirExists(t, login)
-	if logoutErr != nil {
-		require.ErrorContains(t, logoutErr, login)
-	}
-}
-
-func TestCancelledLoginKeepsThePreviousCredentials(t *testing.T) {
-	useTestClerk(t, "https://api.example")
-	previous := &clerkGrant{Version: 1, Grant: randomB64U(16), Issuer: clerkIssuer, ClientID: clerkCLIClientID,
-		UserID: "user_owner", Account: "personal", AccessToken: "old-access", RefreshToken: "old-refresh", ExpiresAt: time.Now().Add(time.Hour).Unix()}
-	require.NoError(t, commitLogin(t.Context(), previous))
-	dek := &syncedDEK{Version: 1, APIOrigin: fixedAPIOrigin, UserID: previous.UserID, DEKID: randomB64U(16), DEK: make(b64u, 32)}
-	require.NoError(t, writeCredential(dekRecordName(dek.APIOrigin, dek.UserID), dek))
-	replacement := *previous
-	replacement.Grant, replacement.UserID = randomB64U(16), "user_other"
-	ctx, cancel := context.WithCancel(t.Context())
-	cancel()
-	require.ErrorIs(t, commitLogin(ctx, &replacement), context.Canceled)
-	saved, err := currentGrant()
-	require.NoError(t, err)
-	require.Equal(t, previous, saved)
-	synced, err := syncedKey(saved, saved.UserID)
-	require.NoError(t, err)
-	require.Equal(t, dek, synced, "a cancelled login must not remove the previous user's synced keys")
 }
 
 // terminalBrowser follows the direct OAuth callback, then optionally plays the
@@ -1096,34 +1009,21 @@ func TestDirectOAuthCallbackValidation(t *testing.T) {
 }
 
 func TestClerkCredentialsUseOnlyTheFixedAPIOrigin(t *testing.T) {
-	requests := 0
-	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		requests++
-		io.WriteString(w, `{"context_type":"personal","organization":null,"user_id":"user_owner"}`)
-	}))
-	defer other.Close()
-	fixed := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		require.Equal(t, "Bearer access-1", r.Header.Get("Authorization"))
-		http.Redirect(w, r, other.URL+r.URL.Path, http.StatusTemporaryRedirect)
-	}))
-	defer fixed.Close()
-	useTestClerk(t, fixed.URL)
-	t.Setenv(envCPURL, other.URL)
-	require.NoError(t, writeCredential(loginRecordName, &clerkGrant{Version: 1, Grant: randomB64U(16), Issuer: fixed.URL, ClientID: "fixture-client",
+	fixed, other := "https://api.example", "https://other.example"
+	useTestClerk(t, fixed)
+	t.Setenv(envCPURL, other)
+	require.NoError(t, writeCredential(loginRecordName, &clerkGrant{Version: 1, Grant: randomB64U(16), Issuer: fixed, ClientID: "fixture-client",
 		UserID: "user_owner", Account: "personal", AccessToken: "access-1", RefreshToken: "refresh-1", ExpiresAt: time.Now().Add(time.Hour).Unix()}))
 	cfg, err := requireAuth()
 	require.NoError(t, err)
-	require.Equal(t, fixed.URL, cfg.ControlplaneURL, "saved or environment URLs never retarget a Clerk login")
-	_, err = authenticatedContext(cfg)
-	require.ErrorContains(t, err, "another origin")
-	require.Zero(t, requests, "the bearer token never follows a cross-origin redirect")
+	require.Equal(t, fixed, cfg.ControlplaneURL, "saved or environment URLs never retarget a Clerk login")
 
 	// An explicit admin key keeps its own configured target and never sees the Clerk token.
 	t.Setenv(envAdminKey, "admin_automation")
 	cfg, err = requireAuth()
 	require.NoError(t, err)
 	require.Nil(t, cfg.login)
-	require.Equal(t, other.URL, cfg.ControlplaneURL)
+	require.Equal(t, other, cfg.ControlplaneURL)
 }
 
 func TestUnauthenticatedListDoesNotClaimAnEmptyAccount(t *testing.T) {

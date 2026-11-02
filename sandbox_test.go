@@ -2,7 +2,7 @@ package main
 
 import (
 	"bytes"
-	"context"
+	"crypto/ecdh"
 	"crypto/ed25519"
 	"crypto/x509"
 	"encoding/base64"
@@ -113,11 +113,10 @@ func TestSandboxRequiresRestrictedAliasBeforeStoppingOrDeploying(t *testing.T) {
 	require.NoError(t, validateSandboxNetwork(row))
 }
 
-func TestSandboxDeleteKeepsWorkspaceKeysAndRemovesOwnedProfile(t *testing.T) {
+func TestSandboxDeleteKeepsCredentialsAndRemovesOwnedProfile(t *testing.T) {
 	owner := ed25519PublicKeyString(testSeed(t))
-	volume := "22222222-2222-4222-8222-222222222222"
 	row := containerView{ID: "11111111-1111-4111-8111-111111111111", Name: "work", Repo: defaultSandboxRepo, Status: statusRunning,
-		OwnerKeyMode: "umk", OwnerPublicKey: owner, Volumes: map[string]string{"workspace": volume}}
+		OwnerKeyMode: "umk", OwnerPublicKey: owner}
 	deleted := false
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method + " " + r.URL.Path {
@@ -130,13 +129,7 @@ func TestSandboxDeleteKeepsWorkspaceKeysAndRemovesOwnedProfile(t *testing.T) {
 				json.NewEncoder(w).Encode([]containerView{row})
 			}
 		case "GET /api/containers/" + row.ID:
-			if deleted {
-				http.NotFound(w, r)
-				return
-			}
 			json.NewEncoder(w).Encode(row)
-		case "GET /api/volumes":
-			json.NewEncoder(w).Encode(volumeList{Volumes: []volumeView{{ID: volume, Sandbox: true}}})
 		case "DELETE /api/containers/" + row.ID:
 			deleted = true
 			w.WriteHeader(http.StatusNoContent)
@@ -156,24 +149,18 @@ func TestSandboxDeleteKeepsWorkspaceKeysAndRemovesOwnedProfile(t *testing.T) {
 	profile := filepath.Join(home, ".ssh", "tinfoil", "work.conf")
 	require.NoError(t, os.MkdirAll(filepath.Dir(profile), 0700))
 	require.NoError(t, os.WriteFile(profile, []byte("# tinfoil-resource: "+server.URL+"//owner/"+row.ID+"\n"), 0600))
-	record, err := umkRecordPath(accountScope{ControlplaneURL: server.URL, UserID: "owner"}, row.ID)
+	credential, err := umkRecordPath(accountScope{ControlplaneURL: server.URL, UserID: "owner"}, row.ID)
 	require.NoError(t, err)
-	_, err = saveUMKRecord(record, newUMKRecord("sandbox", owner))
+	_, err = saveUMKRecord(credential, newUMKRecord("sandbox", owner))
 	require.NoError(t, err)
-	before, err := os.ReadFile(record)
+	before, err := os.ReadFile(credential)
 	require.NoError(t, err)
-	sandboxDeleteCmd.SetContext(t.Context())
-	t.Cleanup(func() { sandboxDeleteCmd.SetContext(context.Background()) })
 	for range 2 {
-		out, err := captureTestStdout(func() error { return sandboxDeleteCmd.RunE(sandboxDeleteCmd, []string{row.Name}) })
-		require.NoError(t, err)
-		if !strings.Contains(string(out), "already deleted") {
-			require.Contains(t, string(out), "workspace volume "+volume+" still exists")
-		}
+		require.NoError(t, sandboxDeleteCmd.RunE(sandboxDeleteCmd, []string{row.Name}))
 	}
-	after, err := os.ReadFile(record)
+	after, err := os.ReadFile(credential)
 	require.NoError(t, err)
-	require.Equal(t, before, after, "deletion keeps the disk key while the workspace volume exists")
+	require.Equal(t, before, after, "deletion must preserve encryption and owner signing keys")
 	require.NoFileExists(t, profile)
 }
 
@@ -629,7 +616,6 @@ func TestMonitorRestartRelinksOnlyAuthorizedSandboxes(t *testing.T) {
 	newHost, oldHost := testSigner(t).PublicKey(), authorizedLine(testSigner(t))
 	fixtures := map[string]*fixture{}
 	var rows []containerView
-	var volumes []volumeView
 	for i, name := range []string{"a", "b", "removed", "nokeys", "unbound", "wrongbinding", "rebooted", "elsewhere"} {
 		f := &fixture{name: name, id: fmt.Sprintf("1111111%d-1111-4111-8111-111111111111", i), instance: fmt.Sprintf("2222222%d-2222-4222-8222-222222222222", i),
 			volume: fmt.Sprintf("3333333%d-3333-4333-8333-333333333333", i), key: newResourceKey("sandbox"), host: testSigner(t), monitor: monitorID}
@@ -655,13 +641,11 @@ func TestMonitorRestartRelinksOnlyAuthorizedSandboxes(t *testing.T) {
 			}
 			return f.status
 		}}
-		config := string(rendered(trustedSandboxTemplate, []string{
-			`SANDBOX_OWNER_PUBLIC_KEY: ""`, `SANDBOX_OWNER_PUBLIC_KEY: "` + f.key.OwnerPublicKey + `"`,
-			`SANDBOX_INSTANCE_ID: ""`, `SANDBOX_INSTANCE_ID: "` + f.instance + `"`, "size: 30GiB", "size: 16GB"}, nil))
+		config := fmt.Sprintf("containers: [{env: [{SANDBOX_OWNER_PUBLIC_KEY: %q}, {SANDBOX_INSTANCE_ID: %q}]}]", f.key.OwnerPublicKey, f.instance)
 		rows = append(rows, containerView{ID: f.id, Name: name, Repo: defaultSandboxRepo, Status: statusRunning, ClerkUserID: "user_owner", Config: config,
+			Domain: name + ".example", ConfigName: "/tinfoil/containers/" + storageHash([]byte(config)),
 			OwnerKeyMode: "tmk", OwnerPublicKey: f.key.OwnerPublicKey, Volumes: map[string]string{"workspace": f.volume},
 			NetworkPolicy: &containerNetworkPolicy{EgressMode: "restricted", Egress: []containerPeer{{ContainerID: f.monitor, Port: 22, Alias: &containerAlias{IP: "10.254.0.1", Port: 22}}}}})
-		volumes = append(volumes, volumeView{ID: f.volume, ContainerID: f.id, Slot: "workspace", Sandbox: true, SizeBytes: 16_000_000_000})
 		fixtures[f.instance] = f
 		fixtures[name] = f
 	}
@@ -681,8 +665,6 @@ func TestMonitorRestartRelinksOnlyAuthorizedSandboxes(t *testing.T) {
 				}
 			}
 			http.NotFound(w, r)
-		case r.Method == "GET" && r.URL.Path == "/api/volumes":
-			json.NewEncoder(w).Encode(volumeList{Volumes: volumes})
 		default:
 			keys.ServeHTTP(w, r)
 		}
@@ -712,19 +694,22 @@ func TestMonitorRestartRelinksOnlyAuthorizedSandboxes(t *testing.T) {
 	require.NoError(t, err)
 	revision := keys.revision
 
-	// verifySandboxEvidence keeps the trusted profile check; only CVM hardware evidence is substituted.
+	previousDangerous := trustDangerous
+	trustDangerous = true
+	t.Cleanup(func() { trustDangerous = previousDangerous })
 	previous := verifySandboxEvidence
-	verifySandboxEvidence = func(_ context.Context, doc, _ []byte, policy workloadPolicy) (*verify.Verification, error) {
-		if _, err := policy.check(doc); err != nil {
-			return nil, err
-		}
+	verifySandboxEvidence = func(doc, _ []byte, source string) (*verify.Verification, error) {
 		for _, f := range fixtures {
-			if strings.Contains(string(doc), f.instance) {
+			if strings.Contains(string(doc), f.instance) && strings.Contains(source, storageHash(doc)) {
 				host, err := x509.MarshalPKIXPublicKey(f.host.PublicKey().(ssh.CryptoPublicKey).CryptoPublicKey())
+				require.NoError(t, err)
+				ehbpKey, err := ecdh.X25519().NewPublicKey(f.ehbp.MarshalPublicKey())
+				require.NoError(t, err)
+				ehbp, err := x509.MarshalPKIXPublicKey(ehbpKey)
 				require.NoError(t, err)
 				return &verify.Verification{FreshnessExpiresAt: time.Now().Add(time.Hour), CryptoMaterial: []document.CryptoMaterialItem{
 					{ID: attestedHostKeyID, Format: document.KeySPKIV1Format, Data: hex.EncodeToString(host)},
-					{ID: sandboxEHBPKeyID, Format: document.KeySPKIV1Format, Data: x25519SPKIPrefix + hex.EncodeToString(f.ehbp.MarshalPublicKey())},
+					{ID: sandboxEHBPKeyID, Format: document.KeySPKIV1Format, Data: hex.EncodeToString(ehbp)},
 				}}, nil
 			}
 		}

@@ -6,7 +6,6 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -461,69 +460,6 @@ func nativeSandboxTransport(t *testing.T, monitorAddress string, monitorKey ssh.
 	output, err = native(nil, "ssh", "work", "true")
 	require.Error(t, err)
 	require.Contains(t, string(output), "Host key verification failed")
-}
-
-func TestMonitorOpenRequiresTheCurrentHealthContract(t *testing.T) {
-	t.Setenv(envConfigPath, filepath.Join(t.TempDir(), "config.json"))
-	host := testSigner(t).PublicKey()
-	owner := ed25519PublicKeyString(testSeed(t))
-	for _, test := range []struct {
-		name, health string
-		noLocalKeys  bool
-		unlocked     bool
-		err          string
-	}{
-		{name: "older Monitor without state", health: `{"locked":true}`, err: "current owner protocol"},
-		{name: "unknown state", health: `{"locked":true,"state":"maybe"}`, err: "current owner protocol"},
-		{name: "saved state", health: `{"locked":true,"state":"present"}`, unlocked: true},
-		{name: "web-provisioned UMK with saved state", health: `{"locked":true,"state":"present"}`, noLocalKeys: true, err: "restore its UMK keys"},
-		{name: "web-provisioned UMK with absent state", health: `{"locked":true,"state":"absent"}`, noLocalKeys: true, unlocked: true},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			dir := t.TempDir()
-			require.NoError(t, writeStorageJSON(filepath.Join(dir, monitorProfileFile), monitorProfile{}, false))
-			keys := &resourceKeys{mode: "tmk", storageKey: testSeed(t)}
-			if test.noLocalKeys {
-				keys = &resourceKeys{mode: "umk"}
-				var err error
-				keys.umkPath, err = umkRecordPath(accountScope{ControlplaneURL: "https://cp.example", UserID: "user_owner"}, testContainerID)
-				require.NoError(t, err)
-			}
-			var calls []string
-			var sent []byte
-			m := &monitorSession{dir: dir, hostKey: host, keys: keys, request: func(method, path string, input, out any) error {
-				calls = append(calls, method+" "+path)
-				switch path {
-				case "/healthz":
-					return json.Unmarshal([]byte(test.health), out)
-				case "/unlock":
-					data, _ := json.Marshal(input)
-					var body struct {
-						StorageKey []byte `json:"storage_key"`
-					}
-					json.Unmarshal(data, &body)
-					sent = body.StorageKey
-					return json.Unmarshal([]byte(`{"host_key":"`+authorizedKeyLine(host)+`"}`), out)
-				}
-				return fmt.Errorf("unexpected %s", path)
-			}}
-			err := m.open(t.Context(), "monitor", owner, mkBinding{Account: "personal"}, false)
-			if test.err != "" {
-				require.ErrorContains(t, err, test.err)
-			} else {
-				require.NoError(t, err)
-			}
-			want := []string{"GET /healthz"}
-			if test.unlocked {
-				want = append(want, "POST /unlock")
-				require.Len(t, sent, 32)
-				require.Equal(t, []byte(m.keys.storageKey), sent)
-			}
-			require.Equal(t, want, calls, "no state key leaves before the health contract is confirmed")
-			_, statErr := os.Stat(keys.umkPath)
-			require.Equal(t, test.noLocalKeys && test.unlocked, statErr == nil)
-		})
-	}
 }
 
 func TestMonitorUnlockMissingDeviceKey(t *testing.T) {

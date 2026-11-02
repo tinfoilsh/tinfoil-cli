@@ -26,30 +26,9 @@ func init() {
 	monitorCmd.AddCommand(newManagedStatusCmd("monitor"))
 	start := newManagedContainerCmd("monitor", "start", containerDeployCmd, "no-wait")
 	start.Short = "Start a stopped or failed Monitor using its saved configuration"
-	remove := newManagedContainerCmd("monitor", "delete", containerDeleteCmd, "yes")
-	deleteMonitor := remove.RunE
-	remove.RunE = func(cmd *cobra.Command, args []string) error {
-		client, err := authedClient()
-		if err != nil {
-			return err
-		}
-		row, err := managedRow(client, "monitor", args[0])
-		if err != nil {
-			return err
-		}
-		if err := deleteMonitor(cmd, args); err != nil {
-			return err
-		}
-		scope, _, err := currentScope()
-		if err == nil {
-			err = forgetDeletedResource(cmd.Context(), client, scope, *row)
-		}
-		if err != nil {
-			fmt.Fprintf(cmd.OutOrStdout(), "Its keys are kept: %v\n", err)
-		}
-		return nil
-	}
-	monitorCmd.AddCommand(start, newManagedContainerCmd("monitor", "stop", containerStopCmd), remove)
+	monitorCmd.AddCommand(start,
+		newManagedContainerCmd("monitor", "stop", containerStopCmd),
+		newManagedContainerCmd("monitor", "delete", containerDeleteCmd, "yes"))
 	for _, group := range []*cobra.Command{sandboxCmd, monitorCmd} {
 		group.PersistentFlags().StringVarP(&outputFormat, "output", "o", "table", "Output format: table or json")
 		group.PersistentFlags().StringVar(&attestSSHIdentity, "identity", "", "Owner SSH identity file")
@@ -134,8 +113,6 @@ func newManagedCreateCmd(kind string) *cobra.Command {
 			} else {
 				body["object_storage"] = map[string]any{}
 			}
-			// Keys are saved before allocation; a lost create reply is reconciled
-			// through inventory by this owner key, never by resubmitting.
 			mode, owner, err := prepareResourceKeys(cmd.Context(), client, scope, kind, userKeys, publicKey)
 			if err != nil {
 				return err
@@ -196,8 +173,6 @@ func selectCreationMonitor(client *cpClient, identifier, userID string) (*contai
 	return row, err
 }
 
-// prepareResourceKeys saves a new resource's synced keys in the key bundle before it
-// is created, or selects the user's own key, whose storage keys are generated on first open.
 func prepareResourceKeys(ctx context.Context, client *cpClient, scope accountScope, kind string, userKeys bool, publicKey string) (string, string, error) {
 	if !userKeys {
 		mk, err := newMKSession(client, scope)

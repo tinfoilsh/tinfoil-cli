@@ -221,17 +221,8 @@ type authContext struct {
 }
 
 func authenticatedContext(cfg cliConfig) (authContext, error) {
-	identity, err := clientContext(context.Background(), newCPClient(cfg))
-	// A grant keeps the account it was issued for; switching requires a new login.
-	if err == nil && cfg.login != nil && (identity.UserID != cfg.login.UserID || identity.account() != cfg.login.Account) {
-		err = errors.New("the API reports a different account than this login; run `tinfoil login` to choose an account")
-	}
-	return identity, err
-}
-
-func clientContext(ctx context.Context, client *cpClient) (authContext, error) {
 	var identity authContext
-	if _, err := client.doContext(ctx, "GET", "/api/auth/context", nil, nil, nil, &identity); err != nil {
+	if _, err := newCPClient(cfg).do("GET", "/api/auth/context", nil, nil, &identity); err != nil {
 		return identity, err
 	}
 	if identity.UserID == "" || identity.ContextType != "personal" && identity.ContextType != "organization" ||
@@ -240,14 +231,6 @@ func clientContext(ctx context.Context, client *cpClient) (authContext, error) {
 		return identity, fmt.Errorf("invalid authenticated context response")
 	}
 	return identity, nil
-}
-
-// account is the key-bundle binding form: the organization ID or "personal".
-func (a authContext) account() string {
-	if a.Organization != nil {
-		return a.Organization.ID
-	}
-	return "personal"
 }
 
 func loginSyncChoice(cmd *cobra.Command) (bool, error) {
@@ -274,9 +257,6 @@ func randomB64U(n int) string {
 	return base64.RawURLEncoding.EncodeToString(data)
 }
 
-// loginCeremony owns direct OAuth login and the optional subsequent key transfer.
-// The PKCE verifier never leaves CLI except for the exchange with Clerk. The
-// terminal receives only a fresh key-sync request after the grant is committed.
 type loginCeremony struct {
 	ctx      context.Context
 	scopes   []string
@@ -312,7 +292,6 @@ func clerkLogin(cmd *cobra.Command, syncKeys bool) error {
 			return err
 		}
 	}
-	// Own the fixed port before opening Clerk, including when key sync is declined.
 	listeners, err := listenLoopback()
 	if err != nil {
 		return err
@@ -393,7 +372,6 @@ func clerkAuthorizationURL(state, verifier string, scopes []string) string {
 	return clerkIssuer + "/oauth/authorize?" + query.Encode()
 }
 
-// listenLoopback binds the fixed callback port on loopback only: IPv4, plus IPv6 where the host has it.
 func listenLoopback() ([]net.Listener, error) {
 	v4, err := net.Listen("tcp4", net.JoinHostPort("127.0.0.1", loginListenPort))
 	if err != nil {
@@ -447,8 +425,6 @@ func (c *loginCeremony) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// A single configured issuer supplies code/state. Validate RFC 9207's issuer
-// parameter when supplied; Clerk's ordinary code/state response is also valid.
 func parseOAuthCallback(query, state string) (code, failure string, err error) {
 	bad := errors.New("the Clerk authorization reply is malformed or belongs to another sign-in")
 	values, parseErr := url.ParseQuery(query)
@@ -588,7 +564,6 @@ func loginPage(w http.ResponseWriter, status int, message string) {
 	fmt.Fprintf(w, "<!doctype html><title>Tinfoil CLI</title><p>%s</p>", html.EscapeString(message))
 }
 
-// redeem authenticates directly with Clerk and commits the grant independently of key sync.
 func (c *loginCeremony) redeem(code string) (*clerkGrant, error) {
 	tokens, err := clerkToken(c.ctx, url.Values{"grant_type": {"authorization_code"}, "code": {code},
 		"redirect_uri": {oauthCallback}, "code_verifier": {c.verifier}}, c.scopes)
@@ -646,7 +621,6 @@ func commitLogin(ctx context.Context, grant *clerkGrant) error {
 		if err := writeCredential(loginRecordName, grant); err != nil {
 			return err
 		}
-		// The latest interactive login wins over a previously saved admin key.
 		cfg, path, err := loadConfig()
 		if err == nil && cfg.APIKey != "" && envAdminAPIKey() == "" {
 			if _, statErr := os.Stat(path); statErr == nil {
@@ -665,7 +639,6 @@ type clerkTokens struct {
 	Scope        *string `json:"scope"`
 }
 
-// clerkToken calls the fixed Clerk token endpoint for this build's public client.
 func clerkToken(ctx context.Context, form url.Values, scopes []string) (*clerkTokens, error) {
 	form.Set("client_id", clerkCLIClientID)
 	form.Set("resource", fixedAPIOrigin)
@@ -690,8 +663,6 @@ func clerkToken(ctx context.Context, form url.Values, scopes []string) (*clerkTo
 	return &tokens, nil
 }
 
-// clerkIdentity asks the issuer to authenticate the access token and resolve its
-// granted account. Login and renewal do not depend on the resource API accepting it.
 func clerkIdentity(ctx context.Context, accessToken string) (userID, account string, err error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, clerkIssuer+"/oauth/userinfo", nil)
 	if err != nil {
@@ -753,9 +724,6 @@ func clerkRequest(req *http.Request) ([]byte, error) {
 	return reply, nil
 }
 
-// accessToken returns the current access token of this login under the credential
-// lock, renewing it when needed. The loaded grant only names the login: after logout or
-// a new login, no cached token is admitted.
 func (g *clerkGrant) accessToken(ctx context.Context) (string, error) {
 	var token string
 	err := withCredentialLock(func() error {
@@ -778,7 +746,6 @@ func (g *clerkGrant) accessToken(ctx context.Context) (string, error) {
 		if err != nil {
 			return fmt.Errorf("renewing your login failed; run `tinfoil login`: %w", err)
 		}
-		// Renewal never moves the grant to another user or account.
 		userID, account, err := clerkIdentity(ctx, tokens.AccessToken)
 		if err != nil {
 			return fmt.Errorf("checking the renewed login: %w", err)
@@ -799,7 +766,6 @@ func (g *clerkGrant) accessToken(ctx context.Context) (string, error) {
 	return token, err
 }
 
-// clerkLogout revokes the refresh token when possible and always removes local credentials.
 func clerkLogout(out io.Writer) error {
 	return withCredentialLock(func() error {
 		var grant clerkGrant
@@ -823,7 +789,6 @@ func clerkLogout(out io.Writer) error {
 	})
 }
 
-// removeLocalCredentials deletes the login, synced keys and SSH keys exported from synced resources.
 func removeLocalCredentials(grant *clerkGrant) error {
 	errs := []error{deleteCredential(loginRecordName)}
 	if grant.UserID != "" {

@@ -5,7 +5,6 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"encoding/pem"
-	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -37,15 +36,12 @@ func ensureOwnerSSHKey(path string, seed []byte) error {
 // keyStateServer is an in-memory controlplane key-state owner: whole-state writes
 // by revision CAS under one DEK.
 type keyStateServer struct {
-	mu         sync.Mutex
-	revision   uint64
-	dekID      *string
-	mk         *string
-	dropReply  int                   // drop the reply of this many committed writes
-	interpose  func(*keyStateServer) // runs once before the next write is checked
-	containers map[string]bool
-	volumes    []volumeView
-	volumesErr bool
+	mu        sync.Mutex
+	revision  uint64
+	dekID     *string
+	mk        *string
+	dropReply int                   // drop the reply of this many committed writes
+	interpose func(*keyStateServer) // runs once before the next write is checked
 }
 
 func (s *keyStateServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -57,24 +53,6 @@ func (s *keyStateServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(state)
 		return
 	case r.Method == "PUT" && r.URL.Path == keyStatePath:
-	case r.Method == "GET" && r.URL.Path == "/api/volumes":
-		list, failed := volumeList{Volumes: s.volumes}, s.volumesErr
-		s.mu.Unlock()
-		if failed {
-			http.Error(w, "unavailable", http.StatusServiceUnavailable)
-			return
-		}
-		json.NewEncoder(w).Encode(list)
-		return
-	case r.Method == "GET" && strings.HasPrefix(r.URL.Path, "/api/containers/"):
-		exists := s.containers[r.URL.Path]
-		s.mu.Unlock()
-		if !exists {
-			http.NotFound(w, r)
-			return
-		}
-		io.WriteString(w, `{}`)
-		return
 	default:
 		s.mu.Unlock()
 		http.NotFound(w, r)
@@ -310,45 +288,6 @@ func TestUMKKeysStayLocalAndAreGeneratedOnlyOnce(t *testing.T) {
 	require.Len(t, resolved.storageKey, 32)
 	require.FileExists(t, path)
 	resolved.close()
-}
-
-func TestDeletedResourceKeysAreRemovedOnlyAfterConfirmation(t *testing.T) {
-	keys := &keyStateServer{containers: map[string]bool{}}
-	server := httptest.NewServer(keys)
-	defer server.Close()
-	cp, scope, dek := testLogin(t, server, keys)
-	mk, err := newMKSession(cp, scope)
-	require.NoError(t, err)
-	monitor, sandbox, unbound := newResourceKey("monitor"), newResourceKey("sandbox"), newResourceKey("sandbox")
-	bucket, instance, volume := "s3://b", "22222222-2222-4222-8222-222222222222", "33333333-3333-4333-8333-333333333333"
-	monitor.Binding = &mkBinding{Account: "personal", ContainerID: "11111111-1111-4111-8111-111111111111", Bucket: &bucket}
-	sandbox.Binding = &mkBinding{Account: "personal", ContainerID: "77777777-7777-4777-8777-777777777777", InstanceID: &instance, VolumeID: &volume}
-	_, err = mk.update(t.Context(), func(p *mkPayload) error {
-		return errors.Join(addKey(p, monitor), addKey(p, sandbox), addKey(p, unbound))
-	})
-	require.NoError(t, err)
-	monitorRow := containerView{ID: monitor.Binding.ContainerID, OwnerKeyMode: "tmk", OwnerPublicKey: monitor.OwnerPublicKey}
-	sandboxRow := containerView{ID: sandbox.Binding.ContainerID, OwnerKeyMode: "tmk", OwnerPublicKey: sandbox.OwnerPublicKey, Volumes: map[string]string{"workspace": volume}}
-
-	keys.containers["/api/containers/"+monitorRow.ID] = true
-	require.ErrorContains(t, forgetDeletedResource(t.Context(), cp, scope, monitorRow), "not confirmed")
-	keys.containers["/api/containers/"+monitorRow.ID] = false
-	other := scope
-	other.OrgID = "org_other"
-	require.NoError(t, forgetDeletedResource(t.Context(), cp, other, monitorRow))
-	require.Len(t, keys.payload(t, dek, mk.context).Resources, 3, "absence in another account is not confirmation")
-	require.NoError(t, forgetDeletedResource(t.Context(), cp, scope, monitorRow))
-
-	keys.volumes = []volumeView{{ID: volume, Sandbox: true}}
-	require.ErrorContains(t, forgetDeletedResource(t.Context(), cp, scope, sandboxRow), "still exists")
-	keys.volumes, keys.volumesErr = nil, true
-	require.ErrorContains(t, forgetDeletedResource(t.Context(), cp, scope, sandboxRow), "could not be checked", "a failed read is not proof of deletion")
-	require.Len(t, keys.payload(t, dek, mk.context).Resources, 2)
-	keys.volumesErr = false
-	require.NoError(t, forgetDeletedResource(t.Context(), cp, scope, sandboxRow))
-	left := keys.payload(t, dek, mk.context).Resources
-	require.Len(t, left, 1)
-	require.Equal(t, unbound.KeyID, left[0].KeyID, "unbound keys stay until their non-use is confirmed")
 }
 
 func TestEncryptedOwnerIdentityFallsBackToAgent(t *testing.T) {

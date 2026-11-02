@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/ecdh"
 	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/base32"
@@ -16,7 +17,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -61,7 +61,10 @@ var sandboxYes bool
 
 func init() {
 	rootCmd.AddCommand(sandboxCmd)
-	sandboxCmd.AddCommand(sandboxStatusCmd, sandboxStartCmd, sandboxRestartCmd, sandboxStopCmd, sandboxDeleteCmd, sandboxEnrollCmd)
+	sandboxCmd.AddCommand(sandboxStatusCmd, sandboxStartCmd, sandboxRestartCmd, sandboxStopCmd, sandboxDeleteCmd)
+	for _, cmd := range []*cobra.Command{sandboxStartCmd, sandboxRestartCmd} {
+		addTrustDangerousFlag(cmd)
+	}
 	sandboxDeleteCmd.Flags().BoolVar(&sandboxYes, "yes", false, "Skip the confirmation prompt")
 	for _, cmd := range []*cobra.Command{sandboxStartCmd, sandboxRestartCmd} {
 		cmd.Flags().Bool("no-enroll", false, "Boot without unlocking or enrolling this machine's keys")
@@ -76,7 +79,7 @@ var sandboxCmd = &cobra.Command{
 var sandboxStatusCmd = newManagedStatusCmd("sandbox")
 
 var sandboxStartCmd = &cobra.Command{
-	Use: "start [id|name]", Short: "Start a stopped sandbox and enroll this machine's keys into it",
+	Use: "start [id|name]", Short: "Start a sandbox if stopped and enroll this machine's keys into it",
 	Args: cobra.ExactArgs(1), RunE: runSandboxAction("start"),
 }
 var sandboxRestartCmd = &cobra.Command{
@@ -90,11 +93,6 @@ var sandboxStopCmd = &cobra.Command{
 var sandboxDeleteCmd = &cobra.Command{
 	Use: "delete [id|name]", Short: "Delete a sandbox, keeping its workspace volume",
 	Args: cobra.ExactArgs(1), RunE: runSandboxAction("delete"),
-}
-var sandboxEnrollCmd = &cobra.Command{
-	Use: "enroll [id|name]", Short: "Attest, enroll and install the SSH profile for a running sandbox",
-	Long: "Verify the current boot against the trusted sandbox and Monitor profiles, enroll or re-link it, unlock the workspace and install the SSH profile. Reuses the resource's saved keys; rerun after a lost reply, reboot or Monitor restart.",
-	Args: cobra.ExactArgs(1), RunE: runSandboxAction("enroll"),
 }
 
 func runSandboxAction(action string) func(*cobra.Command, []string) error {
@@ -123,14 +121,7 @@ func runSandboxAction(action string) func(*cobra.Command, []string) error {
 			if err := forgetSandbox(row.Name, row.ID); err != nil {
 				return fmt.Errorf("%s is deleted, but %w", row.Name, err)
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "Deleted %s. Remove any access grants in the Monitor UI.\n", row.Name)
-			scope, _, err := currentScope()
-			if err == nil {
-				err = forgetDeletedResource(cmd.Context(), client, scope, *row)
-			}
-			if err != nil {
-				fmt.Fprintf(cmd.OutOrStdout(), "Its keys are kept: %v\n", err)
-			}
+			fmt.Fprintf(cmd.OutOrStdout(), "Deleted %s. Saved encryption credentials are kept. Remove any access grants in the Monitor UI.\n", row.Name)
 			return nil
 		case "stop":
 			stopped, err := stopContainer(client, *row)
@@ -154,7 +145,7 @@ func runSandboxAction(action string) func(*cobra.Command, []string) error {
 				}
 			}
 		}
-		target, err := managedWorkload(*row, defaultSandboxRepo)
+		target, err := resolveWorkload(*row, defaultSandboxRepo, repo)
 		if err != nil {
 			return err
 		}
@@ -167,7 +158,7 @@ func runSandboxAction(action string) func(*cobra.Command, []string) error {
 			return err
 		}
 		if err := s.install(); err != nil {
-			return fmt.Errorf("%s was enrolled, but its ssh profile was not installed: %w; retry `tinfoil sandbox enroll %s`", target.Name, err, target.Name)
+			return fmt.Errorf("%s was enrolled, but its ssh profile was not installed: %w; retry `tinfoil sandbox start %s`", target.Name, err, target.Name)
 		}
 		return renderContainer(*row)
 	}
@@ -237,7 +228,6 @@ func validateSandboxNetwork(row containerView) error {
 const (
 	sandboxOwnerProtocol = "sandbox-owner-v1"
 	sandboxEHBPKeyID     = "sandbox-ehbp"
-	// The relay hop and the owner request share this one-minute operation window.
 	ownerOperationWindow = time.Minute
 	ownerRetryAttempts   = 4
 	maxOwnerReplyBytes   = 2 << 20
@@ -267,7 +257,7 @@ func connectSandbox(ctx context.Context, target *workloadTarget) (_ *sandboxSess
 		return nil, err
 	}
 	row := target.containerView
-	binding, size, err := sandboxBinding(cp, scope, target)
+	binding, err := sandboxBinding(scope, target)
 	if err != nil {
 		return nil, err
 	}
@@ -278,9 +268,9 @@ func connectSandbox(ctx context.Context, target *workloadTarget) (_ *sandboxSess
 		if err != nil {
 			return nil, err
 		}
-		selected, err := managedWorkload(*peer, monitorRepo)
+		selected, err := resolveWorkload(*peer, monitorRepo, "")
 		if err != nil {
-			return nil, fmt.Errorf("selected Monitor %s: %w", peer.Name, err)
+			return nil, fmt.Errorf("selected Monitor %s: %w; review its configuration with `tinfoil monitor open %s`", peer.Name, err, peer.Name)
 		}
 		if peer.OwnerKeyMode == "umk" && row.OwnerKeyMode == "tmk" {
 			return nil, fmt.Errorf("a UMK Monitor cannot serve the synced sandbox %s", row.Name)
@@ -302,49 +292,34 @@ func connectSandbox(ctx context.Context, target *workloadTarget) (_ *sandboxSess
 	if err != nil {
 		return nil, err
 	}
-	return openSandbox(ctx, scope, cp, target, binding, size, monitor, keys, dir)
+	return openSandbox(scope, cp, target, binding, monitor, keys, dir)
 }
 
-// sandboxBinding checks a sandbox record from fresh inventory and returns its exact
-// account, container, instance and workspace-volume binding and the bound volume's
-// rendered size, which the trusted profile substitutes.
-func sandboxBinding(cp *cpClient, scope accountScope, target *workloadTarget) (mkBinding, string, error) {
+func sandboxBinding(scope accountScope, target *workloadTarget) (mkBinding, error) {
 	row, env := target.containerView, target.env
 	if err := requireRunningConnection("Sandbox", row); err != nil {
-		return mkBinding{}, "", err
+		return mkBinding{}, err
 	}
-	volumeID := row.Volumes["workspace"]
+	volumeID, instance := row.Volumes["workspace"], env["SANDBOX_INSTANCE_ID"]
 	if len(row.Volumes) != 1 || !validLowerUUID(volumeID) {
-		return mkBinding{}, "", errors.New("sandbox has no unique workspace volume binding")
+		return mkBinding{}, errors.New("sandbox has no unique workspace volume binding")
 	}
-	instance := env["SANDBOX_INSTANCE_ID"]
 	if !validLowerUUID(instance) {
-		return mkBinding{}, "", errors.New("sandbox release lacks a measured instance ID; use compatible templates")
+		return mkBinding{}, errors.New("sandbox release lacks a measured instance ID; use compatible templates")
+	}
+	if env[sandboxOwnerEnv] != row.OwnerPublicKey {
+		return mkBinding{}, errors.New("sandbox's measured owner is not its owner key")
 	}
 	if err := validateSandboxNetwork(row); err != nil {
-		return mkBinding{}, "", err
+		return mkBinding{}, err
 	}
 	if env["NO_MONITOR"] == "1" && (row.SSHPort < 1 || row.SSHPort > maxConnectionPort) {
-		return mkBinding{}, "", errors.New("sandbox has no published SSH port")
+		return mkBinding{}, errors.New("sandbox has no published SSH port")
 	}
-	list, err := listVolumes(cp)
-	if err != nil {
-		return mkBinding{}, "", fmt.Errorf("reading workspace volume %s: %w", volumeID, err)
-	}
-	i := slices.IndexFunc(list.Volumes, func(v volumeView) bool {
-		return v.ID == volumeID && v.ContainerID == row.ID && v.Slot == "workspace" && v.Sandbox && v.SizeBytes > 0
-	})
-	if i < 0 {
-		return mkBinding{}, "", fmt.Errorf("workspace volume %s is not attached to %s", volumeID, row.Name)
-	}
-	binding := mkBinding{Account: scope.account(), ContainerID: row.ID, InstanceID: &instance, VolumeID: &volumeID}
-	return binding, formatVolumeSize(list.Volumes[i].SizeBytes), nil
+	return mkBinding{Account: scope.account(), ContainerID: row.ID, InstanceID: &instance, VolumeID: &volumeID}, nil
 }
 
-// openSandbox verifies a sandbox under its trusted profile with resolved keys, directly
-// for NO_MONITOR=1 or through the unlocked monitor's relay, and builds its SSH profile.
-func openSandbox(ctx context.Context, scope accountScope, cp *cpClient, target *workloadTarget, binding mkBinding, size string,
-	monitor *monitorSession, keys *resourceKeys, dir string) (_ *sandboxSession, err error) {
+func openSandbox(scope accountScope, cp *cpClient, target *workloadTarget, binding mkBinding, monitor *monitorSession, keys *resourceKeys, dir string) (_ *sandboxSession, err error) {
 	row := target.containerView
 	noMonitor := monitor == nil
 	s := &sandboxSession{box: row, noMonitor: noMonitor, binding: binding, keys: keys, monitor: monitor}
@@ -360,13 +335,15 @@ func openSandbox(ctx context.Context, scope accountScope, cp *cpClient, target *
 		}
 	}
 	resourceID := scope.ControlplaneURL + "/" + scope.OrgID + "/" + scope.UserID + "/" + row.ID
-	policy := sandboxPolicy(row.OwnerPublicKey, *binding.InstanceID, size, noMonitor)
 	if noMonitor {
-		stop := startConnectionProgress(os.Stderr, "Verifying sandbox attestation and SSH host key for "+row.Domain)
-		verified, err := verifyWorkload(ctx, row.Domain, policy)
-		stop()
+		defer startConnectionProgress(os.Stderr, "Verifying sandbox attestation and SSH host key for "+row.Domain)()
+		secure, err := newVerifiedClient(row.Domain, target.source, "")
 		if err != nil {
 			return nil, err
+		}
+		verified, err := secure.Verify()
+		if err != nil {
+			return nil, fmt.Errorf("verifying %s: %w", row.Domain, err)
 		}
 		host, err := endorsedHostKey(row.Domain, verified)
 		if err != nil {
@@ -380,7 +357,7 @@ func openSandbox(ctx context.Context, scope accountScope, cp *cpClient, target *
 	}
 	s.owner = &sandboxOwner{request: monitor.request, instance: *binding.InstanceID, signer: keys.signer, owner: row.OwnerPublicKey}
 	stop := startConnectionProgress(os.Stderr, "Requesting sandbox attestation through Monitor's relay")
-	verified, err := s.owner.attest(ctx, policy)
+	verified, err := s.owner.attest(target.source)
 	stop()
 	if err != nil {
 		return nil, fmt.Errorf("sandbox attestation through Monitor: %w", err)
@@ -399,11 +376,6 @@ func openSandbox(ctx context.Context, scope accountScope, cp *cpClient, target *
 	return s, nil
 }
 
-// relinkSandboxes points this freshly opened Monitor's sandboxes at its new verified host
-// key after a Monitor-only restart. It re-enrolls a stale pin with each sandbox's active
-// identity through its attested owner API and re-pins installed SSH profiles; it never
-// restores an identity or initializes storage. Sandboxes this machine has no keys for,
-// and identities Monitor no longer authorizes, are skipped.
 func relinkSandboxes(ctx context.Context, scope accountScope, cp *cpClient, m *monitorSession, monitorID string) []error {
 	var rows []containerView
 	if _, err := cp.doContext(ctx, "GET", "/api/containers", nil, nil, nil, &rows); err != nil {
@@ -433,11 +405,11 @@ func relinkSandbox(ctx context.Context, scope accountScope, cp *cpClient, m *mon
 	if m.keys.mode == "umk" && row.OwnerKeyMode == "tmk" {
 		return fmt.Errorf("a UMK Monitor cannot serve the synced sandbox %s", row.Name)
 	}
-	target, err := managedWorkload(*row, defaultSandboxRepo)
+	target, err := resolveWorkload(*row, defaultSandboxRepo, "")
 	if err != nil {
 		return err
 	}
-	binding, size, err := sandboxBinding(cp, scope, target)
+	binding, err := sandboxBinding(scope, target)
 	if err != nil {
 		return err
 	}
@@ -453,7 +425,7 @@ func relinkSandbox(ctx context.Context, scope accountScope, cp *cpClient, m *mon
 		keys.close()
 		return nil
 	}
-	s, err := openSandbox(ctx, scope, cp, target, binding, size, m, keys, dir)
+	s, err := openSandbox(scope, cp, target, binding, m, keys, dir)
 	if err != nil {
 		return err
 	}
@@ -463,7 +435,7 @@ func relinkSandbox(ctx context.Context, scope accountScope, cp *cpClient, m *mon
 		return err
 	}
 	if status.MonitorIdentity == nil || *status.MonitorIdentity != monitorIdentity(keys.monitorIdentitySeed) {
-		return fmt.Errorf("its saved Monitor identity is not active; run `tinfoil sandbox enroll %s`", row.Name)
+		return fmt.Errorf("its saved Monitor identity is not active; run `tinfoil sandbox start %s`", row.Name)
 	}
 	if host := authorizedKeyLine(m.hostKey); status.MonitorHostKey == nil || *status.MonitorHostKey != host {
 		fmt.Fprintln(os.Stderr, "Re-linking sandbox "+row.Name+" to the current Monitor boot")
@@ -500,9 +472,6 @@ type sandboxStatus struct {
 	MonitorHostKey  *string `json:"monitor_host_key"`
 }
 
-// enroll decides from the actual Monitor identities and the sandbox's authenticated
-// status whether this is a first enrollment, a reboot, or a re-link to a new Monitor
-// boot. A missing identity is never silently restored: Monitor refuses one its owner removed.
 func (s *sandboxSession) enroll(ctx context.Context) error {
 	if !time.Now().Before(s.expires) {
 		return errors.New("sandbox attestation expired; verify it again before unlocking")
@@ -531,7 +500,6 @@ func (s *sandboxSession) enroll(ctx context.Context) error {
 			agent = monitorIdentity(s.keys.monitorIdentitySeed)
 		}
 		fmt.Fprintln(os.Stderr, "Registering sandbox "+name+" with Monitor")
-		// Monitor itself refuses an identity the owner removed earlier.
 		if err := s.monitor.enrollAgent(ctx, "sandbox-"+name, agent); err != nil {
 			return err
 		}
@@ -547,7 +515,6 @@ func (s *sandboxSession) enroll(ctx context.Context) error {
 	return nil
 }
 
-// status is the sandbox's own authenticated report of its volume, Monitor identity and Monitor pin.
 func (s *sandboxSession) status(ctx context.Context) (sandboxStatus, error) {
 	var status sandboxStatus
 	if err := s.owner.call(ctx, http.MethodGet, "/status", nil, &status); err != nil {
@@ -559,9 +526,6 @@ func (s *sandboxSession) status(ctx context.Context) (sandboxStatus, error) {
 	return status, nil
 }
 
-// enrollSandbox sends the Monitor identity, verified Monitor host key and disk key to
-// the attested sandbox only. The volume worker formats only blank storage and
-// otherwise unlocks it.
 func (s *sandboxSession) enrollSandbox(ctx context.Context, volume, host string) error {
 	if volume != "unlocked" {
 		fmt.Fprintln(os.Stderr, "Unlocking sandbox "+s.box.Name+" encrypted workspace")
@@ -574,10 +538,10 @@ func (s *sandboxSession) enrollSandbox(ctx context.Context, volume, host string)
 	}{s.keys.monitorIdentitySeed, host, s.keys.storageKey, true}
 	var status sandboxStatus
 	if err := s.owner.call(ctx, http.MethodPost, "/enroll", input, &status); err != nil {
-		return fmt.Errorf("%w; rerun `tinfoil sandbox enroll %s` to reconcile", err, s.box.Name)
+		return fmt.Errorf("%w; rerun `tinfoil sandbox start %s` to reconcile", err, s.box.Name)
 	}
 	if status.Volume != "unlocked" {
-		return fmt.Errorf("sandbox %s workspace is still %s; rerun `tinfoil sandbox enroll %s`", s.box.Name, status.Volume, s.box.Name)
+		return fmt.Errorf("sandbox %s workspace is still %s; rerun `tinfoil sandbox start %s`", s.box.Name, status.Volume, s.box.Name)
 	}
 	fmt.Fprintf(os.Stderr, "Prepared %s through its attested owner API.\n", s.box.Name)
 	return nil
@@ -594,18 +558,14 @@ func authorizedKeyLine(key ssh.PublicKey) string {
 	return strings.TrimSpace(string(ssh.MarshalAuthorizedKey(key)))
 }
 
-// sandboxOwner sends signed sandbox-owner-v1 requests sealed to the attested
-// sandbox-ehbp key. Monitor's relay carries them but never sees plaintext.
 type sandboxOwner struct {
-	// request is Monitor's owner API, which carries the relay.
 	request  func(method, path string, input, out any) error
 	instance string
 	signer   ssh.Signer
 	owner    string
 	client   *http.Client
 	expires  time.Time
-	// skew is the sandbox's clock minus ours, learned when it refuses a request's time.
-	skew time.Duration
+	skew     time.Duration
 }
 
 type relayHeaders struct {
@@ -635,13 +595,15 @@ func (o *sandboxOwner) relay(target string, nonce *string, headers *relayHeaders
 	return &reply, data, err
 }
 
-// verifySandboxEvidence verifies relayed sandbox attestation; tests without CVM
-// hardware substitute it while keeping the trusted profile check.
-var verifySandboxEvidence = verifyWorkloadDocument
+var verifySandboxEvidence = func(doc, nonce []byte, source string) (*verify.Verification, error) {
+	verifier, err := verify.NewVerifier()
+	if err != nil {
+		return nil, err
+	}
+	return verifier.VerifyV3(doc, nonce, source)
+}
 
-// attest verifies fresh nonce-bound sandbox evidence under policy and binds the
-// owner channel to the endorsed sandbox-ehbp key of that same verification.
-func (o *sandboxOwner) attest(ctx context.Context, policy workloadPolicy) (*verify.Verification, error) {
+func (o *sandboxOwner) attest(source string) (*verify.Verification, error) {
 	nonce, err := document.RandomNonce()
 	if err != nil {
 		return nil, err
@@ -654,19 +616,19 @@ func (o *sandboxOwner) attest(ctx context.Context, policy workloadPolicy) (*veri
 	if reply.Status != http.StatusOK {
 		return nil, fmt.Errorf("sandbox attestation returned HTTP %d", reply.Status)
 	}
-	verified, err := verifySandboxEvidence(ctx, doc, nonce, policy)
+	verified, err := verifySandboxEvidence(doc, nonce, source)
 	if err != nil {
 		return nil, err
 	}
-	spki, ok := verified.CryptoMaterialData(sandboxEHBPKeyID, document.KeySPKIV1Format)
+	public, err := endorsedKey("sandbox", verified, sandboxEHBPKeyID)
+	if err != nil {
+		return nil, err
+	}
+	raw, ok := public.(*ecdh.PublicKey)
 	if !ok {
-		return nil, fmt.Errorf("sandbox endorses no %q key", sandboxEHBPKeyID)
+		return nil, fmt.Errorf("attested %q key is not X25519", sandboxEHBPKeyID)
 	}
-	raw, err := sandboxEHBPKey(spki)
-	if err != nil {
-		return nil, err
-	}
-	key, err := identity.FromPublicKeyBytes(raw)
+	key, err := identity.FromPublicKeyBytes(raw.Bytes())
 	if err != nil {
 		return nil, err
 	}
@@ -679,8 +641,7 @@ func (o *sandboxOwner) attest(ctx context.Context, policy workloadPolicy) (*veri
 	return verified, nil
 }
 
-// RoundTrip carries one sealed request through Monitor's relay and never retries it:
-// a repeated ciphertext would repeat its nonce. call re-signs instead.
+// Never retried: a repeated ciphertext would repeat its nonce; call re-signs instead.
 func (o *sandboxOwner) RoundTrip(r *http.Request) (*http.Response, error) {
 	body, err := io.ReadAll(r.Body)
 	r.Body.Close()
@@ -698,9 +659,6 @@ func (o *sandboxOwner) RoundTrip(r *http.Request) (*http.Response, error) {
 	return &http.Response{StatusCode: reply.Status, Header: header, Body: io.NopCloser(bytes.NewReader(data)), ContentLength: int64(len(data)), Request: r}, nil
 }
 
-// call signs one owner operation. While its outcome is unknown, it retries the same
-// content and original time with a fresh nonce inside the one-minute window; every
-// sandbox effect is safe to repeat.
 func (o *sandboxOwner) call(ctx context.Context, method, path string, input, out any) error {
 	var body []byte
 	if input != nil {
@@ -766,8 +724,6 @@ func (s *sandboxSession) install() error {
 	return installSandboxAlias(s.profile, home)
 }
 
-// repinInstalled rewrites this resource's already installed SSH profiles, under the names
-// they were installed with, with the current verified pins. It installs no new profile.
 func (s *sandboxSession) repinInstalled() error {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -858,8 +814,6 @@ func routeName(key ssh.PublicKey) string {
 	return strings.ToLower(base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(digest[:])) + sandboxRouteSuffix
 }
 
-// unlockDirect is owned by the explicit NO_MONITOR=1 profile: the measured owner
-// unlocks the workspace over attested SSH. It is never a fallback for Monitor enrollment.
 func (s *sandboxSession) unlockDirect() error {
 	dial := func() (*ssh.Client, error) {
 		if !time.Now().Before(s.expires) {
@@ -890,7 +844,7 @@ func (s *sandboxSession) unlockDirect() error {
 	}
 	fmt.Fprintln(os.Stderr, "Unlocking sandbox "+s.box.Name+" encrypted workspace")
 	if _, err := sendOwnerCommand(dial, "/usr/local/bin/workspace-unlock --initialize", s.keys.storageKey); err != nil {
-		return fmt.Errorf("unlock workspace: %w; retry with `tinfoil sandbox enroll %s`", err, s.box.Name)
+		return fmt.Errorf("unlock workspace: %w; retry with `tinfoil sandbox start %s`", err, s.box.Name)
 	}
 	return nil
 }

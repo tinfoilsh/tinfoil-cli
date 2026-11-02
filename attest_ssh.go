@@ -93,11 +93,7 @@ attestation always uses the enclave hostname.`,
 				if attestSSHName != "" && !sshProfileNamePattern.MatchString(attestSSHName) {
 					return errors.New("invalid SSH profile name")
 				}
-				workload, err := managedWorkload(*target.container, defaultSandboxRepo)
-				if err != nil {
-					return err
-				}
-				s, err := connectSandbox(cmd.Context(), workload)
+				s, err := connectSandbox(cmd.Context(), target.workload)
 				if err != nil {
 					return err
 				}
@@ -189,19 +185,27 @@ func attestedHostKey(host, source, sealedTo string) (ssh.PublicKey, error) {
 }
 
 func endorsedHostKey(host string, verified *verify.Verification) (ssh.PublicKey, error) {
-	data, ok := verified.CryptoMaterialData(attestedHostKeyID, document.KeySPKIV1Format)
+	public, err := endorsedKey(host, verified, attestedHostKeyID)
+	if err != nil {
+		return nil, err
+	}
+	return ssh.NewPublicKey(public)
+}
+
+func endorsedKey(host string, verified *verify.Verification, id string) (any, error) {
+	data, ok := verified.CryptoMaterialData(id, document.KeySPKIV1Format)
 	if !ok {
-		return nil, fmt.Errorf("%s endorses no attested %q key", host, attestedHostKeyID)
+		return nil, fmt.Errorf("%s endorses no attested %q key", host, id)
 	}
 	der, err := hex.DecodeString(data)
 	if err != nil {
-		return nil, fmt.Errorf("attested %q key is not hex: %w", attestedHostKeyID, err)
+		return nil, fmt.Errorf("attested %q key is not hex: %w", id, err)
 	}
 	public, err := x509.ParsePKIXPublicKey(der)
 	if err != nil {
-		return nil, fmt.Errorf("attested %q key is not SPKI: %w", attestedHostKeyID, err)
+		return nil, fmt.Errorf("attested %q key is not SPKI: %w", id, err)
 	}
-	return ssh.NewPublicKey(public)
+	return public, nil
 }
 
 type sshProfile struct {

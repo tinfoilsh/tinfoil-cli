@@ -5,7 +5,9 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,6 +18,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strconv"
 	"syscall"
@@ -60,16 +63,26 @@ type monitorProfile struct {
 	Storage     string `json:"storage,omitempty"`
 	HostKey     string `json:"host_key,omitempty"`
 	Generation  uint64 `json:"generation"`
-	// Custody "tmk" marks the device key as CLI-managed material that logout removes.
-	Custody string `json:"custody,omitempty"`
+	Custody     string `json:"custody,omitempty"`
 }
 
-// account is the key-bundle binding form: the organization ID or "personal".
 func (s accountScope) account() string {
 	if s.OrgID != "" {
 		return s.OrgID
 	}
 	return "personal"
+}
+
+var monitorBucketPattern = regexp.MustCompile(`^s3://[a-z0-9.-]+\?prefix=containers%2F([0-9a-f]{64})%2F[A-Za-z0-9-]+%2F&region=[a-z0-9-]+$`)
+
+func bucketOwnedBy(bucket, account, user string) bool {
+	owner := "org:" + account
+	if account == "personal" {
+		owner = "user:" + user
+	}
+	match := monitorBucketPattern.FindStringSubmatch(bucket)
+	digest := sha256.Sum256([]byte(owner))
+	return match != nil && match[1] == hex.EncodeToString(digest[:])
 }
 
 var monitorCmd = &cobra.Command{
@@ -92,6 +105,9 @@ func currentScope() (accountScope, *cpClient, error) {
 	if identity.Organization != nil {
 		scope.OrgID = identity.Organization.ID
 		scope.OrgName = identity.Organization.Name
+	}
+	if cfg.login != nil && (scope.UserID != cfg.login.UserID || scope.account() != cfg.login.Account) {
+		return accountScope{}, nil, errors.New("the API reports a different account than this login; run `tinfoil login` to choose an account")
 	}
 	return scope, newCPClient(cfg), nil
 }
@@ -127,11 +143,8 @@ type ownerChannelOptions struct {
 	Generation uint64
 }
 
-// monitorSession is an unlocked Monitor reached over owner SSH pinned to the host
-// key endorsed by the same verification that authorized its configuration.
 type monitorSession struct {
-	client *ssh.Client
-	// request is the owner API over client.
+	client  *ssh.Client
 	request func(method, path string, input, out any) error
 	dir     string
 	domain  string
@@ -163,6 +176,9 @@ func connectMonitorOwner(ctx context.Context, scope accountScope, cp *cpClient, 
 	if len(bucket) > maxBucketChars || !bucketOwnedBy(bucket, scope.account(), scope.UserID) {
 		return nil, errors.New("Monitor storage does not belong to this account")
 	}
+	if row.env[monitorOwnerEnv] != row.OwnerPublicKey {
+		return nil, errors.New("Monitor's measured owner is not its owner key")
+	}
 	dir, err := monitorRecord(scope, row)
 	if err != nil {
 		return nil, err
@@ -177,7 +193,6 @@ func connectMonitorOwner(ctx context.Context, scope accountScope, cp *cpClient, 
 	if m.keys, err = resolveResourceKeys(ctx, cp, scope, row.containerView, "monitor", binding, dir, true); err != nil {
 		return nil, err
 	}
-	// Open with the larger of the recovered and locally observed minimum generation.
 	if _, err := updateProfile(dir, func(p *monitorProfile) error {
 		p.Generation, p.Custody = max(p.Generation, m.keys.minGeneration), m.keys.mode
 		return nil
@@ -193,13 +208,7 @@ func connectMonitorOwner(ctx context.Context, scope accountScope, cp *cpClient, 
 	if err != nil {
 		return nil, err
 	}
-	stop := startConnectionProgress(os.Stderr, "Verifying Monitor attestation, configuration and build provenance for "+row.Domain)
-	verified, err := verifyWorkload(ctx, row.Domain, monitorPolicy(row.OwnerPublicKey, bucket))
-	stop()
-	if err != nil {
-		return nil, err
-	}
-	if m.hostKey, err = endorsedHostKey(row.Domain, verified); err != nil {
+	if m.hostKey, err = attestedHostKey(row.Domain, row.source, ""); err != nil {
 		return nil, err
 	}
 	if _, err := updateProfile(dir, func(p *monitorProfile) error {
@@ -227,8 +236,6 @@ func connectMonitorOwner(ctx context.Context, scope accountScope, cp *cpClient, 
 	return m, nil
 }
 
-// open checks that Monitor speaks the current owner protocol before any state key
-// leaves, generates UMK keys only for confirmed-absent state, then unlocks.
 func (m *monitorSession) open(ctx context.Context, name, owner string, binding mkBinding, restoreDevice bool) error {
 	var health struct {
 		State string `json:"state"`
@@ -264,7 +271,6 @@ func (m *monitorSession) close() {
 	}
 }
 
-// unlock delivers the state key; Monitor itself initializes only confirmed-absent state at generation 0.
 func (m *monitorSession) unlock(restoreDevice bool) error {
 	var profile monitorProfile
 	if err := readStorageJSON(filepath.Join(m.dir, monitorProfileFile), &profile); err != nil {
@@ -305,7 +311,6 @@ func (m *monitorSession) authorizes(agent string) bool {
 	return false
 }
 
-// enrollAgent registers only the public agent key; Monitor refuses a previously removed identity.
 func (m *monitorSession) enrollAgent(ctx context.Context, name, agent string) error {
 	var view monitorView
 	if err := m.request(http.MethodPost, "/enroll", map[string]any{name: map[string]any{"key": agent}}, &view); err != nil {
@@ -316,8 +321,6 @@ func (m *monitorSession) enrollAgent(ctx context.Context, name, agent string) er
 	return nil
 }
 
-// checkpoint persists the locally observed generation into the key bundle. Until it
-// succeeds only this machine holds the raised minimum, and the warning says so.
 func (m *monitorSession) checkpoint(ctx context.Context) {
 	if m.keys.mk == nil {
 		return
@@ -459,7 +462,7 @@ func init() {
 	rootCmd.AddCommand(monitorCmd)
 	command := &cobra.Command{
 		Use: "open [id|name]", Short: "Unlock and forward the Monitor UI over attested SSH", Args: cobra.ExactArgs(1),
-		Long: "Verify the Monitor against its trusted profile and build provenance, unlock it with its saved key and minimum generation, restore this device's sandbox connectivity, and forward its UI over attested SSH.",
+		Long: "Unlock the Monitor, restore this device's sandbox connectivity, and forward its UI over attested SSH. Requires a Monitor release supporting device restoration during unlock.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
 			fmt.Fprintln(cmd.ErrOrStderr(), "Looking up Monitor "+name)
@@ -471,7 +474,7 @@ func init() {
 			if err != nil {
 				return err
 			}
-			target, err := managedWorkload(*row, monitorRepo)
+			target, err := resolveWorkload(*row, monitorRepo, repo)
 			if err != nil {
 				return err
 			}
@@ -486,6 +489,7 @@ func init() {
 			return serveMonitorPanel(cmd, m.client, m.dir, "127.0.0.1:0")
 		},
 	}
+	addTrustDangerousFlag(command)
 	monitorCmd.AddCommand(command)
 }
 

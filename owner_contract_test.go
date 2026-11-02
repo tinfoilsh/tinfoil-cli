@@ -4,7 +4,6 @@ import (
 	"crypto/ecdh"
 	"crypto/ed25519"
 	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"os"
 	"strings"
@@ -76,16 +75,12 @@ type ownerContractFixture struct {
 		InvalidRequests []struct{ Case, Bytes string } `json:"invalid_requests"`
 	} `json:"owner_request"`
 	KeySync struct {
-		Targets      contractKeySyncTargets `json:"targets"`
-		Request      contractKeySyncRequest `json:"request"`
-		RecipientKey string                 `json:"recipient_private_key"`
-		LaunchURL    string                 `json:"launch_url"`
-		Canonical    string                 `json:"canonical"`
-		Code         string                 `json:"code"`
-		CodeInputs   []struct {
-			Input   string `json:"input"`
-			Matches bool   `json:"matches"`
-		} `json:"code_inputs"`
+		Targets         contractKeySyncTargets `json:"targets"`
+		Request         contractKeySyncRequest `json:"request"`
+		RecipientKey    string                 `json:"recipient_private_key"`
+		LaunchURL       string                 `json:"launch_url"`
+		Canonical       string                 `json:"canonical"`
+		Code            string                 `json:"code"`
 		ChangedContexts []struct {
 			Case    string                 `json:"case"`
 			Targets contractKeySyncTargets `json:"targets"`
@@ -102,14 +97,6 @@ type ownerContractFixture struct {
 
 		CompletionURL string `json:"completion_url"`
 	} `json:"key_sync"`
-	SandboxEHBPKey struct {
-		SPKIHex string `json:"spki_hex"`
-		RawHex  string `json:"raw_hex"`
-		Reject  []struct {
-			Case    string `json:"case"`
-			SPKIHex string `json:"spki_hex"`
-		} `json:"reject"`
-	} `json:"sandbox_ehbp_key"`
 }
 
 func loadOwnerContract(t *testing.T) ownerContractFixture {
@@ -247,9 +234,6 @@ func TestOwnerContractKeySyncCodeAndEnvelope(t *testing.T) {
 	require.Equal(t, f.LaunchURL, keySyncLaunchURL(request, targets))
 	require.Equal(t, f.Canonical, string(canonicalKeySyncRequest(request, targets)))
 	require.Equal(t, f.Code, confirmationCode([]byte(f.Canonical)))
-	for _, input := range f.CodeInputs {
-		require.Equal(t, input.Matches, confirmationCodeMatches(input.Input, f.Code), input.Input)
-	}
 
 	private, err := ecdh.X25519().NewPrivateKey(fixtureBytes(t, f.RecipientKey))
 	require.NoError(t, err)
@@ -284,15 +268,4 @@ func TestOwnerContractKeySyncCodeAndEnvelope(t *testing.T) {
 	var envelope keySyncEnvelope
 	require.NoError(t, decodeCanonical([]byte(f.EnvelopePlaintext), &envelope))
 	require.Equal(t, f.CompletionURL, keySyncCompletionURL(targets, request.Request, envelope.UserID, "org_2fixtureB"))
-}
-
-func TestOwnerContractSandboxEHBPKey(t *testing.T) {
-	f := loadOwnerContract(t).SandboxEHBPKey
-	raw, err := sandboxEHBPKey(f.SPKIHex)
-	require.NoError(t, err)
-	require.Equal(t, f.RawHex, hex.EncodeToString(raw))
-	for _, reject := range f.Reject {
-		_, err := sandboxEHBPKey(reject.SPKIHex)
-		require.Error(t, err, reject.Case)
-	}
 }

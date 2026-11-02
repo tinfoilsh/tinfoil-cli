@@ -9,10 +9,8 @@ import (
 	"crypto/hpke"
 	"crypto/rand"
 	"crypto/sha256"
-	"crypto/subtle"
 	"encoding/base64"
 	"encoding/binary"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -24,12 +22,10 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
-// Wire formats shared with terminal; testdata/owner-contract-v1.json freezes them.
 const (
-	mkEnvelopePrefix   = "mk1."
-	mkAADLabel         = "tinfoil-mk-v1"
-	maxMKEnvelopeChars = 262144
-	// The largest plaintext whose "mk1." envelope fits maxMKEnvelopeChars.
+	mkEnvelopePrefix       = "mk1."
+	mkAADLabel             = "tinfoil-mk-v1"
+	maxMKEnvelopeChars     = 262144
 	maxMKPlaintextBytes    = 196576
 	maxMKResources         = 256
 	maxBucketChars         = 512
@@ -41,7 +37,6 @@ const (
 	keySyncConfirmLabel    = "tinfoil-cli-confirm-v1"
 	keySyncEnvelopeLabel   = "tinfoil-cli-key-sync-envelope-v1\x00"
 	confirmationAlphabet   = "ABCDEFGHJKLMNPQRSTUVWXYZ"
-	x25519SPKIPrefix       = "302a300506032b656e032100"
 )
 
 var (
@@ -50,7 +45,6 @@ var (
 	errMKFormat    = errors.New("the encrypted key bundle is damaged or uses an unsupported format")
 )
 
-// b64u is canonical unpadded base64url; JSON null is a nil value.
 type b64u []byte
 
 func (b b64u) MarshalJSON() ([]byte, error) {
@@ -78,7 +72,6 @@ func (b *b64u) UnmarshalJSON(data []byte) error {
 }
 
 // decodeB64U requires the canonical encoding; Go's decoder alone skips CR and LF.
-// A negative size accepts any length.
 func decodeB64U(text string, size int) ([]byte, error) {
 	decoded, err := base64.RawURLEncoding.Strict().DecodeString(text)
 	if err != nil || base64.RawURLEncoding.EncodeToString(decoded) != text || (size >= 0 && len(decoded) != size) {
@@ -98,7 +91,6 @@ func printableASCII(s string) bool {
 
 func validLowerUUID(id string) bool { return looksLikeUUID(id) && id == strings.ToLower(id) }
 
-// contractJSON is the deterministic encoding: declared field order, no HTML escaping.
 func contractJSON(v any) ([]byte, error) {
 	var out bytes.Buffer
 	encoder := json.NewEncoder(&out)
@@ -109,8 +101,6 @@ func contractJSON(v any) ([]byte, error) {
 	return bytes.TrimSuffix(out.Bytes(), []byte("\n")), nil
 }
 
-// decodeCanonical accepts only the deterministic encoding, so duplicate, unknown,
-// reordered or reformatted members are rejected in Go and TypeScript alike.
 func decodeCanonical(data []byte, v any) error {
 	if err := json.Unmarshal(data, v); err != nil {
 		return err
@@ -197,7 +187,6 @@ func (p *mkPayload) validate() error {
 	return nil
 }
 
-// mkContext is the authenticated scope of one user's MK.
 type mkContext struct{ APIOrigin, UserID, DEKID string }
 
 func contractAAD(fields ...string) ([]byte, error) {
@@ -244,7 +233,6 @@ func sealMK(payload *mkPayload, dek []byte, c mkContext) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	// The random-nonce AEAD prefixes its 12-byte nonce.
 	sealed := aead.Seal(nil, nil, plain, aad)
 	return mkEnvelopePrefix + base64.RawURLEncoding.EncodeToString(sealed[:12]) + "." + base64.RawURLEncoding.EncodeToString(sealed[12:]), nil
 }
@@ -262,7 +250,6 @@ func openMK(envelope string, dek []byte, c mkContext) (*mkPayload, error) {
 	if err != nil {
 		return nil, err
 	}
-	// Bound the encoded size before decoding allocates.
 	encodedNonce, encodedCiphertext, ok := strings.Cut(strings.TrimPrefix(envelope, mkEnvelopePrefix), ".")
 	if len(envelope) > maxMKEnvelopeChars || !strings.HasPrefix(envelope, mkEnvelopePrefix) || !ok {
 		return nil, errMKFormat
@@ -287,7 +274,6 @@ func openMK(envelope string, dek []byte, c mkContext) (*mkPayload, error) {
 	return &payload, nil
 }
 
-// ownerRequest is the signed request Monitor and sandbox owner APIs accept.
 type ownerRequest struct {
 	Protocol   string `json:"protocol"`
 	Owner      string `json:"owner"`
@@ -307,13 +293,11 @@ type ownerEnvelope struct {
 	Signature b64u `json:"signature"`
 }
 
-// ownerRequestMessage is what an owner key signs: a digest, since hardware keys cap the message size.
 func ownerRequestMessage(request []byte) []byte {
 	digest := sha256.Sum256(request)
 	return append([]byte(ownerRequestContext), digest[:]...)
 }
 
-// signOwnerRequest signs with an Ed25519 SSH signer: a TMK seed, a UMK key file or an agent key.
 func signOwnerRequest(signer ssh.Signer, request ownerRequest) ([]byte, error) {
 	var owner string
 	if public, err := ssh.ParsePublicKey(signer.PublicKey().Marshal()); err == nil {
@@ -345,7 +329,6 @@ func signOwnerRequest(signer ssh.Signer, request ownerRequest) ([]byte, error) {
 	return contractJSON(ownerEnvelope{Request: raw, Signature: signature.Blob})
 }
 
-// keySyncRequest binds a key transfer to the user and account already authenticated by CLI.
 type keySyncRequest struct {
 	HPKEPublicKey []byte
 	Request       string
@@ -354,7 +337,6 @@ type keySyncRequest struct {
 	Expires       int64
 }
 
-// keySyncTargets are fixed per trusted build and bound locally, never transmitted.
 type keySyncTargets struct {
 	Terminal, APIOrigin, Callback, Completion string
 }
@@ -398,23 +380,6 @@ func confirmationCode(canonical []byte) string {
 	return string(code[:3]) + "-" + string(code[3:])
 }
 
-// confirmationCodeMatches compares a typed code after the shared normalization.
-func confirmationCodeMatches(input, expected string) bool {
-	normalized := strings.Map(func(r rune) rune {
-		if r == ' ' || r == '\t' || r == '-' {
-			return -1
-		}
-		if r >= 'a' && r <= 'z' {
-			return r - 'a' + 'A'
-		}
-		return r
-	}, input)
-	if len(normalized) != 6 || strings.Trim(normalized, confirmationAlphabet) != "" {
-		return false
-	}
-	return subtle.ConstantTimeCompare([]byte(normalized), []byte(strings.ReplaceAll(expected, "-", ""))) == 1
-}
-
 type keySyncEnvelope struct {
 	V       int    `json:"v"`
 	Request string `json:"request"`
@@ -434,7 +399,6 @@ func keySyncEnvelopeInfo(canonical []byte) []byte {
 	return append([]byte(keySyncEnvelopeLabel), digest[:]...)
 }
 
-// openKeySyncEnvelope decrypts a key transfer for the already authenticated user.
 func openKeySyncEnvelope(private *ecdh.PrivateKey, r keySyncRequest, t keySyncTargets, payload string) (*keySyncEnvelope, error) {
 	if len(payload) > maxKeySyncPayloadChars {
 		return nil, errors.New("malformed key-sync callback")
@@ -465,13 +429,4 @@ func openKeySyncEnvelope(private *ecdh.PrivateKey, r keySyncRequest, t keySyncTa
 
 func keySyncCompletionURL(t keySyncTargets, request, userID, account string) string {
 	return t.Completion + "#v=1&request=" + url.QueryEscape(request) + "&user=" + url.QueryEscape(userID) + "&account=" + url.QueryEscape(account)
-}
-
-// sandboxEHBPKey extracts the raw X25519 key from the attested sandbox-ehbp SPKI.
-func sandboxEHBPKey(spkiHex string) ([]byte, error) {
-	der, err := hex.DecodeString(spkiHex)
-	if err != nil || len(der) != 44 || hex.EncodeToString(der[:12]) != x25519SPKIPrefix {
-		return nil, errors.New("sandbox-ehbp is not an X25519 SPKI key")
-	}
-	return der[12:], nil
 }

@@ -35,19 +35,8 @@ func newCPClient(cfg cliConfig) *cpClient {
 		baseURL: strings.TrimRight(cfg.ControlplaneURL, "/"),
 		apiKey:  cfg.APIKey,
 		login:   cfg.login,
-		http:    &http.Client{Timeout: 60 * time.Second, CheckRedirect: sameOriginRedirect},
+		http:    &http.Client{Timeout: 60 * time.Second},
 	}
-}
-
-// Authenticated requests never follow a redirect to another origin.
-func sameOriginRedirect(req *http.Request, via []*http.Request) error {
-	if req.URL.Scheme != via[0].URL.Scheme || req.URL.Host != via[0].URL.Host {
-		return fmt.Errorf("refusing a redirect from %s to another origin", via[0].URL.Host)
-	}
-	if len(via) >= 10 {
-		return errors.New("stopped after 10 redirects")
-	}
-	return nil
 }
 
 // cpError carries a structured error from the controlplane.
