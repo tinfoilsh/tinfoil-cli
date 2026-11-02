@@ -621,8 +621,10 @@ func userSigner(name, owner, dir string) (ssh.Signer, string, func(), error) {
 		agentState = "ssh-agent is unreachable"
 		conn, dialErr := net.Dial("unix", socket)
 		if dialErr == nil {
-			agentState = "ssh-agent doesn't hold it"
-			signers, _ := agent.NewClient(conn).Signers()
+			signers, signersErr := agent.NewClient(conn).Signers()
+			if signersErr == nil {
+				agentState = "ssh-agent doesn't hold it"
+			}
 			for _, signer := range signers {
 				if bytes.Equal(signer.PublicKey().Marshal(), public.Marshal()) {
 					path := filepath.Join(dir, "owner.pub")

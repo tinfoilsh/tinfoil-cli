@@ -52,7 +52,7 @@ const (
 var loginCmd = &cobra.Command{
 	Use:   "login",
 	Short: "Sign in to Tinfoil",
-	Long:  "TINFOIL_ADMIN_KEY and TINFOIL_CONTROLPLANE_URL override a saved admin key.",
+	Long:  "TINFOIL_ADMIN_KEY (or an admin_ key in TINFOIL_API_KEY) overrides a saved admin key; TINFOIL_CONTROLPLANE_URL overrides its URL.",
 	Example: `  Sign in with your browser
   tinfoil login
 
@@ -132,7 +132,7 @@ var loginCmd = &cobra.Command{
 
 var logoutCmd = &cobra.Command{
 	Use:   "logout",
-	Short: "Sign out and remove credentials and synced keys",
+	Short: "Sign out and remove saved credentials and synced keys",
 	Long:  "Your own SSH keys and locally generated resource keys are kept.",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		clerkErr := clerkLogout(cmd.OutOrStdout())
