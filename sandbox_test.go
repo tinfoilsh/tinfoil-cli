@@ -576,10 +576,10 @@ func TestDirectProfileUnlocksOverAttestedOwnerSSH(t *testing.T) {
 				binding: mkBinding{Account: "personal", ContainerID: "11111111-1111-4111-8111-111111111111", InstanceID: &instance, VolumeID: &volumeID},
 				profile: sshProfile{hostName: address, port: portNumber, hostKey: host.PublicKey()}}
 			err := s.enroll(t.Context())
+			require.NoError(t, err)
 			status := <-calls
 			require.Equal(t, "/usr/local/bin/workspace-unlock --status", status.command)
 			require.Empty(t, status.body)
-			require.NoError(t, err)
 			if test.unlock == "" {
 				require.Empty(t, calls)
 				return

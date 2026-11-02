@@ -262,6 +262,11 @@ func connectSandbox(ctx context.Context, target *workloadTarget) (_ *sandboxSess
 		return nil, err
 	}
 	var monitor *monitorSession
+	defer func() {
+		if err != nil && monitor != nil {
+			monitor.close()
+		}
+	}()
 	if target.env["NO_MONITOR"] != "1" {
 		fmt.Fprintln(os.Stderr, "Checking the selected Monitor for sandbox "+row.Name)
 		peer, err := resolveContainerDetail(cp, row.NetworkPolicy.Egress[0].ContainerID)
@@ -278,11 +283,6 @@ func connectSandbox(ctx context.Context, target *workloadTarget) (_ *sandboxSess
 		if monitor, err = connectMonitorOwner(ctx, scope, cp, selected, true); err != nil {
 			return nil, err
 		}
-		defer func() {
-			if err != nil {
-				monitor.close()
-			}
-		}()
 	}
 	dir, err := resourceDir(scope, row.ID, row.Name)
 	if err != nil {

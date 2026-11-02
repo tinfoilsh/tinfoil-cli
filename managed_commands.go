@@ -244,7 +244,8 @@ func newManagedStatusCmd(kind string) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			client, err := authedClient()
 			if len(args) == 0 && errors.Is(err, errNotLoggedIn) {
-				fmt.Fprintf(cmd.OutOrStdout(), "No %ss are stored on this machine. Run `tinfoil login` to list your account's %ss.\n", kind, kind)
+				plural := map[string]string{"monitor": "monitors", "sandbox": "sandboxes"}[kind]
+				fmt.Fprintf(cmd.OutOrStdout(), "No %s are stored on this machine. Run `tinfoil login` to list your account's %s.\n", plural, plural)
 				return nil
 			}
 			if err != nil {
