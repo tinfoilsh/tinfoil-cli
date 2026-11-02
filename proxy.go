@@ -73,14 +73,12 @@ var proxyCmd = &cobra.Command{
 			tinfoilClient, err = tinfoil.NewClientWithOptions(tinfoil.WithEnclave(enclaveHost), tinfoil.WithRepo(repo), tinfoil.WithVerificationOptions(*opts))
 		}
 		if err != nil {
-			log.WithError(err).Error("failed to create HTTP client")
 			return err
 		}
 		log.Debug("secure HTTP client created successfully")
 
 		targetUrl, err := url.Parse("https://" + enclaveHost)
 		if err != nil {
-			log.WithError(err).Error("failed to parse upstream URL")
 			return err
 		}
 
