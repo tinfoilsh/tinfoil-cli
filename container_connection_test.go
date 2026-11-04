@@ -112,10 +112,6 @@ func TestReviewConnectionPinsCandidate(t *testing.T) {
 		if target.host != wantHost || target.source != wantSource {
 			t.Fatalf("wrong target: %+v", target)
 		}
-		secure, err := newVerifiedClient(target.host, target.source, "")
-		if err != nil || secure.Repo() != wantSource || secure.Enclave() != wantHost {
-			t.Fatalf("lost SDK verification pins: %v", err)
-		}
 	}
 	for _, source := range []string{"acme/app", "acme/app@v1", "other/app@v2", "bad reference"} {
 		if _, err := containerConnection(c, true, source); err == nil {

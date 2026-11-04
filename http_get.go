@@ -1,8 +1,6 @@
 package main
 
 import (
-	"fmt"
-
 	"github.com/spf13/cobra"
 )
 
@@ -28,7 +26,7 @@ var httpGetCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		fmt.Println(string(resp.Body))
-		return nil
+		defer resp.Body.Close()
+		return printHTTPResponse(cmd.OutOrStdout(), resp.Body)
 	},
 }

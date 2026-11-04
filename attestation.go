@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/tls"
 	"fmt"
 	"time"
@@ -8,7 +9,8 @@ import (
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 
-	"github.com/tinfoilsh/tinfoil-go/enclave"
+	"github.com/tinfoilsh/tinfoil-go"
+	"github.com/tinfoilsh/tinfoil-go/verify"
 	"github.com/tinfoilsh/tinfoil-go/verify/document"
 	"github.com/tinfoilsh/tinfoil-go/verify/measurement"
 )
@@ -32,7 +34,35 @@ func tlsConnection(enclaveHost string) (*tls.ConnectionState, error) {
 	return &cs, nil
 }
 
-func newVerifiedClient(host, source, sealedTo string) (*enclave.Handle, error) {
+func verificationOptions(source, sealedTo string) (*tinfoil.EnclaveOptions, error) {
+	var policy []verify.Option
+	if localConfigFile != "" {
+		if source != "" {
+			return nil, fmt.Errorf("--config and --repo cannot be used together")
+		}
+		data, err := readLocalConfig()
+		if err != nil {
+			return nil, err
+		}
+		policy = append(policy, verify.WithEmbeddedReferences(verify.EmbeddedReferences{Config: &verify.EmbeddedConfig{Bytes: data}}))
+	} else if source == "" {
+		return nil, fmt.Errorf("v3 verification requires an expected workload; pass --repo owner/name[@tag][@sha256:digest] or --config FILE")
+	}
+	if sealedTo != "" {
+		pins, err := measurement.ParseExpectedTDX("", "", "", "", sealedTo)
+		if err != nil {
+			return nil, err
+		}
+		policy = append(policy, verify.WithPinnedRegisters(pins))
+	}
+	v, err := verify.NewVerifier(policy...)
+	if err != nil {
+		return nil, err
+	}
+	return &tinfoil.EnclaveOptions{Verifier: v}, nil
+}
+
+func newVerifiedClient(host, source, sealedTo string) (*tinfoil.EnclaveHTTPClient, error) {
 	if host == "" {
 		return nil, fmt.Errorf("--enclave is required")
 	}
@@ -40,7 +70,7 @@ func newVerifiedClient(host, source, sealedTo string) (*enclave.Handle, error) {
 	if err != nil {
 		return nil, err
 	}
-	return enclave.NewHandle(host, source, opts)
+	return tinfoil.NewEnclaveHTTPClient(context.Background(), host, source, opts)
 }
 
 type auditRecord struct {
@@ -51,8 +81,8 @@ type auditRecord struct {
 	Digest  string `json:"digest,omitempty"`
 
 	Measurements struct {
-		Sigstore measurement.Measurement  `json:"sigstore,omitempty"` // Measurement from sigstore bundle
-		Enclave  *measurement.Measurement `json:"enclave,omitempty"`  // Measurement from enclave attestation over HTTP
+		Sigstore auditMeasurement `json:"sigstore,omitempty"` // Measurement from sigstore bundle
+		Enclave  auditMeasurement `json:"enclave,omitempty"`  // Measurement from enclave attestation over HTTP
 	} `json:"measurements"`
 
 	Keys struct {
@@ -65,6 +95,34 @@ type auditRecord struct {
 
 	Status string `json:"status"`
 	Error  string `json:"error,omitempty"`
+}
+
+type auditMeasurement struct {
+	Type      string   `json:"type"`
+	Registers []string `json:"registers"`
+}
+
+func measurementRecord(expected measurement.Expected) auditMeasurement {
+	const (
+		snpType = "https://tinfoil.sh/predicate/sev-snp-guest/v2"
+		tdxType = "https://tinfoil.sh/predicate/tdx-guest/v2"
+	)
+	var result auditMeasurement
+	var registers []*measurement.Register
+	switch value := expected.(type) {
+	case measurement.ExpectedSEVSNP:
+		result.Type, registers = snpType, []*measurement.Register{value.Launch}
+	case measurement.ExpectedTDX:
+		result.Type, registers = tdxType, []*measurement.Register{value.MRTD, value.RTMR0, value.RTMR1, value.RTMR2, value.RTMR3}
+	}
+	for _, register := range registers {
+		value := ""
+		if register != nil {
+			value = register.String()
+		}
+		result.Registers = append(result.Registers, value)
+	}
+	return result
 }
 
 // verificationError returns an error when the audit record reports a
@@ -82,7 +140,7 @@ func verifyAttestation(l *log.Logger) (*auditRecord, error) {
 		return nil, fmt.Errorf("--enclave is required with --config")
 	}
 	if host == "" {
-		router, err := enclave.NewDefaultHandle(nil)
+		router, err := tinfoil.NewRouterHTTPClient(context.Background(), nil)
 		if err != nil {
 			return nil, fmt.Errorf("getting router: %w", err)
 		}
@@ -96,17 +154,17 @@ func verifyAttestation(l *log.Logger) (*auditRecord, error) {
 	if err != nil {
 		return nil, err
 	}
-	verified, err := secure.Verify()
+	verified, err := secure.EnsureVerified(context.Background())
 	if err != nil {
 		return nil, fmt.Errorf("verifying attestation: %w", err)
 	}
 
 	record := &auditRecord{
-		Timestamp: time.Now().UTC().Format(time.RFC3339), Enclave: host, Repo: source, Digest: verified.CodeDigest,
-		CryptoMaterial: verified.CryptoMaterial, FreshnessExpiresAt: verified.FreshnessExpiresAt,
+		Timestamp: time.Now().UTC().Format(time.RFC3339), Enclave: host, Repo: source, Digest: verified.CodeDigest(),
+		CryptoMaterial: verified.CryptoMaterial(), FreshnessExpiresAt: verified.FreshnessExpiresAt(),
 	}
-	record.Measurements.Sigstore = *verified.CodeMeasurement
-	record.Measurements.Enclave = verified.EnclaveMeasurement
+	record.Measurements.Sigstore = measurementRecord(verified.CodeMeasurement())
+	record.Measurements.Enclave = measurementRecord(verified.EnclaveMeasurement().Expected())
 	var ok bool
 	record.Keys.Enclave, ok = verified.TLSPublicKeyFP()
 	if !ok {
@@ -118,7 +176,7 @@ func verifyAttestation(l *log.Logger) (*auditRecord, error) {
 	if err != nil {
 		return nil, fmt.Errorf("fetching remote public key fingerprint: %w", err)
 	}
-	record.Keys.Connection, err = enclave.ConnectionCertFP(*cs)
+	record.Keys.Connection, err = verify.ConnectionCertFP(*cs)
 	if err != nil {
 		return nil, fmt.Errorf("fetching remote public key fingerprint: %w", err)
 	}
@@ -127,7 +185,7 @@ func verifyAttestation(l *log.Logger) (*auditRecord, error) {
 		record.Status, record.Error = "fail", "remote public key does not match the endorsed TLS key"
 	} else {
 		record.Status = "ok"
-		l.Printf("Verified %s at %s; TLS key %s", source, verified.CodeDigest, record.Keys.Enclave)
+		l.Printf("Verified %s at %s; TLS key %s", source, verified.CodeDigest(), record.Keys.Enclave)
 	}
 	return record, nil
 }

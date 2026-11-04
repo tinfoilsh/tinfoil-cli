@@ -117,10 +117,10 @@ func TestLocalConnectionRequiresTrustedFile(t *testing.T) {
 	require.NoError(t, os.WriteFile(path, []byte("different config"), 0600))
 	opts, err := verificationOptions(target.repo, "")
 	require.NoError(t, err)
-	require.Equal(t, data, opts.EmbeddedConfig.Bytes)
-	client, err := newVerifiedClient(target.host, target.repo, "")
+	require.True(t, opts.Verifier.CallerAuthorizesConfig())
+	cached, err := readLocalConfig()
 	require.NoError(t, err)
-	require.Empty(t, client.Repo())
+	require.Equal(t, data, cached)
 	require.ErrorContains(t, func() error { _, err := newVerifiedClient(target.host, "acme/app", ""); return err }(), "cannot be used together")
 
 	guidance := containerConnectionGuidance(c, false)

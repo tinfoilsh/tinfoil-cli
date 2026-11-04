@@ -25,7 +25,6 @@ import (
 	ehbp "github.com/tinfoilsh/encrypted-http-body-protocol/client"
 	"github.com/tinfoilsh/encrypted-http-body-protocol/identity"
 	"github.com/tinfoilsh/encrypted-http-body-protocol/protocol"
-	"github.com/tinfoilsh/tinfoil-go/verify"
 	"github.com/tinfoilsh/tinfoil-go/verify/document"
 	"golang.org/x/crypto/ssh"
 )
@@ -340,7 +339,7 @@ func openSandbox(scope accountScope, cp *cpClient, target *workloadTarget, bindi
 		if err != nil {
 			return nil, err
 		}
-		verified, err := secure.Verify()
+		verified, err := secure.EnsureVerified(context.Background())
 		if err != nil {
 			return nil, fmt.Errorf("verifying %s: %w", row.Domain, err)
 		}
@@ -348,7 +347,7 @@ func openSandbox(scope accountScope, cp *cpClient, target *workloadTarget, bindi
 		if err != nil {
 			return nil, err
 		}
-		s.expires = verified.FreshnessExpiresAt
+		s.expires = verified.FreshnessExpiresAt()
 		s.profile = sshProfile{name: row.Name, hostName: row.Domain, port: row.SSHPort, hostKeyAlias: row.Domain,
 			user: sandboxLoginUser, identityFile: identity, hostKey: host, resourceID: resourceID}
 		fmt.Fprintf(os.Stderr, "Sandbox %s attestation verified.\nWarning: sandbox has NO_MONITOR=1; its network traffic is not being tunneled through Monitor.\n", row.Name)
@@ -365,7 +364,7 @@ func openSandbox(scope accountScope, cp *cpClient, target *workloadTarget, bindi
 	if err != nil {
 		return nil, err
 	}
-	s.expires = verified.FreshnessExpiresAt
+	s.expires = verified.FreshnessExpiresAt()
 	fmt.Fprintf(os.Stderr, "Sandbox %s attestation verified.\n", row.Name)
 	address, port, _ := net.SplitHostPort(monitor.address)
 	portNumber, _ := strconv.Atoi(port)
@@ -594,15 +593,15 @@ func (o *sandboxOwner) relay(target string, nonce *string, headers *relayHeaders
 	return &reply, data, err
 }
 
-var verifySandboxEvidence = func(doc, nonce []byte, source string) (*verify.Verification, error) {
-	verifier, err := verify.NewVerifier()
+var verifySandboxEvidence = func(doc, nonce []byte, source string) (attestedEvidence, error) {
+	options, err := verificationOptions(source, "")
 	if err != nil {
 		return nil, err
 	}
-	return verifier.VerifyV3(doc, nonce, source)
+	return options.Verifier.VerifyV3(doc, nonce, source)
 }
 
-func (o *sandboxOwner) attest(source string) (*verify.Verification, error) {
+func (o *sandboxOwner) attest(source string) (attestedEvidence, error) {
 	nonce, err := document.RandomNonce()
 	if err != nil {
 		return nil, err
@@ -628,11 +627,11 @@ func (o *sandboxOwner) attest(source string) (*verify.Verification, error) {
 		return nil, err
 	}
 	o.client = &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	o.expires = verified.FreshnessExpiresAt
+	o.expires = verified.FreshnessExpiresAt()
 	return verified, nil
 }
 
-func sandboxEHBPKey(verified *verify.Verification) (*identity.Identity, error) {
+func sandboxEHBPKey(verified attestedEvidence) (*identity.Identity, error) {
 	public, err := endorsedKey("sandbox", verified, sandboxEHBPKeyID)
 	if err != nil {
 		return nil, err

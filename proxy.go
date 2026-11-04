@@ -57,20 +57,26 @@ var proxyCmd = &cobra.Command{
 			"repo":         repo,
 		}).Info("initializing secure client")
 
-		var tinfoilClient *tinfoil.Client
+		var httpClient *http.Client
 		var err error
 		if enclaveHost == "" && repo == "" {
-			tinfoilClient, err = tinfoil.NewClient()
+			var router *tinfoil.RouterHTTPClient
+			router, err = tinfoil.NewRouterHTTPClient(cmd.Context(), nil)
 			if err == nil {
-				enclaveHost = tinfoilClient.Enclave()
-				repo = tinfoilClient.Repo()
+				enclaveHost = router.Enclave()
+				repo = router.Repo()
+				httpClient = router.Client
 			}
 		} else {
 			opts, parseErr := verificationOptions(repo, "")
 			if parseErr != nil {
 				return parseErr
 			}
-			tinfoilClient, err = tinfoil.NewClientWithOptions(tinfoil.WithEnclave(enclaveHost), tinfoil.WithRepo(repo), tinfoil.WithVerificationOptions(*opts))
+			var enclave *tinfoil.EnclaveHTTPClient
+			enclave, err = tinfoil.NewEnclaveHTTPClient(cmd.Context(), enclaveHost, repo, opts)
+			if err == nil {
+				httpClient = enclave.Client
+			}
 		}
 		if err != nil {
 			return err
@@ -81,8 +87,6 @@ var proxyCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-
-		httpClient := tinfoilClient.HTTPClient()
 
 		proxy := httputil.NewSingleHostReverseProxy(targetUrl)
 		proxy.Transport = withLoggingTransport(log.StandardLogger(), httpClient.Transport)

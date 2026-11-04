@@ -7,10 +7,7 @@ import (
 	"io"
 	"os"
 
-	"github.com/tinfoilsh/tinfoil-go/enclave"
 	configendorsement "github.com/tinfoilsh/tinfoil-go/endorsement/config"
-	"github.com/tinfoilsh/tinfoil-go/verify"
-	"github.com/tinfoilsh/tinfoil-go/verify/measurement"
 )
 
 var localConfigBytes []byte
@@ -49,24 +46,4 @@ func checkLocalConfigDigest(expected string) error {
 		return fmt.Errorf("local config does not match the selected container's config digest")
 	}
 	return nil
-}
-
-func verificationOptions(source, sealedTo string) (*enclave.Options, error) {
-	opts := &enclave.Options{}
-	if localConfigFile != "" {
-		if source != "" {
-			return nil, fmt.Errorf("--config and --repo cannot be used together")
-		}
-		data, err := readLocalConfig()
-		if err != nil {
-			return nil, err
-		}
-		opts.EmbeddedConfig = &verify.EmbeddedConfig{Bytes: data}
-	} else if source == "" {
-		return nil, fmt.Errorf("v3 verification requires an expected workload; pass --repo owner/name[@tag][@sha256:digest] or --config FILE")
-	}
-	if sealedTo != "" {
-		opts.PinnedRegisters = &measurement.Measurement{Type: measurement.TdxGuestV2, Registers: []string{"", "", "", "", sealedTo}}
-	}
-	return opts, nil
 }

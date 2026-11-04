@@ -28,7 +28,6 @@ import (
 	ehbp "github.com/tinfoilsh/encrypted-http-body-protocol/client"
 	"github.com/tinfoilsh/encrypted-http-body-protocol/identity"
 	"github.com/tinfoilsh/encrypted-http-body-protocol/protocol"
-	"github.com/tinfoilsh/tinfoil-go/verify"
 	"github.com/tinfoilsh/tinfoil-go/verify/document"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/knownhosts"
@@ -711,7 +710,7 @@ func TestMonitorRestartRelinksOnlyAuthorizedSandboxes(t *testing.T) {
 	t.Setenv(envKnownConfigs, filepath.Join(t.TempDir(), "known-configs.json"))
 	require.NoError(t, os.WriteFile(os.Getenv(envKnownConfigs), policy, 0o600))
 	previous := verifySandboxEvidence
-	verifySandboxEvidence = func(doc, _ []byte, source string) (*verify.Verification, error) {
+	verifySandboxEvidence = func(doc, _ []byte, source string) (attestedEvidence, error) {
 		for _, f := range fixtures {
 			if strings.Contains(string(doc), f.instance) && strings.Contains(source, storageHash(doc)) {
 				host, err := x509.MarshalPKIXPublicKey(f.host.PublicKey().(ssh.CryptoPublicKey).CryptoPublicKey())
@@ -720,7 +719,7 @@ func TestMonitorRestartRelinksOnlyAuthorizedSandboxes(t *testing.T) {
 				require.NoError(t, err)
 				ehbp, err := x509.MarshalPKIXPublicKey(ehbpKey)
 				require.NoError(t, err)
-				return &verify.Verification{FreshnessExpiresAt: time.Now().Add(time.Hour), CryptoMaterial: []document.CryptoMaterialItem{
+				return &testEvidence{expires: time.Now().Add(time.Hour), keys: []document.CryptoMaterialItem{
 					{ID: attestedHostKeyID, Format: document.KeySPKIV1Format, Data: hex.EncodeToString(host)},
 					{ID: sandboxEHBPKeyID, Format: document.KeySPKIV1Format, Data: hex.EncodeToString(ehbp)},
 				}}, nil

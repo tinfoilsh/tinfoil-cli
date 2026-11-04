@@ -11,7 +11,6 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
-	"github.com/tinfoilsh/tinfoil-go/verify"
 	"github.com/tinfoilsh/tinfoil-go/verify/document"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/agent"
@@ -283,8 +282,8 @@ func TestOwnerContractKeySyncCodeAndEnvelope(t *testing.T) {
 
 func TestOwnerContractSandboxEHBPKey(t *testing.T) {
 	f := loadOwnerContract(t).SandboxEHBPKey
-	endorsing := func(spki string) *verify.Verification {
-		return &verify.Verification{CryptoMaterial: []document.CryptoMaterialItem{{ID: sandboxEHBPKeyID, Format: document.KeySPKIV1Format, Data: spki}}}
+	endorsing := func(spki string) attestedEvidence {
+		return &testEvidence{keys: []document.CryptoMaterialItem{{ID: sandboxEHBPKeyID, Format: document.KeySPKIV1Format, Data: spki}}}
 	}
 	key, err := sandboxEHBPKey(endorsing(f.SPKIHex))
 	require.NoError(t, err)

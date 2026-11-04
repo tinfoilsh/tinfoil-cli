@@ -5,6 +5,8 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"fmt"
+	"github.com/tinfoilsh/tinfoil-go/verify"
+	"github.com/tinfoilsh/tinfoil-go/verify/document"
 	"os"
 	"path/filepath"
 	"strings"
@@ -223,4 +225,14 @@ func TestConnectionProgressRepeatsAndStops(t *testing.T) {
 			t.Fatalf("progress must repeat every 10s and stop when finished: %q", out.String())
 		}
 	})
+}
+
+type testEvidence struct {
+	expires time.Time
+	keys    []document.CryptoMaterialItem
+}
+
+func (v *testEvidence) FreshnessExpiresAt() time.Time { return v.expires }
+func (v *testEvidence) CryptoMaterialData(id, format string) (string, bool) {
+	return verify.CryptoMaterialData(v.keys, id, format)
 }

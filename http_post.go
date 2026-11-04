@@ -50,10 +50,7 @@ var httpPostCmd = &cobra.Command{
 			}
 
 			// Use the verifier’s HTTP client.
-			client, err := sc.HTTPClient()
-			if err != nil {
-				return fmt.Errorf("error getting HTTP client: %w", err)
-			}
+			client := sc
 			resp, err := client.Do(req)
 			if err != nil {
 				return fmt.Errorf("error performing streaming request: %w", err)
@@ -72,7 +69,10 @@ var httpPostCmd = &cobra.Command{
 			if err != nil {
 				return err
 			}
-			fmt.Println(string(resp.Body))
+			defer resp.Body.Close()
+			if err := printHTTPResponse(cmd.OutOrStdout(), resp.Body); err != nil {
+				return err
+			}
 		}
 
 		return nil
