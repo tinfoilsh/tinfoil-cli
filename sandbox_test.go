@@ -2,9 +2,7 @@ package main
 
 import (
 	"bytes"
-	"crypto/ecdh"
 	"crypto/ed25519"
-	"crypto/rand"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/hex"
@@ -490,7 +488,6 @@ func TestMonitorRestartRelinksOnlyAuthorizedSandboxes(t *testing.T) {
 		name, id, instance, volume string
 		key                        mkResource
 		host                       ssh.Signer
-		sessionKey                 *ecdh.PrivateKey
 		owner                      *fakeSandboxOwner
 		status                     sandboxStatus
 		monitor                    string
@@ -503,9 +500,6 @@ func TestMonitorRestartRelinksOnlyAuthorizedSandboxes(t *testing.T) {
 	for i, name := range []string{"a", "b", "removed", "nokeys", "unbound", "wrongbinding", "rebooted", "elsewhere", "untrusted"} {
 		f := &fixture{name: name, id: fmt.Sprintf("1111111%d-1111-4111-8111-111111111111", i), instance: fmt.Sprintf("2222222%d-2222-4222-8222-222222222222", i),
 			volume: fmt.Sprintf("3333333%d-3333-4333-8333-333333333333", i), key: newResourceKey("sandbox"), host: testSigner(t), monitor: monitorID}
-		var err error
-		f.sessionKey, err = ecdh.X25519().GenerateKey(rand.Reader)
-		require.NoError(t, err)
 		agent := monitorIdentity(f.key.MonitorIdentitySeed)
 		f.status = sandboxStatus{Protocol: sandboxOwnerProtocol, InstanceID: f.instance, Volume: "unlocked", MonitorIdentity: &agent, MonitorHostKey: &oldHost}
 		if name == "rebooted" {
@@ -528,10 +522,7 @@ func TestMonitorRestartRelinksOnlyAuthorizedSandboxes(t *testing.T) {
 			}
 			return f.status
 		}}
-		f.owner.key = f.sessionKey
-		endpoint := httptest.NewServer(f.owner)
-		t.Cleanup(endpoint.Close)
-		routes[net.JoinHostPort(routeName(f.host.PublicKey()), sandboxOwnerPort)] = endpoint.Listener.Addr().String()
+		routes[net.JoinHostPort(routeName(f.host.PublicKey()), strconv.Itoa(defaultSSHPort))] = testSandboxSSH(t, f.host, f.owner)
 		config := fmt.Sprintf("containers: [{env: [{SANDBOX_OWNER_PUBLIC_KEY: %q}, {SANDBOX_INSTANCE_ID: %q}]}]", f.key.OwnerPublicKey, f.instance)
 		rows = append(rows, containerView{ID: f.id, Name: name, Repo: defaultSandboxRepo, Status: statusRunning, ClerkUserID: "user_owner", Config: config,
 			Domain: name + ".example", ConfigName: "/tinfoil/containers/" + storageHash([]byte(config)),
@@ -603,11 +594,8 @@ func TestMonitorRestartRelinksOnlyAuthorizedSandboxes(t *testing.T) {
 			if strings.Contains(string(doc), f.instance) && strings.Contains(source, storageHash(doc)) {
 				host, err := x509.MarshalPKIXPublicKey(f.host.PublicKey().(ssh.CryptoPublicKey).CryptoPublicKey())
 				require.NoError(t, err)
-				sessionKey, err := x509.MarshalPKIXPublicKey(f.sessionKey.PublicKey())
-				require.NoError(t, err)
 				return &testEvidence{expires: time.Now().Add(time.Hour), keys: []document.CryptoMaterialItem{
 					{ID: attestedHostKeyID, Format: document.KeySPKIV1Format, Data: hex.EncodeToString(host)},
-					{ID: sandboxSessionKeyID, Format: document.KeySPKIV1Format, Data: hex.EncodeToString(sessionKey)},
 				}}, nil
 			}
 		}

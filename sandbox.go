@@ -3,9 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
-	"crypto/ecdh"
 	"crypto/ed25519"
-	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base32"
 	"encoding/hex"
@@ -20,11 +18,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/coder/websocket"
-	"github.com/flynn/noise"
 	"github.com/spf13/cobra"
 	"github.com/tinfoilsh/tinfoil-go/verify/document"
-	"golang.org/x/crypto/chacha20poly1305"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -223,15 +218,10 @@ func validateSandboxNetwork(row containerView) error {
 }
 
 const (
-	sandboxOwnerProtocol  = "sandbox-owner-v1"
-	sandboxSessionKeyID   = "owner-session"
-	ownerSessionContext   = "tinfoil owner session v1\x00"
-	ownerHandshakeTimeout = 10 * time.Second
-	ownerFrameBytes       = noise.MaxMsgLen - 1 - chacha20poly1305.Overhead
-	ownerFrameMore        = 0
-	ownerFrameLast        = 1
-	sandboxOwnerPort      = "443"
-	maxOwnerReplyBytes    = 2 << 20
+	sandboxOwnerProtocol = "sandbox-owner-v1"
+	sandboxStatusCommand = "sudo -n -- /usr/local/bin/workspace-owner status"
+	sandboxEnrollCommand = "sudo -n -- /usr/local/bin/workspace-owner enroll"
+	ownerConnectTimeout  = 30 * time.Second
 
 	// Monitor routes to a sandbox boot by a name derived from its SSH host key.
 	sandboxRouteSuffix = ".sandbox.invalid"
@@ -356,7 +346,7 @@ func openSandbox(scope accountScope, cp *cpClient, target *workloadTarget, bindi
 		fmt.Fprintf(os.Stderr, "Sandbox %s attestation verified.\nWarning: sandbox has NO_MONITOR=1; its network traffic is not being tunneled through Monitor.\n", row.Name)
 		return s, nil
 	}
-	s.owner = &sandboxOwner{request: monitor.request, instance: *binding.InstanceID, signer: keys.signer}
+	s.owner = &sandboxOwner{request: monitor.request, instance: *binding.InstanceID, dial: s.dial}
 	stop := startConnectionProgress(os.Stderr, "Requesting sandbox attestation through Monitor's relay")
 	verified, err := s.owner.attest(target.source)
 	stop()
@@ -367,9 +357,6 @@ func openSandbox(scope accountScope, cp *cpClient, target *workloadTarget, bindi
 	if err != nil {
 		return nil, err
 	}
-	s.owner.client = &http.Client{Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-		return monitor.dialSandbox(ctx, host)
-	}}, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	s.expires = verified.FreshnessExpiresAt()
 	fmt.Fprintf(os.Stderr, "Sandbox %s attestation verified.\n", row.Name)
 	address, port, _ := net.SplitHostPort(monitor.address)
@@ -481,7 +468,7 @@ func (s *sandboxSession) enroll(ctx context.Context) error {
 		return errors.New("sandbox attestation expired; verify it again before unlocking")
 	}
 	if s.noMonitor {
-		return s.unlockDirect()
+		return s.unlockDirect(ctx)
 	}
 	name := s.box.Name
 	status, err := s.status(ctx)
@@ -521,7 +508,7 @@ func (s *sandboxSession) enroll(ctx context.Context) error {
 
 func (s *sandboxSession) status(ctx context.Context) (sandboxStatus, error) {
 	var status sandboxStatus
-	if err := s.owner.call(ctx, http.MethodGet, "/status", nil, &status); err != nil {
+	if err := s.owner.call(ctx, sandboxStatusCommand, nil, &status); err != nil {
 		return status, err
 	}
 	if status.Protocol != sandboxOwnerProtocol || status.InstanceID != s.owner.instance {
@@ -541,13 +528,13 @@ func (s *sandboxSession) enrollSandbox(ctx context.Context, volume, host string)
 		AllowInitialize     bool   `json:"allow_initialize"`
 	}{s.keys.monitorIdentitySeed, host, s.keys.storageKey, true}
 	var status sandboxStatus
-	if err := s.owner.call(ctx, http.MethodPost, "/enroll", input, &status); err != nil {
+	if err := s.owner.call(ctx, sandboxEnrollCommand, input, &status); err != nil {
 		return fmt.Errorf("%w; rerun `tinfoil sandbox start %s` to reconcile", err, s.box.Name)
 	}
 	if status.Volume != "unlocked" {
 		return fmt.Errorf("sandbox %s workspace is still %s; rerun `tinfoil sandbox start %s`", s.box.Name, status.Volume, s.box.Name)
 	}
-	fmt.Fprintf(os.Stderr, "Prepared %s through its attested owner API.\n", s.box.Name)
+	fmt.Fprintf(os.Stderr, "Prepared %s over attested SSH.\n", s.box.Name)
 	return nil
 }
 
@@ -565,9 +552,7 @@ func authorizedKeyLine(key ssh.PublicKey) string {
 type sandboxOwner struct {
 	request  func(method, path string, input, out any) error
 	instance string
-	signer   ssh.Signer
-	key      *ecdh.PublicKey
-	client   *http.Client
+	dial     func(context.Context) (*ssh.Client, error)
 	expires  time.Time
 }
 
@@ -608,26 +593,11 @@ func (o *sandboxOwner) attest(source string) (attestedEvidence, error) {
 	if err != nil {
 		return nil, err
 	}
-	if o.key, err = sandboxSessionKey(verified); err != nil {
-		return nil, err
-	}
 	o.expires = verified.FreshnessExpiresAt()
 	return verified, nil
 }
 
-func sandboxSessionKey(verified attestedEvidence) (*ecdh.PublicKey, error) {
-	public, err := endorsedKey("sandbox", verified, sandboxSessionKeyID)
-	if err != nil {
-		return nil, err
-	}
-	key, ok := public.(*ecdh.PublicKey)
-	if !ok || key.Curve() != ecdh.X25519() {
-		return nil, fmt.Errorf("attested %q key is not X25519", sandboxSessionKeyID)
-	}
-	return key, nil
-}
-
-// A route owns its device SSH connection; closing the WebSocket releases both.
+// The inner SSH connection owns and closes its Monitor device connection.
 type sandboxRouteConn struct {
 	net.Conn
 	client *ssh.Client
@@ -642,7 +612,7 @@ func (m *monitorSession) dialSandbox(ctx context.Context, host ssh.PublicKey) (n
 	if err != nil {
 		return nil, err
 	}
-	conn, err := (&net.Dialer{Timeout: ownerHandshakeTimeout}).DialContext(ctx, "tcp", m.address)
+	conn, err := (&net.Dialer{Timeout: ownerConnectTimeout}).DialContext(ctx, "tcp", m.address)
 	if err != nil {
 		return nil, err
 	}
@@ -652,7 +622,7 @@ func (m *monitorSession) dialSandbox(ctx context.Context, host ssh.PublicKey) (n
 	if err != nil {
 		return nil, err
 	}
-	route, err := client.DialContext(ctx, "tcp", net.JoinHostPort(routeName(host), sandboxOwnerPort))
+	route, err := client.DialContext(ctx, "tcp", net.JoinHostPort(routeName(host), strconv.Itoa(defaultSSHPort)))
 	if err != nil {
 		client.Close()
 		return nil, err
@@ -660,136 +630,42 @@ func (m *monitorSession) dialSandbox(ctx context.Context, host ssh.PublicKey) (n
 	return &sandboxRouteConn{Conn: route, client: client}, nil
 }
 
-func writeOwnerFrame(ctx context.Context, conn *websocket.Conn, cipher *noise.CipherState, message []byte) error {
-	if len(message) > ownerFrameBytes {
-		return errors.New("sandbox owner request is too large")
+func (s *sandboxSession) dial(ctx context.Context) (*ssh.Client, error) {
+	if !time.Now().Before(s.expires) {
+		return nil, errors.New("sandbox attestation expired; verify it again before unlocking")
 	}
-	frame := append([]byte{ownerFrameLast}, message...)
-	defer clear(frame)
-	sealed, err := cipher.Encrypt(nil, nil, frame)
+	var conn net.Conn
+	var err error
+	if s.monitor != nil {
+		conn, err = s.monitor.dialSandbox(ctx, s.profile.hostKey)
+	} else {
+		address := net.JoinHostPort(s.profile.hostName, strconv.Itoa(s.profile.port))
+		conn, err = (&net.Dialer{Timeout: ownerConnectTimeout}).DialContext(ctx, "tcp", address)
+	}
 	if err != nil {
-		return err
+		return nil, err
 	}
-	return conn.Write(ctx, websocket.MessageBinary, sealed)
+	stop := context.AfterFunc(ctx, func() { conn.Close() })
+	defer stop()
+	return connectOwnerSigner(conn, s.box.Domain, s.profile.hostKey, s.keys.signer, sandboxLoginUser)
 }
 
-func readOwnerFrame(ctx context.Context, conn *websocket.Conn) ([]byte, error) {
-	kind, frame, err := conn.Read(ctx)
-	if err == nil && kind != websocket.MessageBinary {
-		err = errors.New("sandbox owner session requires binary messages")
-	}
-	return frame, err
-}
-
-type ownerCall struct {
-	ID     uint64 `json:"id"`
-	Method string `json:"method"`
-	Path   string `json:"path"`
-	Body   []byte `json:"body"`
-}
-
-type ownerReply struct {
-	ID     uint64 `json:"id"`
-	Status int    `json:"status"`
-	Body   []byte `json:"body"`
-}
-
-func (o *sandboxOwner) call(ctx context.Context, method, path string, input, out any) error {
-	if !time.Now().Before(o.expires) {
-		return errors.New("sandbox attestation expired; verify it again")
-	}
+func (o *sandboxOwner) call(ctx context.Context, command string, input, out any) error {
 	ctx, cancel := context.WithDeadline(ctx, o.expires)
 	defer cancel()
-	ctx, timeout := context.WithTimeout(ctx, sandboxBootTimeout)
-	defer timeout()
-	handshakeCtx, done := context.WithTimeout(ctx, ownerHandshakeTimeout)
-	defer done()
-	conn, _, err := websocket.Dial(handshakeCtx, "ws://sandbox/owner/ws", &websocket.DialOptions{HTTPClient: o.client})
-	if err != nil {
-		return err
-	}
-	defer conn.CloseNow()
-	conn.SetReadLimit(noise.MaxMsgLen)
-	hs, err := noise.NewHandshakeState(noise.Config{
-		CipherSuite: noise.NewCipherSuite(noise.DH25519, noise.CipherChaChaPoly, noise.HashBLAKE2s),
-		Pattern:     noise.HandshakeNK, Initiator: true, Prologue: []byte(sandboxOwnerProtocol), PeerStatic: o.key.Bytes(),
-	})
-	if err != nil {
-		return err
-	}
-	message, _, _, err := hs.WriteMessage(nil, nil)
-	if err == nil {
-		err = conn.Write(handshakeCtx, websocket.MessageBinary, message)
-	}
-	if err == nil {
-		message, err = readOwnerFrame(handshakeCtx, conn)
-	}
-	if err != nil {
-		return err
-	}
-	_, send, recv, err := hs.ReadMessage(nil, message)
-	if err != nil {
-		return fmt.Errorf("sandbox owner handshake: %w", err)
-	}
-	signature, err := o.signer.Sign(rand.Reader, append([]byte(ownerSessionContext), hs.ChannelBinding()...))
-	if err != nil {
-		return err
-	}
-	if signature.Format != ssh.KeyAlgoED25519 || len(signature.Blob) != ed25519.SignatureSize {
-		return errors.New("the owner key did not produce an Ed25519 signature")
-	}
-	hello, _ := json.Marshal(struct {
-		Signature []byte `json:"signature"`
-		Open      string `json:"open"`
-	}{signature.Blob, "rpc"})
-	if err := writeOwnerFrame(handshakeCtx, conn, send, hello); err != nil {
-		return err
-	}
-	done()
-	call := ownerCall{Method: method, Path: path}
+	var body []byte
 	if input != nil {
-		call.Body, err = json.Marshal(input)
-		if err != nil {
+		var err error
+		if body, err = json.Marshal(input); err != nil {
 			return err
 		}
-		defer clear(call.Body)
+		defer clear(body)
 	}
-	message, err = json.Marshal(call)
+	reply, err := sendOwnerCommand(ctx, o.dial, command, body)
 	if err != nil {
 		return err
 	}
-	defer clear(message)
-	if err := writeOwnerFrame(ctx, conn, send, message); err != nil {
-		return fmt.Errorf("sandbox %s %s has an unknown outcome: %w", method, path, err)
-	}
-	var replyBytes []byte
-	for {
-		frame, err := readOwnerFrame(ctx, conn)
-		if err == nil {
-			frame, err = recv.Decrypt(nil, nil, frame)
-		}
-		if err == nil && (len(frame) == 0 || frame[0] > ownerFrameLast || len(replyBytes)+len(frame)-1 > maxOwnerReplyBytes) {
-			err = errors.New("malformed sandbox owner reply")
-		}
-		if err != nil {
-			return fmt.Errorf("sandbox %s %s has an unknown outcome: %w", method, path, err)
-		}
-		replyBytes = append(replyBytes, frame[1:]...)
-		if frame[0] == ownerFrameLast {
-			break
-		}
-	}
-	var reply ownerReply
-	if err := json.Unmarshal(replyBytes, &reply); err != nil {
-		return err
-	}
-	if reply.ID != call.ID {
-		return errors.New("sandbox owner reply names another call")
-	}
-	if reply.Status != http.StatusOK {
-		return fmt.Errorf("sandbox %s %s: %d %s", method, path, reply.Status, extractErrorMessage(reply.Body))
-	}
-	return json.Unmarshal(reply.Body, out)
+	return json.Unmarshal([]byte(reply), out)
 }
 
 func (s *sandboxSession) install() error {
@@ -890,19 +766,10 @@ func routeName(key ssh.PublicKey) string {
 	return strings.ToLower(base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(digest[:])) + sandboxRouteSuffix
 }
 
-func (s *sandboxSession) unlockDirect() error {
-	dial := func() (*ssh.Client, error) {
-		if !time.Now().Before(s.expires) {
-			return nil, errors.New("sandbox attestation expired; verify it again before unlocking")
-		}
-		address := net.JoinHostPort(s.profile.hostName, strconv.Itoa(s.profile.port))
-		conn, err := (&net.Dialer{Timeout: 30 * time.Second}).Dial("tcp", address)
-		if err != nil {
-			return nil, err
-		}
-		return connectOwnerSigner(conn, s.box.Domain, s.profile.hostKey, s.keys.signer, sandboxLoginUser)
-	}
-	volume, err := sendOwnerCommand(dial, "/usr/local/bin/workspace-unlock --status", nil)
+func (s *sandboxSession) unlockDirect(ctx context.Context) error {
+	ctx, cancel := context.WithDeadline(ctx, s.expires)
+	defer cancel()
+	volume, err := sendOwnerCommand(ctx, s.dial, "/usr/local/bin/workspace-unlock --status", nil)
 	if err != nil {
 		return fmt.Errorf("workspace status: %w", err)
 	}
@@ -919,20 +786,25 @@ func (s *sandboxSession) unlockDirect() error {
 		}
 	}
 	fmt.Fprintln(os.Stderr, "Unlocking sandbox "+s.box.Name+" encrypted workspace")
-	if _, err := sendOwnerCommand(dial, "/usr/local/bin/workspace-unlock --initialize", s.keys.storageKey); err != nil {
+	if _, err := sendOwnerCommand(ctx, s.dial, "/usr/local/bin/workspace-unlock --initialize", s.keys.storageKey); err != nil {
 		return fmt.Errorf("unlock workspace: %w; retry with `tinfoil sandbox start %s`", err, s.box.Name)
 	}
 	return nil
 }
 
-func sendOwnerCommand(dial func() (*ssh.Client, error), command string, body []byte) (string, error) {
-	client, err := dial()
+func sendOwnerCommand(ctx context.Context, dial func(context.Context) (*ssh.Client, error), command string, body []byte) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, sandboxBootTimeout)
+	defer cancel()
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	client, err := dial(ctx)
 	if err != nil {
 		return "", err
 	}
 	defer client.Close()
-	timer := time.AfterFunc(sandboxBootTimeout, func() { client.Close() })
-	defer timer.Stop()
+	stop := context.AfterFunc(ctx, func() { client.Close() })
+	defer stop()
 	session, err := client.NewSession()
 	if err != nil {
 		return "", err

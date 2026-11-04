@@ -3,14 +3,12 @@ package main
 import (
 	"crypto/ecdh"
 	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"os"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
-	"github.com/tinfoilsh/tinfoil-go/verify/document"
 )
 
 type contractKeySyncRequest struct {
@@ -77,14 +75,6 @@ type ownerContractFixture struct {
 
 		CompletionURL string `json:"completion_url"`
 	} `json:"key_sync"`
-	SandboxEHBPKey struct {
-		SPKIHex string `json:"spki_hex"`
-		RawHex  string `json:"raw_hex"`
-		Reject  []struct {
-			Case    string `json:"case"`
-			SPKIHex string `json:"spki_hex"`
-		} `json:"reject"`
-	} `json:"sandbox_ehbp_key"`
 }
 
 func loadOwnerContract(t *testing.T) ownerContractFixture {
@@ -213,18 +203,4 @@ func TestOwnerContractKeySyncCodeAndEnvelope(t *testing.T) {
 	var envelope keySyncEnvelope
 	require.NoError(t, decodeCanonical([]byte(f.EnvelopePlaintext), &envelope))
 	require.Equal(t, f.CompletionURL, keySyncCompletionURL(targets, request.Request, envelope.UserID, "org_2fixtureB"))
-}
-
-func TestOwnerContractSandboxSessionKey(t *testing.T) {
-	f := loadOwnerContract(t).SandboxEHBPKey
-	endorsing := func(spki string) attestedEvidence {
-		return &testEvidence{keys: []document.CryptoMaterialItem{{ID: sandboxSessionKeyID, Format: document.KeySPKIV1Format, Data: spki}}}
-	}
-	key, err := sandboxSessionKey(endorsing(f.SPKIHex))
-	require.NoError(t, err)
-	require.Equal(t, f.RawHex, hex.EncodeToString(key.Bytes()))
-	for _, reject := range f.Reject {
-		_, err := sandboxSessionKey(endorsing(reject.SPKIHex))
-		require.Error(t, err, reject.Case)
-	}
 }
