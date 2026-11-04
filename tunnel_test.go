@@ -1,9 +1,7 @@
 package main
 
 import (
-	"context"
 	"crypto/ed25519"
-	"crypto/tls"
 	"fmt"
 	"io"
 	"net"
@@ -18,7 +16,6 @@ import (
 
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/knownhosts"
-	"golang.org/x/net/http2"
 )
 
 const testAPIKey = "test-key"
@@ -49,6 +46,10 @@ func echoListener(t *testing.T) (string, int) {
 func connectServer(t *testing.T, backend string, published int) *httptest.Server {
 	t.Helper()
 	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.ProtoMajor != 2 {
+			http.Error(w, "expected HTTP/2", http.StatusHTTPVersionNotSupported)
+			return
+		}
 		if r.Method != http.MethodConnect {
 			http.Error(w, "expected CONNECT", http.StatusMethodNotAllowed)
 			return
@@ -102,14 +103,9 @@ func connectServer(t *testing.T, backend string, published int) *httptest.Server
 
 func testTunnel(t *testing.T, server *httptest.Server, apiKey string) *tunnel {
 	t.Helper()
-	transport := &http2.Transport{
-		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-		DialTLSContext: func(ctx context.Context, network, _ string, config *tls.Config) (net.Conn, error) {
-			return (&tls.Dialer{Config: config}).DialContext(ctx, network, server.Listener.Addr().String())
-		},
-	}
-	t.Cleanup(transport.CloseIdleConnections)
-	return &tunnel{transport: transport, host: "enclave.test", apiKey: apiKey}
+	transport := server.Client().Transport
+	t.Cleanup(server.Client().CloseIdleConnections)
+	return &tunnel{transport: transport, host: strings.TrimPrefix(server.URL, "https://"), apiKey: apiKey}
 }
 
 func TestTunnelDialReachesPublishedPort(t *testing.T) {

@@ -1,11 +1,25 @@
 package main
 
 import (
+	"bytes"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestPrintHTTPResponseAppendsNewline(t *testing.T) {
+	for _, test := range []struct{ body, want string }{
+		{"", "\n"},
+		{"response", "response\n"},
+		{"response\n", "response\n\n"},
+	} {
+		var output bytes.Buffer
+		require.NoError(t, printHTTPResponse(&output, strings.NewReader(test.body)))
+		require.Equal(t, test.want, output.String())
+	}
+}
 
 func TestParseRequestHeaders(t *testing.T) {
 	headers, err := parseRequestHeaders([]string{

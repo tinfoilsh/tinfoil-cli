@@ -1,24 +1,40 @@
 package main
 
 import (
-	"encoding/json"
+	"bytes"
 	"fmt"
+	"io"
+	"net/http"
 	"strings"
 
 	"github.com/spf13/cobra"
 
-	"github.com/tinfoilsh/tinfoil-go/enclave"
+	"github.com/tinfoilsh/tinfoil-go"
 )
 
 var requestHeaders []string
 
-func secureClient() (*enclave.Handle, error) {
+func secureClient() (*tinfoil.EnclaveHTTPClient, error) {
 	return newVerifiedClient(enclaveHost, repo, "")
 }
 
-func requestWithHeaders(sc *enclave.Handle, method, url string, headers map[string]string, body []byte) (*enclave.Response, error) {
-	encoded, _ := json.Marshal(headers) // A map of strings always marshals.
-	return sc.Request(method, url, string(encoded), body)
+func requestWithHeaders(sc *tinfoil.EnclaveHTTPClient, method, url string, headers map[string]string, body []byte) (*http.Response, error) {
+	req, err := http.NewRequest(method, url, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	for name, value := range headers {
+		req.Header.Set(name, value)
+	}
+	return sc.Do(req)
+}
+
+func printHTTPResponse(out io.Writer, body io.Reader) error {
+	if _, err := io.Copy(out, body); err != nil {
+		return err
+	}
+	_, err := fmt.Fprintln(out)
+	return err
 }
 
 func init() {

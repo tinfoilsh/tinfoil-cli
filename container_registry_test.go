@@ -119,9 +119,6 @@ func TestRegistryConnectionPinsNameAndDigest(t *testing.T) {
 	target, err := parseConnectionDescriptor(descriptor)
 	require.NoError(t, err)
 	require.Equal(t, expected, target.source)
-	secure, err := newVerifiedClient(target.host, target.source, "")
-	require.NoError(t, err)
-	require.Equal(t, expected, secure.Repo())
 
 	for _, invalid := range []connectionDescriptor{
 		{URL: descriptor.URL, ConfigName: "/acme/app", ConfigDigest: registryConfigDigest},
@@ -159,9 +156,6 @@ func TestRegistryConnectionPinsNameAndDigest(t *testing.T) {
 	tunnel, err = resolveTunnelTarget(testContainerID)
 	require.NoError(t, err)
 	require.Equal(t, repo, tunnel.repo)
-	secure, err = newVerifiedClient(tunnel.host, tunnel.repo, "")
-	require.NoError(t, err)
-	require.Equal(t, repo, secure.Repo())
 	policy, err := loadConnectionPolicy()
 	require.NoError(t, err)
 	require.True(t, policy.hasPin(repo), "explicit hash pin must be recorded")

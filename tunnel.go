@@ -1,8 +1,6 @@
 package main
 
 import (
-	"context"
-	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,22 +11,14 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"time"
 
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
-	"golang.org/x/net/http2"
-
-	"github.com/tinfoilsh/tinfoil-go/enclave"
-	"github.com/tinfoilsh/tinfoil-go/verify"
 )
 
 // debugToolboxContainer is the container tinfoild injects for debug mode
 // (tinfoil-config's ReservedDebugContainerName).
 const debugToolboxContainer = "tinfoil-debug-toolbox"
-
-// A PING this often notices a dead path; the shim's idle timer only counts real traffic.
-const tunnelReadIdleTimeout = 30 * time.Second
 
 var (
 	forwardPorts    []string
@@ -314,48 +304,11 @@ func newTunnel(target *tunnelTarget) (*tunnel, error) {
 	if err != nil {
 		return nil, err
 	}
-	host, port, splitErr := net.SplitHostPort(target.host)
-	if splitErr != nil {
-		host, port = target.host, "443"
-	}
-	address := net.JoinHostPort(host, port)
-	transport, err := secure.NewTransport(func(verified *verify.Verification) (http.RoundTripper, error) {
-		fingerprint, ok := verified.TLSPublicKeyFP()
-		if !ok {
-			return nil, fmt.Errorf("attestation has no TLS public key fingerprint")
-		}
-		return &http2.Transport{
-			ReadIdleTimeout: tunnelReadIdleTimeout,
-			TLSClientConfig: &tls.Config{VerifyConnection: pinnedTLS(fingerprint)},
-			// The request authority carries the enclave-side port, so the
-			// address http2 derives from it is never the one to dial.
-			DialTLSContext: func(ctx context.Context, network, _ string, config *tls.Config) (net.Conn, error) {
-				return (&tls.Dialer{Config: config}).DialContext(ctx, network, address)
-			},
-		}, nil
-	}, nil)
-	if err != nil {
-		return nil, fmt.Errorf("verifying %s against %s: %w", target.host, target.repo, err)
-	}
-	tun := &tunnel{host: host, apiKey: enclaveAPIKey(), transport: transport}
+	tun := &tunnel{host: target.host, apiKey: enclaveAPIKey(), transport: secure.Transport}
 	if err := checkDebugMode(tun, target); err != nil {
 		return nil, err
 	}
 	return tun, nil
-}
-
-// pinnedTLS accepts only a connection presenting the attested TLS key.
-func pinnedTLS(fingerprint string) func(tls.ConnectionState) error {
-	return func(state tls.ConnectionState) error {
-		certFP, err := enclave.ConnectionCertFP(state)
-		if err != nil {
-			return err
-		}
-		if certFP != fingerprint {
-			return errors.New("certificate does not match the attested key; re-verify the enclave")
-		}
-		return nil
-	}
 }
 
 // checkDebugMode refuses a tunnel into an enclave running the debug toolbox,
@@ -413,7 +366,10 @@ func (t *tunnel) runsDebugToolbox() (bool, error) {
 }
 
 func (t *tunnel) dial(port int) (tunnelStream, error) {
-	authority := net.JoinHostPort(t.host, strconv.Itoa(port))
+	// The URL selects the attested HTTPS endpoint; CONNECT's authority
+	// selects the destination port inside the enclave.
+	endpoint := &url.URL{Scheme: "https", Host: t.host}
+	authority := net.JoinHostPort(endpoint.Hostname(), strconv.Itoa(port))
 	header := http.Header{}
 	if t.apiKey != "" {
 		header.Set("Authorization", "Bearer "+t.apiKey)
@@ -422,7 +378,7 @@ func (t *tunnel) dial(port int) (tunnelStream, error) {
 	body, writer := io.Pipe()
 	resp, err := t.transport.RoundTrip(&http.Request{
 		Method:     http.MethodConnect,
-		URL:        &url.URL{Scheme: "https", Host: authority},
+		URL:        endpoint,
 		Host:       authority,
 		Header:     header,
 		Body:       body,

@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"crypto/x509"
 	"encoding/hex"
 	"errors"
@@ -17,7 +18,6 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
-	"github.com/tinfoilsh/tinfoil-go/verify"
 	"github.com/tinfoilsh/tinfoil-go/verify/document"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/knownhosts"
@@ -168,14 +168,19 @@ func attestedHostKey(host, source, sealedTo string) (ssh.PublicKey, error) {
 	if err != nil {
 		return nil, err
 	}
-	verified, err := secure.Verify()
+	verified, err := secure.EnsureVerified(context.Background())
 	if err != nil {
 		return nil, fmt.Errorf("verifying %s: %w", host, err)
 	}
 	return endorsedHostKey(host, verified)
 }
 
-func endorsedHostKey(host string, verified *verify.Verification) (ssh.PublicKey, error) {
+type attestedEvidence interface {
+	CryptoMaterialData(string, string) (string, bool)
+	FreshnessExpiresAt() time.Time
+}
+
+func endorsedHostKey(host string, verified attestedEvidence) (ssh.PublicKey, error) {
 	public, err := endorsedKey(host, verified, attestedHostKeyID)
 	if err != nil {
 		return nil, err
@@ -183,7 +188,7 @@ func endorsedHostKey(host string, verified *verify.Verification) (ssh.PublicKey,
 	return ssh.NewPublicKey(public)
 }
 
-func endorsedKey(host string, verified *verify.Verification, id string) (any, error) {
+func endorsedKey(host string, verified attestedEvidence, id string) (any, error) {
 	data, ok := verified.CryptoMaterialData(id, document.KeySPKIV1Format)
 	if !ok {
 		return nil, fmt.Errorf("%s endorses no attested %q key", host, id)
