@@ -14,6 +14,7 @@ import (
 // in-memory keyring keeps tests away from the OS credential service.
 func TestMain(m *testing.M) {
 	keyring.MockInit()
+	os.Unsetenv(envTrust)
 	dir, err := os.MkdirTemp("", "tinfoil-cli-tests-*")
 	if err != nil {
 		panic(err)

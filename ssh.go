@@ -157,6 +157,9 @@ func proxyCommand(target *tunnelTarget, port int) (string, error) {
 	if target.repo != "" {
 		argv = append(argv, "--repo", target.repo)
 	}
+	if publicRegistry {
+		argv = append(argv, "--public-registry")
+	}
 	if localConfigFile != "" {
 		path, err := filepath.Abs(localConfigFile)
 		if err != nil {

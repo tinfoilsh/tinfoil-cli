@@ -22,7 +22,9 @@ import (
 // not yet present is announced as new.
 const (
 	envKnownConfigs                = "TINFOIL_KNOWN_CONFIGS"
-	connectionPolicyFileName       = "known-configs.json"
+	envTrust                       = "TINFOIL_TRUST"
+	connectionPolicyFileName       = "trust.json"
+	legacyJSONPolicyFileName       = "known-configs.json"
 	legacyConnectionPolicyFileName = "known-configs.yml"
 
 	// mode: what happens when a descriptor matches no allow entry.
@@ -36,9 +38,10 @@ const (
 )
 
 type connectionPolicy struct {
-	Mode   string `json:"mode"`
-	Record string `json:"record"`
-	Allow  struct {
+	Mode       string               `json:"mode"`
+	Record     string               `json:"record"`
+	Registries []registryEnrollment `json:"registries,omitempty"`
+	Allow      struct {
 		Orgs     []string `json:"orgs,omitempty"`
 		Projects []string `json:"projects,omitempty"`
 		Pins     []string `json:"pins,omitempty"`
@@ -48,6 +51,9 @@ type connectionPolicy struct {
 }
 
 func connectionPolicyPath() (string, error) {
+	if p := os.Getenv(envTrust); p != "" {
+		return p, nil
+	}
 	if p := os.Getenv(envKnownConfigs); p != "" {
 		return p, nil
 	}
@@ -57,6 +63,9 @@ func connectionPolicyPath() (string, error) {
 	}
 	path := filepath.Join(home, ".tinfoil", connectionPolicyFileName)
 	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+		if _, err := os.Stat(filepath.Join(home, ".tinfoil", legacyJSONPolicyFileName)); err == nil {
+			return path, nil
+		}
 		legacy := filepath.Join(home, ".tinfoil", legacyConnectionPolicyFileName)
 		if _, err := os.Stat(legacy); err == nil {
 			return "", fmt.Errorf("convert %s to JSON at %s before connecting", legacy, path)
@@ -90,7 +99,16 @@ func loadConnectionPolicy() (connectionPolicy, error) {
 	if err != nil {
 		return connectionPolicy{Mode: policyModePrompt, Record: policyRecordProject}, err
 	}
-	return loadConnectionPolicyFrom(path)
+	policy, err := loadConnectionPolicyFrom(path)
+	if err != nil || os.Getenv(envTrust) != "" || os.Getenv(envKnownConfigs) != "" {
+		return policy, err
+	}
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		return policy, err
+	}
+	policy, err = loadConnectionPolicyFrom(filepath.Join(filepath.Dir(path), legacyJSONPolicyFileName))
+	policy.path = path
+	return policy, err
 }
 
 func loadConnectionPolicyFrom(path string) (connectionPolicy, error) {
@@ -131,6 +149,9 @@ func loadConnectionPolicyFrom(path string) (connectionPolicy, error) {
 	p.Allow.Pins, err = cleanBucket(p.Allow.Pins, policyRecordPin)
 	if err != nil {
 		return p, fmt.Errorf("%s: allow.pins: %w", path, err)
+	}
+	if err := validateRegistryEnrollments(p.Registries); err != nil {
+		return p, fmt.Errorf("%s: registries: %w", path, err)
 	}
 
 	return p, nil
