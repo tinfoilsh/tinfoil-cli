@@ -60,7 +60,11 @@ func (f *fakeSandboxOwner) call(command string, body []byte) ([]byte, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.requests = append(f.requests, call)
-	return json.Marshal(f.reply(call))
+	reply := f.reply(call)
+	if err, ok := reply.(error); ok {
+		return nil, err
+	}
+	return json.Marshal(reply)
 }
 
 func testSandboxSSH(t *testing.T, host ssh.Signer, owner *fakeSandboxOwner) string {
@@ -155,9 +159,14 @@ func testSandboxOwner(t *testing.T, seed []byte, reply func(ownerCall) any) (*sa
 }
 
 func TestSandboxOwnerSSH(t *testing.T) {
-	for _, mode := range []string{"valid", "wrong host", "wrong owner", "expired", "canceled", "lost reply"} {
+	for _, mode := range []string{"valid", "wrong host", "wrong owner", "expired", "canceled", "lost reply", "refused"} {
 		t.Run(mode, func(t *testing.T) {
-			owner, endpoint := testSandboxOwner(t, testSeed(t), func(ownerCall) any { return "unlocked" })
+			owner, endpoint := testSandboxOwner(t, testSeed(t), func(ownerCall) any {
+				if mode == "refused" {
+					return errors.New("owner refused")
+				}
+				return "unlocked"
+			})
 			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
 			switch mode {
@@ -181,7 +190,7 @@ func TestSandboxOwnerSSH(t *testing.T) {
 				require.Error(t, err)
 			}
 			calls := endpoint.calls()
-			if mode == "valid" || mode == "lost reply" {
+			if mode == "valid" || mode == "lost reply" || mode == "refused" {
 				require.Len(t, calls, 1, "a dropped reply never repeats an enrollment")
 				require.Equal(t, "/enroll", calls[0].Path)
 				require.JSONEq(t, `{"disk_key":"secret"}`, string(calls[0].Body))
@@ -190,6 +199,13 @@ func TestSandboxOwnerSSH(t *testing.T) {
 			}
 			if mode == "expired" || mode == "canceled" {
 				require.Zero(t, endpoint.hits.Load())
+			}
+			if mode == "lost reply" {
+				require.ErrorContains(t, err, "unknown outcome")
+			}
+			if mode == "refused" {
+				require.ErrorContains(t, err, "owner refused")
+				require.NotContains(t, err.Error(), "unknown outcome")
 			}
 		})
 	}

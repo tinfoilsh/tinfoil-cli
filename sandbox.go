@@ -814,6 +814,10 @@ func sendOwnerCommand(ctx context.Context, dial func(context.Context) (*ssh.Clie
 	var output, message limitedUnlockOutput
 	session.Stdout, session.Stderr = &output, &message
 	if err := session.Run(command); err != nil {
+		var exit *ssh.ExitError
+		if !errors.As(err, &exit) {
+			return "", fmt.Errorf("owner command has an unknown outcome: %w", err)
+		}
 		return "", fmt.Errorf("%w: %s", err, strings.TrimSpace(string(message)))
 	}
 	return strings.TrimSpace(string(output)), nil
