@@ -167,6 +167,49 @@ func TestSandboxDeleteKeepsCredentialsAndRemovesOwnedProfile(t *testing.T) {
 	require.NoFileExists(t, profile)
 }
 
+func TestSandboxAttestationRelayUsesCurrentSchema(t *testing.T) {
+	const instance = "22222222-2222-4222-8222-222222222222"
+	const source = "acme/sandbox@v1"
+	doc := []byte("attestation document")
+	challenges := make(chan []byte, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var input struct {
+			InstanceID string `json:"instance_id"`
+			Nonce      string `json:"nonce"`
+		}
+		decoder := json.NewDecoder(r.Body)
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&input); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		nonce, err := hex.DecodeString(input.Nonce)
+		if r.Method != http.MethodPost || r.URL.Path != "/sandboxes/relay" || input.InstanceID != instance || err != nil || len(nonce) != document.NonceSize {
+			http.Error(w, "invalid attestation relay request", http.StatusBadRequest)
+			return
+		}
+		challenges <- nonce
+		json.NewEncoder(w).Encode(map[string]any{"status": http.StatusOK, "body": base64.RawURLEncoding.EncodeToString(doc)})
+	}))
+	defer server.Close()
+	client := newCPClient(cliConfig{ControlplaneURL: server.URL})
+	owner := sandboxOwner{instance: instance, request: func(method, path string, input, out any) error {
+		_, err := client.do(method, path, nil, input, out)
+		return err
+	}}
+	previous := verifySandboxEvidence
+	t.Cleanup(func() { verifySandboxEvidence = previous })
+	verificationError := errors.New("verification stopped")
+	verifySandboxEvidence = func(raw, nonce []byte, reference string) (attestedEvidence, error) {
+		require.Equal(t, doc, raw)
+		require.Equal(t, <-challenges, nonce)
+		require.Equal(t, source, reference)
+		return nil, verificationError
+	}
+	_, err := owner.attest(source)
+	require.ErrorIs(t, err, verificationError)
+}
+
 // relayToHandler is Monitor's relay for tests: it carries sealed bytes to a sandbox handler.
 type relayToHandler struct {
 	handler http.Handler
@@ -749,14 +792,14 @@ func TestMonitorRestartRelinksOnlyAuthorizedSandboxes(t *testing.T) {
 		require.NotContains(t, string(raw), "monitor_host_key", "Monitor sees only sealed owner requests")
 		var in struct {
 			InstanceID string        `json:"instance_id"`
-			Target     string        `json:"target"`
+			Nonce      string        `json:"nonce"`
 			Headers    *relayHeaders `json:"headers"`
 			Body       string        `json:"body"`
 		}
 		require.NoError(t, json.Unmarshal(raw, &in))
 		f := fixtures[in.InstanceID]
 		relayed[f.name]++
-		if in.Target == "attestation" {
+		if in.Nonce != "" {
 			config := rows[slices.IndexFunc(rows, func(r containerView) bool { return r.ID == f.id })].Config
 			return json.Unmarshal(fmt.Appendf(nil, `{"status":200,"headers":{},"body":%q}`, base64.RawURLEncoding.EncodeToString([]byte(config))), out)
 		}
