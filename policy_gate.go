@@ -16,8 +16,7 @@ import (
 // the controlplane rather than supplied by the caller (an explicit --repo
 // skips it: that IS the caller's expectation). It checks the resolved
 // reference against the known-configs store, so a substituted config prompts
-// or fails closed instead of verifying silently, and journals the exact pin
-// of every config actually connected to.
+// or fails closed instead of verifying silently.
 // Every connection trust decision goes through this file: the gate for
 // controlplane-resolved configs, --repo assertions, and create-time seeding.
 var trustDangerous bool
@@ -51,15 +50,6 @@ func gateConnectionPolicy(source string, in io.Reader, out io.Writer, interactiv
 	}
 
 	if policy.matches(source) {
-		if policy.Mode == policyModeFrozen {
-			// Frozen means the CLI never writes the file, journal included;
-			// a first-seen config is still announced.
-			if _, tag, digest, err := verify.ParseReference(source); err == nil && (tag != "" || digest != "") && !policy.hasPin(source) {
-				fmt.Fprintf(out, "New config (not journaled, mode: frozen): %s\n", source)
-			}
-			return nil
-		}
-		journalPin(&policy, source, out)
 		return nil
 	}
 
@@ -82,26 +72,6 @@ func gateConnectionPolicy(source string, in io.Reader, out io.Writer, interactiv
 	}
 	fmt.Fprintf(out, "Recorded %s as %s in %s\n", source, policy.Record, policy.path)
 	return nil
-}
-
-// journalPin records the exact reference of a policy-passing connect and
-// announces a first sight. Best-effort: journaling failures warn, they do not
-// block a connection that policy already allows. References without a
-// revision or digest (a bare owner/repo) have no exact config to journal and are
-// skipped.
-func journalPin(policy *connectionPolicy, source string, out io.Writer) {
-	_, tag, digest, err := verify.ParseReference(source)
-	if err != nil || (tag == "" && digest == "") {
-		return
-	}
-	fresh, err := policy.recordPin(source)
-	if err != nil {
-		fmt.Fprintf(out, "warning: could not journal %s: %v\n", source, err)
-		return
-	}
-	if fresh {
-		fmt.Fprintf(out, "New config journaled: %s\n", source)
-	}
 }
 
 // seedTrustFromCreate records the caller's typed intent at container create
@@ -163,9 +133,6 @@ func assertTrustedSource(assertion, resolvedSource string) error {
 	}
 	if changed {
 		fmt.Fprintf(os.Stderr, "Recorded %s as %s in %s\n", recordSource, level, policy.path)
-	}
-	if recordSource != resolvedSource {
-		journalPin(&policy, resolvedSource, os.Stderr)
 	}
 	return nil
 }

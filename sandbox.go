@@ -353,7 +353,7 @@ func openSandbox(scope accountScope, cp *cpClient, target *workloadTarget, bindi
 		fmt.Fprintf(os.Stderr, "Sandbox %s attestation verified.\nWarning: sandbox has NO_MONITOR=1; its network traffic is not being tunneled through Monitor.\n", row.Name)
 		return s, nil
 	}
-	s.owner = &sandboxOwner{request: monitor.request, instance: *binding.InstanceID, signer: keys.signer, owner: row.OwnerPublicKey}
+	s.owner = &sandboxOwner{request: monitor.request, instance: *binding.InstanceID, host: row.Domain, signer: keys.signer, owner: row.OwnerPublicKey}
 	stop := startConnectionProgress(os.Stderr, "Requesting sandbox attestation through Monitor's relay")
 	verified, err := s.owner.attest(target.source)
 	stop()
@@ -559,6 +559,7 @@ func authorizedKeyLine(key ssh.PublicKey) string {
 type sandboxOwner struct {
 	request  func(method, path string, input, out any) error
 	instance string
+	host     string
 	signer   ssh.Signer
 	owner    string
 	client   *http.Client
@@ -593,12 +594,19 @@ func (o *sandboxOwner) relay(target string, nonce *string, headers *relayHeaders
 	return &reply, data, err
 }
 
-var verifySandboxEvidence = func(doc, nonce []byte, source string) (attestedEvidence, error) {
+var verifySandboxEvidence = func(doc, nonce []byte, host, source string) (attestedEvidence, error) {
 	options, err := verificationOptions(source, "")
 	if err != nil {
 		return nil, err
 	}
-	return options.Verifier.VerifyV3(doc, nonce, source)
+	verified, err := options.Verifier.VerifyV3(doc, nonce, source)
+	if err != nil {
+		return nil, err
+	}
+	if err := checkVerifiedDeployment(host, source, verified); err != nil {
+		return nil, err
+	}
+	return verified, nil
 }
 
 func (o *sandboxOwner) attest(source string) (attestedEvidence, error) {
@@ -614,7 +622,7 @@ func (o *sandboxOwner) attest(source string) (attestedEvidence, error) {
 	if reply.Status != http.StatusOK {
 		return nil, fmt.Errorf("sandbox attestation returned HTTP %d", reply.Status)
 	}
-	verified, err := verifySandboxEvidence(doc, nonce, source)
+	verified, err := verifySandboxEvidence(doc, nonce, o.host, source)
 	if err != nil {
 		return nil, err
 	}

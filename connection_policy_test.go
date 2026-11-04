@@ -280,85 +280,13 @@ func TestRecordTrustDedupes(t *testing.T) {
 	}
 }
 
-func TestRecordPinJournalsAndDedupes(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "known-configs.json")
-	policy, err := loadConnectionPolicyFrom(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	source := "acme/api@r12@" + testDigestA
-	fresh, err := policy.recordPin(source)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !fresh {
-		t.Fatal("first record should report new")
-	}
-	again, err := policy.recordPin(source)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if again {
-		t.Fatal("duplicate record should not report new")
-	}
-	reloaded, err := loadConnectionPolicyFrom(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(reloaded.Allow.Pins) != 1 {
-		t.Fatalf("expected one journaled pin: %v", reloaded.Allow.Pins)
-	}
-	// Journaling a pin must not widen policy.
-	if reloaded.matches("acme/api@r13@" + testDigestB) {
-		t.Fatal("journal pin must not cover other revisions")
-	}
-}
-
-func TestRecordPinSortsIntoProjectGroups(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "known-configs.json")
-	policy, err := loadConnectionPolicyFrom(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, pin := range []string{
-		"widgets/batch@r2@" + testDigestB,
-		"acme/api@r1@" + testDigestA,
-		"widgets/batch@r1@" + testDigestA,
-	} {
-		if _, err := policy.recordPin(pin); err != nil {
-			t.Fatal(err)
-		}
-	}
-	reloaded, err := loadConnectionPolicyFrom(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := []string{
-		"acme/api@r1@" + testDigestA,
-		"widgets/batch@r1@" + testDigestA,
-		"widgets/batch@r2@" + testDigestB,
-	}
-	for i := range want {
-		if reloaded.Allow.Pins[i] != want[i] {
-			t.Fatalf("pins not grouped: %v", reloaded.Allow.Pins)
-		}
-	}
-}
-
-func TestRecordPinRejectsUnpinned(t *testing.T) {
-	policy := connectionPolicy{path: filepath.Join(t.TempDir(), "known-configs.json")}
-	if _, err := policy.recordPin("acme/api"); err == nil {
-		t.Fatal("expected error for unpinned reference")
-	}
-}
-
 func TestSetDefaultsPreservesAllowList(t *testing.T) {
 	path := writePolicyFile(t, `{"allow":{"projects":["acme/api"]}}`)
 	policy, err := loadConnectionPolicyFrom(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := policy.recordPin("widgets/batch@r12@" + testDigestA); err != nil {
+	if _, err := policy.recordTrustAt("widgets/batch@r12@"+testDigestA, policyRecordPin); err != nil {
 		t.Fatal(err)
 	}
 	if err := policy.setDefaults(policyModeFrozen, policyRecordPin); err != nil {
@@ -388,7 +316,7 @@ func TestAppendIntoEmptyBuckets(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err := policy.recordPin("acme/api@r1@" + testDigestA); err != nil {
+			if _, err := policy.recordTrustAt("acme/api@r1@"+testDigestA, policyRecordPin); err != nil {
 				t.Fatal(err)
 			}
 			reloaded, err := loadConnectionPolicyFrom(path)

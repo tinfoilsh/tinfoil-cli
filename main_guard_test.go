@@ -15,6 +15,7 @@ import (
 func TestMain(m *testing.M) {
 	keyring.MockInit()
 	os.Unsetenv(envTrust)
+	os.Unsetenv(envKnownDeployments)
 	dir, err := os.MkdirTemp("", "tinfoil-cli-tests-*")
 	if err != nil {
 		panic(err)

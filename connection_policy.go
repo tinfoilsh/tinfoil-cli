@@ -16,10 +16,6 @@ import (
 // The known-configs store holds the caller's side of connection verification:
 // which registry references this user has chosen to trust, at the granularity
 // they wrote them down — whole orgs, projects (any revision), or exact pins.
-//
-// The pins bucket doubles as a journal: every successful connect records the
-// exact reference it resolved to (deduplicated, never on --dangerous). A pin
-// not yet present is announced as new.
 const (
 	envKnownConfigs                = "TINFOIL_KNOWN_CONFIGS"
 	envTrust                       = "TINFOIL_TRUST"
@@ -40,6 +36,7 @@ const (
 type connectionPolicy struct {
 	Mode       string               `json:"mode"`
 	Record     string               `json:"record"`
+	Updates    string               `json:"updates,omitempty"`
 	Registries []registryEnrollment `json:"registries,omitempty"`
 	Allow      struct {
 		Orgs     []string `json:"orgs,omitempty"`
@@ -112,7 +109,7 @@ func loadConnectionPolicy() (connectionPolicy, error) {
 }
 
 func loadConnectionPolicyFrom(path string) (connectionPolicy, error) {
-	p := connectionPolicy{Mode: policyModePrompt, Record: policyRecordProject, path: path}
+	p := connectionPolicy{Mode: policyModePrompt, Record: policyRecordProject, Updates: updatesFollow, path: path}
 
 	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
@@ -135,6 +132,9 @@ func loadConnectionPolicyFrom(path string) (connectionPolicy, error) {
 	}
 	p.Record = strings.TrimSpace(p.Record)
 	if err := validateRecordLevel(p.Record); err != nil {
+		return p, fmt.Errorf("%s: %w", path, err)
+	}
+	if err := validateUpdates(p.Updates); err != nil {
 		return p, fmt.Errorf("%s: %w", path, err)
 	}
 
@@ -236,7 +236,7 @@ func referenceMatches(expected, source string) bool {
 		(expectedDigest == "" || digest == expectedDigest)
 }
 
-// hasPin reports whether the exact reference is already journaled.
+// hasPin reports whether the exact reference has an approval.
 func (p connectionPolicy) hasPin(source string) bool {
 	return containsEntry(p.Allow.Pins, source)
 }
@@ -333,23 +333,6 @@ func (p *connectionPolicy) recordTrustAt(source, fromLevel string) (bool, error)
 	}
 	if !changed {
 		return false, nil
-	}
-	return true, p.save()
-}
-
-// recordPin journals the exact reference a successful connect resolved to
-// and reports whether it was new. Deduplicated; callers skip it entirely for
-// --dangerous connects — a bypass must never become standing trust.
-func (p *connectionPolicy) recordPin(source string) (bool, error) {
-	source = strings.TrimSpace(source)
-	if err := validateEntry(source, policyRecordPin); err != nil {
-		return false, err
-	}
-	if p.hasPin(source) {
-		return false, nil
-	}
-	if err := p.appendEntry(policyRecordPin, source); err != nil {
-		return false, err
 	}
 	return true, p.save()
 }
