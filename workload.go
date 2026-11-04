@@ -31,7 +31,7 @@ func resolveWorkload(row containerView, repository, assertion string) (*workload
 		return nil, err
 	}
 	digest := storageHash([]byte(row.Config))
-	if row.ConfigName != "/tinfoil/containers/"+digest {
+	if !strings.HasSuffix(row.ConfigName, "/"+digest) {
 		return nil, errors.New("workload config reference does not match its digest")
 	}
 	target, err := parseConnectionDescriptor(connectionDescriptor{URL: "https://" + row.Domain, ConfigName: row.ConfigName, ConfigDigest: digest})

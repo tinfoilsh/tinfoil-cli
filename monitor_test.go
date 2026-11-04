@@ -28,19 +28,24 @@ import (
 
 func TestManagedTrustPrecedesCredentials(t *testing.T) {
 	t.Setenv(envKnownConfigs, filepath.Join(t.TempDir(), "known-configs.json"))
-	for _, kind := range []string{"sandbox", "monitor"} {
+	for _, test := range []struct{ kind, prefix string }{
+		{"sandbox", "/tinfoil/containers"},
+		{"monitor", "/tinfoil/containers"},
+		{"monitor", "/acme/confidential-agent-monitor"},
+		{"sandbox", "/user-9c4a7f21-e0b8-36d5-6a13-c8fe42d907ab/confidential-agent-sandbox"},
+	} {
 		require.NoError(t, os.WriteFile(os.Getenv(envKnownConfigs), []byte(`{"mode":"frozen","allow":{}}`), 0600))
 
-		row := containerView{Repo: managedRepo(kind), Domain: "work.example", Config: "containers: [{env: [{OWNER: owner}]}]"}
-		row.ConfigName = "/tinfoil/containers/" + storageHash([]byte(row.Config))
+		row := containerView{Repo: managedRepo(test.kind), Domain: "work.example", Config: "containers: [{env: [{OWNER: owner}]}]"}
+		row.ConfigName = test.prefix + "/" + storageHash([]byte(row.Config))
 		_, err := resolveWorkload(row, row.Repo, "")
 		require.ErrorContains(t, err, "mode: frozen")
-		target, err := resolveWorkload(row, row.Repo, "tinfoil/containers")
+		target, err := resolveWorkload(row, row.Repo, strings.TrimPrefix(test.prefix, "/"))
 		require.NoError(t, err)
 		row.Config += "\n# changed"
 		_, err = resolveWorkload(row, row.Repo, target.source)
 		require.ErrorContains(t, err, "digest")
-		row.ConfigName = "/tinfoil/containers/" + storageHash([]byte(row.Config))
+		row.ConfigName = test.prefix + "/" + storageHash([]byte(row.Config))
 		_, err = resolveWorkload(row, row.Repo, target.source)
 		require.ErrorContains(t, err, "does not match --repo")
 	}
