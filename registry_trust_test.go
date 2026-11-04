@@ -36,6 +36,7 @@ func TestRegistryEnrollmentRequiresExplicitAcceptanceAndReplacement(t *testing.T
 	require.NoError(t, err)
 	require.Empty(t, policy.Registries)
 	require.NoError(t, acceptRegistry(strings.NewReader("yes\n"), &output, entry, false))
+	require.Contains(t, output.String(), "Registry ID: "+entry.Scope)
 	policy, err = loadConnectionPolicy()
 	require.NoError(t, err)
 	require.Equal(t, []registryEnrollment{entry}, policy.Registries)

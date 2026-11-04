@@ -177,14 +177,15 @@ func acceptRegistry(in io.Reader, out io.Writer, entry registryEnrollment, expli
 	}
 	for _, previous := range policy.Registries {
 		if previous.ControlplaneURL == entry.ControlplaneURL && previous.AccountID == entry.AccountID && slices.Equal(previous.Namespaces, entry.Namespaces) && previous.Scope == entry.Scope {
-			fmt.Fprintf(out, "Registry %s is already enrolled.\n", entry.Label)
+			fmt.Fprintf(out, "Private registry %s is already trusted.\nRegistry ID: %s\n", entry.Label, entry.Scope)
 			return nil
 		}
 		if previous.ControlplaneURL == entry.ControlplaneURL && previous.AccountID == entry.AccountID && previous.Scope != entry.Scope {
-			fmt.Fprintf(out, "Private registry identity changed.\nPrevious registry ID: %s\nNew registry ID: %s\n", previous.Scope, entry.Scope)
+			fmt.Fprintf(out, "Private registry identity changed.\nPrevious registry ID: %s\n", previous.Scope)
 		}
 	}
 	printRegistryScopes(out, []registryEnrollment{entry})
+	fmt.Fprintf(out, "Registry ID: %s\n", entry.Scope)
 	if !explicit {
 		fmt.Fprint(out, "Trust configs from this private registry? Existing project and config restrictions still apply. [y/N] ")
 		scanner := bufio.NewScanner(in)
