@@ -18,6 +18,21 @@ func deploymentFixture(t *testing.T) deploymentRecord {
 	return deploymentRecord{Host: "api.example.com:443", Scope: configendorsement.ScopePrefix + strings.Repeat("f", 32), Project: "acme/api", Digest: strings.TrimPrefix(testDigestA, "sha256:")}
 }
 
+func TestDeploymentEndpointCanonicalization(t *testing.T) {
+	for _, host := range []string{"API.Example.com", "api.example.com:443", "api.example.com:0443"} {
+		canonical, err := deploymentHost(host)
+		require.NoError(t, err)
+		require.Equal(t, "api.example.com:443", canonical)
+	}
+	canonical, err := deploymentHost("[::1]:8443")
+	require.NoError(t, err)
+	require.Equal(t, "[::1]:8443", canonical)
+	for _, host := range []string{"", "user@api.example.com", "api.example.com/path", "api.example.com:0", "api.example.com:99999"} {
+		_, err := deploymentHost(host)
+		require.Error(t, err)
+	}
+}
+
 func TestDeploymentFollowDoesNotBroadenPolicy(t *testing.T) {
 	record := deploymentFixture(t)
 	policyPath, err := connectionPolicyPath()
