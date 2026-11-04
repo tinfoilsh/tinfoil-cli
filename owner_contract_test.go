@@ -2,7 +2,6 @@ package main
 
 import (
 	"crypto/ecdh"
-	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -12,8 +11,6 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"github.com/tinfoilsh/tinfoil-go/verify/document"
-	"golang.org/x/crypto/ssh"
-	"golang.org/x/crypto/ssh/agent"
 )
 
 type contractKeySyncRequest struct {
@@ -57,25 +54,6 @@ type ownerContractFixture struct {
 		WrongDEK          string                             `json:"wrong_dek"`
 		InvalidPlaintexts []struct{ Case, Plaintext string } `json:"invalid_plaintexts"`
 	} `json:"mk"`
-	OwnerRequest struct {
-		Seed     string `json:"seed"`
-		Owner    string `json:"owner"`
-		Requests []struct {
-			Name      string `json:"name"`
-			InnerBody string `json:"inner_body"`
-			Bytes     string `json:"bytes"`
-			Signature string `json:"signature"`
-			Envelope  string `json:"envelope"`
-		} `json:"requests"`
-		ServerRejects []struct {
-			Case      string         `json:"case"`
-			Bytes     string         `json:"bytes"`
-			Signature string         `json:"signature"`
-			Server    map[string]any `json:"server"`
-			Error     *string        `json:"error"`
-		} `json:"server_rejects"`
-		InvalidRequests []struct{ Case, Bytes string } `json:"invalid_requests"`
-	} `json:"owner_request"`
 	KeySync struct {
 		Targets         contractKeySyncTargets `json:"targets"`
 		Request         contractKeySyncRequest `json:"request"`
@@ -195,49 +173,6 @@ func TestOwnerContractMKBoundsAreCoherentAndCheckedBeforeDecoding(t *testing.T) 
 	require.ErrorIs(t, err, errMKFormat)
 }
 
-func TestOwnerContractSignedRequestsMatchFixtureBytes(t *testing.T) {
-	f := loadOwnerContract(t).OwnerRequest
-	private := ed25519.NewKeyFromSeed(fixtureBytes(t, f.Seed))
-	keySigner, err := ssh.NewSignerFromKey(private)
-	require.NoError(t, err)
-	keyring := agent.NewKeyring()
-	require.NoError(t, keyring.Add(agent.AddedKey{PrivateKey: private}))
-	agentSigners, err := keyring.Signers()
-	require.NoError(t, err)
-	owner, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(f.Owner, "ed25519:"))
-	require.NoError(t, err)
-	for _, fixture := range f.Requests {
-		var request ownerRequest
-		require.NoError(t, decodeCanonical([]byte(fixture.Bytes), &request), fixture.Name)
-		require.Equal(t, fixture.InnerBody, string(fixtureBytes(t, request.Body)), fixture.Name)
-		for _, signer := range []ssh.Signer{keySigner, agentSigners[0]} {
-			envelope, err := signOwnerRequest(signer, request)
-			require.NoError(t, err, fixture.Name)
-			require.Equal(t, fixture.Envelope, string(envelope), fixture.Name)
-		}
-		require.True(t, ed25519.Verify(owner, ownerRequestMessage([]byte(fixture.Bytes)), fixtureBytes(t, fixture.Signature)), fixture.Name)
-	}
-	for _, invalid := range f.InvalidRequests {
-		var request ownerRequest
-		require.NoError(t, decodeCanonical([]byte(invalid.Bytes), &request), invalid.Case)
-		_, err := signOwnerRequest(keySigner, request)
-		require.Error(t, err, invalid.Case)
-	}
-	var request ownerRequest
-	require.NoError(t, decodeCanonical([]byte(f.Requests[0].Bytes), &request))
-	otherSigner, err := ssh.NewSignerFromKey(ed25519.NewKeyFromSeed(make([]byte, ed25519.SeedSize)))
-	require.NoError(t, err)
-	_, err = signOwnerRequest(otherSigner, request)
-	require.Error(t, err, "the owner field must name the signing key")
-	// Only the invalid_signature cases fail verification against the measured owner key.
-	for _, reject := range f.ServerRejects {
-		measured, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(reject.Server["owner"].(string), "ed25519:"))
-		require.NoError(t, err)
-		valid := ed25519.Verify(measured, ownerRequestMessage([]byte(reject.Bytes)), fixtureBytes(t, reject.Signature))
-		require.Equal(t, reject.Error == nil || *reject.Error != "invalid_signature", valid, reject.Case)
-	}
-}
-
 func TestOwnerContractKeySyncCodeAndEnvelope(t *testing.T) {
 	f := loadOwnerContract(t).KeySync
 	targets, request := f.Targets.targets(), f.Request.request(t)
@@ -280,16 +215,16 @@ func TestOwnerContractKeySyncCodeAndEnvelope(t *testing.T) {
 	require.Equal(t, f.CompletionURL, keySyncCompletionURL(targets, request.Request, envelope.UserID, "org_2fixtureB"))
 }
 
-func TestOwnerContractSandboxEHBPKey(t *testing.T) {
+func TestOwnerContractSandboxSessionKey(t *testing.T) {
 	f := loadOwnerContract(t).SandboxEHBPKey
 	endorsing := func(spki string) attestedEvidence {
-		return &testEvidence{keys: []document.CryptoMaterialItem{{ID: sandboxEHBPKeyID, Format: document.KeySPKIV1Format, Data: spki}}}
+		return &testEvidence{keys: []document.CryptoMaterialItem{{ID: sandboxSessionKeyID, Format: document.KeySPKIV1Format, Data: spki}}}
 	}
-	key, err := sandboxEHBPKey(endorsing(f.SPKIHex))
+	key, err := sandboxSessionKey(endorsing(f.SPKIHex))
 	require.NoError(t, err)
-	require.Equal(t, f.RawHex, hex.EncodeToString(key.MarshalPublicKey()))
+	require.Equal(t, f.RawHex, hex.EncodeToString(key.Bytes()))
 	for _, reject := range f.Reject {
-		_, err := sandboxEHBPKey(endorsing(reject.SPKIHex))
+		_, err := sandboxSessionKey(endorsing(reject.SPKIHex))
 		require.Error(t, err, reject.Case)
 	}
 }

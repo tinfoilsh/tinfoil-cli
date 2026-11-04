@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/ecdh"
 	"crypto/ed25519"
+	"crypto/rand"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/hex"
@@ -25,9 +26,6 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
-	ehbp "github.com/tinfoilsh/encrypted-http-body-protocol/client"
-	"github.com/tinfoilsh/encrypted-http-body-protocol/identity"
-	"github.com/tinfoilsh/encrypted-http-body-protocol/protocol"
 	"github.com/tinfoilsh/tinfoil-go/verify/document"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/knownhosts"
@@ -210,159 +208,6 @@ func TestSandboxAttestationRelayUsesCurrentSchema(t *testing.T) {
 	require.ErrorIs(t, err, verificationError)
 }
 
-// relayToHandler is Monitor's relay for tests: it carries sealed bytes to a sandbox handler.
-type relayToHandler struct {
-	handler http.Handler
-	inputs  []json.RawMessage
-	fail    func(attempt int) (deliver bool, reply func(*relayReply))
-}
-
-func (r *relayToHandler) request(method, path string, input, out any) error {
-	if method != http.MethodPost || path != "/sandboxes/relay" {
-		return fmt.Errorf("unexpected Monitor request %s %s", method, path)
-	}
-	raw, _ := json.Marshal(input)
-	r.inputs = append(r.inputs, raw)
-	var in struct {
-		InstanceID string        `json:"instance_id"`
-		Target     string        `json:"target"`
-		Nonce      *string       `json:"nonce"`
-		Headers    *relayHeaders `json:"headers"`
-		Body       string        `json:"body"`
-	}
-	if err := json.Unmarshal(raw, &in); err != nil || in.Target != "owner" || in.Nonce != nil || in.Headers == nil {
-		return fmt.Errorf("malformed relay input %s", raw)
-	}
-	deliver, edit := true, func(*relayReply) {}
-	if r.fail != nil {
-		deliver, edit = r.fail(len(r.inputs))
-	}
-	if !deliver {
-		return errors.New("Monitor: 503 route unavailable")
-	}
-	body, err := decodeB64U(in.Body, -1)
-	if err != nil {
-		return err
-	}
-	req := httptest.NewRequest(http.MethodPost, "http://sandbox/owner/rpc", bytes.NewReader(body))
-	req.Header.Set(protocol.EncapsulatedKeyHeader, in.Headers.EncapsulatedKey)
-	req.Header.Set("Content-Type", in.Headers.ContentType)
-	recorder := httptest.NewRecorder()
-	r.handler.ServeHTTP(recorder, req)
-	reply := &relayReply{Status: recorder.Code, Headers: map[string]string{}, Body: base64.RawURLEncoding.EncodeToString(recorder.Body.Bytes())}
-	for _, name := range []string{"Content-Type", protocol.ResponseNonceHeader} {
-		if value := recorder.Header().Get(name); value != "" {
-			reply.Headers[name] = value
-		}
-	}
-	edit(reply)
-	if reply.Status == 0 {
-		return errors.New("Monitor: 502 the sandbox reply was lost")
-	}
-	data, _ := json.Marshal(reply)
-	return json.Unmarshal(data, out)
-}
-
-// fakeSandboxOwner verifies owner envelopes and records one effect per operation.
-type fakeSandboxOwner struct {
-	owner    ed25519.PublicKey
-	instance string
-	requests []ownerRequest
-	effects  map[string][]byte
-	reply    func(ownerRequest) any
-}
-
-func (f *fakeSandboxOwner) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	var envelope ownerEnvelope
-	data, _ := io.ReadAll(r.Body)
-	if err := decodeCanonical(data, &envelope); err != nil || !ed25519.Verify(f.owner, ownerRequestMessage(envelope.Request), envelope.Signature) {
-		http.Error(w, `{"error":"invalid_signature"}`, http.StatusUnauthorized)
-		return
-	}
-	var request ownerRequest
-	if err := decodeCanonical(envelope.Request, &request); err != nil || request.Protocol != sandboxOwnerProtocol || request.Resource != f.instance || request.Owner != ownerKeyString(f.owner) {
-		http.Error(w, `{"error":"malformed"}`, http.StatusBadRequest)
-		return
-	}
-	f.requests = append(f.requests, request)
-	key := request.Operation + "|" + request.Body + "|" + fmt.Sprint(request.IssuedAt)
-	if saved, ok := f.effects[key]; ok {
-		w.Write(saved)
-		return
-	}
-	reply, _ := json.Marshal(f.reply(request))
-	if request.Method == http.MethodPost {
-		if f.effects == nil {
-			f.effects = map[string][]byte{}
-		}
-		f.effects[key] = reply
-	}
-	w.Write(reply)
-}
-
-func TestSandboxOwnerRetriesTheSameOperationWithFreshNonceAndCiphertext(t *testing.T) {
-	seed := testSeed(t)
-	signer, err := ssh.NewSignerFromKey(ed25519.NewKeyFromSeed(seed))
-	require.NoError(t, err)
-	instance := "22222222-2222-4222-8222-222222222222"
-	sandbox := &fakeSandboxOwner{owner: ed25519.NewKeyFromSeed(seed).Public().(ed25519.PublicKey), instance: instance,
-		reply: func(r ownerRequest) any { return map[string]any{"volume": "unlocked", "effects": 1} }}
-	server, err := identity.NewIdentity()
-	require.NoError(t, err)
-	relay := &relayToHandler{handler: server.Middleware()(sandbox)}
-	relay.fail = func(attempt int) (bool, func(*relayReply)) {
-		switch attempt {
-		case 1:
-			return false, nil // never delivered
-		case 2:
-			return true, func(r *relayReply) { r.Status = 0 } // applied, reply lost
-		case 3:
-			return true, func(r *relayReply) { r.Body = base64.RawURLEncoding.EncodeToString([]byte("tampered")) }
-		}
-		return true, func(*relayReply) {}
-	}
-	public, err := identity.FromPublicKeyBytes(server.MarshalPublicKey())
-	require.NoError(t, err)
-	owner := &sandboxOwner{request: relay.request, instance: instance, signer: signer, owner: ed25519PublicKeyString(seed), expires: time.Now().Add(time.Hour)}
-	transport, err := ehbp.NewTransportWithIdentity(public, ehbp.WithHTTPClient(&http.Client{Transport: owner}))
-	require.NoError(t, err)
-	owner.client = &http.Client{Transport: transport}
-
-	var status map[string]any
-	require.NoError(t, owner.call(t.Context(), http.MethodPost, "/enroll", map[string]string{"disk_key": "secret"}, &status))
-	require.Equal(t, "unlocked", status["volume"])
-	require.Len(t, relay.inputs, 4)
-	require.Len(t, sandbox.requests, 3, "only delivered attempts reach the sandbox")
-	require.Len(t, sandbox.effects, 1, "the effect runs once")
-	nonces, ciphertexts := map[string]bool{}, map[string]bool{}
-	for _, request := range sandbox.requests {
-		require.Equal(t, sandbox.requests[0].Operation, request.Operation)
-		require.Equal(t, sandbox.requests[0].IssuedAt, request.IssuedAt, "retries keep the original operation time")
-		require.Equal(t, sandbox.requests[0].Body, request.Body)
-		require.False(t, nonces[request.Nonce], "each attempt has a fresh nonce")
-		nonces[request.Nonce] = true
-	}
-	for _, input := range relay.inputs {
-		require.NotContains(t, string(input), "secret", "Monitor sees only ciphertext")
-		var in struct {
-			Headers relayHeaders `json:"headers"`
-		}
-		require.NoError(t, json.Unmarshal(input, &in))
-		require.False(t, ciphertexts[in.Headers.EncapsulatedKey], "a sealed request is never replayed")
-		ciphertexts[in.Headers.EncapsulatedKey] = true
-	}
-
-	// A definite sandbox refusal is not retried.
-	relay.inputs, relay.fail = nil, nil
-	sandbox.owner = testSigner(t).PublicKey().(ssh.CryptoPublicKey).CryptoPublicKey().(ed25519.PublicKey)
-	require.ErrorContains(t, owner.call(t.Context(), http.MethodGet, "/status", nil, &status), "401")
-	require.Len(t, relay.inputs, 1)
-	// An expired attestation sends nothing.
-	owner.expires = time.Now().Add(-time.Second)
-	require.ErrorContains(t, owner.call(t.Context(), http.MethodGet, "/status", nil, &status), "attestation expired")
-	require.Len(t, relay.inputs, 1)
-}
-
 func TestContainedProfileJumpsThroughMonitorAndKeepsItsAlias(t *testing.T) {
 	program, err := exec.LookPath("ssh")
 	if err != nil {
@@ -415,41 +260,28 @@ func TestContainedProfileJumpsThroughMonitorAndKeepsItsAlias(t *testing.T) {
 	require.Error(t, pins("work.acme.sandboxes.tinfoil.dev:22", remote, monitorKey), "Monitor cannot impersonate the sandbox")
 }
 
-// fakeOwnerTransport answers signed sandbox owner calls without EHBP, for decision tests.
 type fakeOwnerTransport struct {
 	status sandboxStatus
 	calls  []string
 	bodies map[string]json.RawMessage
 }
 
-func (f *fakeOwnerTransport) RoundTrip(r *http.Request) (*http.Response, error) {
-	var envelope ownerEnvelope
-	data, _ := io.ReadAll(r.Body)
-	if err := decodeCanonical(data, &envelope); err != nil {
-		return nil, err
-	}
-	var request ownerRequest
-	if err := decodeCanonical(envelope.Request, &request); err != nil {
-		return nil, err
-	}
+func (f *fakeOwnerTransport) reply(request ownerCall) any {
 	f.calls = append(f.calls, request.Method+" "+request.Path)
-	body, _ := decodeB64U(request.Body, -1)
 	if f.bodies == nil {
 		f.bodies = map[string]json.RawMessage{}
 	}
-	f.bodies[request.Path] = body
-	switch request.Path {
-	case "/enroll":
+	f.bodies[request.Path] = request.Body
+	if request.Path == "/enroll" {
 		var in struct {
 			MonitorIdentitySeed b64u   `json:"monitor_identity_seed"`
 			MonitorHostKey      string `json:"monitor_host_key"`
 		}
-		json.Unmarshal(body, &in)
+		json.Unmarshal(request.Body, &in)
 		agent := monitorIdentity(in.MonitorIdentitySeed)
 		f.status.MonitorIdentity, f.status.MonitorHostKey, f.status.Volume = &agent, &in.MonitorHostKey, "unlocked"
 	}
-	reply, _ := json.Marshal(f.status)
-	return &http.Response{StatusCode: 200, Body: io.NopCloser(bytes.NewReader(reply)), Request: r}, nil
+	return f.status
 }
 
 func TestSandboxEnrollDecidesFromMonitorIdentityAndSandboxStatus(t *testing.T) {
@@ -487,6 +319,8 @@ func TestSandboxEnrollDecidesFromMonitorIdentityAndSandboxStatus(t *testing.T) {
 			require.NoError(t, err)
 			owner := ed25519PublicKeyString(seed)
 			transport := &fakeOwnerTransport{status: sandboxStatus{Protocol: sandboxOwnerProtocol, InstanceID: instance, Volume: test.volume, MonitorIdentity: test.agent, MonitorHostKey: test.pinned}}
+			rpc, endpoint := testSandboxOwner(t, seed, transport.reply)
+			rpc.instance = instance
 			var monitorCalls []string
 			m := &monitorSession{dir: t.TempDir(), hostKey: monitorHost, keys: &resourceKeys{}}
 			if test.monitorKnows {
@@ -508,8 +342,10 @@ func TestSandboxEnrollDecidesFromMonitorIdentityAndSandboxStatus(t *testing.T) {
 			}
 			s := &sandboxSession{box: containerView{Name: "work", OwnerPublicKey: owner}, keys: keys, monitor: m, expires: time.Now().Add(time.Hour),
 				binding: mkBinding{Account: "personal", ContainerID: "11111111-1111-4111-8111-111111111111", InstanceID: &instance, VolumeID: &volume},
-				owner:   &sandboxOwner{instance: instance, signer: signer, owner: owner, client: &http.Client{Transport: transport}, expires: time.Now().Add(time.Hour)}}
+				owner:   rpc}
 			err = s.enroll(t.Context())
+			endpoint.mu.Lock()
+			defer endpoint.mu.Unlock()
 			if test.err != "" {
 				require.ErrorContains(t, err, test.err)
 			} else {
@@ -654,19 +490,21 @@ func TestMonitorRestartRelinksOnlyAuthorizedSandboxes(t *testing.T) {
 		name, id, instance, volume string
 		key                        mkResource
 		host                       ssh.Signer
-		ehbp                       *identity.Identity
+		sessionKey                 *ecdh.PrivateKey
 		owner                      *fakeSandboxOwner
 		status                     sandboxStatus
 		monitor                    string
 	}
-	newHost, oldHost := testSigner(t).PublicKey(), authorizedLine(testSigner(t))
+	monitorSigner := testSigner(t)
+	newHost, oldHost := monitorSigner.PublicKey(), authorizedLine(testSigner(t))
+	routes := map[string]string{}
 	fixtures := map[string]*fixture{}
 	var rows []containerView
 	for i, name := range []string{"a", "b", "removed", "nokeys", "unbound", "wrongbinding", "rebooted", "elsewhere", "untrusted"} {
 		f := &fixture{name: name, id: fmt.Sprintf("1111111%d-1111-4111-8111-111111111111", i), instance: fmt.Sprintf("2222222%d-2222-4222-8222-222222222222", i),
 			volume: fmt.Sprintf("3333333%d-3333-4333-8333-333333333333", i), key: newResourceKey("sandbox"), host: testSigner(t), monitor: monitorID}
 		var err error
-		f.ehbp, err = identity.NewIdentity()
+		f.sessionKey, err = ecdh.X25519().GenerateKey(rand.Reader)
 		require.NoError(t, err)
 		agent := monitorIdentity(f.key.MonitorIdentitySeed)
 		f.status = sandboxStatus{Protocol: sandboxOwnerProtocol, InstanceID: f.instance, Volume: "unlocked", MonitorIdentity: &agent, MonitorHostKey: &oldHost}
@@ -676,9 +514,9 @@ func TestMonitorRestartRelinksOnlyAuthorizedSandboxes(t *testing.T) {
 		if name == "elsewhere" {
 			f.monitor = "88888888-8888-4888-8888-888888888888"
 		}
-		f.owner = &fakeSandboxOwner{owner: ed25519.NewKeyFromSeed(f.key.OwnerSeed).Public().(ed25519.PublicKey), instance: f.instance, reply: func(r ownerRequest) any {
+		f.owner = &fakeSandboxOwner{owner: ed25519.NewKeyFromSeed(f.key.OwnerSeed).Public().(ed25519.PublicKey), reply: func(r ownerCall) any {
 			if r.Path == "/enroll" {
-				body, _ := decodeB64U(r.Body, -1)
+				body := r.Body
 				var in struct {
 					MonitorHostKey string `json:"monitor_host_key"`
 				}
@@ -687,6 +525,10 @@ func TestMonitorRestartRelinksOnlyAuthorizedSandboxes(t *testing.T) {
 			}
 			return f.status
 		}}
+		f.owner.key = f.sessionKey
+		endpoint := httptest.NewServer(f.owner)
+		t.Cleanup(endpoint.Close)
+		routes[net.JoinHostPort(routeName(f.host.PublicKey()), sandboxOwnerPort)] = endpoint.Listener.Addr().String()
 		config := fmt.Sprintf("containers: [{env: [{SANDBOX_OWNER_PUBLIC_KEY: %q}, {SANDBOX_INSTANCE_ID: %q}]}]", f.key.OwnerPublicKey, f.instance)
 		rows = append(rows, containerView{ID: f.id, Name: name, Repo: defaultSandboxRepo, Status: statusRunning, ClerkUserID: "user_owner", Config: config,
 			Domain: name + ".example", ConfigName: "/tinfoil/containers/" + storageHash([]byte(config)),
@@ -758,13 +600,11 @@ func TestMonitorRestartRelinksOnlyAuthorizedSandboxes(t *testing.T) {
 			if strings.Contains(string(doc), f.instance) && strings.Contains(source, storageHash(doc)) {
 				host, err := x509.MarshalPKIXPublicKey(f.host.PublicKey().(ssh.CryptoPublicKey).CryptoPublicKey())
 				require.NoError(t, err)
-				ehbpKey, err := ecdh.X25519().NewPublicKey(f.ehbp.MarshalPublicKey())
-				require.NoError(t, err)
-				ehbp, err := x509.MarshalPKIXPublicKey(ehbpKey)
+				sessionKey, err := x509.MarshalPKIXPublicKey(f.sessionKey.PublicKey())
 				require.NoError(t, err)
 				return &testEvidence{expires: time.Now().Add(time.Hour), keys: []document.CryptoMaterialItem{
 					{ID: attestedHostKeyID, Format: document.KeySPKIV1Format, Data: hex.EncodeToString(host)},
-					{ID: sandboxEHBPKeyID, Format: document.KeySPKIV1Format, Data: hex.EncodeToString(ehbp)},
+					{ID: sandboxSessionKeyID, Format: document.KeySPKIV1Format, Data: hex.EncodeToString(sessionKey)},
 				}}, nil
 			}
 		}
@@ -774,7 +614,10 @@ func TestMonitorRestartRelinksOnlyAuthorizedSandboxes(t *testing.T) {
 
 	relayed := map[string]int{}
 	var monitorCalls []string
-	m := &monitorSession{dir: t.TempDir(), domain: "monitor.example", address: "127.0.0.1:2222", hostKey: newHost, keys: &resourceKeys{}}
+	m := &monitorSession{dir: t.TempDir(), domain: "monitor.example", hostKey: newHost, keys: &resourceKeys{}}
+	device, err := ensureSSHIdentity(filepath.Join(m.dir, monitorDeviceKeyName), nil)
+	require.NoError(t, err)
+	m.address = testSandboxRoutes(t, monitorSigner, device.PublicKey(), routes)
 	m.view.Config.Identities = map[string]struct {
 		Key string `json:"key"`
 	}{}
@@ -791,10 +634,8 @@ func TestMonitorRestartRelinksOnlyAuthorizedSandboxes(t *testing.T) {
 		}
 		require.NotContains(t, string(raw), "monitor_host_key", "Monitor sees only sealed owner requests")
 		var in struct {
-			InstanceID string        `json:"instance_id"`
-			Nonce      string        `json:"nonce"`
-			Headers    *relayHeaders `json:"headers"`
-			Body       string        `json:"body"`
+			InstanceID string `json:"instance_id"`
+			Nonce      string `json:"nonce"`
 		}
 		require.NoError(t, json.Unmarshal(raw, &in))
 		f := fixtures[in.InstanceID]
@@ -803,8 +644,7 @@ func TestMonitorRestartRelinksOnlyAuthorizedSandboxes(t *testing.T) {
 			config := rows[slices.IndexFunc(rows, func(r containerView) bool { return r.ID == f.id })].Config
 			return json.Unmarshal(fmt.Appendf(nil, `{"status":200,"headers":{},"body":%q}`, base64.RawURLEncoding.EncodeToString([]byte(config))), out)
 		}
-		relay := &relayToHandler{handler: f.ehbp.Middleware()(f.owner)}
-		return relay.request(method, path, input, out)
+		return errors.New("only attestation uses the HTTP relay")
 	}
 
 	home, err := os.UserHomeDir()
@@ -829,15 +669,17 @@ func TestMonitorRestartRelinksOnlyAuthorizedSandboxes(t *testing.T) {
 	host := authorizedKeyLine(newHost)
 	for _, name := range []string{"a", "b"} {
 		f := fixtures[name]
+		f.owner.mu.Lock()
 		require.Equal(t, host, *f.status.MonitorHostKey, name)
+		f.owner.mu.Unlock()
 		var paths []string
-		for _, request := range f.owner.requests {
+		for _, request := range f.owner.calls() {
 			paths = append(paths, request.Method+" "+request.Path)
 		}
 		require.Equal(t, []string{"GET /status", "POST /enroll"}, paths, name)
 	}
-	require.Equal(t, []string{"GET /status"}, []string{fixtures["rebooted"].owner.requests[0].Method + " " + fixtures["rebooted"].owner.requests[0].Path})
-	require.Len(t, fixtures["rebooted"].owner.requests, 1, "a rebooted sandbox is not enrolled or unlocked here")
+	require.Equal(t, []string{"GET /status"}, []string{fixtures["rebooted"].owner.calls()[0].Method + " " + fixtures["rebooted"].owner.calls()[0].Path})
+	require.Len(t, fixtures["rebooted"].owner.calls(), 1, "a rebooted sandbox is not enrolled or unlocked here")
 	for _, name := range []string{"removed", "nokeys", "unbound", "wrongbinding", "elsewhere", "untrusted"} {
 		require.Zero(t, relayed[name], "%s is not contacted", name)
 	}
@@ -854,11 +696,11 @@ func TestMonitorRestartRelinksOnlyAuthorizedSandboxes(t *testing.T) {
 
 	// A second open finds every pin current and changes nothing.
 	for _, name := range []string{"a", "b"} {
-		fixtures[name].owner.requests = nil
+		fixtures[name].owner.reset()
 	}
 	require.Len(t, relinkSandboxes(t.Context(), scope, cp, m, monitorID), 3)
 	for _, name := range []string{"a", "b"} {
-		require.Len(t, fixtures[name].owner.requests, 1, "%s: status only", name)
+		require.Len(t, fixtures[name].owner.calls(), 1, "%s: status only", name)
 	}
 
 	for _, tc := range []struct {

@@ -7,7 +7,6 @@ import (
 	"crypto/ecdh"
 	"crypto/ed25519"
 	"crypto/hpke"
-	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/binary"
@@ -18,8 +17,6 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-
-	"golang.org/x/crypto/ssh"
 )
 
 const (
@@ -31,8 +28,6 @@ const (
 	maxBucketChars         = 512
 	maxKeySyncPayloadChars = 8192
 	maxSafeInteger         = 1<<53 - 1
-	ownerRequestContext    = "tinfoil owner request v3\x00"
-	ownerNonceBytes        = 24
 	keySyncRequestLabel    = "tinfoil-cli-key-sync-v1"
 	keySyncConfirmLabel    = "tinfoil-cli-confirm-v1"
 	keySyncEnvelopeLabel   = "tinfoil-cli-key-sync-envelope-v1\x00"
@@ -272,61 +267,6 @@ func openMK(envelope string, dek []byte, c mkContext) (*mkPayload, error) {
 		return nil, err
 	}
 	return &payload, nil
-}
-
-type ownerRequest struct {
-	Protocol   string `json:"protocol"`
-	Owner      string `json:"owner"`
-	Resource   string `json:"resource"`
-	Method     string `json:"method"`
-	Path       string `json:"path"`
-	Body       string `json:"body"`
-	Operation  string `json:"operation"`
-	Session    string `json:"session"`
-	Generation uint64 `json:"generation"`
-	IssuedAt   int64  `json:"issued_at"`
-	Nonce      string `json:"nonce"`
-}
-
-type ownerEnvelope struct {
-	Request   b64u `json:"request"`
-	Signature b64u `json:"signature"`
-}
-
-func ownerRequestMessage(request []byte) []byte {
-	digest := sha256.Sum256(request)
-	return append([]byte(ownerRequestContext), digest[:]...)
-}
-
-func signOwnerRequest(signer ssh.Signer, request ownerRequest) ([]byte, error) {
-	var owner string
-	if public, err := ssh.ParsePublicKey(signer.PublicKey().Marshal()); err == nil {
-		if crypto, ok := public.(ssh.CryptoPublicKey); ok {
-			if key, ok := crypto.CryptoPublicKey().(ed25519.PublicKey); ok {
-				owner = ownerKeyString(key)
-			}
-		}
-	}
-	_, nonceErr := decodeB64U(request.Nonce, ownerNonceBytes)
-	_, bodyErr := decodeB64U(request.Body, -1)
-	if owner == "" || request.Owner != owner || nonceErr != nil || bodyErr != nil ||
-		!validID16(request.Operation) || (request.Session != "" && !validID16(request.Session)) ||
-		!strings.HasPrefix(request.Path, "/") || !printableASCII(request.Path) ||
-		request.IssuedAt < 0 || request.IssuedAt > maxSafeInteger || request.Generation > maxSafeInteger {
-		return nil, errors.New("invalid owner request")
-	}
-	raw, err := contractJSON(request)
-	if err != nil {
-		return nil, err
-	}
-	signature, err := signer.Sign(rand.Reader, ownerRequestMessage(raw))
-	if err != nil {
-		return nil, err
-	}
-	if signature.Format != ssh.KeyAlgoED25519 || len(signature.Blob) != ed25519.SignatureSize {
-		return nil, errors.New("the owner key did not produce an Ed25519 signature")
-	}
-	return contractJSON(ownerEnvelope{Request: raw, Signature: signature.Blob})
 }
 
 type keySyncRequest struct {

@@ -5,14 +5,13 @@ import (
 	"context"
 	"crypto/ecdh"
 	"crypto/ed25519"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base32"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"net/http"
 	"os"
@@ -21,11 +20,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/coder/websocket"
+	"github.com/flynn/noise"
 	"github.com/spf13/cobra"
-	ehbp "github.com/tinfoilsh/encrypted-http-body-protocol/client"
-	"github.com/tinfoilsh/encrypted-http-body-protocol/identity"
-	"github.com/tinfoilsh/encrypted-http-body-protocol/protocol"
 	"github.com/tinfoilsh/tinfoil-go/verify/document"
+	"golang.org/x/crypto/chacha20poly1305"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -224,11 +223,15 @@ func validateSandboxNetwork(row containerView) error {
 }
 
 const (
-	sandboxOwnerProtocol = "sandbox-owner-v1"
-	sandboxEHBPKeyID     = "sandbox-ehbp"
-	ownerOperationWindow = time.Minute
-	ownerRetryAttempts   = 4
-	maxOwnerReplyBytes   = 2 << 20
+	sandboxOwnerProtocol  = "sandbox-owner-v1"
+	sandboxSessionKeyID   = "owner-session"
+	ownerSessionContext   = "tinfoil owner session v1\x00"
+	ownerHandshakeTimeout = 10 * time.Second
+	ownerFrameBytes       = noise.MaxMsgLen - 1 - chacha20poly1305.Overhead
+	ownerFrameMore        = 0
+	ownerFrameLast        = 1
+	sandboxOwnerPort      = "443"
+	maxOwnerReplyBytes    = 2 << 20
 
 	// Monitor routes to a sandbox boot by a name derived from its SSH host key.
 	sandboxRouteSuffix = ".sandbox.invalid"
@@ -353,7 +356,7 @@ func openSandbox(scope accountScope, cp *cpClient, target *workloadTarget, bindi
 		fmt.Fprintf(os.Stderr, "Sandbox %s attestation verified.\nWarning: sandbox has NO_MONITOR=1; its network traffic is not being tunneled through Monitor.\n", row.Name)
 		return s, nil
 	}
-	s.owner = &sandboxOwner{request: monitor.request, instance: *binding.InstanceID, signer: keys.signer, owner: row.OwnerPublicKey}
+	s.owner = &sandboxOwner{request: monitor.request, instance: *binding.InstanceID, signer: keys.signer}
 	stop := startConnectionProgress(os.Stderr, "Requesting sandbox attestation through Monitor's relay")
 	verified, err := s.owner.attest(target.source)
 	stop()
@@ -364,6 +367,9 @@ func openSandbox(scope accountScope, cp *cpClient, target *workloadTarget, bindi
 	if err != nil {
 		return nil, err
 	}
+	s.owner.client = &http.Client{Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+		return monitor.dialSandbox(ctx, host)
+	}}, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	s.expires = verified.FreshnessExpiresAt()
 	fmt.Fprintf(os.Stderr, "Sandbox %s attestation verified.\n", row.Name)
 	address, port, _ := net.SplitHostPort(monitor.address)
@@ -560,37 +566,14 @@ type sandboxOwner struct {
 	request  func(method, path string, input, out any) error
 	instance string
 	signer   ssh.Signer
-	owner    string
+	key      *ecdh.PublicKey
 	client   *http.Client
 	expires  time.Time
-	skew     time.Duration
-}
-
-type relayHeaders struct {
-	EncapsulatedKey string `json:"Ehbp-Encapsulated-Key"`
-	ContentType     string `json:"Content-Type"`
 }
 
 type relayReply struct {
-	Status  int               `json:"status"`
-	Headers map[string]string `json:"headers"`
-	Body    string            `json:"body"`
-}
-
-func (o *sandboxOwner) relay(target string, nonce *string, headers *relayHeaders, body []byte) (*relayReply, []byte, error) {
-	input := struct {
-		InstanceID string        `json:"instance_id"`
-		Target     string        `json:"target,omitempty"`
-		Nonce      *string       `json:"nonce"`
-		Headers    *relayHeaders `json:"headers,omitempty"`
-		Body       string        `json:"body,omitempty"`
-	}{o.instance, target, nonce, headers, base64.RawURLEncoding.EncodeToString(body)}
-	var reply relayReply
-	if err := o.request(http.MethodPost, "/sandboxes/relay", input, &reply); err != nil {
-		return nil, nil, err
-	}
-	data, err := decodeB64U(reply.Body, -1)
-	return &reply, data, err
+	Status int    `json:"status"`
+	Body   string `json:"body"`
 }
 
 var verifySandboxEvidence = func(doc, nonce []byte, source string) (attestedEvidence, error) {
@@ -606,116 +589,207 @@ func (o *sandboxOwner) attest(source string) (attestedEvidence, error) {
 	if err != nil {
 		return nil, err
 	}
-	encoded := hex.EncodeToString(nonce)
-	reply, doc, err := o.relay("", &encoded, nil, nil)
-	if err != nil {
+	input := struct {
+		InstanceID string `json:"instance_id"`
+		Nonce      string `json:"nonce"`
+	}{o.instance, hex.EncodeToString(nonce)}
+	var reply relayReply
+	if err := o.request(http.MethodPost, "/sandboxes/relay", input, &reply); err != nil {
 		return nil, err
 	}
 	if reply.Status != http.StatusOK {
 		return nil, fmt.Errorf("sandbox attestation returned HTTP %d", reply.Status)
 	}
+	doc, err := decodeB64U(reply.Body, -1)
+	if err != nil {
+		return nil, err
+	}
 	verified, err := verifySandboxEvidence(doc, nonce, source)
 	if err != nil {
 		return nil, err
 	}
-	key, err := sandboxEHBPKey(verified)
-	if err != nil {
+	if o.key, err = sandboxSessionKey(verified); err != nil {
 		return nil, err
 	}
-	transport, err := ehbp.NewTransportWithIdentity(key, ehbp.WithHTTPClient(&http.Client{Transport: o}))
-	if err != nil {
-		return nil, err
-	}
-	o.client = &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	o.expires = verified.FreshnessExpiresAt()
 	return verified, nil
 }
 
-func sandboxEHBPKey(verified attestedEvidence) (*identity.Identity, error) {
-	public, err := endorsedKey("sandbox", verified, sandboxEHBPKeyID)
+func sandboxSessionKey(verified attestedEvidence) (*ecdh.PublicKey, error) {
+	public, err := endorsedKey("sandbox", verified, sandboxSessionKeyID)
 	if err != nil {
 		return nil, err
 	}
 	key, ok := public.(*ecdh.PublicKey)
-	if !ok {
-		return nil, fmt.Errorf("attested %q key is not X25519", sandboxEHBPKeyID)
+	if !ok || key.Curve() != ecdh.X25519() {
+		return nil, fmt.Errorf("attested %q key is not X25519", sandboxSessionKeyID)
 	}
-	return identity.FromPublicKeyBytes(key.Bytes())
+	return key, nil
 }
 
-// Never retried: a repeated ciphertext would repeat its nonce; call re-signs instead.
-func (o *sandboxOwner) RoundTrip(r *http.Request) (*http.Response, error) {
-	body, err := io.ReadAll(r.Body)
-	r.Body.Close()
+// A route owns its device SSH connection; closing the WebSocket releases both.
+type sandboxRouteConn struct {
+	net.Conn
+	client *ssh.Client
+}
+
+func (c *sandboxRouteConn) Close() error {
+	return errors.Join(c.Conn.Close(), c.client.Close())
+}
+
+func (m *monitorSession) dialSandbox(ctx context.Context, host ssh.PublicKey) (net.Conn, error) {
+	device, err := loadSigner(filepath.Join(m.dir, monitorDeviceKeyName))
 	if err != nil {
 		return nil, err
 	}
-	reply, data, err := o.relay("owner", nil, &relayHeaders{r.Header.Get(protocol.EncapsulatedKeyHeader), r.Header.Get("Content-Type")}, body)
+	conn, err := (&net.Dialer{Timeout: ownerHandshakeTimeout}).DialContext(ctx, "tcp", m.address)
 	if err != nil {
 		return nil, err
 	}
-	header := http.Header{}
-	for name, value := range reply.Headers {
-		header.Set(name, value)
+	stop := context.AfterFunc(ctx, func() { conn.Close() })
+	defer stop()
+	client, err := connectOwnerSigner(conn, m.domain, m.hostKey, device, monitorSSHUser)
+	if err != nil {
+		return nil, err
 	}
-	return &http.Response{StatusCode: reply.Status, Header: header, Body: io.NopCloser(bytes.NewReader(data)), ContentLength: int64(len(data)), Request: r}, nil
+	route, err := client.DialContext(ctx, "tcp", net.JoinHostPort(routeName(host), sandboxOwnerPort))
+	if err != nil {
+		client.Close()
+		return nil, err
+	}
+	return &sandboxRouteConn{Conn: route, client: client}, nil
+}
+
+func writeOwnerFrame(ctx context.Context, conn *websocket.Conn, cipher *noise.CipherState, message []byte) error {
+	if len(message) > ownerFrameBytes {
+		return errors.New("sandbox owner request is too large")
+	}
+	frame := append([]byte{ownerFrameLast}, message...)
+	defer clear(frame)
+	sealed, err := cipher.Encrypt(nil, nil, frame)
+	if err != nil {
+		return err
+	}
+	return conn.Write(ctx, websocket.MessageBinary, sealed)
+}
+
+func readOwnerFrame(ctx context.Context, conn *websocket.Conn) ([]byte, error) {
+	kind, frame, err := conn.Read(ctx)
+	if err == nil && kind != websocket.MessageBinary {
+		err = errors.New("sandbox owner session requires binary messages")
+	}
+	return frame, err
+}
+
+type ownerCall struct {
+	ID     uint64 `json:"id"`
+	Method string `json:"method"`
+	Path   string `json:"path"`
+	Body   []byte `json:"body"`
+}
+
+type ownerReply struct {
+	ID     uint64 `json:"id"`
+	Status int    `json:"status"`
+	Body   []byte `json:"body"`
 }
 
 func (o *sandboxOwner) call(ctx context.Context, method, path string, input, out any) error {
-	var body []byte
+	if !time.Now().Before(o.expires) {
+		return errors.New("sandbox attestation expired; verify it again")
+	}
+	ctx, cancel := context.WithDeadline(ctx, o.expires)
+	defer cancel()
+	ctx, timeout := context.WithTimeout(ctx, sandboxBootTimeout)
+	defer timeout()
+	handshakeCtx, done := context.WithTimeout(ctx, ownerHandshakeTimeout)
+	defer done()
+	conn, _, err := websocket.Dial(handshakeCtx, "ws://sandbox/owner/ws", &websocket.DialOptions{HTTPClient: o.client})
+	if err != nil {
+		return err
+	}
+	defer conn.CloseNow()
+	conn.SetReadLimit(noise.MaxMsgLen)
+	hs, err := noise.NewHandshakeState(noise.Config{
+		CipherSuite: noise.NewCipherSuite(noise.DH25519, noise.CipherChaChaPoly, noise.HashBLAKE2s),
+		Pattern:     noise.HandshakeNK, Initiator: true, Prologue: []byte(sandboxOwnerProtocol), PeerStatic: o.key.Bytes(),
+	})
+	if err != nil {
+		return err
+	}
+	message, _, _, err := hs.WriteMessage(nil, nil)
+	if err == nil {
+		err = conn.Write(handshakeCtx, websocket.MessageBinary, message)
+	}
+	if err == nil {
+		message, err = readOwnerFrame(handshakeCtx, conn)
+	}
+	if err != nil {
+		return err
+	}
+	_, send, recv, err := hs.ReadMessage(nil, message)
+	if err != nil {
+		return fmt.Errorf("sandbox owner handshake: %w", err)
+	}
+	signature, err := o.signer.Sign(rand.Reader, append([]byte(ownerSessionContext), hs.ChannelBinding()...))
+	if err != nil {
+		return err
+	}
+	if signature.Format != ssh.KeyAlgoED25519 || len(signature.Blob) != ed25519.SignatureSize {
+		return errors.New("the owner key did not produce an Ed25519 signature")
+	}
+	hello, _ := json.Marshal(struct {
+		Signature []byte `json:"signature"`
+		Open      string `json:"open"`
+	}{signature.Blob, "rpc"})
+	if err := writeOwnerFrame(handshakeCtx, conn, send, hello); err != nil {
+		return err
+	}
+	done()
+	call := ownerCall{Method: method, Path: path}
 	if input != nil {
-		var err error
-		if body, err = json.Marshal(input); err != nil {
+		call.Body, err = json.Marshal(input)
+		if err != nil {
 			return err
 		}
-		defer clear(body)
+		defer clear(call.Body)
 	}
-	request := ownerRequest{Protocol: sandboxOwnerProtocol, Owner: o.owner, Resource: o.instance, Method: method, Path: path,
-		Body: base64.RawURLEncoding.EncodeToString(body), Operation: randomB64U(16), IssuedAt: time.Now().Add(o.skew).UnixMilli()}
-	started := time.Now()
-	var lastErr error
-	for range ownerRetryAttempts {
-		if !time.Now().Before(o.expires) {
-			return errors.Join(errors.New("sandbox attestation expired; verify it again"), lastErr)
+	message, err = json.Marshal(call)
+	if err != nil {
+		return err
+	}
+	defer clear(message)
+	if err := writeOwnerFrame(ctx, conn, send, message); err != nil {
+		return fmt.Errorf("sandbox %s %s has an unknown outcome: %w", method, path, err)
+	}
+	var replyBytes []byte
+	for {
+		frame, err := readOwnerFrame(ctx, conn)
+		if err == nil {
+			frame, err = recv.Decrypt(nil, nil, frame)
 		}
-		if time.Since(started) > ownerOperationWindow || ctx.Err() != nil {
+		if err == nil && (len(frame) == 0 || frame[0] > ownerFrameLast || len(replyBytes)+len(frame)-1 > maxOwnerReplyBytes) {
+			err = errors.New("malformed sandbox owner reply")
+		}
+		if err != nil {
+			return fmt.Errorf("sandbox %s %s has an unknown outcome: %w", method, path, err)
+		}
+		replyBytes = append(replyBytes, frame[1:]...)
+		if frame[0] == ownerFrameLast {
 			break
 		}
-		request.Nonce = randomB64U(ownerNonceBytes)
-		envelope, err := signOwnerRequest(o.signer, request)
-		if err != nil {
-			return err
-		}
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://sandbox/owner/rpc", bytes.NewReader(envelope))
-		if err != nil {
-			return err
-		}
-		req.Header.Set("Content-Type", "application/json")
-		resp, err := o.client.Do(req)
-		var reply []byte
-		if err == nil {
-			reply, err = io.ReadAll(io.LimitReader(resp.Body, maxOwnerReplyBytes+1))
-			resp.Body.Close()
-		}
-		if err != nil || len(reply) > maxOwnerReplyBytes {
-			lastErr = errors.Join(err, errors.New("the sandbox reply was lost"))
-			continue
-		}
-		var refused struct {
-			Error string
-			Now   *int64
-		}
-		if resp.StatusCode == http.StatusUnauthorized && json.Unmarshal(reply, &refused) == nil && refused.Now != nil &&
-			(refused.Error == "request_time_in_future" || refused.Error == "request_expired") {
-			o.skew, request.IssuedAt = time.Until(time.UnixMilli(*refused.Now)), *refused.Now
-			continue
-		}
-		if resp.StatusCode != http.StatusOK {
-			return fmt.Errorf("sandbox %s %s: %d %s", method, path, resp.StatusCode, extractErrorMessage(reply))
-		}
-		return json.Unmarshal(reply, out)
 	}
-	return fmt.Errorf("sandbox %s %s has an unknown outcome: %w", method, path, lastErr)
+	var reply ownerReply
+	if err := json.Unmarshal(replyBytes, &reply); err != nil {
+		return err
+	}
+	if reply.ID != call.ID {
+		return errors.New("sandbox owner reply names another call")
+	}
+	if reply.Status != http.StatusOK {
+		return fmt.Errorf("sandbox %s %s: %d %s", method, path, reply.Status, extractErrorMessage(reply.Body))
+	}
+	return json.Unmarshal(reply.Body, out)
 }
 
 func (s *sandboxSession) install() error {
