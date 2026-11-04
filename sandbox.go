@@ -219,8 +219,9 @@ func validateSandboxNetwork(row containerView) error {
 
 const (
 	sandboxOwnerProtocol = "sandbox-owner-v1"
-	sandboxStatusCommand = "sudo -n -- /usr/local/bin/workspace-owner status"
-	sandboxEnrollCommand = "sudo -n -- /usr/local/bin/workspace-owner enroll"
+	sandboxOwnerRequest  = "sudo -n -- curl -sS --fail-with-body --unix-socket /run/workspace/owner.sock http://sandbox"
+	sandboxStatusCommand = sandboxOwnerRequest + "/status"
+	sandboxEnrollCommand = sandboxOwnerRequest + "/enroll --data-binary @-"
 	ownerConnectTimeout  = 30 * time.Second
 
 	// Monitor routes to a sandbox boot by a name derived from its SSH host key.
@@ -818,7 +819,7 @@ func sendOwnerCommand(ctx context.Context, dial func(context.Context) (*ssh.Clie
 		if !errors.As(err, &exit) {
 			return "", fmt.Errorf("owner command has an unknown outcome: %w", err)
 		}
-		return "", fmt.Errorf("%w: %s", err, strings.TrimSpace(string(message)))
+		return "", fmt.Errorf("%w: %s", err, strings.TrimSpace(string(message)+string(output)))
 	}
 	return strings.TrimSpace(string(output)), nil
 }
