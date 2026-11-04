@@ -520,7 +520,10 @@ func TestMonitorRestartRelinksOnlyAuthorizedSandboxes(t *testing.T) {
 				var in struct {
 					MonitorHostKey string `json:"monitor_host_key"`
 				}
-				require.NoError(t, json.Unmarshal(body, &in))
+				if err := json.Unmarshal(body, &in); err != nil {
+					t.Error(err)
+					return nil
+				}
 				f.status.MonitorHostKey = &in.MonitorHostKey
 			}
 			return f.status

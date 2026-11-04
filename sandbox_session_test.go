@@ -99,9 +99,9 @@ func (f *fakeSandboxOwner) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.requests = append(f.requests, call)
 	body, _ := json.Marshal(f.reply(call))
-	f.mu.Unlock()
 	if f.mode == "lost reply" {
 		return
 	}
@@ -164,9 +164,7 @@ func TestSandboxOwnerSession(t *testing.T) {
 			if mode == "oversized" {
 				body = strings.Repeat("x", maxOwnerReplyBytes)
 			}
-			owner, endpoint := testSandboxOwner(t, testSeed(t), func(call ownerCall) any {
-				require.Equal(t, "/enroll", call.Path)
-				require.JSONEq(t, `{"disk_key":"secret"}`, string(call.Body))
+			owner, endpoint := testSandboxOwner(t, testSeed(t), func(ownerCall) any {
 				return body
 			})
 			endpoint.mode = mode
@@ -196,6 +194,10 @@ func TestSandboxOwnerSession(t *testing.T) {
 				require.Empty(t, endpoint.calls(), "unauthenticated calls never reach the owner API")
 			} else {
 				require.Len(t, endpoint.calls(), 1, "lost or malformed replies never repeat an effect")
+			}
+			for _, call := range endpoint.calls() {
+				require.Equal(t, "/enroll", call.Path)
+				require.JSONEq(t, `{"disk_key":"secret"}`, string(call.Body))
 			}
 			if mode == "expired" || mode == "canceled" {
 				require.Zero(t, endpoint.hits.Load())
