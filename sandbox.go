@@ -580,10 +580,10 @@ type relayReply struct {
 func (o *sandboxOwner) relay(target string, nonce *string, headers *relayHeaders, body []byte) (*relayReply, []byte, error) {
 	input := struct {
 		InstanceID string        `json:"instance_id"`
-		Target     string        `json:"target"`
+		Target     string        `json:"target,omitempty"`
 		Nonce      *string       `json:"nonce"`
-		Headers    *relayHeaders `json:"headers"`
-		Body       string        `json:"body"`
+		Headers    *relayHeaders `json:"headers,omitempty"`
+		Body       string        `json:"body,omitempty"`
 	}{o.instance, target, nonce, headers, base64.RawURLEncoding.EncodeToString(body)}
 	var reply relayReply
 	if err := o.request(http.MethodPost, "/sandboxes/relay", input, &reply); err != nil {
@@ -607,7 +607,7 @@ func (o *sandboxOwner) attest(source string) (attestedEvidence, error) {
 		return nil, err
 	}
 	encoded := hex.EncodeToString(nonce)
-	reply, doc, err := o.relay("attestation", &encoded, nil, nil)
+	reply, doc, err := o.relay("", &encoded, nil, nil)
 	if err != nil {
 		return nil, err
 	}
