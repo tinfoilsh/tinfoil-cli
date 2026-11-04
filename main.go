@@ -88,7 +88,7 @@ func newRootCommand() *cobra.Command {
 		SilenceUsage: true,
 	}
 	cmd.PersistentFlags().StringVar(&localConfigFile, "config", "", "Local config file to launch or trust for verification")
-	cmd.PersistentFlags().BoolVar(&publicRegistry, "public-registry", false, "Require the public registry scope, including in enrolled private namespaces")
+	cmd.PersistentFlags().BoolVar(&publicRegistry, "public-registry", false, "Require public configs, even when a private registry is trusted")
 	cmd.MarkFlagsMutuallyExclusive("config", "public-registry")
 	return cmd
 }

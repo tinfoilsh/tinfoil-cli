@@ -8,9 +8,11 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/spf13/cobra"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	configendorsement "github.com/tinfoilsh/tinfoil-go/endorsement/config"
 	"github.com/tinfoilsh/tinfoil-go/verify"
@@ -69,14 +71,37 @@ func TestScopeCommandsKeepPersonalAndOrganizationApprovalsSeparate(t *testing.T)
 	personal := entry
 	personal.AccountID, personal.Namespaces, personal.Scope = "user_owner", []string{"/user-personal"}, configendorsement.ScopePrefix+strings.Repeat("f", 32)
 	require.NoError(t, acceptRegistry(strings.NewReader(""), &bytes.Buffer{}, personal, true))
-	require.NoError(t, executeLifecycleCLI(t, "trust", "scope", "add", "--scope", entry.Scope))
+	require.NoError(t, executeLifecycleCLI(t, "trust", "add", "--registry-id", entry.Scope))
 	policy, err := loadConnectionPolicy()
 	require.NoError(t, err)
 	require.Len(t, policy.Registries, 2)
-	require.NoError(t, executeLifecycleCLI(t, "trust", "scope", "remove", entry.AccountID))
+	output, err := captureTestStdout(func() error { return executeLifecycleCLI(t, "trust") })
+	require.NoError(t, err)
+	require.Contains(t, string(output), "Private registry: Acme")
+	require.NotContains(t, string(output), entry.Scope)
+	output, err = captureTestStdout(func() error { return executeLifecycleCLI(t, "trust", "--json") })
+	require.NoError(t, err)
+	require.Contains(t, string(output), `"registry_id":"`+entry.Scope+`"`)
+	require.NoError(t, executeLifecycleCLI(t, "trust", "remove", entry.Label))
 	policy, err = loadConnectionPolicy()
 	require.NoError(t, err)
 	require.Equal(t, []registryEnrollment{personal}, policy.Registries)
+}
+
+func TestRegistryRemovalRejectsAmbiguousNames(t *testing.T) {
+	entry := enrollmentFixture(t)
+	require.NoError(t, acceptRegistry(strings.NewReader(""), &bytes.Buffer{}, entry, true))
+	other := entry
+	other.AccountID, other.Namespaces, other.Scope = "org_other", []string{"/other"}, configendorsement.ScopePrefix+strings.Repeat("e", 32)
+	require.NoError(t, acceptRegistry(strings.NewReader(""), &bytes.Buffer{}, other, true))
+	require.ErrorContains(t, executeLifecycleCLI(t, "trust", "remove", entry.Label), "multiple private registries")
+	policy, err := loadConnectionPolicy()
+	require.NoError(t, err)
+	require.Len(t, policy.Registries, 2)
+	require.NoError(t, executeLifecycleCLI(t, "trust", "remove", entry.AccountID))
+	policy, err = loadConnectionPolicy()
+	require.NoError(t, err)
+	require.Equal(t, []registryEnrollment{other}, policy.Registries)
 }
 
 func TestPublicRegistryPolicySurvivesSSHProxyCommand(t *testing.T) {
@@ -167,9 +192,9 @@ func TestClerkRegistryEnrollmentUsesTheAuthenticatedAPIOrigin(t *testing.T) {
 func TestRegistryEnrollmentRejectsAnUnexpectedScope(t *testing.T) {
 	entry := enrollmentFixture(t)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		require.Equal(t, http.MethodGet, r.Method)
-		require.Equal(t, registryEnrollmentPath, r.URL.Path)
-		require.Equal(t, "Bearer admin_test", r.Header.Get("Authorization"))
+		assert.Equal(t, http.MethodGet, r.Method)
+		assert.Equal(t, registryEnrollmentPath, r.URL.Path)
+		assert.Equal(t, "Bearer admin_test", r.Header.Get("Authorization"))
 		json.NewEncoder(w).Encode(registryAccount{OwnerKind: "user", Namespaces: entry.Namespaces, Scope: entry.Scope})
 	}))
 	defer server.Close()
@@ -177,10 +202,32 @@ func TestRegistryEnrollmentRejectsAnUnexpectedScope(t *testing.T) {
 	cmd.SetOut(&bytes.Buffer{})
 	identity := authContext{ContextType: "personal", UserID: "user_test"}
 	err := enrollRegistry(cmd, cliConfig{ControlplaneURL: server.URL, APIKey: "admin_test"}, identity, configendorsement.PublicScope, false)
-	require.ErrorContains(t, err, "expected scope")
+	require.ErrorContains(t, err, "expected registry ID")
 	policy, err := loadConnectionPolicy()
 	require.NoError(t, err)
 	require.Empty(t, policy.Registries)
 	err = enrollRegistry(cmd, cliConfig{}, identity, "", false)
-	require.ErrorContains(t, err, "explicit --scope")
+	require.ErrorContains(t, err, "explicit --registry-id")
+}
+
+func TestRegistryEnrollmentRejectsUnsafeURLsBeforeSendingCredentials(t *testing.T) {
+	entry := enrollmentFixture(t)
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		json.NewEncoder(w).Encode(registryAccount{OwnerKind: "user", Namespaces: entry.Namespaces, Scope: entry.Scope})
+	}))
+	defer server.Close()
+	for _, address := range []string{
+		strings.Replace(server.URL, "://", "://user:password@", 1),
+		server.URL + "?token=fixture",
+		server.URL + "?",
+		server.URL + "#fragment",
+	} {
+		cmd := &cobra.Command{}
+		cmd.SetErr(&bytes.Buffer{})
+		err := enrollRegistry(cmd, cliConfig{ControlplaneURL: address, APIKey: "admin_fixture"}, authContext{ContextType: "personal", UserID: "user_owner"}, entry.Scope, false)
+		require.ErrorContains(t, err, "must not contain")
+	}
+	require.Zero(t, requests.Load())
 }

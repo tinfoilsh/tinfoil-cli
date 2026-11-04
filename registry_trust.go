@@ -21,7 +21,7 @@ type registryEnrollment struct {
 	AccountID       string   `json:"account_id"`
 	Label           string   `json:"label,omitempty"`
 	Namespaces      []string `json:"namespaces"`
-	Scope           string   `json:"scope"`
+	Scope           string   `json:"registry_id"`
 }
 
 type registryAccount struct {
@@ -33,30 +33,13 @@ type registryAccount struct {
 var enrollmentScope string
 
 func init() {
-	trustCmd.AddCommand(trustScopeCmd)
-	trustScopeCmd.AddCommand(trustEnrollCmd, trustRemoveCmd, trustScopeListCmd)
-	trustEnrollCmd.Flags().StringVar(&enrollmentScope, "scope", "", "Expected audit scope URI; explicitly accepts this scope without a prompt")
-}
-
-var trustScopeCmd = &cobra.Command{
-	Use: "scope", Short: "Manage private registry scope approvals",
-}
-
-var trustScopeListCmd = &cobra.Command{
-	Use: "list", Short: "Show approved private registry scopes", Args: cobra.NoArgs,
-	RunE: func(cmd *cobra.Command, _ []string) error {
-		policy, err := loadConnectionPolicy()
-		if err != nil {
-			return err
-		}
-		printRegistryScopes(cmd.OutOrStdout(), policy.Registries)
-		return nil
-	},
+	trustCmd.AddCommand(trustEnrollCmd, trustRemoveCmd)
+	trustEnrollCmd.Flags().StringVar(&enrollmentScope, "registry-id", "", "Expected private registry ID; approves it without a prompt")
 }
 
 var trustEnrollCmd = &cobra.Command{
 	Use:   "add",
-	Short: "Accept the current account's private registry scope",
+	Short: "Trust the current account's private registry",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		cfg, err := requireAuth()
@@ -72,8 +55,8 @@ var trustEnrollCmd = &cobra.Command{
 }
 
 var trustRemoveCmd = &cobra.Command{
-	Use:   "remove <account-id>",
-	Short: "Remove a private registry enrollment for the current control plane",
+	Use:   "remove <account>",
+	Short: "Stop trusting an account's private registry",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		controlplaneURL, err := registryControlplaneURL()
@@ -84,8 +67,17 @@ var trustRemoveCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
+		matches := 0
+		for _, entry := range policy.Registries {
+			if entry.ControlplaneURL == controlplaneURL && registryAccountMatches(entry, args[0]) {
+				matches++
+			}
+		}
+		if matches > 1 {
+			return fmt.Errorf("multiple private registries match %s; use the account ID shown by tinfoil trust", args[0])
+		}
 		remaining := slices.DeleteFunc(policy.Registries, func(e registryEnrollment) bool {
-			return e.ControlplaneURL == controlplaneURL && e.AccountID == args[0]
+			return e.ControlplaneURL == controlplaneURL && registryAccountMatches(e, args[0])
 		})
 		if len(remaining) == len(policy.Registries) {
 			return fmt.Errorf("no registry enrollment for account %s", args[0])
@@ -95,9 +87,13 @@ var trustRemoveCmd = &cobra.Command{
 	},
 }
 
+func registryAccountMatches(entry registryEnrollment, account string) bool {
+	return entry.AccountID == account || strings.EqualFold(entry.Label, account) || slices.Contains(entry.Namespaces, "/"+strings.TrimPrefix(account, "/"))
+}
+
 func printRegistryScopes(out io.Writer, entries []registryEnrollment) {
 	for _, entry := range entries {
-		fmt.Fprintf(out, "Registry: %s (%s) at %s\n  Namespaces: %s\n  Audit scope: %s\n", entry.Label, entry.AccountID, entry.ControlplaneURL, strings.Join(entry.Namespaces, ", "), entry.Scope)
+		fmt.Fprintf(out, "Private registry: %s (%s)\n  Control plane: %s\n  Projects under: %s\n", entry.Label, entry.AccountID, entry.ControlplaneURL, strings.Join(entry.Namespaces, ", "))
 	}
 }
 
@@ -114,7 +110,7 @@ func offerRegistryEnrollment(cmd *cobra.Command) {
 		}
 	}
 	if err != nil {
-		fmt.Fprintf(cmd.ErrOrStderr(), "Signed in, but registry enrollment failed: %v\nRun tinfoil trust scope add to try again.\n", err)
+		fmt.Fprintf(cmd.ErrOrStderr(), "Signed in, but private registry approval failed: %v\nRun tinfoil trust add to try again.\n", err)
 	}
 }
 
@@ -141,16 +137,22 @@ func (e registryEnrollment) validate() error {
 
 func enrollRegistry(cmd *cobra.Command, cfg cliConfig, identity authContext, expectedScope string, interactive bool) error {
 	if !interactive && expectedScope == "" {
-		return fmt.Errorf("registry enrollment requires a terminal or an explicit --scope")
+		return fmt.Errorf("private registry approval requires a terminal or an explicit --registry-id")
 	}
 	var account registryAccount
 	if _, err := newCPClient(cfg).do("GET", registryEnrollmentPath, nil, nil, &account); err != nil {
 		return err
 	}
 	if expectedScope != "" && expectedScope != account.Scope {
-		return fmt.Errorf("registry scope does not match the expected scope")
+		return fmt.Errorf("private registry ID does not match the expected registry ID")
 	}
 	entry := registryEnrollment{ControlplaneURL: cfg.ControlplaneURL, AccountID: identity.UserID, Label: identity.UserID, Namespaces: account.Namespaces, Scope: account.Scope}
+	if identity.ContextType == "personal" {
+		entry.Label = "Personal"
+		if identity.UserName != "" {
+			entry.Label = identity.UserName
+		}
+	}
 	ownerKind := "user"
 	if identity.Organization != nil {
 		ownerKind = "organization"
@@ -178,10 +180,13 @@ func acceptRegistry(in io.Reader, out io.Writer, entry registryEnrollment, expli
 			fmt.Fprintf(out, "Registry %s is already enrolled.\n", entry.Label)
 			return nil
 		}
+		if previous.ControlplaneURL == entry.ControlplaneURL && previous.AccountID == entry.AccountID && previous.Scope != entry.Scope {
+			fmt.Fprintf(out, "Private registry identity changed.\nPrevious registry ID: %s\nNew registry ID: %s\n", previous.Scope, entry.Scope)
+		}
 	}
-	fmt.Fprintf(out, "Private registry: %s (%s)\nControl plane: %s\nNamespaces: %s\nAudit scope: %s\n", entry.Label, entry.AccountID, entry.ControlplaneURL, strings.Join(entry.Namespaces, ", "), entry.Scope)
+	printRegistryScopes(out, []registryEnrollment{entry})
 	if !explicit {
-		fmt.Fprint(out, "Accept current and future configs in this scope? This replaces any previous enrollment for this account. [y/N] ")
+		fmt.Fprint(out, "Trust configs from this private registry? Existing project and config restrictions still apply. [y/N] ")
 		scanner := bufio.NewScanner(in)
 		if !scanner.Scan() {
 			return scanner.Err()
@@ -205,7 +210,7 @@ func acceptRegistry(in io.Reader, out io.Writer, entry registryEnrollment, expli
 	if err := policy.save(); err != nil {
 		return err
 	}
-	fmt.Fprintf(out, "Enrolled %s. Connections in these namespaces require this scope; project and config restrictions still apply.\n", entry.Label)
+	fmt.Fprintf(out, "Trusted private registry: %s.\n", entry.Label)
 	return nil
 }
 
