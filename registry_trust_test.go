@@ -99,6 +99,9 @@ func TestRegistryRemovalRejectsAmbiguousNames(t *testing.T) {
 	policy, err := loadConnectionPolicy()
 	require.NoError(t, err)
 	require.Len(t, policy.Registries, 2)
+	other.Label = entry.AccountID
+	policy.Registries[1] = other
+	require.NoError(t, policy.save())
 	require.NoError(t, executeLifecycleCLI(t, "trust", "remove", entry.AccountID))
 	policy, err = loadConnectionPolicy()
 	require.NoError(t, err)

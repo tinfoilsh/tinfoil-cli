@@ -67,17 +67,25 @@ var trustRemoveCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		matches := 0
+		accountID := ""
 		for _, entry := range policy.Registries {
-			if entry.ControlplaneURL == controlplaneURL && registryAccountMatches(entry, args[0]) {
-				matches++
+			if entry.ControlplaneURL == controlplaneURL && entry.AccountID == args[0] {
+				accountID = entry.AccountID
+				break
 			}
 		}
-		if matches > 1 {
-			return fmt.Errorf("multiple private registries match %s; use the account ID shown by tinfoil trust", args[0])
+		if accountID == "" {
+			for _, entry := range policy.Registries {
+				if entry.ControlplaneURL == controlplaneURL && registryAccountMatches(entry, args[0]) {
+					if accountID != "" {
+						return fmt.Errorf("multiple private registries match %s; use the account ID shown by tinfoil trust", args[0])
+					}
+					accountID = entry.AccountID
+				}
+			}
 		}
 		remaining := slices.DeleteFunc(policy.Registries, func(e registryEnrollment) bool {
-			return e.ControlplaneURL == controlplaneURL && registryAccountMatches(e, args[0])
+			return e.ControlplaneURL == controlplaneURL && e.AccountID == accountID
 		})
 		if len(remaining) == len(policy.Registries) {
 			return fmt.Errorf("no registry enrollment for account %s", args[0])
@@ -88,7 +96,7 @@ var trustRemoveCmd = &cobra.Command{
 }
 
 func registryAccountMatches(entry registryEnrollment, account string) bool {
-	return entry.AccountID == account || strings.EqualFold(entry.Label, account) || slices.Contains(entry.Namespaces, "/"+strings.TrimPrefix(account, "/"))
+	return account != "" && (entry.AccountID == account || strings.EqualFold(entry.Label, account) || slices.Contains(entry.Namespaces, "/"+strings.TrimPrefix(account, "/")))
 }
 
 func printRegistryScopes(out io.Writer, entries []registryEnrollment) {
