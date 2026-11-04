@@ -37,6 +37,9 @@ func tlsConnection(enclaveHost string) (*tls.ConnectionState, error) {
 func verificationOptions(source, sealedTo string) (*tinfoil.EnclaveOptions, error) {
 	var policy []verify.Option
 	if localConfigFile != "" {
+		if publicRegistry {
+			return nil, fmt.Errorf("--public-registry and --config cannot be used together")
+		}
 		if source != "" {
 			return nil, fmt.Errorf("--config and --repo cannot be used together")
 		}
@@ -47,6 +50,12 @@ func verificationOptions(source, sealedTo string) (*tinfoil.EnclaveOptions, erro
 		policy = append(policy, verify.WithEmbeddedReferences(verify.EmbeddedReferences{Config: &verify.EmbeddedConfig{Bytes: data}}))
 	} else if source == "" {
 		return nil, fmt.Errorf("v3 verification requires an expected workload; pass --repo owner/name[@tag][@sha256:digest] or --config FILE")
+	} else {
+		var err error
+		policy, err = registrySigningOptions(source)
+		if err != nil {
+			return nil, err
+		}
 	}
 	if sealedTo != "" {
 		pins, err := measurement.ParseExpectedTDX("", "", "", "", sealedTo)

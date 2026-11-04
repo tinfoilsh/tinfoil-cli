@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"encoding/json/v2"
 	"fmt"
 	"io"
 	"os"
@@ -18,11 +19,13 @@ var (
 	trustSetMode   string
 	trustSetRecord string
 	trustSetPrune  bool
+	trustJSON      bool
 )
 
 func init() {
 	rootCmd.AddCommand(trustCmd)
 	trustCmd.AddCommand(trustSetCmd)
+	trustCmd.Flags().BoolVar(&trustJSON, "json", false, "Show the complete trust policy, including registry IDs")
 	trustSetCmd.Flags().StringVar(&trustSetMode, "mode", "", "prompt (unknown configs ask) or frozen (unknown configs fail)")
 	trustSetCmd.Flags().StringVar(&trustSetRecord, "record", "", "what a yes records: org, project, or pin")
 	trustSetCmd.Flags().BoolVar(&trustSetPrune, "prune", false, "also remove broader allow entries when tightening --record")
@@ -43,6 +46,14 @@ var trustCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		policy, err := loadConnectionPolicy()
 		if err != nil {
+			return err
+		}
+		if trustJSON {
+			data, err := json.Marshal(policy)
+			if err != nil {
+				return err
+			}
+			_, err = fmt.Fprintln(cmd.OutOrStdout(), string(data))
 			return err
 		}
 		printTrustStore(cmd.OutOrStdout(), policy)
@@ -125,6 +136,7 @@ func plural(n int, one, many string) string {
 }
 
 func printTrustStore(out io.Writer, policy connectionPolicy) {
+	printRegistryScopes(out, policy.Registries)
 	fmt.Fprintf(out, "Store: %s", policy.path)
 	if _, err := os.Stat(policy.path); os.IsNotExist(err) {
 		fmt.Fprint(out, " (not created yet)")

@@ -540,4 +540,23 @@ func TestConnectionPolicyDoesNotIgnoreYAMLStore(t *testing.T) {
 	if err != nil || policy.Mode != policyModeFrozen {
 		t.Fatalf("converted store: mode=%q, err=%v", policy.Mode, err)
 	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	previous := filepath.Join(filepath.Dir(path), legacyJSONPolicyFileName)
+	content := []byte(`{"mode":"frozen","allow":{"projects":["acme/api"]}}`)
+	if err := os.WriteFile(previous, content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	policy, err = loadConnectionPolicy()
+	if err != nil || policy.Mode != policyModeFrozen || !policy.matches("acme/api@v2") || policy.path != path {
+		t.Fatalf("released JSON policy was not preserved: %+v, %v", policy, err)
+	}
+	if err := policy.save(); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := os.ReadFile(previous)
+	if err != nil || string(stored) != string(content) {
+		t.Fatalf("released policy was overwritten: %q, %v", stored, err)
+	}
 }

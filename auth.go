@@ -122,6 +122,7 @@ var loginCmd = &cobra.Command{
 			}
 		}
 		printAuthContext("Effective login", effective, credentialSource(), identity)
+		offerRegistryEnrollment(cmd)
 		return nil
 	},
 }
@@ -337,6 +338,7 @@ func clerkLogin(cmd *cobra.Command, syncKeys bool) error {
 	if syncKeys {
 		fmt.Fprintln(cmd.OutOrStdout(), "Sandbox keys synced to this machine.")
 	}
+	offerRegistryEnrollment(cmd)
 	return nil
 }
 

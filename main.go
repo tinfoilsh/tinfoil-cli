@@ -72,6 +72,7 @@ var (
 var (
 	enclaveHost, repo string
 	localConfigFile   string
+	publicRegistry    bool
 	verbose, trace    bool
 	version           = defaultVersion
 	// exitCode is the status a command wants the process to end with, for the
@@ -87,6 +88,8 @@ func newRootCommand() *cobra.Command {
 		SilenceUsage: true,
 	}
 	cmd.PersistentFlags().StringVar(&localConfigFile, "config", "", "Local config file to launch or trust for verification")
+	cmd.PersistentFlags().BoolVar(&publicRegistry, "public-registry", false, "Require public configs, even when a private registry is trusted")
+	cmd.MarkFlagsMutuallyExclusive("config", "public-registry")
 	return cmd
 }
 

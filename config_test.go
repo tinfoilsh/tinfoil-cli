@@ -134,7 +134,7 @@ func TestValidateControlplaneURL(t *testing.T) {
 		{name: "empty", input: "", wantError: true, errSubstr: "empty"},
 		{name: "no scheme", input: "api.tinfoil.sh", wantError: true, errSubstr: "missing host"},
 		{name: "http public", input: "http://api.tinfoil.sh", wantError: true, errSubstr: "must use https"},
-		{name: "http with userinfo", input: "http://user:pass@attacker.example.com", wantError: true, errSubstr: "must use https"},
+		{name: "http with userinfo", input: "http://user:pass@attacker.example.com", wantError: true, errSubstr: "must not contain"},
 		{name: "ftp", input: "ftp://api.tinfoil.sh", wantError: true, errSubstr: "must use https"},
 		{name: "ws", input: "ws://api.tinfoil.sh", wantError: true, errSubstr: "must use https"},
 		{name: "https no host", input: "https://", wantError: true, errSubstr: "missing host"},

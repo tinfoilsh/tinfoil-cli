@@ -67,6 +67,7 @@ func TestCreateLocalConfigRejectsUnsupportedSelections(t *testing.T) {
 		message string
 	}{
 		{[]string{"--repo", "acme/app"}, "none of the others can be"},
+		{[]string{"--public-registry"}, "none of the others can be"},
 		{[]string{"--tag", "v1"}, "none of the others can be"},
 		{[]string{"--revision", "v1"}, "none of the others can be"},
 		{[]string{"--source", containerSourceGitHub}, "--config requires --source local"},

@@ -390,6 +390,9 @@ func validateControlplaneURL(raw string) error {
 	if u.Host == "" {
 		return fmt.Errorf("invalid controlplane URL %q: missing host (expected https://...)", raw)
 	}
+	if u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || u.RawFragment != "" {
+		return fmt.Errorf("controlplane URL must not contain credentials, a query, or a fragment")
+	}
 	switch u.Scheme {
 	case "https":
 		return nil
