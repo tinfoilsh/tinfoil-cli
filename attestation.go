@@ -79,6 +79,9 @@ func newVerifiedClient(host, source, sealedTo string) (*tinfoil.EnclaveHTTPClien
 	if err != nil {
 		return nil, err
 	}
+	opts.VerificationCheck = func(verified *verify.Verification) error {
+		return checkVerifiedDeployment(host, source, verified)
+	}
 	return tinfoil.NewEnclaveHTTPClient(context.Background(), host, source, opts)
 }
 

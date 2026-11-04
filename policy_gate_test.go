@@ -35,31 +35,16 @@ func TestGateDangerousBypassesAndRecordsNothing(t *testing.T) {
 	}
 }
 
-func TestGateMatchedJournalsNewPin(t *testing.T) {
-	path := gateEnv(t, `{"allow":{"projects":["acme/api"]}}`)
+func TestGateApprovedProjectDoesNotGrantObservedPins(t *testing.T) {
+	content := `{"allow":{"projects":["acme/api"]}}`
+	path := gateEnv(t, content)
 	var out strings.Builder
-	source := "acme/api@r42@" + testDigestA
-	if err := gateConnectionPolicy(source, strings.NewReader(""), &out, false, false); err != nil {
+	if err := gateConnectionPolicy("acme/api@r42@"+testDigestA, strings.NewReader(""), &out, false, false); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out.String(), "New config journaled: "+source) {
-		t.Fatalf("expected journal announcement: %q", out.String())
-	}
-	policy, err := loadConnectionPolicyFrom(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !policy.hasPin(source) {
-		t.Fatalf("pin not journaled: %+v", policy)
-	}
-
-	// Second connect to the same config: quiet, no duplicate.
-	out.Reset()
-	if err := gateConnectionPolicy(source, strings.NewReader(""), &out, false, false); err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(out.String(), "New config journaled") {
-		t.Fatalf("known pin must not re-announce: %q", out.String())
+	data, err := os.ReadFile(path)
+	if err != nil || string(data) != content {
+		t.Fatalf("observation changed authorization: %s, %v", data, err)
 	}
 }
 
@@ -77,9 +62,6 @@ func TestGateFrozenStillAllowsMatchesAndNeverWrites(t *testing.T) {
 	var out strings.Builder
 	if err := gateConnectionPolicy("acme/api@r1@"+testDigestA, strings.NewReader(""), &out, false, false); err != nil {
 		t.Fatal(err)
-	}
-	if !strings.Contains(out.String(), "not journaled, mode: frozen") {
-		t.Fatalf("first sight should still be announced: %q", out.String())
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -120,7 +102,11 @@ func TestAssertTrustedSource(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !policy.hasPin(source) {
+			pin := source
+			if !tc.wantProject {
+				pin = tc.assertion
+			}
+			if !policy.hasPin(pin) || !policy.matches(source) {
 				t.Fatalf("pin always records: %+v", policy)
 			}
 			if !tc.wantProject && !policy.hasPin(tc.assertion) {

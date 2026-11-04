@@ -68,12 +68,8 @@ var proxyCmd = &cobra.Command{
 				httpClient = router.Client
 			}
 		} else {
-			opts, parseErr := verificationOptions(repo, "")
-			if parseErr != nil {
-				return parseErr
-			}
 			var enclave *tinfoil.EnclaveHTTPClient
-			enclave, err = tinfoil.NewEnclaveHTTPClient(cmd.Context(), enclaveHost, repo, opts)
+			enclave, err = newVerifiedClient(enclaveHost, repo, "")
 			if err == nil {
 				httpClient = enclave.Client
 			}

@@ -16,10 +16,11 @@ import (
 // the CLI, so changing mode/record or finding the file to edit does not
 // require remembering its path.
 var (
-	trustSetMode   string
-	trustSetRecord string
-	trustSetPrune  bool
-	trustJSON      bool
+	trustSetMode    string
+	trustSetRecord  string
+	trustSetPrune   bool
+	trustJSON       bool
+	trustSetUpdates string
 )
 
 func init() {
@@ -29,6 +30,7 @@ func init() {
 	trustSetCmd.Flags().StringVar(&trustSetMode, "mode", "", "prompt (unknown configs ask) or frozen (unknown configs fail)")
 	trustSetCmd.Flags().StringVar(&trustSetRecord, "record", "", "what a yes records: org, project, or pin")
 	trustSetCmd.Flags().BoolVar(&trustSetPrune, "prune", false, "also remove broader allow entries when tightening --record")
+	trustSetCmd.Flags().StringVar(&trustSetUpdates, "updates", "", "follow, ask, or pinned deployment config changes")
 }
 
 var trustCmd = &cobra.Command{
@@ -66,13 +68,19 @@ var trustSetCmd = &cobra.Command{
 	Short: "Set the trust store's mode and/or record granularity",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		if trustSetMode == "" && trustSetRecord == "" {
-			return fmt.Errorf("nothing to set: pass --mode and/or --record")
+		if trustSetMode == "" && trustSetRecord == "" && trustSetUpdates == "" {
+			return fmt.Errorf("nothing to set: pass --mode, --record, or --updates")
 		}
 		policy, err := loadConnectionPolicy()
 		if err != nil {
 			// A malformed store must be fixed by hand, not overwritten.
 			return err
+		}
+		if trustSetUpdates != "" {
+			if err := validateUpdates(trustSetUpdates); err != nil {
+				return err
+			}
+			policy.Updates = trustSetUpdates
 		}
 		if err := policy.setDefaults(trustSetMode, trustSetRecord); err != nil {
 			return err
@@ -137,6 +145,7 @@ func plural(n int, one, many string) string {
 
 func printTrustStore(out io.Writer, policy connectionPolicy) {
 	printRegistryScopes(out, policy.Registries)
+	fmt.Fprintf(out, "Updates: %s\n", policy.Updates)
 	fmt.Fprintf(out, "Store: %s", policy.path)
 	if _, err := os.Stat(policy.path); os.IsNotExist(err) {
 		fmt.Fprint(out, " (not created yet)")
