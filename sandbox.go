@@ -3,16 +3,13 @@ package main
 import (
 	"bytes"
 	"context"
-	"crypto/ecdh"
 	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/base32"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"net/http"
 	"os"
@@ -22,9 +19,6 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
-	ehbp "github.com/tinfoilsh/encrypted-http-body-protocol/client"
-	"github.com/tinfoilsh/encrypted-http-body-protocol/identity"
-	"github.com/tinfoilsh/encrypted-http-body-protocol/protocol"
 	"github.com/tinfoilsh/tinfoil-go/verify/document"
 	"golang.org/x/crypto/ssh"
 )
@@ -225,10 +219,10 @@ func validateSandboxNetwork(row containerView) error {
 
 const (
 	sandboxOwnerProtocol = "sandbox-owner-v1"
-	sandboxEHBPKeyID     = "sandbox-ehbp"
-	ownerOperationWindow = time.Minute
-	ownerRetryAttempts   = 4
-	maxOwnerReplyBytes   = 2 << 20
+	sandboxOwnerRequest  = "sudo -n -- curl -sS --fail-with-body --unix-socket /run/workspace/owner.sock http://sandbox"
+	sandboxStatusCommand = sandboxOwnerRequest + "/status"
+	sandboxEnrollCommand = sandboxOwnerRequest + "/enroll --data-binary @-"
+	ownerConnectTimeout  = 30 * time.Second
 
 	// Monitor routes to a sandbox boot by a name derived from its SSH host key.
 	sandboxRouteSuffix = ".sandbox.invalid"
@@ -353,7 +347,7 @@ func openSandbox(scope accountScope, cp *cpClient, target *workloadTarget, bindi
 		fmt.Fprintf(os.Stderr, "Sandbox %s attestation verified.\nWarning: sandbox has NO_MONITOR=1; its network traffic is not being tunneled through Monitor.\n", row.Name)
 		return s, nil
 	}
-	s.owner = &sandboxOwner{request: monitor.request, instance: *binding.InstanceID, signer: keys.signer, owner: row.OwnerPublicKey}
+	s.owner = &sandboxOwner{request: monitor.request, instance: *binding.InstanceID, dial: s.dial}
 	stop := startConnectionProgress(os.Stderr, "Requesting sandbox attestation through Monitor's relay")
 	verified, err := s.owner.attest(target.source)
 	stop()
@@ -475,7 +469,7 @@ func (s *sandboxSession) enroll(ctx context.Context) error {
 		return errors.New("sandbox attestation expired; verify it again before unlocking")
 	}
 	if s.noMonitor {
-		return s.unlockDirect()
+		return s.unlockDirect(ctx)
 	}
 	name := s.box.Name
 	status, err := s.status(ctx)
@@ -515,7 +509,7 @@ func (s *sandboxSession) enroll(ctx context.Context) error {
 
 func (s *sandboxSession) status(ctx context.Context) (sandboxStatus, error) {
 	var status sandboxStatus
-	if err := s.owner.call(ctx, http.MethodGet, "/status", nil, &status); err != nil {
+	if err := s.owner.call(ctx, sandboxStatusCommand, nil, &status); err != nil {
 		return status, err
 	}
 	if status.Protocol != sandboxOwnerProtocol || status.InstanceID != s.owner.instance {
@@ -535,13 +529,13 @@ func (s *sandboxSession) enrollSandbox(ctx context.Context, volume, host string)
 		AllowInitialize     bool   `json:"allow_initialize"`
 	}{s.keys.monitorIdentitySeed, host, s.keys.storageKey, true}
 	var status sandboxStatus
-	if err := s.owner.call(ctx, http.MethodPost, "/enroll", input, &status); err != nil {
+	if err := s.owner.call(ctx, sandboxEnrollCommand, input, &status); err != nil {
 		return fmt.Errorf("%w; rerun `tinfoil sandbox start %s` to reconcile", err, s.box.Name)
 	}
 	if status.Volume != "unlocked" {
 		return fmt.Errorf("sandbox %s workspace is still %s; rerun `tinfoil sandbox start %s`", s.box.Name, status.Volume, s.box.Name)
 	}
-	fmt.Fprintf(os.Stderr, "Prepared %s through its attested owner API.\n", s.box.Name)
+	fmt.Fprintf(os.Stderr, "Prepared %s over attested SSH.\n", s.box.Name)
 	return nil
 }
 
@@ -559,38 +553,13 @@ func authorizedKeyLine(key ssh.PublicKey) string {
 type sandboxOwner struct {
 	request  func(method, path string, input, out any) error
 	instance string
-	signer   ssh.Signer
-	owner    string
-	client   *http.Client
+	dial     func(context.Context) (*ssh.Client, error)
 	expires  time.Time
-	skew     time.Duration
-}
-
-type relayHeaders struct {
-	EncapsulatedKey string `json:"Ehbp-Encapsulated-Key"`
-	ContentType     string `json:"Content-Type"`
 }
 
 type relayReply struct {
-	Status  int               `json:"status"`
-	Headers map[string]string `json:"headers"`
-	Body    string            `json:"body"`
-}
-
-func (o *sandboxOwner) relay(target string, nonce *string, headers *relayHeaders, body []byte) (*relayReply, []byte, error) {
-	input := struct {
-		InstanceID string        `json:"instance_id"`
-		Target     string        `json:"target,omitempty"`
-		Nonce      *string       `json:"nonce"`
-		Headers    *relayHeaders `json:"headers,omitempty"`
-		Body       string        `json:"body,omitempty"`
-	}{o.instance, target, nonce, headers, base64.RawURLEncoding.EncodeToString(body)}
-	var reply relayReply
-	if err := o.request(http.MethodPost, "/sandboxes/relay", input, &reply); err != nil {
-		return nil, nil, err
-	}
-	data, err := decodeB64U(reply.Body, -1)
-	return &reply, data, err
+	Status int    `json:"status"`
+	Body   string `json:"body"`
 }
 
 var verifySandboxEvidence = func(doc, nonce []byte, source string) (attestedEvidence, error) {
@@ -606,62 +575,85 @@ func (o *sandboxOwner) attest(source string) (attestedEvidence, error) {
 	if err != nil {
 		return nil, err
 	}
-	encoded := hex.EncodeToString(nonce)
-	reply, doc, err := o.relay("", &encoded, nil, nil)
-	if err != nil {
+	input := struct {
+		InstanceID string `json:"instance_id"`
+		Nonce      string `json:"nonce"`
+	}{o.instance, hex.EncodeToString(nonce)}
+	var reply relayReply
+	if err := o.request(http.MethodPost, "/sandboxes/relay", input, &reply); err != nil {
 		return nil, err
 	}
 	if reply.Status != http.StatusOK {
 		return nil, fmt.Errorf("sandbox attestation returned HTTP %d", reply.Status)
 	}
+	doc, err := decodeB64U(reply.Body, -1)
+	if err != nil {
+		return nil, err
+	}
 	verified, err := verifySandboxEvidence(doc, nonce, source)
 	if err != nil {
 		return nil, err
 	}
-	key, err := sandboxEHBPKey(verified)
-	if err != nil {
-		return nil, err
-	}
-	transport, err := ehbp.NewTransportWithIdentity(key, ehbp.WithHTTPClient(&http.Client{Transport: o}))
-	if err != nil {
-		return nil, err
-	}
-	o.client = &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	o.expires = verified.FreshnessExpiresAt()
 	return verified, nil
 }
 
-func sandboxEHBPKey(verified attestedEvidence) (*identity.Identity, error) {
-	public, err := endorsedKey("sandbox", verified, sandboxEHBPKeyID)
-	if err != nil {
-		return nil, err
-	}
-	key, ok := public.(*ecdh.PublicKey)
-	if !ok {
-		return nil, fmt.Errorf("attested %q key is not X25519", sandboxEHBPKeyID)
-	}
-	return identity.FromPublicKeyBytes(key.Bytes())
+// The inner SSH connection owns and closes its Monitor device connection.
+type sandboxRouteConn struct {
+	net.Conn
+	client *ssh.Client
 }
 
-// Never retried: a repeated ciphertext would repeat its nonce; call re-signs instead.
-func (o *sandboxOwner) RoundTrip(r *http.Request) (*http.Response, error) {
-	body, err := io.ReadAll(r.Body)
-	r.Body.Close()
-	if err != nil {
-		return nil, err
-	}
-	reply, data, err := o.relay("owner", nil, &relayHeaders{r.Header.Get(protocol.EncapsulatedKeyHeader), r.Header.Get("Content-Type")}, body)
-	if err != nil {
-		return nil, err
-	}
-	header := http.Header{}
-	for name, value := range reply.Headers {
-		header.Set(name, value)
-	}
-	return &http.Response{StatusCode: reply.Status, Header: header, Body: io.NopCloser(bytes.NewReader(data)), ContentLength: int64(len(data)), Request: r}, nil
+func (c *sandboxRouteConn) Close() error {
+	return errors.Join(c.Conn.Close(), c.client.Close())
 }
 
-func (o *sandboxOwner) call(ctx context.Context, method, path string, input, out any) error {
+func (m *monitorSession) dialSandbox(ctx context.Context, host ssh.PublicKey) (net.Conn, error) {
+	device, err := loadSigner(filepath.Join(m.dir, monitorDeviceKeyName))
+	if err != nil {
+		return nil, err
+	}
+	conn, err := (&net.Dialer{Timeout: ownerConnectTimeout}).DialContext(ctx, "tcp", m.address)
+	if err != nil {
+		return nil, err
+	}
+	stop := context.AfterFunc(ctx, func() { conn.Close() })
+	defer stop()
+	client, err := connectOwnerSigner(conn, m.domain, m.hostKey, device, monitorSSHUser)
+	if err != nil {
+		return nil, err
+	}
+	route, err := client.DialContext(ctx, "tcp", net.JoinHostPort(routeName(host), strconv.Itoa(defaultSSHPort)))
+	if err != nil {
+		client.Close()
+		return nil, err
+	}
+	return &sandboxRouteConn{Conn: route, client: client}, nil
+}
+
+func (s *sandboxSession) dial(ctx context.Context) (*ssh.Client, error) {
+	if !time.Now().Before(s.expires) {
+		return nil, errors.New("sandbox attestation expired; verify it again before unlocking")
+	}
+	var conn net.Conn
+	var err error
+	if s.monitor != nil {
+		conn, err = s.monitor.dialSandbox(ctx, s.profile.hostKey)
+	} else {
+		address := net.JoinHostPort(s.profile.hostName, strconv.Itoa(s.profile.port))
+		conn, err = (&net.Dialer{Timeout: ownerConnectTimeout}).DialContext(ctx, "tcp", address)
+	}
+	if err != nil {
+		return nil, err
+	}
+	stop := context.AfterFunc(ctx, func() { conn.Close() })
+	defer stop()
+	return connectOwnerSigner(conn, s.box.Domain, s.profile.hostKey, s.keys.signer, sandboxLoginUser)
+}
+
+func (o *sandboxOwner) call(ctx context.Context, command string, input, out any) error {
+	ctx, cancel := context.WithDeadline(ctx, o.expires)
+	defer cancel()
 	var body []byte
 	if input != nil {
 		var err error
@@ -670,52 +662,11 @@ func (o *sandboxOwner) call(ctx context.Context, method, path string, input, out
 		}
 		defer clear(body)
 	}
-	request := ownerRequest{Protocol: sandboxOwnerProtocol, Owner: o.owner, Resource: o.instance, Method: method, Path: path,
-		Body: base64.RawURLEncoding.EncodeToString(body), Operation: randomB64U(16), IssuedAt: time.Now().Add(o.skew).UnixMilli()}
-	started := time.Now()
-	var lastErr error
-	for range ownerRetryAttempts {
-		if !time.Now().Before(o.expires) {
-			return errors.Join(errors.New("sandbox attestation expired; verify it again"), lastErr)
-		}
-		if time.Since(started) > ownerOperationWindow || ctx.Err() != nil {
-			break
-		}
-		request.Nonce = randomB64U(ownerNonceBytes)
-		envelope, err := signOwnerRequest(o.signer, request)
-		if err != nil {
-			return err
-		}
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://sandbox/owner/rpc", bytes.NewReader(envelope))
-		if err != nil {
-			return err
-		}
-		req.Header.Set("Content-Type", "application/json")
-		resp, err := o.client.Do(req)
-		var reply []byte
-		if err == nil {
-			reply, err = io.ReadAll(io.LimitReader(resp.Body, maxOwnerReplyBytes+1))
-			resp.Body.Close()
-		}
-		if err != nil || len(reply) > maxOwnerReplyBytes {
-			lastErr = errors.Join(err, errors.New("the sandbox reply was lost"))
-			continue
-		}
-		var refused struct {
-			Error string
-			Now   *int64
-		}
-		if resp.StatusCode == http.StatusUnauthorized && json.Unmarshal(reply, &refused) == nil && refused.Now != nil &&
-			(refused.Error == "request_time_in_future" || refused.Error == "request_expired") {
-			o.skew, request.IssuedAt = time.Until(time.UnixMilli(*refused.Now)), *refused.Now
-			continue
-		}
-		if resp.StatusCode != http.StatusOK {
-			return fmt.Errorf("sandbox %s %s: %d %s", method, path, resp.StatusCode, extractErrorMessage(reply))
-		}
-		return json.Unmarshal(reply, out)
+	reply, err := sendOwnerCommand(ctx, o.dial, command, body)
+	if err != nil {
+		return err
 	}
-	return fmt.Errorf("sandbox %s %s has an unknown outcome: %w", method, path, lastErr)
+	return json.Unmarshal([]byte(reply), out)
 }
 
 func (s *sandboxSession) install() error {
@@ -816,19 +767,10 @@ func routeName(key ssh.PublicKey) string {
 	return strings.ToLower(base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(digest[:])) + sandboxRouteSuffix
 }
 
-func (s *sandboxSession) unlockDirect() error {
-	dial := func() (*ssh.Client, error) {
-		if !time.Now().Before(s.expires) {
-			return nil, errors.New("sandbox attestation expired; verify it again before unlocking")
-		}
-		address := net.JoinHostPort(s.profile.hostName, strconv.Itoa(s.profile.port))
-		conn, err := (&net.Dialer{Timeout: 30 * time.Second}).Dial("tcp", address)
-		if err != nil {
-			return nil, err
-		}
-		return connectOwnerSigner(conn, s.box.Domain, s.profile.hostKey, s.keys.signer, sandboxLoginUser)
-	}
-	volume, err := sendOwnerCommand(dial, "/usr/local/bin/workspace-unlock --status", nil)
+func (s *sandboxSession) unlockDirect(ctx context.Context) error {
+	ctx, cancel := context.WithDeadline(ctx, s.expires)
+	defer cancel()
+	volume, err := sendOwnerCommand(ctx, s.dial, "/usr/local/bin/workspace-unlock --status", nil)
 	if err != nil {
 		return fmt.Errorf("workspace status: %w", err)
 	}
@@ -845,20 +787,25 @@ func (s *sandboxSession) unlockDirect() error {
 		}
 	}
 	fmt.Fprintln(os.Stderr, "Unlocking sandbox "+s.box.Name+" encrypted workspace")
-	if _, err := sendOwnerCommand(dial, "/usr/local/bin/workspace-unlock --initialize", s.keys.storageKey); err != nil {
+	if _, err := sendOwnerCommand(ctx, s.dial, "/usr/local/bin/workspace-unlock --initialize", s.keys.storageKey); err != nil {
 		return fmt.Errorf("unlock workspace: %w; retry with `tinfoil sandbox start %s`", err, s.box.Name)
 	}
 	return nil
 }
 
-func sendOwnerCommand(dial func() (*ssh.Client, error), command string, body []byte) (string, error) {
-	client, err := dial()
+func sendOwnerCommand(ctx context.Context, dial func(context.Context) (*ssh.Client, error), command string, body []byte) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, sandboxBootTimeout)
+	defer cancel()
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	client, err := dial(ctx)
 	if err != nil {
 		return "", err
 	}
 	defer client.Close()
-	timer := time.AfterFunc(sandboxBootTimeout, func() { client.Close() })
-	defer timer.Stop()
+	stop := context.AfterFunc(ctx, func() { client.Close() })
+	defer stop()
 	session, err := client.NewSession()
 	if err != nil {
 		return "", err
@@ -868,7 +815,11 @@ func sendOwnerCommand(dial func() (*ssh.Client, error), command string, body []b
 	var output, message limitedUnlockOutput
 	session.Stdout, session.Stderr = &output, &message
 	if err := session.Run(command); err != nil {
-		return "", fmt.Errorf("%w: %s", err, strings.TrimSpace(string(message)))
+		var exit *ssh.ExitError
+		if !errors.As(err, &exit) {
+			return "", fmt.Errorf("owner command has an unknown outcome: %w", err)
+		}
+		return "", fmt.Errorf("%w: %s", err, strings.TrimSpace(string(message)+string(output)))
 	}
 	return strings.TrimSpace(string(output)), nil
 }
