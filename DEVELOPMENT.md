@@ -13,17 +13,26 @@ GOWORK=off go build -o tinfoil .
 
 ## Checks
 
+On macOS, use a short temporary path owned by your primary group for socket and file-permission tests:
+
+```sh
+test_tmp=$(mktemp -d /tmp/tfc.XXXXXX)
+chgrp "$(id -gn)" "$test_tmp"
+export TMPDIR="$test_tmp"
+```
+
 Format edited Go files with `gofmt`, then run:
 
 ```sh
 GOWORK=off go test ./...
+GOWORK=off go test -race -count=1 ./...
 GOWORK=off go vet ./...
 ```
 
 To run a focused set of tests:
 
 ```sh
-GOWORK=off go test -count=1 -run '^TestLoadConfig' .
+GOWORK=off go test -count=1 -run '^TestLoadConfig' ./internal/config
 ```
 
 [CI](.github/workflows/test.yml) runs the test suite on pull requests.
@@ -31,4 +40,4 @@ GOWORK=off go test -count=1 -run '^TestLoadConfig' .
 ## Optional integration tests
 
 - Live attestation: set `RUN_TINFOIL_INTEGRATION=true` to enable the test against `inference.tinfoil.sh`.
-- Monitor integration: provide a Monitor checkout at `../monitor` or set `TINFOIL_MONITOR_TEST_SOURCE` to its path. The test builds and starts a local Monitor and requires the OpenSSH client.
+- Monitor integration: set `TINFOIL_MONITOR_TEST_SOURCE` to the absolute path of a Monitor checkout. The test builds and starts a local Monitor and requires the OpenSSH client.
