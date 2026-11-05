@@ -171,6 +171,68 @@ func TestSpliceHalfClosesOnLocalEOF(t *testing.T) {
 	}
 }
 
+func TestSpliceDeliversReplyAfterLocalHalfClose(t *testing.T) {
+	backend, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer backend.Close()
+	go func() {
+		conn, err := backend.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		request, err := io.ReadAll(conn)
+		if err == nil {
+			_, _ = io.WriteString(conn, "reply:"+string(request))
+		}
+	}()
+	port := backend.Addr().(*net.TCPAddr).Port
+	tun := testTunnel(t, connectServer(t, backend.Addr().String(), port), testAPIKey)
+	stream, err := tun.Dial(port)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stream.Close()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	done := make(chan error, 1)
+	go func() {
+		forwarded, err := listener.Accept()
+		if err != nil {
+			done <- err
+			return
+		}
+		done <- Splice(forwarded, stream)
+	}()
+	local, err := net.Dial("tcp", listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer local.Close()
+	const timeout = 5 * time.Second
+	if err := local.SetDeadline(time.Now().Add(timeout)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.WriteString(local, "request"); err != nil {
+		t.Fatal(err)
+	}
+	if err := local.(*net.TCPConn).CloseWrite(); err != nil {
+		t.Fatal(err)
+	}
+	reply, err := io.ReadAll(local)
+	if err != nil || string(reply) != "reply:request" {
+		t.Fatalf("reply after half-close = %q, %v", reply, err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
 func statusServer(t *testing.T, body string, code int) *httptest.Server {
 	t.Helper()
 	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
