@@ -128,7 +128,7 @@ func TestRegistryEnrollmentRefusesRedirects(t *testing.T) {
 }
 
 func TestRegistryEnrollmentSelectsOnlyItsNamespacesAndControlPlane(t *testing.T) {
-	rootOpts := &rootOptions{}
+	rootOpts := newCommandFixture().rootOpts
 	entry := enrollmentFixture(t)
 	require.NoError(t, acceptRegistry(strings.NewReader(""), &bytes.Buffer{}, entry, true))
 	options, err := registryIDs(rootOpts, "acme/app@v1")
@@ -166,11 +166,11 @@ func TestClerkRegistryEnrollmentUsesTheAuthenticatedAPIOrigin(t *testing.T) {
 		UserID: "user_owner", Account: entry.AccountID, AccessToken: "fixture-access",
 	}))
 	t.Setenv(envCPURL, "https://another-controlplane.example")
-	options, err := registryIDs(&rootOptions{}, "acme/app")
+	options, err := registryIDs(newCommandFixture().rootOpts, "acme/app")
 	require.NoError(t, err)
 	require.Len(t, options, 1, "a URL override cannot bypass the Clerk account's enrolled registry")
 	t.Setenv(envAdminKey, "admin_explicit")
-	options, err = registryIDs(&rootOptions{}, "acme/app")
+	options, err = registryIDs(newCommandFixture().rootOpts, "acme/app")
 	require.NoError(t, err)
 	require.Empty(t, options, "an admin token uses its separately configured control plane")
 }

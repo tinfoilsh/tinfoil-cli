@@ -52,58 +52,58 @@ func workspaceSizeChoices(unit string) string {
 	return strings.Join(sizes[:last], ", ") + ", or " + sizes[last]
 }
 
-func newSandboxCommand(identityOpts *identityOptions, outputOpts *outputOptions, rootOpts *rootOptions) *cobra.Command {
+func newSandboxCommand(newClient authenticatedClientFactory, newScope scopeClientFactory, identityOpts *identityOptions, outputOpts *outputOptions, rootOpts *rootOptions) *cobra.Command {
 	sandboxCmd := &cobra.Command{
 		Use: "sandbox", Aliases: []string{"sandboxes"}, Short: "Manage your confidential sandboxes",
 	}
-	sandboxCmd.AddCommand(newSandboxStatusCommand(outputOpts), newSandboxStartCommand(identityOpts, outputOpts, rootOpts, &sandboxActionOptions{}, &trustOptions{}), newSandboxRestartCommand(identityOpts, outputOpts, rootOpts, &sandboxActionOptions{}, &trustOptions{}), newSandboxStopCommand(identityOpts, outputOpts, rootOpts, &sandboxActionOptions{}, &trustOptions{}), newSandboxDeleteCommand(identityOpts, outputOpts, rootOpts, &sandboxActionOptions{}, &trustOptions{}))
+	sandboxCmd.AddCommand(newSandboxStatusCommand(newClient, outputOpts), newSandboxStartCommand(newClient, newScope, identityOpts, outputOpts, rootOpts, &sandboxActionOptions{}, &trustOptions{}), newSandboxRestartCommand(newClient, newScope, identityOpts, outputOpts, rootOpts, &sandboxActionOptions{}, &trustOptions{}), newSandboxStopCommand(newClient, newScope, identityOpts, outputOpts, rootOpts, &sandboxActionOptions{}, &trustOptions{}), newSandboxDeleteCommand(newClient, newScope, identityOpts, outputOpts, rootOpts, &sandboxActionOptions{}, &trustOptions{}))
 	return sandboxCmd
 }
 
-func newSandboxStatusCommand(outputOpts *outputOptions) *cobra.Command {
-	sandboxStatusCmd := newManagedStatusCmd(outputOpts, "sandbox")
+func newSandboxStatusCommand(newClient authenticatedClientFactory, outputOpts *outputOptions) *cobra.Command {
+	sandboxStatusCmd := newManagedStatusCmd(newClient, outputOpts, "sandbox")
 
 	return sandboxStatusCmd
 }
 
-func newSandboxStartCommand(identityOpts *identityOptions, outputOpts *outputOptions, rootOpts *rootOptions, sandboxActionOpts *sandboxActionOptions, trustOpts *trustOptions) *cobra.Command {
+func newSandboxStartCommand(newClient authenticatedClientFactory, newScope scopeClientFactory, identityOpts *identityOptions, outputOpts *outputOptions, rootOpts *rootOptions, sandboxActionOpts *sandboxActionOptions, trustOpts *trustOptions) *cobra.Command {
 	sandboxStartCmd := &cobra.Command{
 		Use: "start [id|name]", Short: "Start a sandbox and enroll this machine's keys",
-		Args: cobra.ExactArgs(1), RunE: runSandboxAction(identityOpts, outputOpts, rootOpts, sandboxActionOpts, trustOpts, "start"),
+		Args: cobra.ExactArgs(1), RunE: runSandboxAction(newClient, newScope, identityOpts, outputOpts, rootOpts, sandboxActionOpts, trustOpts, "start"),
 	}
 	addTrustDangerousFlag(trustOpts, sandboxStartCmd)
 	sandboxStartCmd.Flags().Bool("no-enroll", false, "Boot without unlocking or enrolling this machine's keys")
 	return sandboxStartCmd
 }
-func newSandboxRestartCommand(identityOpts *identityOptions, outputOpts *outputOptions, rootOpts *rootOptions, sandboxActionOpts *sandboxActionOptions, trustOpts *trustOptions) *cobra.Command {
+func newSandboxRestartCommand(newClient authenticatedClientFactory, newScope scopeClientFactory, identityOpts *identityOptions, outputOpts *outputOptions, rootOpts *rootOptions, sandboxActionOpts *sandboxActionOptions, trustOpts *trustOptions) *cobra.Command {
 	sandboxRestartCmd := &cobra.Command{
 		Use: "restart [id|name]", Short: "Restart a sandbox and enroll this machine's keys",
-		Args: cobra.ExactArgs(1), RunE: runSandboxAction(identityOpts, outputOpts, rootOpts, sandboxActionOpts, trustOpts, "restart"),
+		Args: cobra.ExactArgs(1), RunE: runSandboxAction(newClient, newScope, identityOpts, outputOpts, rootOpts, sandboxActionOpts, trustOpts, "restart"),
 	}
 	addTrustDangerousFlag(trustOpts, sandboxRestartCmd)
 	sandboxRestartCmd.Flags().Bool("no-enroll", false, "Boot without unlocking or enrolling this machine's keys")
 	return sandboxRestartCmd
 }
-func newSandboxStopCommand(identityOpts *identityOptions, outputOpts *outputOptions, rootOpts *rootOptions, sandboxActionOpts *sandboxActionOptions, trustOpts *trustOptions) *cobra.Command {
+func newSandboxStopCommand(newClient authenticatedClientFactory, newScope scopeClientFactory, identityOpts *identityOptions, outputOpts *outputOptions, rootOpts *rootOptions, sandboxActionOpts *sandboxActionOptions, trustOpts *trustOptions) *cobra.Command {
 	sandboxStopCmd := &cobra.Command{
 		Use: "stop [id|name]", Short: "Stop a sandbox, keeping its workspace",
-		Args: cobra.ExactArgs(1), RunE: runSandboxAction(identityOpts, outputOpts, rootOpts, sandboxActionOpts, trustOpts, "stop"),
+		Args: cobra.ExactArgs(1), RunE: runSandboxAction(newClient, newScope, identityOpts, outputOpts, rootOpts, sandboxActionOpts, trustOpts, "stop"),
 	}
 
 	return sandboxStopCmd
 }
-func newSandboxDeleteCommand(identityOpts *identityOptions, outputOpts *outputOptions, rootOpts *rootOptions, sandboxActionOpts *sandboxActionOptions, trustOpts *trustOptions) *cobra.Command {
+func newSandboxDeleteCommand(newClient authenticatedClientFactory, newScope scopeClientFactory, identityOpts *identityOptions, outputOpts *outputOptions, rootOpts *rootOptions, sandboxActionOpts *sandboxActionOptions, trustOpts *trustOptions) *cobra.Command {
 	sandboxDeleteCmd := &cobra.Command{
 		Use: "delete [id|name]", Short: "Delete a sandbox and its workspace volume",
-		Args: cobra.ExactArgs(1), RunE: runSandboxAction(identityOpts, outputOpts, rootOpts, sandboxActionOpts, trustOpts, "delete"),
+		Args: cobra.ExactArgs(1), RunE: runSandboxAction(newClient, newScope, identityOpts, outputOpts, rootOpts, sandboxActionOpts, trustOpts, "delete"),
 	}
 	sandboxDeleteCmd.Flags().BoolVar(&sandboxActionOpts.sandboxYes, "yes", false, "Skip the confirmation prompt")
 	return sandboxDeleteCmd
 }
 
-func runSandboxAction(identityOpts *identityOptions, outputOpts *outputOptions, rootOpts *rootOptions, sandboxActionOpts *sandboxActionOptions, trustOpts *trustOptions, action string) func(*cobra.Command, []string) error {
+func runSandboxAction(newClient authenticatedClientFactory, newScope scopeClientFactory, identityOpts *identityOptions, outputOpts *outputOptions, rootOpts *rootOptions, sandboxActionOpts *sandboxActionOptions, trustOpts *trustOptions, action string) func(*cobra.Command, []string) error {
 	return func(cmd *cobra.Command, args []string) error {
-		client, err := authedClient()
+		client, err := newClient(commandStreams(cmd))
 		if err != nil {
 			return err
 		}
@@ -131,7 +131,7 @@ func runSandboxAction(identityOpts *identityOptions, outputOpts *outputOptions, 
 			if _, err := client.do("DELETE", pathf("/api/containers/%s", row.ID), nil, nil, nil); err != nil && !missingContainer(err) {
 				return err
 			}
-			if err := forgetSandbox(row.Name, row.ID); err != nil {
+			if err := forgetSandbox(commandStreams(cmd), newScope, row.Name, row.ID); err != nil {
 				return fmt.Errorf("%s is deleted, but %w", row.Name, err)
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "Deleted %s. Saved encryption credentials are kept. Remove any access grants in the Monitor UI.\n", deleted)
@@ -162,7 +162,7 @@ func runSandboxAction(identityOpts *identityOptions, outputOpts *outputOptions, 
 		if err != nil {
 			return err
 		}
-		s, err := connectSandbox(commandStreams(cmd), identityOpts, rootOpts, trustOpts, cmd.Context(), target)
+		s, err := connectSandbox(newScope, commandStreams(cmd), identityOpts, rootOpts, trustOpts, cmd.Context(), target)
 		if err != nil {
 			return err
 		}
@@ -264,8 +264,8 @@ type sandboxSession struct {
 	noMonitor bool
 }
 
-func connectSandbox(streams commandIO, identityOpts *identityOptions, rootOpts *rootOptions, trustOpts *trustOptions, ctx context.Context, target *workloadTarget) (_ *sandboxSession, err error) {
-	scope, cp, err := currentScope()
+func connectSandbox(newScope scopeClientFactory, streams commandIO, identityOpts *identityOptions, rootOpts *rootOptions, trustOpts *trustOptions, ctx context.Context, target *workloadTarget) (_ *sandboxSession, err error) {
+	scope, cp, err := newScope(streams)
 	if err != nil {
 		return nil, err
 	}
@@ -301,7 +301,7 @@ func connectSandbox(streams commandIO, identityOpts *identityOptions, rootOpts *
 	if err != nil {
 		return nil, err
 	}
-	keys, err := resolveResourceKeys(identityOpts, ctx, cp, scope, row, "sandbox", binding, dir, true)
+	keys, err := resolveResourceKeys(streams, identityOpts, ctx, cp, scope, row, "sandbox", binding, dir, true)
 	if err != nil {
 		return nil, err
 	}
@@ -343,7 +343,7 @@ func openSandbox(streams commandIO, rootOpts *rootOptions, scope accountScope, c
 	}()
 	identity := keys.identity
 	if keys.mode == "tmk" {
-		if identity, err = exportTMKIdentity(cp.login, dir, keys.ownerSeed); err != nil {
+		if identity, err = exportTMKIdentity(cp, dir, keys.ownerSeed); err != nil {
 			return nil, err
 		}
 	}
@@ -430,7 +430,7 @@ func relinkSandbox(streams commandIO, identityOpts *identityOptions, rootOpts *r
 	if err != nil {
 		return err
 	}
-	keys, err := resolveResourceKeys(identityOpts, ctx, cp, scope, *row, "sandbox", binding, dir, false)
+	keys, err := resolveResourceKeys(streams, identityOpts, ctx, cp, scope, *row, "sandbox", binding, dir, false)
 	if err != nil {
 		return err
 	}
@@ -507,7 +507,7 @@ func (s *sandboxSession) enroll(streams commandIO, ctx context.Context) error {
 		return fmt.Errorf("sandbox %s holds a different Monitor identity than its saved keys", name)
 	case status.MonitorIdentity == nil && (agent == "" || !s.monitor.authorizes(agent)):
 		if s.keys.storageKey == nil {
-			if err := s.keys.generateUMKKeys("sandbox", s.box.OwnerPublicKey, s.binding); err != nil {
+			if err := s.keys.generateUMKKeys(streams, "sandbox", s.box.OwnerPublicKey, s.binding); err != nil {
 				return err
 			}
 			agent = monitorIdentity(s.keys.monitorIdentitySeed)
@@ -749,11 +749,11 @@ func ownsSSHProfile(home, name, resource string) (bool, error) {
 }
 
 // Remove the local SSH profile while keeping the saved keys.
-func forgetSandbox(name, id string) error {
+func forgetSandbox(streams commandIO, newScope scopeClientFactory, name, id string) error {
 	if id == "" {
 		return nil
 	}
-	scope, _, err := currentScope()
+	scope, _, err := newScope(streams)
 	if err != nil {
 		return err
 	}
@@ -809,7 +809,7 @@ func (s *sandboxSession) unlockDirect(streams commandIO, ctx context.Context) er
 		return fmt.Errorf("unexpected workspace status %q", volume)
 	}
 	if s.keys.storageKey == nil {
-		if err := s.keys.generateUMKKeys("sandbox", s.box.OwnerPublicKey, s.binding); err != nil {
+		if err := s.keys.generateUMKKeys(streams, "sandbox", s.box.OwnerPublicKey, s.binding); err != nil {
 			return err
 		}
 	}

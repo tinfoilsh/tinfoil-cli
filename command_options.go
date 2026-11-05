@@ -4,6 +4,8 @@ import (
 	"context"
 	"io"
 	"net/http"
+
+	"github.com/tinfoilsh/tinfoil-cli/internal/auth"
 )
 
 type attestSSHOptions struct {
@@ -171,6 +173,7 @@ type repoConfigPROptions struct {
 }
 
 type rootOptions struct {
+	registryOrigin   func() (string, error)
 	dependencies     commandDependencies
 	enclaveHost      string
 	localConfigBytes []byte
@@ -184,6 +187,10 @@ type rootOptions struct {
 type sandboxEvidenceVerifier func(doc, nonce []byte, source string) (attestedEvidence, error)
 
 type commandDependencies struct {
+	volumeStore           storageStoreFactory
+	authSettings          *auth.BuildSettings
+	credentials           credentialStoreFactory
+	accountHTTP           *http.Client
 	version               string
 	updateTransport       http.RoundTripper
 	in                    io.Reader

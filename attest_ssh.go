@@ -32,7 +32,7 @@ const sshIncludeGlob = "tinfoil/*.conf"
 // sshProfileNamePattern keeps a profile name a literal ssh Host alias and a single path component.
 var sshProfileNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,254}$`)
 
-func newAttestSSHCommand(attestSSHOpts *attestSSHOptions, forwardOpts *forwardOptions, identityOpts *identityOptions, rootOpts *rootOptions, trustOpts *trustOptions) *cobra.Command {
+func newAttestSSHCommand(newClient authenticatedClientFactory, newScope scopeClientFactory, attestSSHOpts *attestSSHOptions, forwardOpts *forwardOptions, identityOpts *identityOptions, rootOpts *rootOptions, trustOpts *trustOptions) *cobra.Command {
 	attestSSHCmd := &cobra.Command{
 		Use:   "attest-ssh [container|hostname]",
 		Short: "Pin an enclave's attested SSH host key for native ssh",
@@ -41,7 +41,7 @@ A reboot rotates the key, so rerun this after one.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			resolved := startConnectionProgress(cmd.ErrOrStderr(), "Looking up "+args[0])
-			target, err := resolveTunnelTarget(commandStreams(cmd), forwardOpts, rootOpts, trustOpts, args[0])
+			target, err := resolveTunnelTarget(newClient, commandStreams(cmd), forwardOpts, rootOpts, trustOpts, args[0])
 			resolved()
 			if err != nil {
 				return err
@@ -58,7 +58,7 @@ A reboot rotates the key, so rerun this after one.`,
 					if attestSSHOpts.attestSSHName != "" && !sshProfileNamePattern.MatchString(attestSSHOpts.attestSSHName) {
 						return errors.New("invalid SSH profile name")
 					}
-					s, err := connectSandbox(commandStreams(cmd), identityOpts, rootOpts, trustOpts, cmd.Context(), target.workload)
+					s, err := connectSandbox(newScope, commandStreams(cmd), identityOpts, rootOpts, trustOpts, cmd.Context(), target.workload)
 					if err != nil {
 						return err
 					}

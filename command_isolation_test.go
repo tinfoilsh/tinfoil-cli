@@ -16,6 +16,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/require"
+	"github.com/tinfoilsh/tinfoil-cli/internal/auth"
 )
 
 func commandAt(t *testing.T, root *cobra.Command, path ...string) *cobra.Command {
@@ -140,7 +141,15 @@ func TestFreshCommandTreesPreserveHelpAndVersion(t *testing.T) {
 	t.Setenv(envConfigPath, t.TempDir())
 	for _, version := range []string{"first-build", "second-build"} {
 		var out bytes.Buffer
-		root := newRootCommandWithDependencies(commandDependencies{version: version, out: &out})
+		root := newRootCommandWithDependencies(commandDependencies{
+			version: version, out: &out,
+			credentials: func() (*auth.Store, error) {
+				t.Fatal("help or version accessed credentials")
+				return nil, nil
+			},
+			volumeStore: forbiddenStorageFactory(t),
+			openBrowser: func(string) error { t.Fatal("help or version opened a browser"); return nil },
+		})
 		root.SetArgs([]string{"--version"})
 		require.NoError(t, root.Execute())
 		require.Equal(t, "tinfoil version "+version+"\n", out.String())

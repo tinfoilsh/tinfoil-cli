@@ -3,7 +3,6 @@ package main
 import (
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 
 	"github.com/tinfoilsh/tinfoil-cli/internal/auth"
@@ -11,39 +10,29 @@ import (
 	"github.com/tinfoilsh/tinfoil-cli/internal/controlplane"
 )
 
-var (
-	cliTargets       = "production"
-	clerkCLIClientID = "DdvUHrDeHCxEqZnN"
-	clerkCLIAPIScope = "tinfoil:api"
-	clerkIssuer      = "https://clerk.tinfoil.sh"
-	fixedAPIOrigin   = defaultControlplaneURL
-)
-
 var errNotLoggedIn = errors.New("not logged in")
 
 type clerkGrant = auth.Grant
 type syncedDEK = auth.SyncedDEK
 
-var osCredentials auth.Keyring = auth.OSKeyring{}
-
-func credentialStore() (*auth.Store, error) {
+func credentialStore(keyring auth.Keyring) (*auth.Store, error) {
 	path, err := configPath()
 	if err != nil {
 		return nil, err
 	}
-	return auth.NewStore(filepath.Join(filepath.Dir(path), "credentials"), osCredentials), nil
+	return auth.NewStore(filepath.Join(filepath.Dir(path), "credentials"), keyring), nil
 }
 
-func currentGrant() (*clerkGrant, error) {
-	service, err := authService()
+func (a *accountAccess) currentGrant(streams commandIO) (*clerkGrant, error) {
+	service, err := a.auth(streams)
 	if err != nil {
 		return nil, err
 	}
 	return service.CurrentGrant()
 }
 
-func syncedKey(login *clerkGrant, userID string) (*syncedDEK, error) {
-	service, err := authService()
+func (a *accountAccess) syncedKey(streams commandIO, login *clerkGrant, userID string) (*syncedDEK, error) {
+	service, err := a.auth(streams)
 	if err != nil {
 		return nil, err
 	}
@@ -72,13 +61,13 @@ func configPath() (string, error) {
 	return config.Path()
 }
 
-func loadConfig() (cliConfig, string, error) {
+func loadConfig(streams commandIO) (cliConfig, string, error) {
 	result, err := config.Load()
 	if err != nil {
 		return cliConfig{}, "", err
 	}
 	if result.Diagnostic != nil {
-		fmt.Fprintf(os.Stderr, "warning: %v\n", result.Diagnostic)
+		fmt.Fprintf(streams.err, "warning: %v\n", result.Diagnostic)
 	}
 	return cliConfig{ControlplaneURL: result.Config.ControlplaneURL, APIKey: result.Config.APIKey}, result.Path, nil
 }
@@ -97,19 +86,19 @@ func deleteConfig() (string, bool, error) {
 
 // requireAuth returns the loaded config or an error explaining how to
 // authenticate. Use it from commands that need to talk to the controlplane.
-func requireAuth() (cliConfig, error) {
-	cfg, _, err := loadConfig()
+func (a *accountAccess) requireAuth(streams commandIO) (cliConfig, error) {
+	cfg, _, err := loadConfig(streams)
 	if err != nil {
 		return cliConfig{}, err
 	}
 	if cfg.APIKey == "" {
-		if cfg.login, err = currentGrant(); err != nil {
+		if cfg.login, err = a.currentGrant(streams); err != nil {
 			return cliConfig{}, err
 		}
 		if cfg.login == nil {
 			return cliConfig{}, fmt.Errorf("%w: run `tinfoil login` or set %s", errNotLoggedIn, envAdminKey)
 		}
-		cfg.ControlplaneURL = fixedAPIOrigin
+		cfg.ControlplaneURL = a.apiOrigin
 		return cfg, nil
 	}
 	if err := validateControlplaneURL(cfg.ControlplaneURL); err != nil {

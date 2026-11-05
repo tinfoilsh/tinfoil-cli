@@ -16,7 +16,6 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/service/secretsmanager"
 	"github.com/spf13/cobra"
-	"github.com/spf13/pflag"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tinfoilsh/tinfoil-cli/internal/autounlock"
@@ -81,54 +80,14 @@ func newStorageCPFixture(commandState *commandFixture, t *testing.T) *storageCPF
 
 func executeStorageCLI(commandState *commandFixture, t *testing.T, factory storageStoreFactory, args ...string) (string, error) {
 	t.Helper()
-	oldFactory := volumeStorageFactory
-	volumeStorageFactory = factory
-	defer func() { volumeStorageFactory = oldFactory }()
-	type savedFlag struct {
-		flag    *pflag.Flag
-		value   string
-		changed bool
-	}
-	var saved []savedFlag
-	var save func(*cobra.Command)
-	seen := map[*pflag.Flag]bool{}
-	save = func(cmd *cobra.Command) {
-		for _, flags := range []*pflag.FlagSet{cmd.Flags(), cmd.PersistentFlags()} {
-			flags.VisitAll(func(f *pflag.Flag) {
-				if !seen[f] {
-					saved = append(saved, savedFlag{f, f.Value.String(), f.Changed})
-					seen[f] = true
-				}
-			})
-		}
-		for _, sub := range cmd.Commands() {
-			save(sub)
-		}
-	}
-	save(commandState.rootCmd)
-	defer func() {
-		for _, f := range saved {
-			if f.flag.Value.Type() == "stringArray" || f.flag.Value.Type() == "stringSlice" {
-				continue
-			}
-			require.NoError(t, f.flag.Value.Set(f.value))
-			f.flag.Changed = f.changed
-		}
-	}()
 	var output bytes.Buffer
-	oldOut, oldErr, oldIn := commandState.rootCmd.OutOrStdout(), commandState.rootCmd.ErrOrStderr(), commandState.rootCmd.InOrStdin()
-	commandState.rootCmd.SetOut(&output)
-	commandState.rootCmd.SetErr(&output)
-	commandState.rootCmd.SetIn(strings.NewReader(""))
-	defer func() {
-		commandState.rootCmd.SetOut(oldOut)
-		commandState.rootCmd.SetErr(oldErr)
-		commandState.rootCmd.SetIn(oldIn)
-		commandState.rootCmd.SetArgs(nil)
-	}()
-	commandState.rootCmd.SetArgs(args)
-	stdout, err := captureTestStdout(func() error { return commandState.rootCmd.Execute() })
-	all := output.String() + string(stdout)
+	dependencies := commandState.rootOpts.dependencies
+	dependencies.volumeStore = factory
+	dependencies.in, dependencies.out, dependencies.err = strings.NewReader(""), &output, &output
+	root := newRootCommandWithDependencies(dependencies)
+	root.SetArgs(args)
+	err := root.Execute()
+	all := output.String()
 	require.NotContains(t, all, storageTestEncoded)
 	if err != nil {
 		require.NotContains(t, err.Error(), storageTestEncoded)
@@ -222,6 +181,32 @@ func TestStorageFullCommandFlowAndNoKeyCustody(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, out, `"configuration":"STALE"`)
 	require.Contains(t, out, `"unlock":"not_observed"`)
+}
+
+func TestTreesKeepVolumeFactoriesIndependent(t *testing.T) {
+	commandState := newCommandFixture()
+	fixture := newStorageCPFixture(commandState, t)
+	configureStorageCLI(commandState, t)
+	flags := storageCLIArtifactFlags(t)
+	args := append([]string{"volume", "create", "app-data", "--size", "30GiB", "--host", "inf13", "--auto-unlock"}, flags...)
+	var roots []*cobra.Command
+	errorsByTree := []error{errors.New("first custody provider"), errors.New("second custody provider")}
+	for _, providerError := range errorsByTree {
+		root := newRootCommandWithDependencies(commandDependencies{
+			out: io.Discard, err: io.Discard,
+			volumeStore: func(context.Context, storageProfile) (*volumeKeyStore, error) {
+				return nil, providerError
+			},
+		})
+		root.SetArgs(args)
+		roots = append(roots, root)
+	}
+	for index, root := range roots {
+		require.ErrorIs(t, root.Execute(), errorsByTree[index])
+	}
+	fixture.mu.Lock()
+	defer fixture.mu.Unlock()
+	require.Zero(t, fixture.allocations, "custody setup failure must precede allocation")
 }
 
 func TestStoragePartialFailureRetainsVolumeAndRecoversReadOnly(t *testing.T) {

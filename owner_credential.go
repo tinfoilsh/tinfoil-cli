@@ -64,7 +64,11 @@ type mkSession struct {
 }
 
 func newMKSession(cp *cpClient, scope accountScope) (*mkSession, error) {
-	dek, err := syncedKey(cp.login, scope.UserID)
+	service, err := cp.auth()
+	if err != nil {
+		return nil, err
+	}
+	dek, err := service.SyncedKey(cp.login, scope.UserID)
 	if err != nil {
 		return nil, err
 	}
@@ -78,7 +82,7 @@ func newMKSession(cp *cpClient, scope accountScope) (*mkSession, error) {
 		}
 		return nil, noLocalKeys(reason + "; " + next)
 	}
-	return &mkSession{cp, dek.DEK, mkContext{APIOrigin: fixedAPIOrigin, UserID: scope.UserID, DEKID: dek.DEKID}}, nil
+	return &mkSession{cp, dek.DEK, mkContext{APIOrigin: cp.authOrigin, UserID: scope.UserID, DEKID: dek.DEKID}}, nil
 }
 
 func (s *mkSession) load(ctx context.Context) (*keyState, *mkPayload, error) {
@@ -194,7 +198,7 @@ func (k *resourceKeys) close() {
 	}
 }
 
-func resolveResourceKeys(identityOpts *identityOptions, ctx context.Context, cp *cpClient, scope accountScope, row containerView, kind string, binding mkBinding, dir string, bind bool) (*resourceKeys, error) {
+func resolveResourceKeys(streams commandIO, identityOpts *identityOptions, ctx context.Context, cp *cpClient, scope accountScope, row containerView, kind string, binding mkBinding, dir string, bind bool) (*resourceKeys, error) {
 	if _, err := measuredOwner(row.OwnerPublicKey); err != nil {
 		return nil, err
 	}
@@ -253,7 +257,7 @@ func resolveResourceKeys(identityOpts *identityOptions, ctx context.Context, cp 
 		if err := prepareStorageDirectory(dir); err != nil {
 			return nil, err
 		}
-		keys.signer, keys.identity, keys.closeSigner, err = userSigner(identityOpts, kind+" "+row.Name, row.OwnerPublicKey, dir)
+		keys.signer, keys.identity, keys.closeSigner, err = userSigner(streams, identityOpts, kind+" "+row.Name, row.OwnerPublicKey, dir)
 		if err != nil {
 			keys.close()
 			return nil, err
@@ -286,7 +290,7 @@ func newUMKRecord(kind, owner string) *umkRecord {
 	return &umkRecord{Version: 1, Kind: kind, Owner: owner, StorageKey: r.StorageKey, MonitorIdentitySeed: r.MonitorIdentitySeed}
 }
 
-func saveUMKRecord(path string, record *umkRecord) (*umkRecord, error) {
+func saveUMKRecord(streams commandIO, path string, record *umkRecord) (*umkRecord, error) {
 	err := writeStorageJSON(path, record, true)
 	if err != nil && !errors.Is(err, os.ErrExist) {
 		return nil, err
@@ -299,7 +303,7 @@ func saveUMKRecord(path string, record *umkRecord) (*umkRecord, error) {
 		return nil, fmt.Errorf("%s holds keys of another resource", path)
 	}
 	if err == nil {
-		fmt.Fprintf(os.Stderr, "Back up %s: it holds this resource's storage keys, which your SSH key cannot recover.\n", path)
+		fmt.Fprintf(streams.err, "Back up %s: it holds this resource's storage keys, which your SSH key cannot recover.\n", path)
 	}
 	return &saved, nil
 }
@@ -324,10 +328,10 @@ func (r *umkRecord) use(keys *resourceKeys, kind, owner string, binding mkBindin
 	return nil
 }
 
-func (k *resourceKeys) generateUMKKeys(kind, owner string, binding mkBinding) error {
+func (k *resourceKeys) generateUMKKeys(streams commandIO, kind, owner string, binding mkBinding) error {
 	record := newUMKRecord(kind, owner)
 	record.Binding = &binding
-	saved, err := saveUMKRecord(k.umkPath, record)
+	saved, err := saveUMKRecord(streams, k.umkPath, record)
 	clear(record.StorageKey)
 	clear(record.MonitorIdentitySeed)
 	if err != nil {
@@ -336,17 +340,17 @@ func (k *resourceKeys) generateUMKKeys(kind, owner string, binding mkBinding) er
 	return saved.use(k, kind, owner, binding, true)
 }
 
-func whileSignedIn(login *clerkGrant, write func() error) error {
-	service, err := authService()
+func whileSignedIn(cp *cpClient, write func() error) error {
+	service, err := cp.auth()
 	if err != nil {
 		return err
 	}
-	return service.WhileSignedIn(login, write)
+	return service.WhileSignedIn(cp.login, write)
 }
 
-func exportTMKIdentity(login *clerkGrant, dir string, seed []byte) (string, error) {
+func exportTMKIdentity(cp *cpClient, dir string, seed []byte) (string, error) {
 	path := filepath.Join(dir, tmkOwnerKeyName)
-	return path, whileSignedIn(login, func() error {
+	return path, whileSignedIn(cp, func() error {
 		if err := prepareStorageDirectory(dir); err != nil {
 			return err
 		}
@@ -540,7 +544,7 @@ func existingCredentialDir(parent, id string) (string, error) {
 }
 
 // A public identity file selects an ssh-agent key without copying its private key.
-func userSigner(identityOpts *identityOptions, name, owner, dir string) (ssh.Signer, string, func(), error) {
+func userSigner(streams commandIO, identityOpts *identityOptions, name, owner, dir string) (ssh.Signer, string, func(), error) {
 	close := func() {}
 	public, err := measuredOwner(owner)
 	if err != nil {
@@ -571,14 +575,14 @@ func userSigner(identityOpts *identityOptions, name, owner, dir string) (ssh.Sig
 		signer, parseErr := ssh.ParsePrivateKey(raw)
 		var encrypted *ssh.PassphraseMissingError
 		if errors.As(parseErr, &encrypted) && encrypted.PublicKey != nil && bytes.Equal(encrypted.PublicKey.Marshal(), public.Marshal()) {
-			if !term.IsTerminal(int(os.Stdin.Fd())) {
+			if !term.IsTerminal(streamFD(streams.in)) {
 				clear(raw)
 				skipped = append(skipped, path+" needs a passphrase, and there is no terminal to ask for it")
 				continue
 			}
-			fmt.Fprintf(os.Stderr, "Passphrase for %s: ", path)
-			password, passwordErr := term.ReadPassword(int(os.Stdin.Fd()))
-			fmt.Fprintln(os.Stderr)
+			fmt.Fprintf(streams.err, "Passphrase for %s: ", path)
+			password, passwordErr := term.ReadPassword(streamFD(streams.in))
+			fmt.Fprintln(streams.err)
 			if passwordErr != nil {
 				clear(raw)
 				clear(password)

@@ -47,7 +47,7 @@ func TestSandboxStartUsesSavedAliasWithoutMonitorLookup(t *testing.T) {
 				Config:        "containers: [{env: []}]",
 				NetworkPolicy: &containerNetworkPolicy{EgressMode: "restricted", Egress: []containerPeer{{ContainerID: monitorID, Port: 22, Alias: &containerAlias{IP: "10.254.0.1", Port: 22}}}}}
 			var mutations []string
-			client := newCPClient(cliConfig{ControlplaneURL: "https://cp.example"})
+			client := testCPClient(cliConfig{ControlplaneURL: "https://cp.example"})
 			client.http.Transport = lifecycleTransport(func(r *http.Request) (*http.Response, error) {
 				require.Nil(t, r.Body, "start and restart must not send boot variables")
 				if r.Method == "POST" {
@@ -88,7 +88,7 @@ func TestSandboxRequiresRestrictedAliasBeforeStoppingOrDeploying(t *testing.T) {
 		t.Errorf("invalid policy made a request: %s %s", r.Method, r.URL.Path)
 	}))
 	defer server.Close()
-	client := newCPClient(cliConfig{ControlplaneURL: server.URL, APIKey: "test"})
+	client := testCPClient(cliConfig{ControlplaneURL: server.URL, APIKey: "test"})
 	for _, policy := range []*containerNetworkPolicy{nil, {}, {Public: true}, {EgressMode: "unrestricted"},
 		{EgressMode: "restricted", Egress: []containerPeer{{ContainerID: monitorID, Port: 22}}},
 		{Public: true, EgressMode: "restricted", Egress: []containerPeer{peer}},
@@ -153,7 +153,7 @@ func TestSandboxDeleteKeepsCredentialsAndRemovesOwnedProfile(t *testing.T) {
 	require.NoError(t, os.WriteFile(profile, []byte("# tinfoil-resource: "+server.URL+"//owner/"+row.ID+"\n"), 0600))
 	credential, err := umkRecordPath(accountScope{ControlplaneURL: server.URL, UserID: "owner"}, row.ID)
 	require.NoError(t, err)
-	_, err = saveUMKRecord(credential, newUMKRecord("sandbox", owner))
+	_, err = saveUMKRecord(testStreams(), credential, newUMKRecord("sandbox", owner))
 	require.NoError(t, err)
 	before, err := os.ReadFile(credential)
 	require.NoError(t, err)
@@ -196,7 +196,7 @@ func TestSandboxAttestationRelayUsesCurrentSchema(t *testing.T) {
 		json.NewEncoder(w).Encode(map[string]any{"status": http.StatusOK, "body": base64.RawURLEncoding.EncodeToString(doc)})
 	}))
 	defer server.Close()
-	client := newCPClient(cliConfig{ControlplaneURL: server.URL})
+	client := testCPClient(cliConfig{ControlplaneURL: server.URL})
 	owner := sandboxOwner{instance: instance, request: func(method, path string, input, out any) error {
 		_, err := client.do(method, path, nil, input, out)
 		return err

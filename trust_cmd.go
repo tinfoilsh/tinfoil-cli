@@ -16,7 +16,7 @@ import (
 // the CLI, so changing mode/record or finding the file to edit does not
 // require remembering its path.
 
-func newTrustCommand(trustOpts *trustOptions) *cobra.Command {
+func newTrustCommand(accounts *accountAccess, trustOpts *trustOptions) *cobra.Command {
 	trustCmd := &cobra.Command{
 		Use:   "trust",
 		Short: "Show the known-configs trust store",
@@ -46,7 +46,7 @@ func newTrustCommand(trustOpts *trustOptions) *cobra.Command {
 			return nil
 		},
 	}
-	trustCmd.AddCommand(newTrustEnrollCommand(&trustEnrollOptions{}), newTrustRemoveCommand())
+	trustCmd.AddCommand(newTrustEnrollCommand(accounts, &trustEnrollOptions{}), newTrustRemoveCommand(accounts))
 	trustCmd.AddCommand(newTrustSetCommand(&trustSetOptions{}))
 	trustCmd.Flags().BoolVar(&trustOpts.trustJSON, "json", false, "Show the complete trust policy, including registry IDs")
 	return trustCmd

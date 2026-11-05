@@ -6,30 +6,30 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func newRepoSecretCommand(outputOpts *outputOptions) *cobra.Command {
+func newRepoSecretCommand(newClient authenticatedClientFactory, outputOpts *outputOptions) *cobra.Command {
 	repoSecretCmd := &cobra.Command{
 		Use:     "secret",
 		Aliases: []string{"secrets"},
 		Short:   "Manage repository-level secrets",
 	}
 	repoSecretCmd.AddCommand(
-		newRepoSecretListCommand(outputOpts),
-		newRepoSecretGetCommand(outputOpts),
-		newRepoSecretCreateCommand(&secretValueOptions{}),
-		newRepoSecretSetCommand(&secretValueOptions{}),
-		newRepoSecretDeleteCommand(),
+		newRepoSecretListCommand(newClient, outputOpts),
+		newRepoSecretGetCommand(newClient, outputOpts),
+		newRepoSecretCreateCommand(newClient, &secretValueOptions{}),
+		newRepoSecretSetCommand(newClient, &secretValueOptions{}),
+		newRepoSecretDeleteCommand(newClient),
 	)
 	return repoSecretCmd
 }
 
-func newRepoSecretListCommand(outputOpts *outputOptions) *cobra.Command {
+func newRepoSecretListCommand(newClient authenticatedClientFactory, outputOpts *outputOptions) *cobra.Command {
 	repoSecretListCmd := &cobra.Command{
 		Use:     "list [owner/repo]",
 		Aliases: []string{"ls"},
 		Short:   "List secrets for a repository",
 		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			repository, client, err := repositoryCommand(args[0])
+			repository, client, err := repositoryCommand(commandStreams(cmd), newClient, args[0])
 			if err != nil {
 				return err
 			}
@@ -44,13 +44,13 @@ func newRepoSecretListCommand(outputOpts *outputOptions) *cobra.Command {
 	return repoSecretListCmd
 }
 
-func newRepoSecretGetCommand(outputOpts *outputOptions) *cobra.Command {
+func newRepoSecretGetCommand(newClient authenticatedClientFactory, outputOpts *outputOptions) *cobra.Command {
 	repoSecretGetCmd := &cobra.Command{
 		Use:   "get [owner/repo] [name]",
 		Short: "Show repository secret metadata",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			repository, client, err := repositoryCommand(args[0])
+			repository, client, err := repositoryCommand(commandStreams(cmd), newClient, args[0])
 			if err != nil {
 				return err
 			}
@@ -65,13 +65,13 @@ func newRepoSecretGetCommand(outputOpts *outputOptions) *cobra.Command {
 	return repoSecretGetCmd
 }
 
-func newRepoSecretCreateCommand(secretValueOpts *secretValueOptions) *cobra.Command {
+func newRepoSecretCreateCommand(newClient authenticatedClientFactory, secretValueOpts *secretValueOptions) *cobra.Command {
 	repoSecretCreateCmd := &cobra.Command{
 		Use:   "create [owner/repo] [name]",
 		Short: "Create a repository secret",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			repository, client, err := repositoryCommand(args[0])
+			repository, client, err := repositoryCommand(commandStreams(cmd), newClient, args[0])
 			if err != nil {
 				return err
 			}
@@ -92,13 +92,13 @@ func newRepoSecretCreateCommand(secretValueOpts *secretValueOptions) *cobra.Comm
 	return repoSecretCreateCmd
 }
 
-func newRepoSecretSetCommand(secretValueOpts *secretValueOptions) *cobra.Command {
+func newRepoSecretSetCommand(newClient authenticatedClientFactory, secretValueOpts *secretValueOptions) *cobra.Command {
 	repoSecretSetCmd := &cobra.Command{
 		Use:   "set [owner/repo] [name]",
 		Short: "Update a repository secret",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			repository, client, err := repositoryCommand(args[0])
+			repository, client, err := repositoryCommand(commandStreams(cmd), newClient, args[0])
 			if err != nil {
 				return err
 			}
@@ -119,14 +119,14 @@ func newRepoSecretSetCommand(secretValueOpts *secretValueOptions) *cobra.Command
 	return repoSecretSetCmd
 }
 
-func newRepoSecretDeleteCommand() *cobra.Command {
+func newRepoSecretDeleteCommand(newClient authenticatedClientFactory) *cobra.Command {
 	repoSecretDeleteCmd := &cobra.Command{
 		Use:     "delete [owner/repo] [name]",
 		Aliases: []string{"rm", "remove"},
 		Short:   "Delete a repository secret",
 		Args:    cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			repository, client, err := repositoryCommand(args[0])
+			repository, client, err := repositoryCommand(commandStreams(cmd), newClient, args[0])
 			if err != nil {
 				return err
 			}

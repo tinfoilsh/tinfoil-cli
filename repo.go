@@ -76,28 +76,28 @@ type repoBuildResponse struct {
 	WorkflowRunURL string `json:"workflow_run_url"`
 }
 
-func newRepoCommand(outputOpts *outputOptions) *cobra.Command {
+func newRepoCommand(newClient authenticatedClientFactory, outputOpts *outputOptions) *cobra.Command {
 	repoCmd := &cobra.Command{
 		Use:     "repo",
 		Aliases: []string{"repository", "repositories"},
 		Short:   "Manage container config repositories",
 	}
 	repoCmd.PersistentFlags().StringVarP(&outputOpts.outputFormat, "output", "o", "table", "Output format: table or json")
-	repoCmd.AddCommand(newRepoConfigCommand(outputOpts), newRepoPRCommand(outputOpts), newRepoBuildCommand(outputOpts))
-	repoCmd.AddCommand(newRepoSecretCommand(outputOpts))
+	repoCmd.AddCommand(newRepoConfigCommand(newClient, outputOpts), newRepoPRCommand(newClient, outputOpts), newRepoBuildCommand(newClient, outputOpts))
+	repoCmd.AddCommand(newRepoSecretCommand(newClient, outputOpts))
 	return repoCmd
 }
 
-func newRepoConfigCommand(outputOpts *outputOptions) *cobra.Command {
+func newRepoConfigCommand(newClient authenticatedClientFactory, outputOpts *outputOptions) *cobra.Command {
 	repoConfigCmd := &cobra.Command{
 		Use:   "config",
 		Short: "Read or propose changes to tinfoil-config.yml",
 	}
-	repoConfigCmd.AddCommand(newRepoConfigGetCommand(outputOpts, &repoConfigGetOptions{}), newRepoConfigPRCommand(outputOpts, &repoConfigPROptions{}))
+	repoConfigCmd.AddCommand(newRepoConfigGetCommand(newClient, outputOpts, &repoConfigGetOptions{}), newRepoConfigPRCommand(newClient, outputOpts, &repoConfigPROptions{}))
 	return repoConfigCmd
 }
 
-func newRepoConfigGetCommand(outputOpts *outputOptions, repoConfigGetOpts *repoConfigGetOptions) *cobra.Command {
+func newRepoConfigGetCommand(newClient authenticatedClientFactory, outputOpts *outputOptions, repoConfigGetOpts *repoConfigGetOptions) *cobra.Command {
 	repoConfigGetCmd := &cobra.Command{
 		Use:   "get [owner/repo]",
 		Short: "Fetch a repo's tinfoil-config.yml",
@@ -106,7 +106,7 @@ func newRepoConfigGetCommand(outputOpts *outputOptions, repoConfigGetOpts *repoC
 			if repoConfigGetOpts.repoConfigRaw && outputOpts.outputFormat == "json" {
 				return fmt.Errorf("--raw and --output json cannot be used together")
 			}
-			repository, client, err := repositoryCommand(args[0])
+			repository, client, err := repositoryCommand(commandStreams(cmd), newClient, args[0])
 			if err != nil {
 				return err
 			}
@@ -135,14 +135,14 @@ func newRepoConfigGetCommand(outputOpts *outputOptions, repoConfigGetOpts *repoC
 	return repoConfigGetCmd
 }
 
-func newRepoConfigPRCommand(outputOpts *outputOptions, repoConfigPROpts *repoConfigPROptions) *cobra.Command {
+func newRepoConfigPRCommand(newClient authenticatedClientFactory, outputOpts *outputOptions, repoConfigPROpts *repoConfigPROptions) *cobra.Command {
 	repoConfigPRCmd := &cobra.Command{
 		Use:   "pr [owner/repo]",
 		Short: "Open a pull request with a local tinfoil-config.yml",
 		Long:  "The repository is public, so keep secret values out of the config.",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			repository, client, err := repositoryCommand(args[0])
+			repository, client, err := repositoryCommand(commandStreams(cmd), newClient, args[0])
 			if err != nil {
 				return err
 			}
@@ -174,16 +174,16 @@ func newRepoConfigPRCommand(outputOpts *outputOptions, repoConfigPROpts *repoCon
 	return repoConfigPRCmd
 }
 
-func newRepoPRCommand(outputOpts *outputOptions) *cobra.Command {
+func newRepoPRCommand(newClient authenticatedClientFactory, outputOpts *outputOptions) *cobra.Command {
 	repoPRCmd := &cobra.Command{
 		Use:   "pr",
 		Short: "Inspect config pull requests",
 	}
-	repoPRCmd.AddCommand(newRepoPRStatusCommand(outputOpts))
+	repoPRCmd.AddCommand(newRepoPRStatusCommand(newClient, outputOpts))
 	return repoPRCmd
 }
 
-func newRepoPRStatusCommand(outputOpts *outputOptions) *cobra.Command {
+func newRepoPRStatusCommand(newClient authenticatedClientFactory, outputOpts *outputOptions) *cobra.Command {
 	repoPRStatusCmd := &cobra.Command{
 		Use:   "status [owner/repo] [number]",
 		Short: "Show the status of a config pull request",
@@ -193,7 +193,7 @@ func newRepoPRStatusCommand(outputOpts *outputOptions) *cobra.Command {
 			if err != nil || number <= 0 {
 				return fmt.Errorf("pull request number must be a positive integer")
 			}
-			repository, client, err := repositoryCommand(args[0])
+			repository, client, err := repositoryCommand(commandStreams(cmd), newClient, args[0])
 			if err != nil {
 				return err
 			}
@@ -216,22 +216,22 @@ func newRepoPRStatusCommand(outputOpts *outputOptions) *cobra.Command {
 	return repoPRStatusCmd
 }
 
-func newRepoBuildCommand(outputOpts *outputOptions) *cobra.Command {
+func newRepoBuildCommand(newClient authenticatedClientFactory, outputOpts *outputOptions) *cobra.Command {
 	repoBuildCmd := &cobra.Command{
 		Use:   "build",
 		Short: "Inspect or trigger the Tinfoil Release workflow",
 	}
-	repoBuildCmd.AddCommand(newRepoBuildInfoCommand(outputOpts), newRepoBuildRunCommand(outputOpts, &repoBuildRunOptions{}), newRepoBuildStatusCommand(outputOpts, &repoBuildStatusOptions{}))
+	repoBuildCmd.AddCommand(newRepoBuildInfoCommand(newClient, outputOpts), newRepoBuildRunCommand(newClient, outputOpts, &repoBuildRunOptions{}), newRepoBuildStatusCommand(newClient, outputOpts, &repoBuildStatusOptions{}))
 	return repoBuildCmd
 }
 
-func newRepoBuildInfoCommand(outputOpts *outputOptions) *cobra.Command {
+func newRepoBuildInfoCommand(newClient authenticatedClientFactory, outputOpts *outputOptions) *cobra.Command {
 	repoBuildInfoCmd := &cobra.Command{
 		Use:   "info [owner/repo]",
 		Short: "Show tags, published releases, and the suggested next version",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			repository, client, err := repositoryCommand(args[0])
+			repository, client, err := repositoryCommand(commandStreams(cmd), newClient, args[0])
 			if err != nil {
 				return err
 			}
@@ -264,13 +264,13 @@ func newRepoBuildInfoCommand(outputOpts *outputOptions) *cobra.Command {
 	return repoBuildInfoCmd
 }
 
-func newRepoBuildRunCommand(outputOpts *outputOptions, repoBuildRunOpts *repoBuildRunOptions) *cobra.Command {
+func newRepoBuildRunCommand(newClient authenticatedClientFactory, outputOpts *outputOptions, repoBuildRunOpts *repoBuildRunOptions) *cobra.Command {
 	repoBuildRunCmd := &cobra.Command{
 		Use:   "run [owner/repo]",
 		Short: "Trigger the Tinfoil Release workflow",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			repository, client, err := repositoryCommand(args[0])
+			repository, client, err := repositoryCommand(commandStreams(cmd), newClient, args[0])
 			if err != nil {
 				return err
 			}
@@ -295,13 +295,13 @@ func newRepoBuildRunCommand(outputOpts *outputOptions, repoBuildRunOpts *repoBui
 	return repoBuildRunCmd
 }
 
-func newRepoBuildStatusCommand(outputOpts *outputOptions, repoBuildStatusOpts *repoBuildStatusOptions) *cobra.Command {
+func newRepoBuildStatusCommand(newClient authenticatedClientFactory, outputOpts *outputOptions, repoBuildStatusOpts *repoBuildStatusOptions) *cobra.Command {
 	repoBuildStatusCmd := &cobra.Command{
 		Use:   "status [owner/repo]",
 		Short: "Check a queued release workflow without starting a build",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			repository, client, err := repositoryCommand(args[0])
+			repository, client, err := repositoryCommand(commandStreams(cmd), newClient, args[0])
 			if err != nil {
 				return err
 			}
@@ -348,12 +348,12 @@ func (r repositoryRef) apiPath() string {
 	return pathf("/api/github/repos/%s/%s", r.owner, r.name)
 }
 
-func repositoryCommand(value string) (repositoryRef, *cpClient, error) {
+func repositoryCommand(streams commandIO, newClient authenticatedClientFactory, value string) (repositoryRef, *cpClient, error) {
 	repository, err := parseRepository(value)
 	if err != nil {
 		return repositoryRef{}, nil, err
 	}
-	client, err := authedClient()
+	client, err := newClient(streams)
 	if err != nil {
 		return repositoryRef{}, nil, err
 	}

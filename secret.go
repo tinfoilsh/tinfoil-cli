@@ -18,24 +18,24 @@ type secretView struct {
 	UsedBy    []string `json:"used_by"`
 }
 
-func newSecretCommand(outputOpts *outputOptions) *cobra.Command {
+func newSecretCommand(newClient authenticatedClientFactory, outputOpts *outputOptions) *cobra.Command {
 	secretCmd := &cobra.Command{
 		Use:     "secret",
 		Aliases: []string{"secrets"},
 		Short:   "Manage organization-level secrets",
 	}
 	secretCmd.PersistentFlags().StringVarP(&outputOpts.outputFormat, "output", "o", "table", "Output format: table or json")
-	secretCmd.AddCommand(newSecretListCommand(outputOpts), newSecretGetCommand(outputOpts), newSecretCreateCommand(&secretValueOptions{}), newSecretSetCommand(&secretValueOptions{}), newSecretDeleteCommand())
+	secretCmd.AddCommand(newSecretListCommand(newClient, outputOpts), newSecretGetCommand(newClient, outputOpts), newSecretCreateCommand(newClient, &secretValueOptions{}), newSecretSetCommand(newClient, &secretValueOptions{}), newSecretDeleteCommand(newClient))
 	return secretCmd
 }
 
-func newSecretListCommand(outputOpts *outputOptions) *cobra.Command {
+func newSecretListCommand(newClient authenticatedClientFactory, outputOpts *outputOptions) *cobra.Command {
 	secretListCmd := &cobra.Command{
 		Use:     "list",
 		Aliases: []string{"ls"},
 		Short:   "List secrets in the organization vault",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			client, err := authedClient()
+			client, err := newClient(commandStreams(cmd))
 			if err != nil {
 				return err
 			}
@@ -50,13 +50,13 @@ func newSecretListCommand(outputOpts *outputOptions) *cobra.Command {
 	return secretListCmd
 }
 
-func newSecretGetCommand(outputOpts *outputOptions) *cobra.Command {
+func newSecretGetCommand(newClient authenticatedClientFactory, outputOpts *outputOptions) *cobra.Command {
 	secretGetCmd := &cobra.Command{
 		Use:   "get [name]",
 		Short: "Show secret metadata",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			client, err := authedClient()
+			client, err := newClient(commandStreams(cmd))
 			if err != nil {
 				return err
 			}
@@ -71,13 +71,13 @@ func newSecretGetCommand(outputOpts *outputOptions) *cobra.Command {
 	return secretGetCmd
 }
 
-func newSecretCreateCommand(secretValueOpts *secretValueOptions) *cobra.Command {
+func newSecretCreateCommand(newClient authenticatedClientFactory, secretValueOpts *secretValueOptions) *cobra.Command {
 	secretCreateCmd := &cobra.Command{
 		Use:   "create [name]",
 		Short: "Create a new organization secret",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			client, err := authedClient()
+			client, err := newClient(commandStreams(cmd))
 			if err != nil {
 				return err
 			}
@@ -98,13 +98,13 @@ func newSecretCreateCommand(secretValueOpts *secretValueOptions) *cobra.Command 
 	return secretCreateCmd
 }
 
-func newSecretSetCommand(secretValueOpts *secretValueOptions) *cobra.Command {
+func newSecretSetCommand(newClient authenticatedClientFactory, secretValueOpts *secretValueOptions) *cobra.Command {
 	secretSetCmd := &cobra.Command{
 		Use:   "set [name]",
 		Short: "Update the value of an existing secret",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			client, err := authedClient()
+			client, err := newClient(commandStreams(cmd))
 			if err != nil {
 				return err
 			}
@@ -125,14 +125,14 @@ func newSecretSetCommand(secretValueOpts *secretValueOptions) *cobra.Command {
 	return secretSetCmd
 }
 
-func newSecretDeleteCommand() *cobra.Command {
+func newSecretDeleteCommand(newClient authenticatedClientFactory) *cobra.Command {
 	secretDeleteCmd := &cobra.Command{
 		Use:     "delete [name]",
 		Aliases: []string{"rm", "remove"},
 		Short:   "Delete a secret",
 		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			client, err := authedClient()
+			client, err := newClient(commandStreams(cmd))
 			if err != nil {
 				return err
 			}

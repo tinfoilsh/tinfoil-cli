@@ -28,24 +28,24 @@ type domainView struct {
 	WildcardCNAMEConfigured *bool    `json:"wildcard_cname_configured"`
 }
 
-func newDomainCommand(outputOpts *outputOptions) *cobra.Command {
+func newDomainCommand(newClient authenticatedClientFactory, outputOpts *outputOptions) *cobra.Command {
 	domainCmd := &cobra.Command{
 		Use:     "domain",
 		Aliases: []string{"domains"},
 		Short:   "Manage custom domains for containers",
 	}
 	domainCmd.PersistentFlags().StringVarP(&outputOpts.outputFormat, "output", "o", "table", "Output format: table or json")
-	domainCmd.AddCommand(newDomainListCommand(outputOpts), newDomainAddCommand(outputOpts), newDomainVerifyCommand(outputOpts), newDomainDeleteCommand())
+	domainCmd.AddCommand(newDomainListCommand(newClient, outputOpts), newDomainAddCommand(newClient, outputOpts), newDomainVerifyCommand(newClient, outputOpts), newDomainDeleteCommand(newClient))
 	return domainCmd
 }
 
-func newDomainListCommand(outputOpts *outputOptions) *cobra.Command {
+func newDomainListCommand(newClient authenticatedClientFactory, outputOpts *outputOptions) *cobra.Command {
 	domainListCmd := &cobra.Command{
 		Use:     "list",
 		Aliases: []string{"ls"},
 		Short:   "List custom domains",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			client, err := authedClient()
+			client, err := newClient(commandStreams(cmd))
 			if err != nil {
 				return err
 			}
@@ -77,7 +77,7 @@ func newDomainListCommand(outputOpts *outputOptions) *cobra.Command {
 	return domainListCmd
 }
 
-func newDomainAddCommand(outputOpts *outputOptions) *cobra.Command {
+func newDomainAddCommand(newClient authenticatedClientFactory, outputOpts *outputOptions) *cobra.Command {
 	domainAddCmd := &cobra.Command{
 		Use:   "add [domain]",
 		Short: "Register a custom domain and print its DNS records",
@@ -88,7 +88,7 @@ func newDomainAddCommand(outputOpts *outputOptions) *cobra.Command {
   tinfoil domain add '*.example.com'`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			client, err := authedClient()
+			client, err := newClient(commandStreams(cmd))
 			if err != nil {
 				return err
 			}
@@ -104,13 +104,13 @@ func newDomainAddCommand(outputOpts *outputOptions) *cobra.Command {
 	return domainAddCmd
 }
 
-func newDomainVerifyCommand(outputOpts *outputOptions) *cobra.Command {
+func newDomainVerifyCommand(newClient authenticatedClientFactory, outputOpts *outputOptions) *cobra.Command {
 	domainVerifyCmd := &cobra.Command{
 		Use:   "verify [domain]",
 		Short: "Re-check the DNS records and update verification status",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			client, err := authedClient()
+			client, err := newClient(commandStreams(cmd))
 			if err != nil {
 				return err
 			}
@@ -125,14 +125,14 @@ func newDomainVerifyCommand(outputOpts *outputOptions) *cobra.Command {
 	return domainVerifyCmd
 }
 
-func newDomainDeleteCommand() *cobra.Command {
+func newDomainDeleteCommand(newClient authenticatedClientFactory) *cobra.Command {
 	domainDeleteCmd := &cobra.Command{
 		Use:     "delete [domain]",
 		Aliases: []string{"rm", "remove"},
 		Short:   "Delete a custom domain",
 		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			client, err := authedClient()
+			client, err := newClient(commandStreams(cmd))
 			if err != nil {
 				return err
 			}

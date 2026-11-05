@@ -30,24 +30,24 @@ type registryListResponse struct {
 	DockerHub registryStatus `json:"dockerhub"`
 }
 
-func newRegistryCommand(outputOpts *outputOptions) *cobra.Command {
+func newRegistryCommand(newClient authenticatedClientFactory, outputOpts *outputOptions) *cobra.Command {
 	registryCmd := &cobra.Command{
 		Use:     "registry",
 		Aliases: []string{"registries"},
 		Short:   "Manage container registry credentials",
 	}
 	registryCmd.PersistentFlags().StringVarP(&outputOpts.outputFormat, "output", "o", "table", "Output format: table or json")
-	registryCmd.AddCommand(newRegistryListCommand(outputOpts), newRegistrySetCommand(&registrySetOptions{}), newRegistryDeleteCommand())
+	registryCmd.AddCommand(newRegistryListCommand(newClient, outputOpts), newRegistrySetCommand(newClient, &registrySetOptions{}), newRegistryDeleteCommand(newClient))
 	return registryCmd
 }
 
-func newRegistryListCommand(outputOpts *outputOptions) *cobra.Command {
+func newRegistryListCommand(newClient authenticatedClientFactory, outputOpts *outputOptions) *cobra.Command {
 	registryListCmd := &cobra.Command{
 		Use:     "list",
 		Aliases: []string{"ls"},
 		Short:   "Show which registries have credentials configured",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			client, err := authedClient()
+			client, err := newClient(commandStreams(cmd))
 			if err != nil {
 				return err
 			}
@@ -87,13 +87,13 @@ func newRegistryListCommand(outputOpts *outputOptions) *cobra.Command {
 	return registryListCmd
 }
 
-func newRegistrySetCommand(registrySetOpts *registrySetOptions) *cobra.Command {
+func newRegistrySetCommand(newClient authenticatedClientFactory, registrySetOpts *registrySetOptions) *cobra.Command {
 	registrySetCmd := &cobra.Command{
 		Use:   "set [ghcr|gcr|dockerhub]",
 		Short: "Set credentials for a registry",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			client, err := authedClient()
+			client, err := newClient(commandStreams(cmd))
 			if err != nil {
 				return err
 			}
@@ -120,14 +120,14 @@ func newRegistrySetCommand(registrySetOpts *registrySetOptions) *cobra.Command {
 	return registrySetCmd
 }
 
-func newRegistryDeleteCommand() *cobra.Command {
+func newRegistryDeleteCommand(newClient authenticatedClientFactory) *cobra.Command {
 	registryDeleteCmd := &cobra.Command{
 		Use:     "delete [ghcr|gcr|dockerhub]",
 		Aliases: []string{"rm", "remove"},
 		Short:   "Delete credentials for a registry",
 		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			client, err := authedClient()
+			client, err := newClient(commandStreams(cmd))
 			if err != nil {
 				return err
 			}

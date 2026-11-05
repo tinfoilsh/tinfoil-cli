@@ -1,10 +1,42 @@
 package main
 
 import (
+	"io"
 	"os"
 
 	"github.com/spf13/cobra"
+	"github.com/tinfoilsh/tinfoil-cli/internal/auth"
+	"github.com/tinfoilsh/tinfoil-cli/internal/autounlock"
 )
+
+func testAccounts() *accountAccess { return testAccountsWithCredentials(auth.OSKeyring{}) }
+
+func testAccountsWithCredentials(keyring auth.Keyring) *accountAccess {
+	return newAccountAccess(executableAuthSettings(), version, func() (*auth.Store, error) {
+		return credentialStore(keyring)
+	}, nil)
+}
+
+func testAuthedClient(streams commandIO) (*cpClient, error) {
+	return testAccounts().authedClient(streams)
+}
+func testScopeClient(streams commandIO) (accountScope, *cpClient, error) {
+	return testAccounts().currentScope(streams)
+}
+func testCPClient(cfg cliConfig) *cpClient { return testAccounts().client(testStreams(), cfg) }
+func requireAuth() (cliConfig, error)      { return testAccounts().requireAuth(testStreams()) }
+func currentGrant() (*clerkGrant, error)   { return testAccounts().currentGrant(testStreams()) }
+func authenticatedContext(cfg cliConfig) (authContext, error) {
+	return testAccounts().authenticatedContext(testStreams(), cfg)
+}
+func clerkLogout(out io.Writer) error {
+	streams := testStreams()
+	streams.out = out
+	return testAccounts().clerkLogout(streams)
+}
+func enrollRegistry(cmd *cobra.Command, cfg cliConfig, identity authContext, expected string, interactive bool) error {
+	return testAccounts().enrollRegistry(cmd, cfg, identity, expected, interactive)
+}
 
 func testStreams() commandIO {
 	return commandIO{in: os.Stdin, out: os.Stdout, err: os.Stderr}
@@ -183,7 +215,7 @@ func newCommandFixture() *commandFixture {
 		repoBuildStatusOpts:   &repoBuildStatusOptions{},
 		repoConfigGetOpts:     &repoConfigGetOptions{},
 		repoConfigPROpts:      &repoConfigPROptions{},
-		rootOpts:              &rootOptions{},
+		rootOpts:              &rootOptions{registryOrigin: func() (string, error) { return testAccounts().registryControlplaneURL(testStreams()) }},
 		sandboxActionOpts:     &sandboxActionOptions{},
 		secretValueOpts:       &secretValueOptions{},
 		sshOpts:               &sshOptions{},
@@ -199,96 +231,96 @@ func newCommandFixture() *commandFixture {
 		volumeRenameOpts:      &volumeRenameOptions{},
 		waitOpts:              &waitOptions{},
 	}
-	f.attestSSHCmd = newAttestSSHCommand(f.attestSSHOpts, f.forwardOpts, f.identityOpts, f.rootOpts, f.trustOpts)
+	f.attestSSHCmd = newAttestSSHCommand(testAuthedClient, testScopeClient, f.attestSSHOpts, f.forwardOpts, f.identityOpts, f.rootOpts, f.trustOpts)
 	f.attestationCmd = newAttestationCommand(f.rootOpts)
 	f.attestationVerifyCmd = newAttestationVerifyCommand(f.attestationVerifyOpts, f.rootOpts)
-	f.containerCancelCmd = newContainerCancelCommand(f.containerCancelOpts)
-	f.containerCmd = newContainerCommand(f.outputOpts, f.rootOpts)
-	f.containerConnectCmd = newContainerConnectCommand(f.containerConnectOpts, f.proxyOpts, f.rootOpts, f.trustOpts)
-	f.containerCreateCmd = newContainerCreateCommand(f.containerCreateOpts, f.outputOpts, f.rootOpts, f.waitOpts)
-	f.containerDeleteCmd = newContainerDeleteCommand(f.containerDeleteOpts)
-	f.containerDeployCmd = newContainerDeployCommand(f.containerDeployOpts, f.outputOpts, f.waitOpts)
-	f.containerGetCmd = newContainerGetCommand(f.outputOpts)
-	f.containerHostsCmd = newContainerHostsCommand(f.outputOpts)
-	f.containerListCmd = newContainerListCommand(f.outputOpts)
-	f.containerMetricsCmd = newContainerMetricsCommand(f.containerMetricsOpts)
-	f.containerPromoteCmd = newContainerPromoteCommand(f.outputOpts, f.waitOpts)
-	f.containerStopCmd = newContainerStopCommand(f.outputOpts)
-	f.containerUpdateCmd = newContainerUpdateCommand(f.containerUpdateOpts, f.outputOpts, f.waitOpts)
-	f.domainAddCmd = newDomainAddCommand(f.outputOpts)
-	f.domainCmd = newDomainCommand(f.outputOpts)
-	f.domainDeleteCmd = newDomainDeleteCommand()
-	f.domainListCmd = newDomainListCommand(f.outputOpts)
-	f.domainVerifyCmd = newDomainVerifyCommand(f.outputOpts)
-	f.forwardCmd = newForwardCommand(f.forwardOpts, f.rootOpts, f.trustOpts, f.tunnelOpts)
+	f.containerCancelCmd = newContainerCancelCommand(testAuthedClient, f.containerCancelOpts)
+	f.containerCmd = newContainerCommand(testAuthedClient, f.outputOpts, f.rootOpts)
+	f.containerConnectCmd = newContainerConnectCommand(testAuthedClient, f.containerConnectOpts, f.proxyOpts, f.rootOpts, f.trustOpts)
+	f.containerCreateCmd = newContainerCreateCommand(testAuthedClient, f.containerCreateOpts, f.outputOpts, f.rootOpts, f.waitOpts)
+	f.containerDeleteCmd = newContainerDeleteCommand(testAuthedClient, f.containerDeleteOpts)
+	f.containerDeployCmd = newContainerDeployCommand(testAuthedClient, f.containerDeployOpts, f.outputOpts, f.waitOpts)
+	f.containerGetCmd = newContainerGetCommand(testAuthedClient, f.outputOpts)
+	f.containerHostsCmd = newContainerHostsCommand(testAuthedClient, f.outputOpts)
+	f.containerListCmd = newContainerListCommand(testAuthedClient, f.outputOpts)
+	f.containerMetricsCmd = newContainerMetricsCommand(testAuthedClient, f.containerMetricsOpts)
+	f.containerPromoteCmd = newContainerPromoteCommand(testAuthedClient, f.outputOpts, f.waitOpts)
+	f.containerStopCmd = newContainerStopCommand(testAuthedClient, f.outputOpts)
+	f.containerUpdateCmd = newContainerUpdateCommand(testAuthedClient, f.containerUpdateOpts, f.outputOpts, f.waitOpts)
+	f.domainAddCmd = newDomainAddCommand(testAuthedClient, f.outputOpts)
+	f.domainCmd = newDomainCommand(testAuthedClient, f.outputOpts)
+	f.domainDeleteCmd = newDomainDeleteCommand(testAuthedClient)
+	f.domainListCmd = newDomainListCommand(testAuthedClient, f.outputOpts)
+	f.domainVerifyCmd = newDomainVerifyCommand(testAuthedClient, f.outputOpts)
+	f.forwardCmd = newForwardCommand(testAuthedClient, f.forwardOpts, f.rootOpts, f.trustOpts, f.tunnelOpts)
 	f.httpCmd = newHttpCommand(f.headersOpts, f.rootOpts)
 	f.httpGetCmd = newHttpGetCommand(f.headersOpts, f.rootOpts)
 	f.httpPostCmd = newHttpPostCommand(f.headersOpts, f.httpPostOpts, f.rootOpts)
-	f.loginCmd = newLoginCommand(openBrowser)
-	f.logoutCmd = newLogoutCommand()
-	f.modelCmd = newModelCommand(f.outputOpts)
-	f.modelDeleteCmd = newModelDeleteCommand()
-	f.modelListCmd = newModelListCommand(f.modelListOpts, f.outputOpts)
-	f.modelStatusCmd = newModelStatusCommand(f.modelStatusOpts, f.outputOpts)
-	f.modelUpdateCmd = newModelUpdateCommand(f.modelUpdateOpts, f.outputOpts)
-	f.modelWrapCmd = newModelWrapCommand(f.modelWrapOpts, f.outputOpts)
+	f.loginCmd = newLoginCommand(testAccounts(), openBrowser)
+	f.logoutCmd = newLogoutCommand(testAccounts())
+	f.modelCmd = newModelCommand(testAuthedClient, f.outputOpts)
+	f.modelDeleteCmd = newModelDeleteCommand(testAuthedClient)
+	f.modelListCmd = newModelListCommand(testAuthedClient, f.modelListOpts, f.outputOpts)
+	f.modelStatusCmd = newModelStatusCommand(testAuthedClient, f.modelStatusOpts, f.outputOpts)
+	f.modelUpdateCmd = newModelUpdateCommand(testAuthedClient, f.modelUpdateOpts, f.outputOpts)
+	f.modelWrapCmd = newModelWrapCommand(testAuthedClient, f.modelWrapOpts, f.outputOpts)
 	f.monitorCmd = newMonitorCommand()
-	f.projectCmd = newProjectCommand(f.outputOpts)
-	f.projectGetCmd = newProjectGetCommand(f.outputOpts)
-	f.projectListCmd = newProjectListCommand(f.outputOpts)
-	f.projectSettingsCmd = newProjectSettingsCommand(f.outputOpts, f.projectSettingsOpts)
-	f.projectUpdateCmd = newProjectUpdateCommand(f.outputOpts, f.projectUpdateOpts)
+	f.projectCmd = newProjectCommand(testAuthedClient, f.outputOpts)
+	f.projectGetCmd = newProjectGetCommand(testAuthedClient, f.outputOpts)
+	f.projectListCmd = newProjectListCommand(testAuthedClient, f.outputOpts)
+	f.projectSettingsCmd = newProjectSettingsCommand(testAuthedClient, f.outputOpts, f.projectSettingsOpts)
+	f.projectUpdateCmd = newProjectUpdateCommand(testAuthedClient, f.outputOpts, f.projectUpdateOpts)
 	f.proxyCmd = newProxyCommand(f.proxyOpts, f.rootOpts)
-	f.registryCmd = newRegistryCommand(f.outputOpts)
-	f.registryDeleteCmd = newRegistryDeleteCommand()
-	f.registryListCmd = newRegistryListCommand(f.outputOpts)
-	f.registrySetCmd = newRegistrySetCommand(f.registrySetOpts)
-	f.repoBuildCmd = newRepoBuildCommand(f.outputOpts)
-	f.repoBuildInfoCmd = newRepoBuildInfoCommand(f.outputOpts)
-	f.repoBuildRunCmd = newRepoBuildRunCommand(f.outputOpts, f.repoBuildRunOpts)
-	f.repoBuildStatusCmd = newRepoBuildStatusCommand(f.outputOpts, f.repoBuildStatusOpts)
-	f.repoCmd = newRepoCommand(f.outputOpts)
-	f.repoConfigCmd = newRepoConfigCommand(f.outputOpts)
-	f.repoConfigGetCmd = newRepoConfigGetCommand(f.outputOpts, f.repoConfigGetOpts)
-	f.repoConfigPRCmd = newRepoConfigPRCommand(f.outputOpts, f.repoConfigPROpts)
-	f.repoPRCmd = newRepoPRCommand(f.outputOpts)
-	f.repoPRStatusCmd = newRepoPRStatusCommand(f.outputOpts)
-	f.repoSecretCmd = newRepoSecretCommand(f.outputOpts)
-	f.repoSecretCreateCmd = newRepoSecretCreateCommand(f.secretValueOpts)
-	f.repoSecretDeleteCmd = newRepoSecretDeleteCommand()
-	f.repoSecretGetCmd = newRepoSecretGetCommand(f.outputOpts)
-	f.repoSecretListCmd = newRepoSecretListCommand(f.outputOpts)
-	f.repoSecretSetCmd = newRepoSecretSetCommand(f.secretValueOpts)
+	f.registryCmd = newRegistryCommand(testAuthedClient, f.outputOpts)
+	f.registryDeleteCmd = newRegistryDeleteCommand(testAuthedClient)
+	f.registryListCmd = newRegistryListCommand(testAuthedClient, f.outputOpts)
+	f.registrySetCmd = newRegistrySetCommand(testAuthedClient, f.registrySetOpts)
+	f.repoBuildCmd = newRepoBuildCommand(testAuthedClient, f.outputOpts)
+	f.repoBuildInfoCmd = newRepoBuildInfoCommand(testAuthedClient, f.outputOpts)
+	f.repoBuildRunCmd = newRepoBuildRunCommand(testAuthedClient, f.outputOpts, f.repoBuildRunOpts)
+	f.repoBuildStatusCmd = newRepoBuildStatusCommand(testAuthedClient, f.outputOpts, f.repoBuildStatusOpts)
+	f.repoCmd = newRepoCommand(testAuthedClient, f.outputOpts)
+	f.repoConfigCmd = newRepoConfigCommand(testAuthedClient, f.outputOpts)
+	f.repoConfigGetCmd = newRepoConfigGetCommand(testAuthedClient, f.outputOpts, f.repoConfigGetOpts)
+	f.repoConfigPRCmd = newRepoConfigPRCommand(testAuthedClient, f.outputOpts, f.repoConfigPROpts)
+	f.repoPRCmd = newRepoPRCommand(testAuthedClient, f.outputOpts)
+	f.repoPRStatusCmd = newRepoPRStatusCommand(testAuthedClient, f.outputOpts)
+	f.repoSecretCmd = newRepoSecretCommand(testAuthedClient, f.outputOpts)
+	f.repoSecretCreateCmd = newRepoSecretCreateCommand(testAuthedClient, f.secretValueOpts)
+	f.repoSecretDeleteCmd = newRepoSecretDeleteCommand(testAuthedClient)
+	f.repoSecretGetCmd = newRepoSecretGetCommand(testAuthedClient, f.outputOpts)
+	f.repoSecretListCmd = newRepoSecretListCommand(testAuthedClient, f.outputOpts)
+	f.repoSecretSetCmd = newRepoSecretSetCommand(testAuthedClient, f.secretValueOpts)
 	f.rootCmd = newRootCommand()
-	f.sandboxCmd = newSandboxCommand(f.identityOpts, f.outputOpts, f.rootOpts)
-	f.sandboxDeleteCmd = newSandboxDeleteCommand(f.identityOpts, f.outputOpts, f.rootOpts, f.sandboxActionOpts, f.trustOpts)
-	f.sandboxRestartCmd = newSandboxRestartCommand(f.identityOpts, f.outputOpts, f.rootOpts, f.sandboxActionOpts, f.trustOpts)
-	f.sandboxStartCmd = newSandboxStartCommand(f.identityOpts, f.outputOpts, f.rootOpts, f.sandboxActionOpts, f.trustOpts)
-	f.sandboxStatusCmd = newSandboxStatusCommand(f.outputOpts)
-	f.sandboxStopCmd = newSandboxStopCommand(f.identityOpts, f.outputOpts, f.rootOpts, f.sandboxActionOpts, f.trustOpts)
-	f.secretCmd = newSecretCommand(f.outputOpts)
-	f.secretCreateCmd = newSecretCreateCommand(f.secretValueOpts)
-	f.secretDeleteCmd = newSecretDeleteCommand()
-	f.secretGetCmd = newSecretGetCommand(f.outputOpts)
-	f.secretListCmd = newSecretListCommand(f.outputOpts)
-	f.secretSetCmd = newSecretSetCommand(f.secretValueOpts)
-	f.sshCmd = newSshCommand(f.forwardOpts, f.rootOpts, f.sshOpts, f.trustOpts, f.tunnelOpts)
-	f.sshKeyCmd = newSshKeyCommand(f.outputOpts, f.sshKeyOpts)
-	f.sshKeyCreateCmd = newSshKeyCreateCommand(f.sshKeyOpts, f.sshKeyCreateOpts)
-	f.sshKeyDeleteCmd = newSshKeyDeleteCommand(f.sshKeyOpts)
-	f.sshKeyListCmd = newSshKeyListCommand(f.outputOpts, f.sshKeyOpts)
-	f.trustCmd = newTrustCommand(f.trustOpts)
-	f.trustEnrollCmd = newTrustEnrollCommand(f.trustEnrollOpts)
-	f.trustRemoveCmd = newTrustRemoveCommand()
+	f.sandboxCmd = newSandboxCommand(testAuthedClient, testScopeClient, f.identityOpts, f.outputOpts, f.rootOpts)
+	f.sandboxDeleteCmd = newSandboxDeleteCommand(testAuthedClient, testScopeClient, f.identityOpts, f.outputOpts, f.rootOpts, f.sandboxActionOpts, f.trustOpts)
+	f.sandboxRestartCmd = newSandboxRestartCommand(testAuthedClient, testScopeClient, f.identityOpts, f.outputOpts, f.rootOpts, f.sandboxActionOpts, f.trustOpts)
+	f.sandboxStartCmd = newSandboxStartCommand(testAuthedClient, testScopeClient, f.identityOpts, f.outputOpts, f.rootOpts, f.sandboxActionOpts, f.trustOpts)
+	f.sandboxStatusCmd = newSandboxStatusCommand(testAuthedClient, f.outputOpts)
+	f.sandboxStopCmd = newSandboxStopCommand(testAuthedClient, testScopeClient, f.identityOpts, f.outputOpts, f.rootOpts, f.sandboxActionOpts, f.trustOpts)
+	f.secretCmd = newSecretCommand(testAuthedClient, f.outputOpts)
+	f.secretCreateCmd = newSecretCreateCommand(testAuthedClient, f.secretValueOpts)
+	f.secretDeleteCmd = newSecretDeleteCommand(testAuthedClient)
+	f.secretGetCmd = newSecretGetCommand(testAuthedClient, f.outputOpts)
+	f.secretListCmd = newSecretListCommand(testAuthedClient, f.outputOpts)
+	f.secretSetCmd = newSecretSetCommand(testAuthedClient, f.secretValueOpts)
+	f.sshCmd = newSshCommand(testAuthedClient, f.forwardOpts, f.rootOpts, f.sshOpts, f.trustOpts, f.tunnelOpts)
+	f.sshKeyCmd = newSshKeyCommand(testAuthedClient, f.outputOpts, f.sshKeyOpts)
+	f.sshKeyCreateCmd = newSshKeyCreateCommand(testAuthedClient, f.sshKeyOpts, f.sshKeyCreateOpts)
+	f.sshKeyDeleteCmd = newSshKeyDeleteCommand(testAuthedClient, f.sshKeyOpts)
+	f.sshKeyListCmd = newSshKeyListCommand(testAuthedClient, f.outputOpts, f.sshKeyOpts)
+	f.trustCmd = newTrustCommand(testAccounts(), f.trustOpts)
+	f.trustEnrollCmd = newTrustEnrollCommand(testAccounts(), f.trustEnrollOpts)
+	f.trustRemoveCmd = newTrustRemoveCommand(testAccounts())
 	f.trustSetCmd = newTrustSetCommand(f.trustSetOpts)
-	f.volumeAttachCmd = newVolumeAttachCommand(f.volumeAttachOpts)
-	f.volumeCmd = newVolumeCommand(f.outputOpts)
-	f.volumeCreateCmd = newVolumeCreateCommand(f.outputOpts, f.volumeCreateOpts)
-	f.volumeDeleteCmd = newVolumeDeleteCommand(f.volumeDeleteOpts)
-	f.volumeDetachCmd = newVolumeDetachCommand()
-	f.volumeGetCmd = newVolumeGetCommand(f.outputOpts)
-	f.volumeListCmd = newVolumeListCommand(f.outputOpts)
-	f.volumeRenameCmd = newVolumeRenameCommand(f.volumeRenameOpts)
-	f.whoamiCmd = newWhoamiCommand()
+	f.volumeAttachCmd = newVolumeAttachCommand(testAuthedClient, f.volumeAttachOpts)
+	f.volumeCmd = newVolumeCommand(testAuthedClient, autounlock.NewAWSKeyStore, f.outputOpts)
+	f.volumeCreateCmd = newVolumeCreateCommand(testAuthedClient, autounlock.NewAWSKeyStore, f.outputOpts, f.volumeCreateOpts)
+	f.volumeDeleteCmd = newVolumeDeleteCommand(testAuthedClient, f.volumeDeleteOpts)
+	f.volumeDetachCmd = newVolumeDetachCommand(testAuthedClient)
+	f.volumeGetCmd = newVolumeGetCommand(testAuthedClient, f.outputOpts)
+	f.volumeListCmd = newVolumeListCommand(testAuthedClient, f.outputOpts)
+	f.volumeRenameCmd = newVolumeRenameCommand(testAuthedClient, f.volumeRenameOpts)
+	f.whoamiCmd = newWhoamiCommand(testAccounts())
 	return f
 }

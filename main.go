@@ -14,6 +14,8 @@ import (
 	"github.com/fatih/color"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
+	"github.com/tinfoilsh/tinfoil-cli/internal/auth"
+	"github.com/tinfoilsh/tinfoil-cli/internal/autounlock"
 )
 
 const (
@@ -72,8 +74,17 @@ var (
 )
 
 var (
-	version = defaultVersion
+	version          = defaultVersion
+	cliTargets       = "production"
+	clerkCLIClientID = "DdvUHrDeHCxEqZnN"
+	clerkCLIAPIScope = "tinfoil:api"
+	clerkIssuer      = "https://clerk.tinfoil.sh"
+	fixedAPIOrigin   = defaultControlplaneURL
 )
+
+func executableAuthSettings() auth.BuildSettings {
+	return auth.BuildSettings{Targets: cliTargets, ClientID: clerkCLIClientID, APIScope: clerkCLIAPIScope, Issuer: clerkIssuer, APIOrigin: fixedAPIOrigin}
+}
 
 func newRootCommand() *cobra.Command {
 	return newRootCommandWithDependencies(commandDependencies{})
@@ -85,6 +96,19 @@ func newRootCommandWithDependencies(dependencies commandDependencies) *cobra.Com
 	if commandVersion == "" {
 		commandVersion = version
 	}
+	settings := executableAuthSettings()
+	if dependencies.authSettings != nil {
+		settings = *dependencies.authSettings
+	}
+	credentials := dependencies.credentials
+	if credentials == nil {
+		credentials = func() (*auth.Store, error) { return credentialStore(auth.OSKeyring{}) }
+	}
+	accounts := newAccountAccess(settings, commandVersion, credentials, dependencies.accountHTTP)
+	volumeStore := dependencies.volumeStore
+	if volumeStore == nil {
+		volumeStore = autounlock.NewAWSKeyStore
+	}
 
 	cmd := &cobra.Command{
 		Use:          "tinfoil",
@@ -95,23 +119,24 @@ func newRootCommandWithDependencies(dependencies commandDependencies) *cobra.Com
 	cmd.SetIn(dependencies.in)
 	cmd.SetOut(dependencies.out)
 	cmd.SetErr(dependencies.err)
+	rootOpts.registryOrigin = func() (string, error) { return accounts.registryControlplaneURL(commandStreams(cmd)) }
 	cmd.PersistentFlags().StringVar(&rootOpts.localConfigFile, "config", "", "Local config file to launch or trust for verification")
 	cmd.PersistentFlags().BoolVar(&rootOpts.publicRegistry, "public-registry", false, "Require public configs, even when a private registry is trusted")
 	cmd.MarkFlagsMutuallyExclusive("config", "public-registry")
 	configureRootCommand(rootOpts, cmd)
-	cmd.AddCommand(newAttestSSHCommand(&attestSSHOptions{}, &forwardOptions{}, &identityOptions{}, rootOpts, &trustOptions{}), newAttestationCommand(rootOpts), newLoginCommand(dependencies.browser()), newLogoutCommand(), newWhoamiCommand(),
-		newContainerCommand(&outputOptions{}, rootOpts), newDomainCommand(&outputOptions{}), newHttpCommand(&headersOptions{}, rootOpts), newModelCommand(&outputOptions{}), newProjectCommand(&outputOptions{}), newProxyCommand(&proxyOptions{}, rootOpts),
-		newRegistryCommand(&outputOptions{}), newRepoCommand(&outputOptions{}), newSCPCommand(&forwardOptions{}, rootOpts, &trustOptions{}, &tunnelOptions{}), newSecretCommand(&outputOptions{}), newSshCommand(&forwardOptions{}, rootOpts, &sshOptions{}, &trustOptions{}, &tunnelOptions{}), newSshKeyCommand(&outputOptions{}, &sshKeyOptions{}),
-		newTrustCommand(&trustOptions{}), newForwardCommand(&forwardOptions{}, rootOpts, &trustOptions{}, &tunnelOptions{}), newVolumeCommand(&outputOptions{}), newSelfUpdateCommand(func() selfUpdateRunner {
+	cmd.AddCommand(newAttestSSHCommand(accounts.authedClient, accounts.currentScope, &attestSSHOptions{}, &forwardOptions{}, &identityOptions{}, rootOpts, &trustOptions{}), newAttestationCommand(rootOpts), newLoginCommand(accounts, dependencies.browser()), newLogoutCommand(accounts), newWhoamiCommand(accounts),
+		newContainerCommand(accounts.authedClient, &outputOptions{}, rootOpts), newDomainCommand(accounts.authedClient, &outputOptions{}), newHttpCommand(&headersOptions{}, rootOpts), newModelCommand(accounts.authedClient, &outputOptions{}), newProjectCommand(accounts.authedClient, &outputOptions{}), newProxyCommand(&proxyOptions{}, rootOpts),
+		newRegistryCommand(accounts.authedClient, &outputOptions{}), newRepoCommand(accounts.authedClient, &outputOptions{}), newSCPCommand(accounts.authedClient, &forwardOptions{}, rootOpts, &trustOptions{}, &tunnelOptions{}), newSecretCommand(accounts.authedClient, &outputOptions{}), newSshCommand(accounts.authedClient, &forwardOptions{}, rootOpts, &sshOptions{}, &trustOptions{}, &tunnelOptions{}), newSshKeyCommand(accounts.authedClient, &outputOptions{}, &sshKeyOptions{}),
+		newTrustCommand(accounts, &trustOptions{}), newForwardCommand(accounts.authedClient, &forwardOptions{}, rootOpts, &trustOptions{}, &tunnelOptions{}), newVolumeCommand(accounts.authedClient, volumeStore, &outputOptions{}), newSelfUpdateCommand(func() selfUpdateRunner {
 			return newDefaultSelfUpdater(commandVersion, dependencies.updateTransport)
 		}))
 	monitorIdentity, sandboxIdentity := &identityOptions{}, &identityOptions{}
 	monitorOutput, sandboxOutput := &outputOptions{}, &outputOptions{}
-	monitor, sandbox := newMonitorCommand(), newSandboxCommand(sandboxIdentity, sandboxOutput, rootOpts)
-	monitor.AddCommand(newMonitorOpenCommand(monitorIdentity, rootOpts, &trustOptions{}))
-	monitor.AddCommand(newManagedStatusCmd(monitorOutput, "monitor"))
-	addManagedCommands(monitorIdentity, monitorOutput, monitor)
-	addManagedCommands(sandboxIdentity, sandboxOutput, sandbox)
+	monitor, sandbox := newMonitorCommand(), newSandboxCommand(accounts.authedClient, accounts.currentScope, sandboxIdentity, sandboxOutput, rootOpts)
+	monitor.AddCommand(newMonitorOpenCommand(accounts.currentScope, monitorIdentity, rootOpts, &trustOptions{}))
+	monitor.AddCommand(newManagedStatusCmd(accounts.authedClient, monitorOutput, "monitor"))
+	addManagedCommands(accounts.authedClient, accounts.currentScope, monitorIdentity, monitorOutput, monitor)
+	addManagedCommands(accounts.authedClient, accounts.currentScope, sandboxIdentity, sandboxOutput, sandbox)
 	cmd.AddCommand(monitor, sandbox)
 	create, _, _ := cmd.Find([]string{"container", "create"})
 	create.MarkFlagsMutuallyExclusive("config", "repo")

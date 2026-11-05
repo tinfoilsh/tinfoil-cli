@@ -137,35 +137,35 @@ const (
 	containerSourceLocal    = "local"
 )
 
-func newContainerCommand(outputOpts *outputOptions, rootOpts *rootOptions) *cobra.Command {
+func newContainerCommand(newClient authenticatedClientFactory, outputOpts *outputOptions, rootOpts *rootOptions) *cobra.Command {
 	containerCmd := &cobra.Command{
 		Use:     "container",
 		Aliases: []string{"containers", "ct"},
 		Short:   "Manage Tinfoil containers",
 	}
 	containerCmd.PersistentFlags().StringVarP(&outputOpts.outputFormat, "output", "o", "table", "Output format: table or json")
-	containerCmd.AddCommand(newContainerListCommand(outputOpts))
-	containerCmd.AddCommand(newContainerGetCommand(outputOpts))
-	containerCmd.AddCommand(newContainerCreateCommand(&containerCreateOptions{}, outputOpts, rootOpts, &waitOptions{}))
-	containerCmd.AddCommand(newContainerDeleteCommand(&containerDeleteOptions{}))
-	containerCmd.AddCommand(newContainerDeployCommand(&containerDeployOptions{}, outputOpts, &waitOptions{}))
-	containerCmd.AddCommand(newContainerStopCommand(outputOpts))
-	containerCmd.AddCommand(newContainerUpdateCommand(&containerUpdateOptions{}, outputOpts, &waitOptions{}))
-	containerCmd.AddCommand(newContainerPromoteCommand(outputOpts, &waitOptions{}))
-	containerCmd.AddCommand(newContainerCancelCommand(&containerCancelOptions{}))
-	containerCmd.AddCommand(newContainerMetricsCommand(&containerMetricsOptions{}))
-	containerCmd.AddCommand(newContainerHostsCommand(outputOpts))
-	containerCmd.AddCommand(newContainerConnectCommand(&containerConnectOptions{}, &proxyOptions{}, rootOpts, &trustOptions{}))
+	containerCmd.AddCommand(newContainerListCommand(newClient, outputOpts))
+	containerCmd.AddCommand(newContainerGetCommand(newClient, outputOpts))
+	containerCmd.AddCommand(newContainerCreateCommand(newClient, &containerCreateOptions{}, outputOpts, rootOpts, &waitOptions{}))
+	containerCmd.AddCommand(newContainerDeleteCommand(newClient, &containerDeleteOptions{}))
+	containerCmd.AddCommand(newContainerDeployCommand(newClient, &containerDeployOptions{}, outputOpts, &waitOptions{}))
+	containerCmd.AddCommand(newContainerStopCommand(newClient, outputOpts))
+	containerCmd.AddCommand(newContainerUpdateCommand(newClient, &containerUpdateOptions{}, outputOpts, &waitOptions{}))
+	containerCmd.AddCommand(newContainerPromoteCommand(newClient, outputOpts, &waitOptions{}))
+	containerCmd.AddCommand(newContainerCancelCommand(newClient, &containerCancelOptions{}))
+	containerCmd.AddCommand(newContainerMetricsCommand(newClient, &containerMetricsOptions{}))
+	containerCmd.AddCommand(newContainerHostsCommand(newClient, outputOpts))
+	containerCmd.AddCommand(newContainerConnectCommand(newClient, &containerConnectOptions{}, &proxyOptions{}, rootOpts, &trustOptions{}))
 	return containerCmd
 }
 
-func newContainerListCommand(outputOpts *outputOptions) *cobra.Command {
+func newContainerListCommand(newClient authenticatedClientFactory, outputOpts *outputOptions) *cobra.Command {
 	containerListCmd := &cobra.Command{
 		Use:     "list",
 		Aliases: []string{"ls"},
 		Short:   "List containers in the current organization",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			client, err := authedClient()
+			client, err := newClient(commandStreams(cmd))
 			if err != nil {
 				return err
 			}
@@ -190,13 +190,13 @@ func listContainers(streams commandIO, outputOpts *outputOptions, client *cpClie
 	return renderContainers(streams, outputOpts, list)
 }
 
-func newContainerGetCommand(outputOpts *outputOptions) *cobra.Command {
+func newContainerGetCommand(newClient authenticatedClientFactory, outputOpts *outputOptions) *cobra.Command {
 	containerGetCmd := &cobra.Command{
 		Use:   "get [id|name]",
 		Short: "Show a single container",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			client, err := authedClient()
+			client, err := newClient(commandStreams(cmd))
 			if err != nil {
 				return err
 			}
@@ -215,7 +215,7 @@ func newContainerGetCommand(outputOpts *outputOptions) *cobra.Command {
 	return containerGetCmd
 }
 
-func newContainerCreateCommand(containerCreateOpts *containerCreateOptions, outputOpts *outputOptions, rootOpts *rootOptions, waitOpts *waitOptions) *cobra.Command {
+func newContainerCreateCommand(newClient authenticatedClientFactory, containerCreateOpts *containerCreateOptions, outputOpts *outputOptions, rootOpts *rootOptions, waitOpts *waitOptions) *cobra.Command {
 	containerCreateCmd := &cobra.Command{
 		Use:   "create [name]",
 		Short: "Create a new container",
@@ -281,7 +281,7 @@ func newContainerCreateCommand(containerCreateOpts *containerCreateOptions, outp
 				return err
 			}
 
-			client, err := authedClient()
+			client, err := newClient(commandStreams(cmd))
 			if err != nil {
 				return err
 			}
@@ -464,14 +464,14 @@ func createFollowupError(created containerView, replaceID string, err error) err
 	return fmt.Errorf("created %s (%s)%s, but follow-up failed: %w. The new container and any successful disk attachments were retained; inspect with: tinfoil container get %s", created.Name, created.ID, replaced, err, created.ID)
 }
 
-func newContainerDeleteCommand(containerDeleteOpts *containerDeleteOptions) *cobra.Command {
+func newContainerDeleteCommand(newClient authenticatedClientFactory, containerDeleteOpts *containerDeleteOptions) *cobra.Command {
 	containerDeleteCmd := &cobra.Command{
 		Use:     "delete [id|name]",
 		Aliases: []string{"rm", "remove"},
 		Short:   "Delete a container",
 		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			client, err := authedClient()
+			client, err := newClient(commandStreams(cmd))
 			if err != nil {
 				return err
 			}
@@ -505,7 +505,7 @@ func newContainerDeleteCommand(containerDeleteOpts *containerDeleteOptions) *cob
 	return containerDeleteCmd
 }
 
-func newContainerDeployCommand(containerDeployOpts *containerDeployOptions, outputOpts *outputOptions, waitOpts *waitOptions) *cobra.Command {
+func newContainerDeployCommand(newClient authenticatedClientFactory, containerDeployOpts *containerDeployOptions, outputOpts *outputOptions, waitOpts *waitOptions) *cobra.Command {
 	containerDeployCmd := &cobra.Command{
 		Use:   "deploy [id|name]",
 		Short: "Deploy a stopped or failed container",
@@ -513,7 +513,7 @@ func newContainerDeployCommand(containerDeployOpts *containerDeployOptions, outp
 To change a running container, use "tinfoil container update".`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runContainerDeploy(containerDeployOpts, outputOpts, waitOpts, cmd, args)
+			return runContainerDeploy(newClient, containerDeployOpts, outputOpts, waitOpts, cmd, args)
 		},
 	}
 	containerDeployCmd.Flags().BoolVar(&waitOpts.noWait, "no-wait", false, "Return once the request is accepted")
@@ -529,13 +529,13 @@ To change a running container, use "tinfoil container update".`,
 	return containerDeployCmd
 }
 
-func newContainerStopCommand(outputOpts *outputOptions) *cobra.Command {
+func newContainerStopCommand(newClient authenticatedClientFactory, outputOpts *outputOptions) *cobra.Command {
 	containerStopCmd := &cobra.Command{
 		Use:   "stop [id|name]",
 		Short: "Stop a running container",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			client, err := authedClient()
+			client, err := newClient(commandStreams(cmd))
 			if err != nil {
 				return err
 			}
@@ -560,7 +560,7 @@ func newContainerStopCommand(outputOpts *outputOptions) *cobra.Command {
 	return containerStopCmd
 }
 
-func newContainerUpdateCommand(containerUpdateOpts *containerUpdateOptions, outputOpts *outputOptions, waitOpts *waitOptions) *cobra.Command {
+func newContainerUpdateCommand(newClient authenticatedClientFactory, containerUpdateOpts *containerUpdateOptions, outputOpts *outputOptions, waitOpts *waitOptions) *cobra.Command {
 	containerUpdateCmd := &cobra.Command{
 		Use:   "update [id|name]",
 		Short: "Update a running container to a new tag or configuration",
@@ -568,7 +568,7 @@ func newContainerUpdateCommand(containerUpdateOpts *containerUpdateOptions, outp
 update has downtime.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runContainerUpdate(containerUpdateOpts, outputOpts, waitOpts, cmd, args)
+			return runContainerUpdate(newClient, containerUpdateOpts, outputOpts, waitOpts, cmd, args)
 		},
 	}
 	containerUpdateCmd.Flags().BoolVar(&waitOpts.noWait, "no-wait", false, "Return once the request is accepted")
@@ -585,25 +585,25 @@ update has downtime.`,
 	return containerUpdateCmd
 }
 
-func newContainerMetricsCommand(containerMetricsOpts *containerMetricsOptions) *cobra.Command {
+func newContainerMetricsCommand(newClient authenticatedClientFactory, containerMetricsOpts *containerMetricsOptions) *cobra.Command {
 	containerMetricsCmd := &cobra.Command{
 		Use:   "metrics [id|name]",
 		Short: "Show container resource metrics",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runContainerMetrics(containerMetricsOpts, cmd, args)
+			return runContainerMetrics(newClient, containerMetricsOpts, cmd, args)
 		},
 	}
 	containerMetricsCmd.Flags().StringVar(&containerMetricsOpts.metricsTime, "time", "24h", "Time window (e.g. 1h, 24h, 7d)")
 	return containerMetricsCmd
 }
 
-func newContainerHostsCommand(outputOpts *outputOptions) *cobra.Command {
+func newContainerHostsCommand(newClient authenticatedClientFactory, outputOpts *outputOptions) *cobra.Command {
 	containerHostsCmd := &cobra.Command{
 		Use:   "hosts",
 		Short: "List container hosts available to your organization",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			client, err := authedClient()
+			client, err := newClient(commandStreams(cmd))
 			if err != nil {
 				return err
 			}
@@ -629,13 +629,13 @@ func newContainerHostsCommand(outputOpts *outputOptions) *cobra.Command {
 	return containerHostsCmd
 }
 
-func newContainerPromoteCommand(outputOpts *outputOptions, waitOpts *waitOptions) *cobra.Command {
+func newContainerPromoteCommand(newClient authenticatedClientFactory, outputOpts *outputOptions, waitOpts *waitOptions) *cobra.Command {
 	containerPromoteCmd := &cobra.Command{
 		Use:   "promote [id|name]",
 		Short: "Switch traffic to an update that was held for review",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			client, err := authedClient()
+			client, err := newClient(commandStreams(cmd))
 			if err != nil {
 				return err
 			}
@@ -657,13 +657,13 @@ func newContainerPromoteCommand(outputOpts *outputOptions, waitOpts *waitOptions
 	return containerPromoteCmd
 }
 
-func newContainerCancelCommand(containerCancelOpts *containerCancelOptions) *cobra.Command {
+func newContainerCancelCommand(newClient authenticatedClientFactory, containerCancelOpts *containerCancelOptions) *cobra.Command {
 	containerCancelCmd := &cobra.Command{
 		Use:   "cancel [id|name]",
 		Short: "Cancel an update and keep the current version",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			client, err := authedClient()
+			client, err := newClient(commandStreams(cmd))
 			if err != nil {
 				return err
 			}
@@ -703,7 +703,7 @@ func newContainerCancelCommand(containerCancelOpts *containerCancelOptions) *cob
 	return containerCancelCmd
 }
 
-func newContainerConnectCommand(containerConnectOpts *containerConnectOptions, proxyOpts *proxyOptions, rootOpts *rootOptions, trustOpts *trustOptions) *cobra.Command {
+func newContainerConnectCommand(newClient authenticatedClientFactory, containerConnectOpts *containerConnectOptions, proxyOpts *proxyOptions, rootOpts *rootOptions, trustOpts *trustOptions) *cobra.Command {
 	containerConnectCmd := &cobra.Command{
 		Use:   "connect [id|name]",
 		Short: "Run a verified proxy to a deployed container",
@@ -717,7 +717,7 @@ func newContainerConnectCommand(containerConnectOpts *containerConnectOptions, p
   tinfoil container connect my-container --config tinfoil-config.yml`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			client, err := authedClient()
+			client, err := newClient(commandStreams(cmd))
 			if err != nil {
 				return err
 			}
@@ -774,12 +774,12 @@ func newContainerConnectCommand(containerConnectOpts *containerConnectOptions, p
 	return containerConnectCmd
 }
 
-func authedClient() (*cpClient, error) {
-	cfg, err := requireAuth()
+func (a *accountAccess) authedClient(streams commandIO) (*cpClient, error) {
+	cfg, err := a.requireAuth(streams)
 	if err != nil {
 		return nil, err
 	}
-	return newCPClient(cfg), nil
+	return a.client(streams, cfg), nil
 }
 
 // resolveContainer accepts either a UUID or a name. When given a name, list
@@ -1184,7 +1184,7 @@ func prettyJSON(raw json.RawMessage) []byte {
 	return out
 }
 
-func runContainerDeploy(containerDeployOpts *containerDeployOptions, outputOpts *outputOptions, waitOpts *waitOptions, cmd *cobra.Command, args []string) error {
+func runContainerDeploy(newClient authenticatedClientFactory, containerDeployOpts *containerDeployOptions, outputOpts *outputOptions, waitOpts *waitOptions, cmd *cobra.Command, args []string) error {
 	body, err := buildLifecycleBody(cmd,
 		containerDeployOpts.deployTag, containerDeployOpts.deployVariables, containerDeployOpts.deploySecrets, containerDeployOpts.deploySSHKeys,
 		containerDeployOpts.deployDebug, containerDeployOpts.deployMarkLatestRelease, containerDeployOpts.deployCustomDomain, containerDeployOpts.deployHost,
@@ -1198,7 +1198,7 @@ func runContainerDeploy(containerDeployOpts *containerDeployOptions, outputOpts 
 		return err
 	}
 
-	client, err := authedClient()
+	client, err := newClient(commandStreams(cmd))
 	if err != nil {
 		return err
 	}
@@ -1249,7 +1249,7 @@ func runContainerDeploy(containerDeployOpts *containerDeployOptions, outputOpts 
 	return followAndRender(commandStreams(cmd), outputOpts, waitOpts, client, deployed, attached)
 }
 
-func runContainerUpdate(containerUpdateOpts *containerUpdateOptions, outputOpts *outputOptions, waitOpts *waitOptions, cmd *cobra.Command, args []string) error {
+func runContainerUpdate(newClient authenticatedClientFactory, containerUpdateOpts *containerUpdateOptions, outputOpts *outputOptions, waitOpts *waitOptions, cmd *cobra.Command, args []string) error {
 	body, err := buildLifecycleBody(cmd,
 		containerUpdateOpts.updateTag, containerUpdateOpts.updateVariables, containerUpdateOpts.updateSecrets, containerUpdateOpts.updateSSHKeys,
 		containerUpdateOpts.updateDebug, containerUpdateOpts.updateMarkLatestRelease, containerUpdateOpts.updateCustomDomain, "",
@@ -1267,7 +1267,7 @@ func runContainerUpdate(containerUpdateOpts *containerUpdateOptions, outputOpts 
 		body["hold"] = false
 	}
 
-	client, err := authedClient()
+	client, err := newClient(commandStreams(cmd))
 	if err != nil {
 		return err
 	}
@@ -1287,8 +1287,8 @@ func runContainerUpdate(containerUpdateOpts *containerUpdateOptions, outputOpts 
 	return followAndRender(commandStreams(cmd), outputOpts, waitOpts, client, updated, nil)
 }
 
-func runContainerMetrics(containerMetricsOpts *containerMetricsOptions, cmd *cobra.Command, args []string) error {
-	client, err := authedClient()
+func runContainerMetrics(newClient authenticatedClientFactory, containerMetricsOpts *containerMetricsOptions, cmd *cobra.Command, args []string) error {
+	client, err := newClient(commandStreams(cmd))
 	if err != nil {
 		return err
 	}

@@ -37,7 +37,7 @@ func TestFollowReadyPrintsVerifiedCandidateRequest(t *testing.T) {
 	c.UpdateStatus = statusDeploying
 	c.Connections.Review = nil
 	out, err := captureTestStdout(func() error {
-		return followAndRender(testStreams(), commandState.outputOpts, commandState.waitOpts, newCPClient(cliConfig{ControlplaneURL: server.URL}), c, nil)
+		return followAndRender(testStreams(), commandState.outputOpts, commandState.waitOpts, testCPClient(cliConfig{ControlplaneURL: server.URL}), c, nil)
 	})
 	if err != nil {
 		t.Fatal(err)

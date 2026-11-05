@@ -23,7 +23,7 @@ func TestPollContainerHonorsDeadline(t *testing.T) {
 				followInterval = time.Hour
 			}
 			requests := 0
-			client := newCPClient(cliConfig{ControlplaneURL: "https://cp.example"})
+			client := testCPClient(cliConfig{ControlplaneURL: "https://cp.example"})
 			client.http.Transport = lifecycleTransport(func(r *http.Request) (*http.Response, error) {
 				requests++
 				_, hasDeadline := r.Context().Deadline()
@@ -109,7 +109,7 @@ func TestFollowContainerStopsAtTerminalStateAndFailsOnFailed(t *testing.T) {
 	configureContainerPromotionTest(commandState, t, server.URL)
 	commandState.waitOpts.noWait, commandState.outputOpts.outputFormat = false, "table"
 
-	client, err := authedClient()
+	client, err := testAuthedClient(testStreams())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -246,7 +246,7 @@ func TestResolveContainerListsBothMatchesWhenNameIsAmbiguous(t *testing.T) {
 	defer server.Close()
 	configureContainerPromotionTest(commandState, t, server.URL)
 
-	client, err := authedClient()
+	client, err := testAuthedClient(testStreams())
 	if err != nil {
 		t.Fatal(err)
 	}

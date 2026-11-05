@@ -22,7 +22,7 @@ const defaultSSHPort = 22
 // Well inside the shim's tunnel idle timeout, and how a dead path gets noticed.
 const sshServerAliveInterval = 60 * time.Second
 
-func newSshCommand(forwardOpts *forwardOptions, rootOpts *rootOptions, sshOpts *sshOptions, trustOpts *trustOptions, tunnelOpts *tunnelOptions) *cobra.Command {
+func newSshCommand(newClient authenticatedClientFactory, forwardOpts *forwardOptions, rootOpts *rootOptions, sshOpts *sshOptions, trustOpts *trustOptions, tunnelOpts *tunnelOptions) *cobra.Command {
 	sshCmd := &cobra.Command{
 		Use:   "ssh [container|hostname] [-- ssh arguments...]",
 		Short: "SSH into a container over its attested connection",
@@ -51,7 +51,7 @@ func newSshCommand(forwardOpts *forwardOptions, rootOpts *rootOptions, sshOpts *
 			if len(args) == 1 {
 				identifier = args[0]
 			}
-			target, err := resolveTunnelTarget(commandStreams(cmd), forwardOpts, rootOpts, trustOpts, identifier)
+			target, err := resolveTunnelTarget(newClient, commandStreams(cmd), forwardOpts, rootOpts, trustOpts, identifier)
 			if err != nil {
 				return err
 			}

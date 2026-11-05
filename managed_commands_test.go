@@ -191,7 +191,7 @@ func TestManagedStatusFiltersAndWatches(t *testing.T) {
 	followInterval = time.Millisecond
 	t.Cleanup(func() { followInterval = previous })
 	commandState.outputOpts.outputFormat = "table"
-	cmd := newManagedStatusCmd(commandState.outputOpts, "monitor")
+	cmd := newManagedStatusCmd(testAuthedClient, commandState.outputOpts, "monitor")
 	cmd.SetContext(ctx)
 	require.NoError(t, cmd.Flags().Set("watch", "true"))
 	out, err := captureTestStdout(func() error { return cmd.RunE(cmd, []string{row.ID}) })
@@ -219,7 +219,7 @@ func TestSandboxStatusShowsWorkspaceSize(t *testing.T) {
 		}
 	})
 	commandState.outputOpts.outputFormat = "table"
-	cmd := newManagedStatusCmd(commandState.outputOpts, "sandbox")
+	cmd := newManagedStatusCmd(testAuthedClient, commandState.outputOpts, "sandbox")
 	out, err := captureTestStdout(func() error { return cmd.RunE(cmd, []string{testContainerID}) })
 	require.NoError(t, err)
 	require.Contains(t, string(out), "Volumes:      workspace ← work-ws (32 GB)\n")
@@ -245,7 +245,7 @@ func TestSandboxCreationOnlySelectsOwnMonitors(t *testing.T) {
 			http.NotFound(w, r)
 		}
 	})
-	client, err := authedClient()
+	client, err := testAuthedClient(testStreams())
 	require.NoError(t, err)
 	selected, err := selectCreationMonitor(client, "", "user_test")
 	require.NoError(t, err)
@@ -336,7 +336,7 @@ func TestManagedCreateUsesContainerRecovery(t *testing.T) {
 				if state == "json" {
 					commandState.outputOpts.outputFormat = "json"
 				}
-				cmd := newManagedCreateCmd(commandState.identityOpts, commandState.outputOpts, commandState.waitOpts, kind)
+				cmd := newManagedCreateCmd(testScopeClient, commandState.identityOpts, commandState.outputOpts, commandState.waitOpts, kind)
 				cmd.SetContext(t.Context())
 				args := []string{"--tag", "v1", "work", "--owner-public-key", publicFile}
 				if state == "no-wait" {
@@ -409,14 +409,14 @@ func TestSyncedCreateSavesKeysBeforeAllocation(t *testing.T) {
 	defer server.Close()
 	_, _, dek = testLogin(t, server, keys)
 	commandState.outputOpts.outputFormat = "table"
-	cmd := newManagedCreateCmd(commandState.identityOpts, commandState.outputOpts, commandState.waitOpts, "monitor")
+	cmd := newManagedCreateCmd(testScopeClient, commandState.identityOpts, commandState.outputOpts, commandState.waitOpts, "monitor")
 	cmd.SetContext(t.Context())
 	require.NoError(t, cmd.ParseFlags([]string{"--tag", "v1", "--no-wait", "work"}))
 	_, err := captureTestStdout(func() error { return cmd.RunE(cmd, cmd.Flags().Args()) })
 	require.NoError(t, err)
 	require.Equal(t, []string{"monitor"}, created)
 
-	cmd = newManagedCreateCmd(commandState.identityOpts, commandState.outputOpts, commandState.waitOpts, "sandbox")
+	cmd = newManagedCreateCmd(testScopeClient, commandState.identityOpts, commandState.outputOpts, commandState.waitOpts, "sandbox")
 	cmd.SetContext(t.Context())
 	require.NoError(t, cmd.ParseFlags([]string{"--tag", "v1", "--no-wait", "--monitor", monitor.ID, "work"}))
 	_, err = captureTestStdout(func() error { return cmd.RunE(cmd, cmd.Flags().Args()) })
@@ -473,7 +473,7 @@ func TestSandboxCreateWorkspaceSize(t *testing.T) {
 				}
 			})
 			commandState.outputOpts.outputFormat = "table"
-			cmd := newManagedCreateCmd(commandState.identityOpts, commandState.outputOpts, commandState.waitOpts, "sandbox")
+			cmd := newManagedCreateCmd(testScopeClient, commandState.identityOpts, commandState.outputOpts, commandState.waitOpts, "sandbox")
 			cmd.SetContext(t.Context())
 			require.NoError(t, cmd.ParseFlags(append([]string{"--tag", "v1", "--monitor", monitorID, "--no-wait", "--owner-public-key", publicFile, "work"}, tt.args...)))
 			_, err := captureTestStdout(func() error { return cmd.RunE(cmd, cmd.Flags().Args()) })
@@ -506,7 +506,7 @@ func TestSandboxWorkspaceIgnoresContainerVolumes(t *testing.T) {
 			{ID: "44444444-4444-4444-8444-444444444444", Name: "logs"},
 		}})
 	})
-	client, err := authedClient()
+	client, err := testAuthedClient(testStreams())
 	require.NoError(t, err)
 	volume, err := lookupSandboxWorkspace(client, "data")
 	require.NoError(t, err, "a container volume with the same name must not make the workspace ambiguous")

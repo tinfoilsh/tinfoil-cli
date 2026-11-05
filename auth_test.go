@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"github.com/tinfoilsh/tinfoil-cli/internal/auth"
 	"github.com/zalando/go-keyring"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/agent"
@@ -28,6 +29,10 @@ func dekRecordName(apiOrigin, userID string) string {
 }
 
 func writeCredential(name string, value any) error {
+	return writeCredentialTo(auth.OSKeyring{}, name, value)
+}
+
+func writeCredentialTo(keyring auth.Keyring, name string, value any) error {
 	path, err := configPath()
 	if err != nil {
 		return err
@@ -40,7 +45,7 @@ func writeCredential(name string, value any) error {
 		Keyring bool            `json:"keyring"`
 		Record  json.RawMessage `json:"record,omitempty"`
 	}{Keyring: true}
-	if err := osCredentials.Set("tinfoil-cli", name, string(data)); err != nil {
+	if err := keyring.Set("tinfoil-cli", name, string(data)); err != nil {
 		slot.Record = data
 	}
 	return writeStorageJSON(filepath.Join(filepath.Dir(path), "credentials", name+".json"), slot, false)
@@ -205,7 +210,7 @@ func TestLoginInvalidEnvironmentDoesNotClaimEffectiveIdentity(t *testing.T) {
 		t.Fatalf("false effective identity: %s", out)
 	}
 	t.Setenv(envAdminKey, "")
-	cfg, _, err := loadConfig()
+	cfg, _, err := loadConfig(testStreams())
 	if err != nil || cfg.APIKey != "admin_saved_secret" {
 		t.Fatal("verified saved credential was lost")
 	}
@@ -270,9 +275,6 @@ func (f *flakyCredentials) Delete(_, user string) error {
 func useFlakyCredentials(t *testing.T) *flakyCredentials {
 	t.Helper()
 	service := &flakyCredentials{store: map[string]string{}}
-	previous := osCredentials
-	osCredentials = service
-	t.Cleanup(func() { osCredentials = previous })
 	return service
 }
 
@@ -314,21 +316,23 @@ func TestLogoutRemovesSyncedMaterialAndKeepsUserKeys(t *testing.T) {
 	defer server.Close()
 	useTestClerk(t, server.URL)
 	service := useFlakyCredentials(t)
+	accounts := testAccountsWithCredentials(service)
 	grant := &clerkGrant{Version: 1, Grant: randomB64U(16), Issuer: server.URL, ClientID: "fixture-client", UserID: "user_owner", Account: "personal",
 		AccessToken: "access-1", RefreshToken: "refresh-1", ExpiresAt: time.Now().Add(time.Hour).Unix()}
-	require.NoError(t, writeCredential(loginRecordName, grant))
+	require.NoError(t, writeCredentialTo(service, loginRecordName, grant))
+	client := accounts.client(testStreams(), cliConfig{ControlplaneURL: server.URL, login: grant})
 	dek := &syncedDEK{Version: 1, APIOrigin: server.URL, UserID: "user_owner", DEKID: randomB64U(16), DEK: make(b64u, 32)}
-	require.NoError(t, writeCredential(dekRecordName(server.URL, "user_owner"), dek))
+	require.NoError(t, writeCredentialTo(service, dekRecordName(server.URL, "user_owner"), dek))
 	// A DEK left by an earlier user's interrupted login commit, with no login record of its own.
 	service.down = true
-	require.NoError(t, writeCredential(dekRecordName(server.URL, "user_earlier"), dek))
+	require.NoError(t, writeCredentialTo(service, dekRecordName(server.URL, "user_earlier"), dek))
 	service.down = false
 
 	scope := accountScope{ControlplaneURL: server.URL, UserID: "user_owner"}
 	sandboxDir, err := resourceDir(scope, "11111111-1111-4111-8111-111111111111", "work")
 	require.NoError(t, err)
 	synced, ownSeed := testSeed(t), testSeed(t)
-	exported, err := exportTMKIdentity(grant, sandboxDir, synced)
+	exported, err := exportTMKIdentity(client, sandboxDir, synced)
 	require.NoError(t, err)
 	device := func(id, custody string) string {
 		dir, err := resourceDir(scope, id, "monitor")
@@ -341,7 +345,7 @@ func TestLogoutRemovesSyncedMaterialAndKeepsUserKeys(t *testing.T) {
 	tmkDevice, umkDevice := device("22222222-2222-4222-8222-222222222222", "tmk"), device("33333333-3333-4333-8333-333333333333", "umk")
 	umkRecord, err := umkRecordPath(scope, "44444444-4444-4444-8444-444444444444")
 	require.NoError(t, err)
-	_, err = saveUMKRecord(umkRecord, newUMKRecord("sandbox", ed25519PublicKeyString(ownSeed)))
+	_, err = saveUMKRecord(testStreams(), umkRecord, newUMKRecord("sandbox", ed25519PublicKeyString(ownSeed)))
 	require.NoError(t, err)
 	userKey := filepath.Join(t.TempDir(), "id_ed25519")
 	require.NoError(t, ensureOwnerSSHKey(userKey, ownSeed))
@@ -355,10 +359,12 @@ func TestLogoutRemovesSyncedMaterialAndKeepsUserKeys(t *testing.T) {
 	held := testAgent(t, privateKey(exported), privateKey(tmkDevice), privateKey(userKey))
 
 	out := &strings.Builder{}
-	require.NoError(t, clerkLogout(out))
+	streams := testStreams()
+	streams.out = out
+	require.NoError(t, accounts.clerkLogout(streams))
 	require.Contains(t, out.String(), "Could not revoke", "revocation failure is reported but does not stop local cleanup")
 	require.Equal(t, "refresh-1", <-revoked)
-	gone, err := currentGrant()
+	gone, err := accounts.currentGrant(testStreams())
 	require.NoError(t, err)
 	require.Nil(t, gone)
 	require.Empty(t, service.store, "logout removes the login and every synced DEK from the OS service")
@@ -375,9 +381,9 @@ func TestLogoutRemovesSyncedMaterialAndKeepsUserKeys(t *testing.T) {
 	require.Equal(t, mustSigner(t, userKey).PublicKey().Marshal(), listed[0].Marshal())
 
 	// A command delayed past logout cannot recreate synced material.
-	_, err = exportTMKIdentity(grant, sandboxDir, synced)
+	_, err = exportTMKIdentity(client, sandboxDir, synced)
 	require.ErrorContains(t, err, "signed out")
-	require.ErrorContains(t, whileSignedIn(grant, func() error { _, err := ensureSSHKey(tmkDevice); return err }), "signed out")
+	require.ErrorContains(t, whileSignedIn(client, func() error { _, err := ensureSSHKey(tmkDevice); return err }), "signed out")
 	require.NoFileExists(t, exported)
 	require.NoFileExists(t, tmkDevice)
 }
@@ -425,7 +431,7 @@ func TestUnauthenticatedListDoesNotClaimAnEmptyAccount(t *testing.T) {
 
 	useTestClerk(t, "https://api.example")
 	for _, kind := range []string{"sandbox", "monitor"} {
-		cmd := newManagedStatusCmd(commandState.outputOpts, kind)
+		cmd := newManagedStatusCmd(testAuthedClient, commandState.outputOpts, kind)
 		out, err := captureTestStdout(func() error { return cmd.RunE(cmd, nil) })
 		require.NoError(t, err)
 		require.Contains(t, string(out), "stored on this machine")
@@ -440,14 +446,16 @@ func TestLogoutRemovesSavedAdminKeyDespiteCredentialServiceOutage(t *testing.T) 
 
 	useTestClerk(t, "https://api.example")
 	service := useFlakyCredentials(t)
+	accounts := testAccountsWithCredentials(service)
+	commandState.logoutCmd = newLogoutCommand(accounts)
 	path, err := saveConfig(cliConfig{ControlplaneURL: "https://api.example", APIKey: "admin_saved_secret"})
 	require.NoError(t, err)
-	require.NoError(t, writeCredential(loginRecordName, &clerkGrant{Version: 1, Grant: randomB64U(16), Issuer: "https://api.example", ClientID: "fixture-client",
+	require.NoError(t, writeCredentialTo(service, loginRecordName, &clerkGrant{Version: 1, Grant: randomB64U(16), Issuer: "https://api.example", ClientID: "fixture-client",
 		UserID: "user_owner", Account: "personal", AccessToken: "access-1", RefreshToken: "refresh-1", ExpiresAt: time.Now().Add(time.Hour).Unix()}))
 	owner := ed25519PublicKeyString(testSeed(t))
 	umk, err := umkRecordPath(accountScope{ControlplaneURL: "https://api.example", UserID: "user_owner"}, testContainerID)
 	require.NoError(t, err)
-	_, err = saveUMKRecord(umk, newUMKRecord("sandbox", owner))
+	_, err = saveUMKRecord(testStreams(), umk, newUMKRecord("sandbox", owner))
 	require.NoError(t, err)
 	t.Setenv(envAPIKey, "admin_environment_secret")
 
@@ -464,7 +472,7 @@ func TestLogoutRemovesSavedAdminKeyDespiteCredentialServiceOutage(t *testing.T) 
 	require.FileExists(t, umk)
 
 	service.down = false
-	grant, err := currentGrant()
+	grant, err := accounts.currentGrant(testStreams())
 	require.NoError(t, err)
 	require.Nil(t, grant, "the login stays removed after the service recovers")
 	require.Contains(t, service.store, loginRecordName)

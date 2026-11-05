@@ -59,7 +59,7 @@ func TestProxyCommandNamesResolvedHost(t *testing.T) {
 func TestResolveTunnelTargetTakesHostnamesWithoutControlplane(t *testing.T) {
 	rootOpts := &rootOptions{}
 	resolve := func(identifier string) (*tunnelTarget, error) {
-		return resolveTunnelTarget(testStreams(), &forwardOptions{}, rootOpts, &trustOptions{}, identifier)
+		return resolveTunnelTarget(testAuthedClient, testStreams(), &forwardOptions{}, rootOpts, &trustOptions{}, identifier)
 	}
 
 	host := "courageous-otter-cinders-4s7ut6c3.box2.tinfoil.sh"

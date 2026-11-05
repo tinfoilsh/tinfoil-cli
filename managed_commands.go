@@ -22,21 +22,21 @@ import (
 
 const managedKindAnnotation = "managed-kind"
 
-func addManagedCommands(identityOpts *identityOptions, outputOpts *outputOptions, group *cobra.Command) {
+func addManagedCommands(newClient authenticatedClientFactory, newScope scopeClientFactory, identityOpts *identityOptions, outputOpts *outputOptions, group *cobra.Command) {
 	if group.Name() == "monitor" {
-		start := newManagedContainerCmd(outputOpts, "monitor", "start")
+		start := newManagedContainerCmd(newClient, outputOpts, "monitor", "start")
 		start.Short = "Start a stopped or failed Monitor"
-		group.AddCommand(start, newMonitorStopCmd(outputOpts), newMonitorDeleteCmd())
+		group.AddCommand(start, newMonitorStopCmd(newScope, outputOpts), newMonitorDeleteCmd(newScope))
 	}
 	group.PersistentFlags().StringVarP(&outputOpts.outputFormat, "output", "o", "table", "Output format: table or json")
 	group.PersistentFlags().StringVar(&identityOpts.attestSSHIdentity, "identity", "", "Owner SSH identity file")
-	update := newManagedContainerCmd(outputOpts, group.Name(), "update")
+	update := newManagedContainerCmd(newClient, outputOpts, group.Name(), "update")
 	update.Long = "Review and apply a release update, switching traffic automatically. The shared update plan and downtime confirmation still apply, including with --no-wait."
-	metrics := newManagedContainerCmd(outputOpts, group.Name(), "metrics")
-	group.AddCommand(update, metrics, newManagedCreateCmd(identityOpts, outputOpts, &waitOptions{}, group.Name()))
+	metrics := newManagedContainerCmd(newClient, outputOpts, group.Name(), "metrics")
+	group.AddCommand(update, metrics, newManagedCreateCmd(newScope, identityOpts, outputOpts, &waitOptions{}, group.Name()))
 }
 
-func newManagedContainerCmd(outputOpts *outputOptions, kind, name string) *cobra.Command {
+func newManagedContainerCmd(newClient authenticatedClientFactory, outputOpts *outputOptions, kind, name string) *cobra.Command {
 	cmd := &cobra.Command{
 		Use: name + " [id|name]", Args: cobra.ExactArgs(1),
 		Annotations: map[string]string{managedKindAnnotation: kind},
@@ -47,13 +47,13 @@ func newManagedContainerCmd(outputOpts *outputOptions, kind, name string) *cobra
 		opts := &containerDeployOptions{}
 		cmd.Short = "Deploy a stopped or failed " + kind
 		cmd.RunE = func(cmd *cobra.Command, args []string) error {
-			return runContainerDeploy(opts, outputOpts, wait, cmd, args)
+			return runContainerDeploy(newClient, opts, outputOpts, wait, cmd, args)
 		}
 	case "update":
 		opts := &containerUpdateOptions{}
 		cmd.Short = "Update a running " + kind + " to a new tag or configuration"
 		cmd.RunE = func(cmd *cobra.Command, args []string) error {
-			return runContainerUpdate(opts, outputOpts, wait, cmd, args)
+			return runContainerUpdate(newClient, opts, outputOpts, wait, cmd, args)
 		}
 		cmd.Flags().StringVar(&opts.updateTag, "tag", "", "Release tag to update to")
 		cmd.Flags().BoolVar(&opts.updateYes, "yes", false, "Approve the update plan, including any downtime")
@@ -61,7 +61,7 @@ func newManagedContainerCmd(outputOpts *outputOptions, kind, name string) *cobra
 		opts := &containerMetricsOptions{}
 		cmd.Short = "Show " + kind + " resource metrics"
 		cmd.RunE = func(cmd *cobra.Command, args []string) error {
-			return runContainerMetrics(opts, cmd, args)
+			return runContainerMetrics(newClient, opts, cmd, args)
 		}
 		cmd.Flags().StringVar(&opts.metricsTime, "time", "24h", "Time window (e.g. 1h, 24h, 7d)")
 	}
@@ -121,11 +121,11 @@ func containerNames(rows []containerView) string {
 	return strings.Join(names, ", ")
 }
 
-func newMonitorStopCmd(outputOpts *outputOptions) *cobra.Command {
+func newMonitorStopCmd(newScope scopeClientFactory, outputOpts *outputOptions) *cobra.Command {
 	return &cobra.Command{
 		Use: "stop [id|name]", Short: "Stop a Monitor together with its sandboxes", Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			scope, client, err := currentScope()
+			scope, client, err := newScope(commandStreams(cmd))
 			if err != nil {
 				return err
 			}
@@ -155,12 +155,12 @@ func newMonitorStopCmd(outputOpts *outputOptions) *cobra.Command {
 	}
 }
 
-func newMonitorDeleteCmd() *cobra.Command {
+func newMonitorDeleteCmd(newScope scopeClientFactory) *cobra.Command {
 	var yes bool
 	cmd := &cobra.Command{
 		Use: "delete [id|name]", Aliases: []string{"rm", "remove"}, Short: "Delete a Monitor together with its sandboxes and their workspaces", Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			scope, client, err := currentScope()
+			scope, client, err := newScope(commandStreams(cmd))
 			if err != nil {
 				return err
 			}
@@ -186,7 +186,7 @@ func newMonitorDeleteCmd() *cobra.Command {
 			}
 			var forgetErr error
 			for _, sandbox := range sandboxes {
-				forgetErr = errors.Join(forgetErr, forgetSandbox(sandbox.Name, sandbox.ID))
+				forgetErr = errors.Join(forgetErr, forgetSandbox(commandStreams(cmd), newScope, sandbox.Name, sandbox.ID))
 			}
 			if forgetErr != nil {
 				return fmt.Errorf("deleted %s, but %w", deleted, forgetErr)
@@ -199,7 +199,7 @@ func newMonitorDeleteCmd() *cobra.Command {
 	return cmd
 }
 
-func newManagedCreateCmd(identityOpts *identityOptions, outputOpts *outputOptions, waitOpts *waitOptions, kind string) *cobra.Command {
+func newManagedCreateCmd(newScope scopeClientFactory, identityOpts *identityOptions, outputOpts *outputOptions, waitOpts *waitOptions, kind string) *cobra.Command {
 	var tag, publicKey, monitor, workspace string
 	var workspaceSize int
 	cmd := &cobra.Command{
@@ -217,7 +217,7 @@ with those, storage keys are created on first open and kept only on that machine
 			if sizeChosen && !slices.Contains(sandboxWorkspaceSizesGB, workspaceSize) {
 				return fmt.Errorf("--workspace-size must be %s (GB)", workspaceSizeChoices(""))
 			}
-			scope, client, err := currentScope()
+			scope, client, err := newScope(commandStreams(cmd))
 			if err != nil {
 				return err
 			}
@@ -371,12 +371,12 @@ func managedRow(client *cpClient, kind, identifier string) (*containerView, erro
 	return row, nil
 }
 
-func newManagedStatusCmd(outputOpts *outputOptions, kind string) *cobra.Command {
+func newManagedStatusCmd(newClient authenticatedClientFactory, outputOpts *outputOptions, kind string) *cobra.Command {
 	var watch bool
 	cmd := &cobra.Command{
 		Use: "status [id|name]", Aliases: []string{"get", "list", "ls"}, Short: "Show status, boot details and connection instructions", Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			client, err := authedClient()
+			client, err := newClient(commandStreams(cmd))
 			if len(args) == 0 && errors.Is(err, errNotLoggedIn) {
 				plural := map[string]string{"monitor": "monitors", "sandbox": "sandboxes"}[kind]
 				fmt.Fprintf(cmd.OutOrStdout(), "No %s are stored on this machine. Run `tinfoil login` to list your account's %s.\n", plural, plural)

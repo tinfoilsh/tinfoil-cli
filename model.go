@@ -33,24 +33,24 @@ var (
 	modelWrapPollInterval = 10 * time.Second
 )
 
-func newModelCommand(outputOpts *outputOptions) *cobra.Command {
+func newModelCommand(newClient authenticatedClientFactory, outputOpts *outputOptions) *cobra.Command {
 	modelCmd := &cobra.Command{
 		Use:     "model",
 		Aliases: []string{"models"},
 		Short:   "Prepare verified model weights for containers",
 	}
 	modelCmd.PersistentFlags().StringVarP(&outputOpts.outputFormat, "output", "o", "table", "Output format: table or json")
-	modelCmd.AddCommand(newModelWrapCommand(&modelWrapOptions{}, outputOpts), newModelUpdateCommand(&modelUpdateOptions{}, outputOpts), newModelListCommand(&modelListOptions{}, outputOpts), newModelStatusCommand(&modelStatusOptions{}, outputOpts), newModelDeleteCommand())
+	modelCmd.AddCommand(newModelWrapCommand(newClient, &modelWrapOptions{}, outputOpts), newModelUpdateCommand(newClient, &modelUpdateOptions{}, outputOpts), newModelListCommand(newClient, &modelListOptions{}, outputOpts), newModelStatusCommand(newClient, &modelStatusOptions{}, outputOpts), newModelDeleteCommand(newClient))
 	return modelCmd
 }
 
-func newModelWrapCommand(modelWrapOpts *modelWrapOptions, outputOpts *outputOptions) *cobra.Command {
+func newModelWrapCommand(newClient authenticatedClientFactory, modelWrapOpts *modelWrapOptions, outputOpts *outputOptions) *cobra.Command {
 	modelWrapCmd := &cobra.Command{
 		Use:   "wrap [owner/model]",
 		Short: "Wrap Hugging Face weights into a verified artifact",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			client, err := authedClient()
+			client, err := newClient(commandStreams(cmd))
 			if err != nil {
 				return err
 			}
@@ -80,7 +80,7 @@ func newModelWrapCommand(modelWrapOpts *modelWrapOptions, outputOpts *outputOpti
 	return modelWrapCmd
 }
 
-func newModelUpdateCommand(modelUpdateOpts *modelUpdateOptions, outputOpts *outputOptions) *cobra.Command {
+func newModelUpdateCommand(newClient authenticatedClientFactory, modelUpdateOpts *modelUpdateOptions, outputOpts *outputOptions) *cobra.Command {
 	modelUpdateCmd := &cobra.Command{
 		Use:   "update [owner/model]",
 		Short: "Wrap a newer revision of a previously wrapped model",
@@ -88,7 +88,7 @@ func newModelUpdateCommand(modelUpdateOpts *modelUpdateOptions, outputOpts *outp
 release, then delete the old wrap job.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			client, err := authedClient()
+			client, err := newClient(commandStreams(cmd))
 			if err != nil {
 				return err
 			}
@@ -147,13 +147,13 @@ release, then delete the old wrap job.`,
 	return modelUpdateCmd
 }
 
-func newModelListCommand(modelListOpts *modelListOptions, outputOpts *outputOptions) *cobra.Command {
+func newModelListCommand(newClient authenticatedClientFactory, modelListOpts *modelListOptions, outputOpts *outputOptions) *cobra.Command {
 	modelListCmd := &cobra.Command{
 		Use:     "list",
 		Aliases: []string{"ls"},
 		Short:   "List model wrap jobs in the organization",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			client, err := authedClient()
+			client, err := newClient(commandStreams(cmd))
 			if err != nil {
 				return err
 			}
@@ -172,14 +172,14 @@ func newModelListCommand(modelListOpts *modelListOptions, outputOpts *outputOpti
 	return modelListCmd
 }
 
-func newModelStatusCommand(modelStatusOpts *modelStatusOptions, outputOpts *outputOptions) *cobra.Command {
+func newModelStatusCommand(newClient authenticatedClientFactory, modelStatusOpts *modelStatusOptions, outputOpts *outputOptions) *cobra.Command {
 	modelStatusCmd := &cobra.Command{
 		Use:     "status [host] [job-id]",
 		Aliases: []string{"get"},
 		Short:   "Show the status of a model wrap job",
 		Args:    cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			client, err := authedClient()
+			client, err := newClient(commandStreams(cmd))
 			if err != nil {
 				return err
 			}
@@ -195,14 +195,14 @@ func newModelStatusCommand(modelStatusOpts *modelStatusOptions, outputOpts *outp
 	return modelStatusCmd
 }
 
-func newModelDeleteCommand() *cobra.Command {
+func newModelDeleteCommand(newClient authenticatedClientFactory) *cobra.Command {
 	modelDeleteCmd := &cobra.Command{
 		Use:     "delete [host] [job-id]",
 		Aliases: []string{"rm", "remove"},
 		Short:   "Delete a wrap job and its artifact once unused",
 		Args:    cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			client, err := authedClient()
+			client, err := newClient(commandStreams(cmd))
 			if err != nil {
 				return err
 			}

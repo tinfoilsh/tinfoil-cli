@@ -61,7 +61,7 @@ func TestMonitorDeletionPreservesRemoteAndLocalFailureOrdering(t *testing.T) {
 			pins := filepath.Join(profiles, sandbox.Name+".known_hosts")
 			require.NoError(t, os.WriteFile(pins, []byte("saved pin\n"), storageFileMode))
 			var out, diagnostic bytes.Buffer
-			cmd := newMonitorDeleteCmd()
+			cmd := newMonitorDeleteCmd(testScopeClient)
 			cmd.SetOut(&out)
 			cmd.SetErr(&diagnostic)
 			require.NoError(t, cmd.Flags().Set("yes", "true"))
@@ -105,7 +105,7 @@ func TestMonitorDeletionWithoutConfirmationDoesNotMutate(t *testing.T) {
 	os.Stdin = input
 	t.Cleanup(func() { os.Stdin = previous })
 	var out, diagnostic bytes.Buffer
-	cmd := newMonitorDeleteCmd()
+	cmd := newMonitorDeleteCmd(testScopeClient)
 	cmd.SetOut(&out)
 	cmd.SetErr(&diagnostic)
 

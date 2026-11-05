@@ -30,7 +30,7 @@ func enclaveAPIKey(tunnelOpts *tunnelOptions) string {
 	return strings.TrimSpace(os.Getenv(envTunnelAPIKey))
 }
 
-func newForwardCommand(forwardOpts *forwardOptions, rootOpts *rootOptions, trustOpts *trustOptions, tunnelOpts *tunnelOptions) *cobra.Command {
+func newForwardCommand(newClient authenticatedClientFactory, forwardOpts *forwardOptions, rootOpts *rootOptions, trustOpts *trustOptions, tunnelOpts *tunnelOptions) *cobra.Command {
 	forwardCmd := &cobra.Command{
 		Use:   "forward [container|hostname]",
 		Short: "Forward local TCP ports into a verified enclave",
@@ -71,7 +71,7 @@ A hostname target needs --repo or --config to select the expected workload.`,
 			if len(args) == 1 {
 				identifier = args[0]
 			}
-			target, err := resolveTunnelTarget(commandStreams(cmd), forwardOpts, rootOpts, trustOpts, identifier)
+			target, err := resolveTunnelTarget(newClient, commandStreams(cmd), forwardOpts, rootOpts, trustOpts, identifier)
 			if err != nil {
 				return err
 			}
@@ -121,7 +121,7 @@ type tunnelTarget struct {
 // resolveTunnelTarget accepts an enclave hostname, a container name, or a
 // container ID. A dotted identifier is a hostname: dev-launched and sandbox
 // CVMs answer on one but have no controlplane record.
-func resolveTunnelTarget(streams commandIO, forwardOpts *forwardOptions, rootOpts *rootOptions, trustOpts *trustOptions, identifier string) (*tunnelTarget, error) {
+func resolveTunnelTarget(newClient authenticatedClientFactory, streams commandIO, forwardOpts *forwardOptions, rootOpts *rootOptions, trustOpts *trustOptions, identifier string) (*tunnelTarget, error) {
 	if identifier == "" {
 		identifier = rootOpts.enclaveHost
 	}
@@ -132,7 +132,7 @@ func resolveTunnelTarget(streams commandIO, forwardOpts *forwardOptions, rootOpt
 		return &tunnelTarget{name: identifier, host: identifier, repo: rootOpts.repo, sealedTo: forwardOpts.forwardSealedTo}, nil
 	}
 
-	cp, err := authedClient()
+	cp, err := newClient(streams)
 	if err != nil {
 		return nil, err
 	}

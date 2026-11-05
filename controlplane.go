@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tinfoilsh/tinfoil-cli/internal/auth"
 	"github.com/tinfoilsh/tinfoil-cli/internal/controlplane"
 )
 
@@ -24,18 +25,27 @@ const (
 )
 
 type cpClient struct {
-	baseURL string
-	apiKey  string
-	login   *clerkGrant
-	http    *http.Client
+	version    string
+	authOrigin string
+	auth       func() (*auth.Service, error)
+	baseURL    string
+	apiKey     string
+	login      *clerkGrant
+	http       *http.Client
 }
 
-func newCPClient(cfg cliConfig) *cpClient {
+func newCPClient(cfg cliConfig, currentVersion, authOrigin string, transport *http.Client, authFactory func() (*auth.Service, error)) *cpClient {
+	client := &http.Client{Timeout: 60 * time.Second}
+	if transport != nil {
+		copy := *transport
+		client = &copy
+	}
 	return &cpClient{
+		version: currentVersion, authOrigin: authOrigin, auth: authFactory,
 		baseURL: strings.TrimRight(cfg.ControlplaneURL, "/"),
 		apiKey:  cfg.APIKey,
 		login:   cfg.login,
-		http:    &http.Client{Timeout: 60 * time.Second},
+		http:    client,
 	}
 }
 
@@ -43,7 +53,7 @@ type cpTokenSource struct{ client *cpClient }
 
 func (s cpTokenSource) Token(ctx context.Context) (string, error) {
 	if s.client.login != nil {
-		service, err := authService()
+		service, err := s.client.auth()
 		if err != nil {
 			return "", err
 		}
@@ -99,7 +109,7 @@ func (c *cpClient) doWithHeaders(method, path string, query url.Values, headers 
 }
 
 func (c *cpClient) doContext(ctx context.Context, method, path string, query url.Values, headers map[string]string, body any, out any) (int, error) {
-	client := controlplane.New(c.baseURL, version, c.http, cpTokenSource{client: c})
+	client := controlplane.New(c.baseURL, c.version, c.http, cpTokenSource{client: c})
 	status, err := client.Do(ctx, method, path, query, headers, body, out)
 	if apiErr, ok := err.(*controlplane.Error); ok {
 		return status, (*cpError)(apiErr)

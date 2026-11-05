@@ -87,8 +87,6 @@ func TestPathfEscapesSegments(t *testing.T) {
 }
 
 func TestControlplaneRequestsSendVersionedUserAgent(t *testing.T) {
-	setVersionForTest(t, "0.16.0")
-
 	userAgent := make(chan string, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		userAgent <- r.Header.Get("User-Agent")
@@ -96,7 +94,7 @@ func TestControlplaneRequestsSendVersionedUserAgent(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := &cpClient{baseURL: server.URL, http: server.Client()}
+	client := newCPClient(cliConfig{ControlplaneURL: server.URL}, "0.16.0", "", server.Client(), nil)
 	if _, err := client.do(http.MethodGet, "/test", nil, nil, nil); err != nil {
 		t.Fatalf("request: %v", err)
 	}

@@ -19,9 +19,7 @@ const storageUnobserved = autounlock.Unobserved
 
 type storageStoreFactory func(context.Context, storageProfile) (*volumeKeyStore, error)
 
-var volumeStorageFactory storageStoreFactory = autounlock.NewAWSKeyStore
-
-func newProjectStorageCommand(outputOpts *outputOptions) *cobra.Command {
+func newProjectStorageCommand(newClient authenticatedClientFactory, outputOpts *outputOptions) *cobra.Command {
 	parent := &cobra.Command{Use: "storage", Short: "Configure customer-owned project storage"}
 	cmd := &cobra.Command{Use: "configure [id|owner/repo]", Short: "Save a local AWS keyserver profile without provisioning infrastructure", Args: cobra.MaximumNArgs(1)}
 	cmd.Flags().String("keyserver-url", "", "Customer keyserver HTTPS origin [required]")
@@ -64,7 +62,7 @@ func newProjectStorageCommand(outputOpts *outputOptions) *cobra.Command {
 		if err := p.Validate(); err != nil {
 			return err
 		}
-		client, err := authedClient()
+		client, err := newClient(commandStreams(cmd))
 		if err != nil {
 			return err
 		}
@@ -125,7 +123,7 @@ func storageOptions(cmd *cobra.Command) storageArtifactOptions {
 	return storageArtifactOptions{Project: get("project"), Mount: get("mount"), Tag: get("tag"), Domain: get("domain"), ConfigFile: get("config-file"), ConfigOut: get("config-out"), PolicyFile: get("policy-file"), PolicyOut: get("policy-out"), ExistingSecret: get("existing-secret")}
 }
 
-func newVolumeAutoUnlockCommand(outputOpts *outputOptions, factory storageStoreFactory) *cobra.Command {
+func newVolumeAutoUnlockCommand(newClient authenticatedClientFactory, outputOpts *outputOptions, factory storageStoreFactory) *cobra.Command {
 	parent := &cobra.Command{Use: "auto-unlock", Short: "Prepare or inspect private volume unlock configuration"}
 	configure := &cobra.Command{Use: "configure <existing-volume>", Short: "Prepare an existing disk using only its original AWS key", Args: cobra.ExactArgs(1)}
 	addStorageArtifactFlags(configure, true)
@@ -137,7 +135,7 @@ func newVolumeAutoUnlockCommand(outputOpts *outputOptions, factory storageStoreF
 		if err := autounlock.ValidateExistingSecretReference(o.ExistingSecret); err != nil {
 			return err
 		}
-		client, err := authedClient()
+		client, err := newClient(commandStreams(cmd))
 		if err != nil {
 			return err
 		}
@@ -165,7 +163,7 @@ func newVolumeAutoUnlockCommand(outputOpts *outputOptions, factory storageStoreF
 		if project == "" {
 			return fmt.Errorf("--project is required")
 		}
-		client, err := authedClient()
+		client, err := newClient(commandStreams(cmd))
 		if err != nil {
 			return err
 		}
@@ -207,12 +205,12 @@ func storagePreflight(client *cpClient, o *storageArtifactOptions, existing bool
 	return service.Preflight(scope, o, existing)
 }
 
-func runAutoUnlockVolumeCreate(outputOpts *outputOptions, volumeCreateOpts *volumeCreateOptions, cmd *cobra.Command, name string, factory storageStoreFactory) error {
+func runAutoUnlockVolumeCreate(newClient authenticatedClientFactory, outputOpts *outputOptions, volumeCreateOpts *volumeCreateOptions, cmd *cobra.Command, name string, factory storageStoreFactory) error {
 	size, err := parseSize(volumeCreateOpts.volumeCreateSize)
 	if err != nil {
 		return fmt.Errorf("--size: %w", err)
 	}
-	client, err := authedClient()
+	client, err := newClient(commandStreams(cmd))
 	if err != nil {
 		return err
 	}

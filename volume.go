@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -49,27 +48,25 @@ type volumeRequest struct {
 	slot       string
 }
 
-func newVolumeCommand(outputOpts *outputOptions) *cobra.Command {
+func newVolumeCommand(newClient authenticatedClientFactory, volumeStore storageStoreFactory, outputOpts *outputOptions) *cobra.Command {
 	volumeCmd := &cobra.Command{
 		Use:     "volume",
 		Aliases: []string{"volumes"},
 		Short:   "Manage persistent volumes for containers and sandboxes",
 	}
-	volumeCmd.AddCommand(newVolumeAutoUnlockCommand(outputOpts, func(ctx context.Context, p storageProfile) (*volumeKeyStore, error) {
-		return volumeStorageFactory(ctx, p)
-	}))
+	volumeCmd.AddCommand(newVolumeAutoUnlockCommand(newClient, outputOpts, volumeStore))
 	volumeCmd.PersistentFlags().StringVarP(&outputOpts.outputFormat, "output", "o", "table", "Output format: table or json")
-	volumeCmd.AddCommand(newVolumeListCommand(outputOpts), newVolumeGetCommand(outputOpts), newVolumeCreateCommand(outputOpts, &volumeCreateOptions{}), newVolumeRenameCommand(&volumeRenameOptions{}), newVolumeAttachCommand(&volumeAttachOptions{}), newVolumeDetachCommand(), newVolumeDeleteCommand(&volumeDeleteOptions{}))
+	volumeCmd.AddCommand(newVolumeListCommand(newClient, outputOpts), newVolumeGetCommand(newClient, outputOpts), newVolumeCreateCommand(newClient, volumeStore, outputOpts, &volumeCreateOptions{}), newVolumeRenameCommand(newClient, &volumeRenameOptions{}), newVolumeAttachCommand(newClient, &volumeAttachOptions{}), newVolumeDetachCommand(newClient), newVolumeDeleteCommand(newClient, &volumeDeleteOptions{}))
 	return volumeCmd
 }
 
-func newVolumeListCommand(outputOpts *outputOptions) *cobra.Command {
+func newVolumeListCommand(newClient authenticatedClientFactory, outputOpts *outputOptions) *cobra.Command {
 	volumeListCmd := &cobra.Command{
 		Use:     "list",
 		Aliases: []string{"ls"},
 		Short:   "List volumes in the current organization",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			client, err := authedClient()
+			client, err := newClient(commandStreams(cmd))
 			if err != nil {
 				return err
 			}
@@ -93,13 +90,13 @@ func newVolumeListCommand(outputOpts *outputOptions) *cobra.Command {
 	return volumeListCmd
 }
 
-func newVolumeGetCommand(outputOpts *outputOptions) *cobra.Command {
+func newVolumeGetCommand(newClient authenticatedClientFactory, outputOpts *outputOptions) *cobra.Command {
 	volumeGetCmd := &cobra.Command{
 		Use:   "get [id|name]",
 		Short: "Show a single volume",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			client, err := authedClient()
+			client, err := newClient(commandStreams(cmd))
 			if err != nil {
 				return err
 			}
@@ -114,7 +111,7 @@ func newVolumeGetCommand(outputOpts *outputOptions) *cobra.Command {
 	return volumeGetCmd
 }
 
-func newVolumeCreateCommand(outputOpts *outputOptions, volumeCreateOpts *volumeCreateOptions) *cobra.Command {
+func newVolumeCreateCommand(newClient authenticatedClientFactory, volumeStore storageStoreFactory, outputOpts *outputOptions, volumeCreateOpts *volumeCreateOptions) *cobra.Command {
 	volumeCreateCmd := &cobra.Command{
 		Use:   "create [name]",
 		Short: "Create an empty volume on a host",
@@ -125,7 +122,7 @@ func newVolumeCreateCommand(outputOpts *outputOptions, volumeCreateOpts *volumeC
 				return errors.New("--auto-unlock does not apply to sandbox volumes, which are unlocked with their owner's credentials")
 			}
 			if autoUnlock {
-				return runAutoUnlockVolumeCreate(outputOpts, volumeCreateOpts, cmd, args[0], volumeStorageFactory)
+				return runAutoUnlockVolumeCreate(newClient, outputOpts, volumeCreateOpts, cmd, args[0], volumeStore)
 			}
 			for _, flag := range []string{"project", "mount", "tag", "domain", "config-file", "config-out", "policy-file", "policy-out"} {
 				if cmd.Flags().Changed(flag) {
@@ -139,7 +136,7 @@ func newVolumeCreateCommand(outputOpts *outputOptions, volumeCreateOpts *volumeC
 			if volumeCreateOpts.volumeCreateSandbox && !isWorkspaceSize(size) {
 				return fmt.Errorf("--size for a sandbox volume must be %s", workspaceSizeChoices("GB"))
 			}
-			client, err := authedClient()
+			client, err := newClient(commandStreams(cmd))
 			if err != nil {
 				return err
 			}
@@ -183,13 +180,13 @@ func newVolumeCreateCommand(outputOpts *outputOptions, volumeCreateOpts *volumeC
 	return volumeCreateCmd
 }
 
-func newVolumeRenameCommand(volumeRenameOpts *volumeRenameOptions) *cobra.Command {
+func newVolumeRenameCommand(newClient authenticatedClientFactory, volumeRenameOpts *volumeRenameOptions) *cobra.Command {
 	volumeRenameCmd := &cobra.Command{
 		Use:   "rename [id|name]",
 		Short: "Rename a volume",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			client, err := authedClient()
+			client, err := newClient(commandStreams(cmd))
 			if err != nil {
 				return err
 			}
@@ -210,13 +207,13 @@ func newVolumeRenameCommand(volumeRenameOpts *volumeRenameOptions) *cobra.Comman
 	return volumeRenameCmd
 }
 
-func newVolumeAttachCommand(volumeAttachOpts *volumeAttachOptions) *cobra.Command {
+func newVolumeAttachCommand(newClient authenticatedClientFactory, volumeAttachOpts *volumeAttachOptions) *cobra.Command {
 	volumeAttachCmd := &cobra.Command{
 		Use:   "attach [volume] [container]",
 		Short: "Attach a volume to a stopped container's declared mount",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			client, err := authedClient()
+			client, err := newClient(commandStreams(cmd))
 			if err != nil {
 				return err
 			}
@@ -248,13 +245,13 @@ func newVolumeAttachCommand(volumeAttachOpts *volumeAttachOptions) *cobra.Comman
 	return volumeAttachCmd
 }
 
-func newVolumeDetachCommand() *cobra.Command {
+func newVolumeDetachCommand(newClient authenticatedClientFactory) *cobra.Command {
 	volumeDetachCmd := &cobra.Command{
 		Use:   "detach [volume]",
 		Short: "Detach a volume from its stopped container",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			client, err := authedClient()
+			client, err := newClient(commandStreams(cmd))
 			if err != nil {
 				return err
 			}
@@ -276,14 +273,14 @@ func newVolumeDetachCommand() *cobra.Command {
 	return volumeDetachCmd
 }
 
-func newVolumeDeleteCommand(volumeDeleteOpts *volumeDeleteOptions) *cobra.Command {
+func newVolumeDeleteCommand(newClient authenticatedClientFactory, volumeDeleteOpts *volumeDeleteOptions) *cobra.Command {
 	volumeDeleteCmd := &cobra.Command{
 		Use:     "delete [id|name]",
 		Aliases: []string{"rm", "remove"},
 		Short:   "Delete a detached volume and all of its data",
 		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			client, err := authedClient()
+			client, err := newClient(commandStreams(cmd))
 			if err != nil {
 				return err
 			}

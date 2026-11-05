@@ -336,7 +336,7 @@ func TestCreateValidationUsesInstanceNamePolicy(t *testing.T) {
 			if tt.replace {
 				commandState.containerCreateOpts.createReplaceID = testReplacedContainerID
 			}
-			client, err := authedClient()
+			client, err := testAuthedClient(testStreams())
 			if err != nil {
 				t.Fatal(err)
 			}

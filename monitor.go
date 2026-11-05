@@ -84,12 +84,12 @@ func newMonitorCommand() *cobra.Command {
 	return monitorCmd
 }
 
-func currentScope() (accountScope, *cpClient, error) {
-	cfg, err := requireAuth()
+func (a *accountAccess) currentScope(streams commandIO) (accountScope, *cpClient, error) {
+	cfg, err := a.requireAuth(streams)
 	if err != nil {
 		return accountScope{}, nil, err
 	}
-	identity, err := authenticatedContext(cfg)
+	identity, err := a.authenticatedContext(streams, cfg)
 	if err != nil {
 		return accountScope{}, nil, err
 	}
@@ -101,7 +101,7 @@ func currentScope() (accountScope, *cpClient, error) {
 	if cfg.login != nil && (scope.UserID != cfg.login.UserID || scope.account() != cfg.login.Account) {
 		return accountScope{}, nil, errors.New("the API reports a different account than this login; run `tinfoil login` to choose an account")
 	}
-	return scope, newCPClient(cfg), nil
+	return scope, a.client(streams, cfg), nil
 }
 
 // Serialize updates to preserve boot-key pins and the maximum generation.
@@ -156,7 +156,7 @@ func connectMonitorOwner(streams commandIO, identityOpts *identityOptions, rootO
 		}
 	}()
 	binding := mkBinding{Account: scope.account(), ContainerID: row.ID, Bucket: &bucket}
-	if m.keys, err = resolveResourceKeys(identityOpts, ctx, cp, scope, row.containerView, "monitor", binding, dir, true); err != nil {
+	if m.keys, err = resolveResourceKeys(streams, identityOpts, ctx, cp, scope, row.containerView, "monitor", binding, dir, true); err != nil {
 		return nil, err
 	}
 	if _, err := updateProfile(dir, func(p *monitorProfile) error {
@@ -167,7 +167,7 @@ func connectMonitorOwner(streams commandIO, identityOpts *identityOptions, rootO
 	}
 	device := func() error { _, err := ensureSSHKey(filepath.Join(dir, monitorDeviceKeyName)); return err }
 	if m.keys.mode == "tmk" {
-		err = whileSignedIn(cp.login, device)
+		err = whileSignedIn(cp, device)
 	} else {
 		err = device()
 	}
@@ -216,7 +216,7 @@ func (m *monitorSession) open(streams commandIO, ctx context.Context, name, owne
 		if health.State != "absent" {
 			return fmt.Errorf("Monitor %s has saved state, but this machine has no storage key for it; restore its UMK keys file %s", name, m.keys.umkPath)
 		}
-		if err := m.keys.generateUMKKeys("monitor", owner, binding); err != nil {
+		if err := m.keys.generateUMKKeys(streams, "monitor", owner, binding); err != nil {
 			return err
 		}
 	}
@@ -388,14 +388,14 @@ func openOwnerChannel(client *ssh.Client, dir, host, token string) (ssh.Channel,
 	return owner.OpenChannel(client, dir, host, token)
 }
 
-func newMonitorOpenCommand(identityOpts *identityOptions, rootOpts *rootOptions, trustOpts *trustOptions) *cobra.Command {
+func newMonitorOpenCommand(newScope scopeClientFactory, identityOpts *identityOptions, rootOpts *rootOptions, trustOpts *trustOptions) *cobra.Command {
 	command := &cobra.Command{
 		Use: "open [id|name]", Short: "Unlock and forward the Monitor UI over attested SSH", Args: cobra.ExactArgs(1),
 		Long: "Also restores this device's sandbox connectivity.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
 			fmt.Fprintln(cmd.ErrOrStderr(), "Looking up Monitor "+name)
-			scope, cp, err := currentScope()
+			scope, cp, err := newScope(commandStreams(cmd))
 			if err != nil {
 				return err
 			}

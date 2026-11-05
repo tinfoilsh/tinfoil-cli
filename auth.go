@@ -7,7 +7,6 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"os/signal"
 	"strings"
@@ -18,7 +17,7 @@ import (
 	"golang.org/x/term"
 )
 
-func newLoginCommand(openBrowser func(string) error) *cobra.Command {
+func newLoginCommand(accounts *accountAccess, openBrowser func(string) error) *cobra.Command {
 	loginCmd := &cobra.Command{
 		Use:   "login",
 		Short: "Sign in to Tinfoil",
@@ -36,10 +35,10 @@ func newLoginCommand(openBrowser func(string) error) *cobra.Command {
 			keyFlag, _ := cmd.Flags().GetString("api-key")
 			if keyFlag == "" && urlFlag == "" {
 				sync, _ := cmd.Flags().GetBool("sync")
-				return clerkLogin(cmd, sync, openBrowser)
+				return accounts.clerkLogin(cmd, sync, openBrowser)
 			}
 
-			cfg, _, err := loadConfig()
+			cfg, _, err := loadConfig(commandStreams(cmd))
 			if err != nil {
 				return err
 			}
@@ -70,7 +69,7 @@ func newLoginCommand(openBrowser func(string) error) *cobra.Command {
 
 			cfg.APIKey = key
 
-			identity, err := authenticatedContext(cfg)
+			identity, err := accounts.authenticatedContext(commandStreams(cmd), cfg)
 			if err != nil {
 				return fmt.Errorf("credential check failed: %w", err)
 			}
@@ -81,19 +80,19 @@ func newLoginCommand(openBrowser func(string) error) *cobra.Command {
 			}
 			fmt.Fprintf(commandStreams(cmd).out, "Credentials saved to %s\n", path)
 			printAuthContext(commandStreams(cmd), "Saved credential", cfg, "file: "+path, identity)
-			effective, _, err := loadConfig()
+			effective, _, err := loadConfig(commandStreams(cmd))
 			if err != nil {
 				return err
 			}
 			if credentialEnvSource() != "" || effective.ControlplaneURL != cfg.ControlplaneURL {
 				fmt.Fprintln(commandStreams(cmd).err, "WARNING: environment overrides remain active; the saved credential is not necessarily the effective login.")
-				identity, err = authenticatedContext(effective)
+				identity, err = accounts.authenticatedContext(commandStreams(cmd), effective)
 				if err != nil {
 					return fmt.Errorf("credentials saved, but effective environment login could not be verified: %w", err)
 				}
 			}
 			printAuthContext(commandStreams(cmd), "Effective login", effective, credentialSource(), identity)
-			offerRegistryEnrollment(cmd)
+			accounts.offerRegistryEnrollment(cmd)
 			return nil
 		},
 	}
@@ -103,13 +102,13 @@ func newLoginCommand(openBrowser func(string) error) *cobra.Command {
 	return loginCmd
 }
 
-func newLogoutCommand() *cobra.Command {
+func newLogoutCommand(accounts *accountAccess) *cobra.Command {
 	logoutCmd := &cobra.Command{
 		Use:   "logout",
 		Short: "Sign out and remove saved credentials and synced keys",
 		Long:  "Your own SSH keys and locally generated resource keys are kept.",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			clerkErr := clerkLogout(cmd.OutOrStdout())
+			clerkErr := accounts.clerkLogout(commandStreams(cmd))
 			path, removed, err := deleteConfig()
 			switch {
 			case err != nil:
@@ -128,24 +127,24 @@ func newLogoutCommand() *cobra.Command {
 	return logoutCmd
 }
 
-func newWhoamiCommand() *cobra.Command {
+func newWhoamiCommand(accounts *accountAccess) *cobra.Command {
 	whoamiCmd := &cobra.Command{
 		Use:   "whoami",
 		Short: "Show the current login and organization",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, err := requireAuth()
+			cfg, err := accounts.requireAuth(commandStreams(cmd))
 			if err != nil {
 				return err
 			}
 
-			identity, err := authenticatedContext(cfg)
+			identity, err := accounts.authenticatedContext(commandStreams(cmd), cfg)
 			if err != nil {
 				return fmt.Errorf("verifying credentials: %w", err)
 			}
 			source := credentialSource()
 			if cfg.login != nil {
 				source = "Clerk login"
-				if dek, err := syncedKey(cfg.login, identity.UserID); err != nil || dek == nil {
+				if dek, err := accounts.syncedKey(commandStreams(cmd), cfg.login, identity.UserID); err != nil || dek == nil {
 					source += " (sandbox keys not synced)"
 				}
 			}
@@ -196,9 +195,9 @@ type authContext struct {
 	UserName string `json:"user_name,omitempty"`
 }
 
-func authenticatedContext(cfg cliConfig) (authContext, error) {
+func (a *accountAccess) authenticatedContext(streams commandIO, cfg cliConfig) (authContext, error) {
 	var identity authContext
-	if _, err := newCPClient(cfg).do("GET", "/api/auth/context", nil, nil, &identity); err != nil {
+	if _, err := a.client(streams, cfg).do("GET", "/api/auth/context", nil, nil, &identity); err != nil {
 		return identity, err
 	}
 	if identity.UserID == "" || identity.ContextType != "personal" && identity.ContextType != "organization" ||
@@ -215,28 +214,8 @@ func randomB64U(n int) string {
 	return base64.RawURLEncoding.EncodeToString(data)
 }
 
-func authService() (*auth.Service, error) {
-	store, err := credentialStore()
-	if err != nil {
-		return nil, err
-	}
-	settings := auth.BuildSettings{Targets: cliTargets, ClientID: clerkCLIClientID, APIScope: clerkCLIAPIScope, Issuer: clerkIssuer, APIOrigin: fixedAPIOrigin}
-	return auth.New(settings, store, nil, version, auth.Lifecycle{
-		CleanupResources: removeExportedKeys,
-		LoginCommitted: func() error {
-			cfg, path, err := loadConfig()
-			if err == nil && cfg.APIKey != "" && envAdminAPIKey() == "" {
-				if _, statErr := os.Stat(path); statErr == nil {
-					_, _, err = deleteConfig()
-				}
-			}
-			return err
-		},
-	}), nil
-}
-
-func clerkLogin(cmd *cobra.Command, syncKeys bool, openBrowser func(string) error) error {
-	service, err := authService()
+func (a *accountAccess) clerkLogin(cmd *cobra.Command, syncKeys bool, openBrowser func(string) error) error {
+	service, err := a.auth(commandStreams(cmd))
 	if err != nil {
 		return err
 	}
@@ -267,21 +246,21 @@ func clerkLogin(cmd *cobra.Command, syncKeys bool, openBrowser func(string) erro
 	if result.KeysSynced {
 		fmt.Fprintln(cmd.OutOrStdout(), "Sandbox keys synced to this machine.")
 	}
-	offerRegistryEnrollment(cmd)
+	a.offerRegistryEnrollment(cmd)
 	return nil
 }
 
-func clerkLogout(out io.Writer) error {
-	service, err := authService()
+func (a *accountAccess) clerkLogout(streams commandIO) error {
+	service, err := a.auth(streams)
 	if err != nil {
 		return err
 	}
 	result, err := service.Logout(context.Background())
 	if result.RevocationError != nil {
-		fmt.Fprintf(out, "Could not revoke the Clerk login (%v); removing it locally anyway.\n", result.RevocationError)
+		fmt.Fprintf(streams.out, "Could not revoke the Clerk login (%v); removing it locally anyway.\n", result.RevocationError)
 	}
 	if result.Removed {
-		fmt.Fprintf(out, "Signed out %s and removed synced keys from this machine.\n", result.UserID)
+		fmt.Fprintf(streams.out, "Signed out %s and removed synced keys from this machine.\n", result.UserID)
 	}
 	return err
 }

@@ -20,7 +20,7 @@ type sshKeyView struct {
 	UsedBy    []string `json:"used_by"`
 }
 
-func newSshKeyCommand(outputOpts *outputOptions, sshKeyOpts *sshKeyOptions) *cobra.Command {
+func newSshKeyCommand(newClient authenticatedClientFactory, outputOpts *outputOptions, sshKeyOpts *sshKeyOptions) *cobra.Command {
 	sshKeyCmd := &cobra.Command{
 		Use:     "ssh-key",
 		Aliases: []string{"ssh-keys"},
@@ -29,7 +29,7 @@ func newSshKeyCommand(outputOpts *outputOptions, sshKeyOpts *sshKeyOptions) *cob
 	}
 	sshKeyCmd.PersistentFlags().StringVarP(&outputOpts.outputFormat, "output", "o", "table", "Output format: table or json")
 	sshKeyCmd.PersistentFlags().BoolVar(&sshKeyOpts.sshKeySandbox, "sandbox", false, "Use the sandbox and Monitor key list instead of container debug keys")
-	sshKeyCmd.AddCommand(newSshKeyListCommand(outputOpts, sshKeyOpts), newSshKeyCreateCommand(sshKeyOpts, &sshKeyCreateOptions{}), newSshKeyDeleteCommand(sshKeyOpts))
+	sshKeyCmd.AddCommand(newSshKeyListCommand(newClient, outputOpts, sshKeyOpts), newSshKeyCreateCommand(newClient, sshKeyOpts, &sshKeyCreateOptions{}), newSshKeyDeleteCommand(newClient, sshKeyOpts))
 	return sshKeyCmd
 }
 
@@ -41,13 +41,13 @@ func sshKeyQuery(sshKeyOpts *sshKeyOptions) url.Values {
 	return url.Values{"sandbox": {"true"}}
 }
 
-func newSshKeyListCommand(outputOpts *outputOptions, sshKeyOpts *sshKeyOptions) *cobra.Command {
+func newSshKeyListCommand(newClient authenticatedClientFactory, outputOpts *outputOptions, sshKeyOpts *sshKeyOptions) *cobra.Command {
 	sshKeyListCmd := &cobra.Command{
 		Use:     "list",
 		Aliases: []string{"ls"},
 		Short:   "List SSH keys",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			client, err := authedClient()
+			client, err := newClient(commandStreams(cmd))
 			if err != nil {
 				return err
 			}
@@ -77,13 +77,13 @@ func newSshKeyListCommand(outputOpts *outputOptions, sshKeyOpts *sshKeyOptions) 
 	return sshKeyListCmd
 }
 
-func newSshKeyCreateCommand(sshKeyOpts *sshKeyOptions, sshKeyCreateOpts *sshKeyCreateOptions) *cobra.Command {
+func newSshKeyCreateCommand(newClient authenticatedClientFactory, sshKeyOpts *sshKeyOptions, sshKeyCreateOpts *sshKeyCreateOptions) *cobra.Command {
 	sshKeyCreateCmd := &cobra.Command{
 		Use:   "create [name]",
 		Short: "Add a public SSH key",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			client, err := authedClient()
+			client, err := newClient(commandStreams(cmd))
 			if err != nil {
 				return err
 			}
@@ -105,7 +105,7 @@ func newSshKeyCreateCommand(sshKeyOpts *sshKeyOptions, sshKeyCreateOpts *sshKeyC
 	return sshKeyCreateCmd
 }
 
-func newSshKeyDeleteCommand(sshKeyOpts *sshKeyOptions) *cobra.Command {
+func newSshKeyDeleteCommand(newClient authenticatedClientFactory, sshKeyOpts *sshKeyOptions) *cobra.Command {
 	sshKeyDeleteCmd := &cobra.Command{
 		Use:     "delete [name]",
 		Aliases: []string{"rm", "remove"},
@@ -113,7 +113,7 @@ func newSshKeyDeleteCommand(sshKeyOpts *sshKeyOptions) *cobra.Command {
 		Long:    "Sandboxes and Monitors that use a deleted sandbox key keep accepting it.",
 		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			client, err := authedClient()
+			client, err := newClient(commandStreams(cmd))
 			if err != nil {
 				return err
 			}

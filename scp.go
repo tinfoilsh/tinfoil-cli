@@ -9,7 +9,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func newSCPCommand(forwardOpts *forwardOptions, rootOpts *rootOptions, trustOpts *trustOptions, tunnelOpts *tunnelOptions) *cobra.Command {
+func newSCPCommand(newClient authenticatedClientFactory, forwardOpts *forwardOptions, rootOpts *rootOptions, trustOpts *trustOptions, tunnelOpts *tunnelOptions) *cobra.Command {
 	var user string
 	var port uint
 	cmd := &cobra.Command{
@@ -43,7 +43,7 @@ Put native scp options after --; -p before -- is the enclave SSH port.`,
 			if port > 65535 {
 				return fmt.Errorf("invalid --port %d: must be 1..65535", port)
 			}
-			target, paths, err := resolveSCPPaths(commandStreams(cmd), forwardOpts, rootOpts, trustOpts, args, user)
+			target, paths, err := resolveSCPPaths(newClient, commandStreams(cmd), forwardOpts, rootOpts, trustOpts, args, user)
 			if err != nil {
 				return err
 			}
@@ -83,7 +83,7 @@ func parseSCPPath(raw string) (scpPath, error) {
 	return scpPath{remote: true, identifier: host, user: user, path: path}, nil
 }
 
-func resolveSCPPaths(streams commandIO, forwardOpts *forwardOptions, rootOpts *rootOptions, trustOpts *trustOptions, args []string, user string) (*tunnelTarget, []string, error) {
+func resolveSCPPaths(newClient authenticatedClientFactory, streams commandIO, forwardOpts *forwardOptions, rootOpts *rootOptions, trustOpts *trustOptions, args []string, user string) (*tunnelTarget, []string, error) {
 	paths := make([]scpPath, len(args))
 	var identifier string
 	hasRemote := false
@@ -117,7 +117,7 @@ func resolveSCPPaths(streams commandIO, forwardOpts *forwardOptions, rootOpts *r
 			}
 		}
 	}
-	target, err := resolveTunnelTarget(streams, forwardOpts, rootOpts, trustOpts, identifier)
+	target, err := resolveTunnelTarget(newClient, streams, forwardOpts, rootOpts, trustOpts, identifier)
 	if err != nil {
 		return nil, nil, err
 	}

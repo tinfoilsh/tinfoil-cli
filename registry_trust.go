@@ -22,34 +22,34 @@ type registryAccount struct {
 	RegistryID string   `json:"scope"`
 }
 
-func newTrustEnrollCommand(trustEnrollOpts *trustEnrollOptions) *cobra.Command {
+func newTrustEnrollCommand(accounts *accountAccess, trustEnrollOpts *trustEnrollOptions) *cobra.Command {
 	trustEnrollCmd := &cobra.Command{
 		Use:   "add",
 		Short: "Trust the current account's private registry",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			cfg, err := requireAuth()
+			cfg, err := accounts.requireAuth(commandStreams(cmd))
 			if err != nil {
 				return err
 			}
-			identity, err := authenticatedContext(cfg)
+			identity, err := accounts.authenticatedContext(commandStreams(cmd), cfg)
 			if err != nil {
 				return err
 			}
-			return enrollRegistry(cmd, cfg, identity, trustEnrollOpts.enrollmentRegistryID, term.IsTerminal(int(streamFD(commandStreams(cmd).in))))
+			return accounts.enrollRegistry(cmd, cfg, identity, trustEnrollOpts.enrollmentRegistryID, term.IsTerminal(int(streamFD(commandStreams(cmd).in))))
 		},
 	}
 	trustEnrollCmd.Flags().StringVar(&trustEnrollOpts.enrollmentRegistryID, "registry-id", "", "Expected private registry ID; approves it without a prompt")
 	return trustEnrollCmd
 }
 
-func newTrustRemoveCommand() *cobra.Command {
+func newTrustRemoveCommand(accounts *accountAccess) *cobra.Command {
 	trustRemoveCmd := &cobra.Command{
 		Use:   "remove <account>",
 		Short: "Stop trusting an account's private registry",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			controlplaneURL, err := registryControlplaneURL()
+			controlplaneURL, err := accounts.registryControlplaneURL(commandStreams(cmd))
 			if err != nil {
 				return err
 			}
@@ -70,16 +70,16 @@ func printRegistries(out io.Writer, entries []registryEnrollment) {
 	}
 }
 
-func offerRegistryEnrollment(cmd *cobra.Command) {
+func (a *accountAccess) offerRegistryEnrollment(cmd *cobra.Command) {
 	if !term.IsTerminal(int(streamFD(commandStreams(cmd).in))) {
 		return
 	}
-	cfg, err := requireAuth()
+	cfg, err := a.requireAuth(commandStreams(cmd))
 	if err == nil {
 		var identity authContext
-		identity, err = authenticatedContext(cfg)
+		identity, err = a.authenticatedContext(commandStreams(cmd), cfg)
 		if err == nil {
-			err = enrollRegistry(cmd, cfg, identity, "", true)
+			err = a.enrollRegistry(cmd, cfg, identity, "", true)
 		}
 	}
 	if err != nil {
@@ -87,12 +87,12 @@ func offerRegistryEnrollment(cmd *cobra.Command) {
 	}
 }
 
-func enrollRegistry(cmd *cobra.Command, cfg cliConfig, identity authContext, expectedRegistryID string, interactive bool) error {
+func (a *accountAccess) enrollRegistry(cmd *cobra.Command, cfg cliConfig, identity authContext, expectedRegistryID string, interactive bool) error {
 	if !interactive && expectedRegistryID == "" {
 		return fmt.Errorf("private registry approval requires a terminal or an explicit --registry-id")
 	}
 	var account registryAccount
-	if _, err := newCPClient(cfg).do("GET", registryEnrollmentPath, nil, nil, &account); err != nil {
+	if _, err := a.client(commandStreams(cmd), cfg).do("GET", registryEnrollmentPath, nil, nil, &account); err != nil {
 		return err
 	}
 	if expectedRegistryID != "" && expectedRegistryID != account.RegistryID {
@@ -160,18 +160,18 @@ func acceptRegistry(in io.Reader, out io.Writer, entry registryEnrollment, expli
 	return nil
 }
 
-func registryControlplaneURL() (string, error) {
-	cfg, _, err := loadConfig()
+func (a *accountAccess) registryControlplaneURL(streams commandIO) (string, error) {
+	cfg, _, err := loadConfig(streams)
 	if err != nil {
 		return "", err
 	}
 	if cfg.APIKey == "" {
-		grant, err := currentGrant()
+		grant, err := a.currentGrant(streams)
 		if err != nil {
 			return "", err
 		}
 		if grant != nil {
-			return fixedAPIOrigin, nil
+			return a.apiOrigin, nil
 		}
 	}
 	return cfg.ControlplaneURL, nil
@@ -185,7 +185,7 @@ func registryIDs(rootOpts *rootOptions, source string) ([]string, error) {
 	if rootOpts.publicRegistry {
 		return nil, nil
 	}
-	controlplaneURL, err := registryControlplaneURL()
+	controlplaneURL, err := rootOpts.registryOrigin()
 	if err != nil {
 		return nil, err
 	}

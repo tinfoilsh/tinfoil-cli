@@ -38,28 +38,28 @@ type projectUpdateResponse struct {
 	Results []projectInstanceResult `json:"results"`
 }
 
-func newProjectCommand(outputOpts *outputOptions) *cobra.Command {
+func newProjectCommand(newClient authenticatedClientFactory, outputOpts *outputOptions) *cobra.Command {
 	projectCmd := &cobra.Command{
 		Use:     "project",
 		Aliases: []string{"projects"},
 		Short:   "Manage groups of containers that share a config repo",
 	}
 	projectCmd.PersistentFlags().StringVarP(&outputOpts.outputFormat, "output", "o", "table", "Output format: table or json")
-	projectCmd.AddCommand(newProjectListCommand(outputOpts))
-	projectCmd.AddCommand(newProjectGetCommand(outputOpts))
-	projectCmd.AddCommand(newProjectSettingsCommand(outputOpts, &projectSettingsOptions{}))
-	projectCmd.AddCommand(newProjectUpdateCommand(outputOpts, &projectUpdateOptions{}))
-	projectCmd.AddCommand(newProjectStorageCommand(outputOpts))
+	projectCmd.AddCommand(newProjectListCommand(newClient, outputOpts))
+	projectCmd.AddCommand(newProjectGetCommand(newClient, outputOpts))
+	projectCmd.AddCommand(newProjectSettingsCommand(newClient, outputOpts, &projectSettingsOptions{}))
+	projectCmd.AddCommand(newProjectUpdateCommand(newClient, outputOpts, &projectUpdateOptions{}))
+	projectCmd.AddCommand(newProjectStorageCommand(newClient, outputOpts))
 	return projectCmd
 }
 
-func newProjectListCommand(outputOpts *outputOptions) *cobra.Command {
+func newProjectListCommand(newClient authenticatedClientFactory, outputOpts *outputOptions) *cobra.Command {
 	projectListCmd := &cobra.Command{
 		Use:     "list",
 		Aliases: []string{"ls"},
 		Short:   "List projects in the current organization",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			client, err := authedClient()
+			client, err := newClient(commandStreams(cmd))
 			if err != nil {
 				return err
 			}
@@ -74,13 +74,13 @@ func newProjectListCommand(outputOpts *outputOptions) *cobra.Command {
 	return projectListCmd
 }
 
-func newProjectGetCommand(outputOpts *outputOptions) *cobra.Command {
+func newProjectGetCommand(newClient authenticatedClientFactory, outputOpts *outputOptions) *cobra.Command {
 	projectGetCmd := &cobra.Command{
 		Use:   "get [id|owner/repo]",
 		Short: "Show a project",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			client, err := authedClient()
+			client, err := newClient(commandStreams(cmd))
 			if err != nil {
 				return err
 			}
@@ -95,7 +95,7 @@ func newProjectGetCommand(outputOpts *outputOptions) *cobra.Command {
 	return projectGetCmd
 }
 
-func newProjectSettingsCommand(outputOpts *outputOptions, projectSettingsOpts *projectSettingsOptions) *cobra.Command {
+func newProjectSettingsCommand(newClient authenticatedClientFactory, outputOpts *outputOptions, projectSettingsOpts *projectSettingsOptions) *cobra.Command {
 	projectSettingsCmd := &cobra.Command{
 		Use:     "settings [id|owner/repo]",
 		Aliases: []string{"set"},
@@ -114,7 +114,7 @@ func newProjectSettingsCommand(outputOpts *outputOptions, projectSettingsOpts *p
 				return fmt.Errorf("specify --hold-by-default")
 			}
 
-			client, err := authedClient()
+			client, err := newClient(commandStreams(cmd))
 			if err != nil {
 				return err
 			}
@@ -140,7 +140,7 @@ func newProjectSettingsCommand(outputOpts *outputOptions, projectSettingsOpts *p
 	return projectSettingsCmd
 }
 
-func newProjectUpdateCommand(outputOpts *outputOptions, projectUpdateOpts *projectUpdateOptions) *cobra.Command {
+func newProjectUpdateCommand(newClient authenticatedClientFactory, outputOpts *outputOptions, projectUpdateOpts *projectUpdateOptions) *cobra.Command {
 	projectUpdateCmd := &cobra.Command{
 		Use:   "update [id|owner/repo]",
 		Short: "Update every running instance of a project to a tag",
@@ -164,7 +164,7 @@ func newProjectUpdateCommand(outputOpts *outputOptions, projectUpdateOpts *proje
 				body["instance_ids"] = projectUpdateOpts.projectUpdateInstanceIDs
 			}
 
-			client, err := authedClient()
+			client, err := newClient(commandStreams(cmd))
 			if err != nil {
 				return err
 			}
