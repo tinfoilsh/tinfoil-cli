@@ -1,4 +1,4 @@
-package main
+package autounlock
 
 import (
 	"bytes"
@@ -102,16 +102,16 @@ func (r *rejectingRandom) Read([]byte) (int, error) {
 	return 0, errors.New("randomness must not be used")
 }
 
-func testStorageProfile() storageProfile {
-	return storageProfile{Version: storageSchemaVersion, Scope: storageScope{ControlplaneURL: "https://api.example.com", OrgID: "org_test", Repo: "owner/repo"}, KeyserverURL: "https://keys.example.com", AWSRegion: "us-east-2", AWSPrefix: "customer", Domain: "app.example.com"}
+func testStorageProfile() Profile {
+	return Profile{Version: SchemaVersion, Scope: Scope{ControlplaneURL: "https://api.example.com", OrgID: "org_test", Repo: "owner/repo"}, KeyserverURL: "https://keys.example.com", AWSRegion: "us-east-2", AWSPrefix: "customer", Domain: "app.example.com"}
 }
 
-func testStorageReceipt() storageReceipt {
+func testStorageReceipt() Receipt {
 	p := testStorageProfile()
-	return storageReceipt{Version: storageSchemaVersion, Profile: p, VolumeID: testVolumeID, Mount: "data", KeySecret: volumeSecretRef(testVolumeID), SecretName: volumeSecretName(p, testVolumeID), Generated: true, Phase: storagePhaseAllocated, Tag: "v1.2.3", Domain: "app.example.com"}
+	return Receipt{Version: SchemaVersion, Profile: p, VolumeID: testVolumeID, Mount: "data", KeySecret: volumeSecretRef(testVolumeID), SecretName: volumeSecretName(p, testVolumeID), Generated: true, Phase: PhaseAllocated, Tag: "v1.2.3", Domain: "app.example.com"}
 }
 
-func testStoredSecret(r storageReceipt) *fakeVolumeSecret {
+func testStoredSecret(r Receipt) *fakeVolumeSecret {
 	return &fakeVolumeSecret{name: r.SecretName, arn: "arn:aws:secretsmanager:us-east-2:123456789012:secret:" + r.SecretName + "-abcdef", version: r.VolumeID, value: `{"value":"` + storageTestEncoded + `"}`, tags: []types.Tag{{Key: aws.String(storageScopeTag), Value: aws.String(r.Profile.Scope.Key())}, {Key: aws.String(storageVolumeTag), Value: aws.String(r.VolumeID)}}}
 }
 
@@ -132,14 +132,14 @@ func TestStorageCreateOnlyAndUncertainResponse(t *testing.T) {
 				fake.createErr = errors.New(storageTestEncoded)
 				fake.persistOnError = true
 			}
-			store := volumeKeyStore{client: fake, random: bytes.NewReader(storageTestKey)}
+			store := KeyStore{client: fake, random: bytes.NewReader(storageTestKey)}
 			stored, err := store.create(context.Background(), r, func() error { marked = true; return nil })
 			require.NoError(t, err)
 			require.Equal(t, r.VolumeID, stored.Version)
 			require.Equal(t, 1, fake.creates)
 			reject := &rejectingRandom{}
 			store.random = reject
-			r.Phase = storagePhaseAttempted
+			r.Phase = PhaseAttempted
 			_, err = store.create(context.Background(), r, func() error { t.Fatal("unexpected generation marker"); return nil })
 			require.NoError(t, err)
 			require.Zero(t, reject.calls)
@@ -150,10 +150,10 @@ func TestStorageCreateOnlyAndUncertainResponse(t *testing.T) {
 
 func TestStorageNeverRegeneratesMissingExistingSecret(t *testing.T) {
 	r := testStorageReceipt()
-	r.Phase = storagePhaseAttempted
+	r.Phase = PhaseAttempted
 	reject := &rejectingRandom{}
 	fake := &fakeStorageAWS{}
-	store := volumeKeyStore{client: fake, random: reject}
+	store := KeyStore{client: fake, random: reject}
 	_, err := store.create(context.Background(), r, func() error { t.Fatal("unexpected generation marker"); return nil })
 	require.ErrorContains(t, err, "no replacement key generated")
 	require.Zero(t, reject.calls)
@@ -191,7 +191,7 @@ func TestStorageRefusesCollisionRotationAndInvalidKeys(t *testing.T) {
 			fake := &fakeStorageAWS{secret: testStoredSecret(r)}
 			tt.change(fake.secret)
 			reject := &rejectingRandom{}
-			store := volumeKeyStore{client: fake, random: reject}
+			store := KeyStore{client: fake, random: reject}
 			_, err := store.create(context.Background(), r, func() error { t.Fatal("unexpected marker"); return nil })
 			require.Error(t, err)
 			require.NotContains(t, err.Error(), storageTestEncoded)
@@ -217,7 +217,7 @@ func TestStorageProviderErrorsNeverEscape(t *testing.T) {
 			if operation == "create" {
 				fake.createErr = sensitiveErr
 			}
-			store := volumeKeyStore{client: fake, random: bytes.NewReader(storageTestKey)}
+			store := KeyStore{client: fake, random: bytes.NewReader(storageTestKey)}
 			_, err := store.create(context.Background(), r, func() error {
 				if operation == "marker" {
 					return errors.New("disk full")
@@ -239,7 +239,7 @@ func TestStorageExplicitARNReadAndVersionBinding(t *testing.T) {
 	fake := &fakeStorageAWS{secret: testStoredSecret(r)}
 	fake.secret.tags = nil
 	reject := &rejectingRandom{}
-	store := volumeKeyStore{client: fake, random: reject}
+	store := KeyStore{client: fake, random: reject}
 	stored, err := store.read(context.Background(), fake.secret.arn, &r)
 	require.NoError(t, err)
 	path, err := storagePolicyPath(r.Profile, stored.Name)
@@ -320,7 +320,7 @@ func TestStorageOfficialSDKWire(t *testing.T) {
 		req.URL.Scheme, req.URL.Host = target.Scheme, target.Host
 		return server.Client().Do(req)
 	})
-	store, err := volumeKeyStoreFromAWSConfig(context.Background(), aws.Config{Region: "us-east-2", Credentials: credentials.NewStaticCredentialsProvider("test-access", "test-secret", ""), Logger: logging.Nop{}, HTTPClient: transport, RetryMaxAttempts: 1})
+	store, err := NewAWSKeyStoreFromConfig(context.Background(), aws.Config{Region: "us-east-2", Credentials: credentials.NewStaticCredentialsProvider("test-access", "test-secret", ""), Logger: logging.Nop{}, HTTPClient: transport, RetryMaxAttempts: 1})
 	require.NoError(t, err)
 	store.random = bytes.NewReader(storageTestKey)
 	stored, err := store.create(context.Background(), testStorageReceipt(), func() error { return nil })
@@ -338,6 +338,6 @@ type storageWireHTTP func(*http.Request) (*http.Response, error)
 func (f storageWireHTTP) Do(req *http.Request) (*http.Response, error) { return f(req) }
 
 func TestStorageRejectsCustomAWSEndpoints(t *testing.T) {
-	_, err := volumeKeyStoreFromAWSConfig(context.Background(), aws.Config{Region: "us-east-2", BaseEndpoint: aws.String("https://not-aws.example.com"), Credentials: credentials.NewStaticCredentialsProvider("test-access", "test-secret", "")})
+	_, err := NewAWSKeyStoreFromConfig(context.Background(), aws.Config{Region: "us-east-2", BaseEndpoint: aws.String("https://not-aws.example.com"), Credentials: credentials.NewStaticCredentialsProvider("test-access", "test-secret", "")})
 	require.ErrorContains(t, err, "custom AWS service endpoints are unsupported")
 }

@@ -1,4 +1,4 @@
-package main
+package autounlock
 
 import (
 	"bytes"
@@ -21,27 +21,30 @@ import (
 )
 
 const (
-	volumeKeyBytes         = 64
-	storageMaxPrefixLength = 400
-	storageScopeTag        = "tinfoil-storage-scope"
-	storageVolumeTag       = "tinfoil-volume-id"
-	storageSecretField     = "value"
+	volumeKeyBytes     = 64
+	storageScopeTag    = "tinfoil-storage-scope"
+	storageVolumeTag   = "tinfoil-volume-id"
+	storageSecretField = "value"
 )
 
-type storageSecretsAPI interface {
+type SecretsAPI interface {
 	CreateSecret(context.Context, *secretsmanager.CreateSecretInput, ...func(*secretsmanager.Options)) (*secretsmanager.CreateSecretOutput, error)
 	DescribeSecret(context.Context, *secretsmanager.DescribeSecretInput, ...func(*secretsmanager.Options)) (*secretsmanager.DescribeSecretOutput, error)
 	GetSecretValue(context.Context, *secretsmanager.GetSecretValueInput, ...func(*secretsmanager.Options)) (*secretsmanager.GetSecretValueOutput, error)
 }
 
-type volumeKeyStore struct {
-	client storageSecretsAPI
+type KeyStore struct {
+	client SecretsAPI
 	random io.Reader
+}
+
+func NewKeyStore(client SecretsAPI, random io.Reader) *KeyStore {
+	return &KeyStore{client: client, random: random}
 }
 
 // Loading credentials is confined to explicit provisioning commands. SDK
 // diagnostics are disabled even when CLI verbose/trace output is requested.
-func newVolumeKeyStore(ctx context.Context, p storageProfile) (*volumeKeyStore, error) {
+func NewAWSKeyStore(ctx context.Context, p Profile) (*KeyStore, error) {
 	options := []func(*awsconfig.LoadOptions) error{
 		awsconfig.WithRegion(p.AWSRegion),
 		awsconfig.WithLogger(logging.Nop{}),
@@ -54,10 +57,10 @@ func newVolumeKeyStore(ctx context.Context, p storageProfile) (*volumeKeyStore, 
 	if err != nil {
 		return nil, fmt.Errorf("loading customer AWS configuration failed; check region/profile and credentials")
 	}
-	return volumeKeyStoreFromAWSConfig(ctx, cfg)
+	return NewAWSKeyStoreFromConfig(ctx, cfg)
 }
 
-func volumeKeyStoreFromAWSConfig(ctx context.Context, cfg aws.Config) (*volumeKeyStore, error) {
+func NewAWSKeyStoreFromConfig(ctx context.Context, cfg aws.Config) (*KeyStore, error) {
 	client := secretsmanager.NewFromConfig(cfg, func(o *secretsmanager.Options) {
 		o.Logger = logging.Nop{}
 		o.ClientLogMode = 0
@@ -72,10 +75,10 @@ func volumeKeyStoreFromAWSConfig(ctx context.Context, cfg aws.Config) (*volumeKe
 	if err != nil || credentials.AccessKeyID == "" || credentials.SecretAccessKey == "" {
 		return nil, fmt.Errorf("loading customer AWS credentials failed; renew credentials or check the selected profile")
 	}
-	return &volumeKeyStore{client: client, random: rand.Reader}, nil
+	return NewKeyStore(client, rand.Reader), nil
 }
 
-func volumeSecretName(p storageProfile, id string) string {
+func volumeSecretName(p Profile, id string) string {
 	name := "volumes/" + id + "/key"
 	if p.AWSPrefix != "" {
 		name = p.AWSPrefix + "/" + name
@@ -89,7 +92,7 @@ func volumeSecretRef(id string) string {
 
 type storedVolumeKey struct{ Name, ARN, Version string }
 
-func validateExistingSecretReference(reference string) error {
+func ValidateExistingSecretReference(reference string) error {
 	candidate := strings.TrimSpace(reference)
 	for _, encoding := range []*base64.Encoding{base64.StdEncoding, base64.RawStdEncoding, base64.URLEncoding, base64.RawURLEncoding} {
 		decoded, err := encoding.DecodeString(candidate)
@@ -113,12 +116,12 @@ func validateExistingSecretReference(reference string) error {
 }
 
 // No secret-bearing value or provider error crosses this adapter's boundary.
-func (s *volumeKeyStore) read(ctx context.Context, reference string, provenance *storageReceipt) (storedVolumeKey, error) {
+func (s *KeyStore) read(ctx context.Context, reference string, provenance *Receipt) (storedVolumeKey, error) {
 	return s.readMatching(ctx, reference, provenance, nil)
 }
 
-func (s *volumeKeyStore) readMatching(ctx context.Context, reference string, provenance *storageReceipt, expectedKey []byte) (storedVolumeKey, error) {
-	if err := validateExistingSecretReference(reference); err != nil {
+func (s *KeyStore) readMatching(ctx context.Context, reference string, provenance *Receipt, expectedKey []byte) (storedVolumeKey, error) {
+	if err := ValidateExistingSecretReference(reference); err != nil {
 		return storedVolumeKey{}, err
 	}
 	desc, err := s.client.DescribeSecret(ctx, &secretsmanager.DescribeSecretInput{SecretId: aws.String(reference)})
@@ -199,7 +202,7 @@ func decodeVolumeSecretString(raw string) (string, error) {
 	return encoded, nil
 }
 
-func (s *volumeKeyStore) create(ctx context.Context, r storageReceipt, beforeGenerate func() error) (storedVolumeKey, error) {
+func (s *KeyStore) create(ctx context.Context, r Receipt, beforeGenerate func() error) (storedVolumeKey, error) {
 	_, err := s.client.DescribeSecret(ctx, &secretsmanager.DescribeSecretInput{SecretId: aws.String(r.SecretName)})
 	if err == nil {
 		return s.read(ctx, r.SecretName, &r)
@@ -208,7 +211,7 @@ func (s *volumeKeyStore) create(ctx context.Context, r storageReceipt, beforeGen
 	if !errors.As(err, &missing) {
 		return storedVolumeKey{}, fmt.Errorf("AWS secret existence check failed; no key generated")
 	}
-	if r.Phase != storagePhaseAllocated || !r.Generated {
+	if r.Phase != PhaseAllocated || !r.Generated {
 		return storedVolumeKey{}, fmt.Errorf("existing volume has no recoverable secret; no replacement key generated")
 	}
 	if err := beforeGenerate(); err != nil {
@@ -243,7 +246,7 @@ func (s *volumeKeyStore) create(ctx context.Context, r storageReceipt, beforeGen
 	return stored, nil
 }
 
-func storagePolicyPath(p storageProfile, name string) (string, error) {
+func storagePolicyPath(p Profile, name string) (string, error) {
 	if !storageNamePattern.MatchString(name) || strings.Trim(name, "/") != name {
 		return "", fmt.Errorf("AWS returned an invalid secret name")
 	}

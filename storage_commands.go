@@ -8,19 +8,18 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/spf13/cobra"
+	"github.com/tinfoilsh/tinfoil-cli/internal/autounlock"
 	"golang.org/x/term"
 )
 
-const storagePreflightVolumeID = "00000000-0000-4000-8000-000000000000"
-const storageUnobserved = "awaiting publication/policy load; unlock not observed"
+const storageUnobserved = autounlock.Unobserved
 
 type storageStoreFactory func(context.Context, storageProfile) (*volumeKeyStore, error)
 
-var volumeStorageFactory storageStoreFactory = newVolumeKeyStore
+var volumeStorageFactory storageStoreFactory = autounlock.NewAWSKeyStore
 
 func newProjectStorageCommand() *cobra.Command {
 	parent := &cobra.Command{Use: "storage", Short: "Configure customer-owned project storage"}
@@ -73,20 +72,11 @@ func newProjectStorageCommand() *cobra.Command {
 		if err != nil {
 			return err
 		}
-		path, err := storageMetadataPath(p.Scope, "")
+		service, err := newStorageService()
 		if err != nil {
 			return err
 		}
-		old, err := loadStorageProfile(p.Scope)
-		if err == nil {
-			if old != p {
-				return fmt.Errorf("storage profile already exists with different custody metadata; refusing implicit reconfiguration")
-			}
-		} else if errors.Is(err, os.ErrNotExist) {
-			if err := writeStorageJSON(path, p, true); err != nil {
-				return fmt.Errorf("saving project storage profile: %w", err)
-			}
-		} else {
+		if err := service.SaveProfile(p); err != nil {
 			return err
 		}
 		if outputFormat == "json" {
@@ -144,7 +134,7 @@ func newVolumeAutoUnlockCommand(factory storageStoreFactory) *cobra.Command {
 		if o.ExistingSecret == "" {
 			return fmt.Errorf("--existing-secret is required: existing volumes always reuse the original key, even when local configuration is missing")
 		}
-		if err := validateExistingSecretReference(o.ExistingSecret); err != nil {
+		if err := autounlock.ValidateExistingSecretReference(o.ExistingSecret); err != nil {
 			return err
 		}
 		client, err := authedClient()
@@ -210,65 +200,11 @@ func storagePreflight(client *cpClient, o *storageArtifactOptions, existing bool
 	if err != nil {
 		return p, nil, nil, err
 	}
-	p, err = loadStorageProfile(scope)
-	if errors.Is(err, os.ErrNotExist) {
-		return p, nil, nil, fmt.Errorf("no local storage profile for this controlplane/organization/project; run tinfoil project storage configure %s", scope.Repo)
-	}
+	service, err := newStorageService()
 	if err != nil {
 		return p, nil, nil, err
 	}
-	if o.Domain == "" {
-		o.Domain = p.Domain
-	}
-	if err := o.validate(p); err != nil {
-		return p, nil, nil, err
-	}
-	config, err := readStorageInput(o.ConfigFile)
-	if err != nil {
-		return p, nil, nil, err
-	}
-	var policy []byte
-	if o.PolicyFile != "" {
-		policy, err = readStorageInput(o.PolicyFile)
-		if err != nil {
-			return p, nil, nil, err
-		}
-	}
-	_, _, err = prepareVolumeConfig(config, p.KeyserverURL, o.Mount, volumeSecretRef(storagePreflightVolumeID), existing)
-	if err != nil {
-		return p, nil, nil, err
-	}
-	r := storageReceipt{Profile: p, VolumeID: storagePreflightVolumeID, KeySecret: volumeSecretRef(storagePreflightVolumeID), Tag: o.Tag, Domain: o.Domain}
-	if _, err := prepareVolumePolicy(policy, r, "volumes/"+storagePreflightVolumeID+"/key"); err != nil {
-		return p, nil, nil, err
-	}
-	for _, out := range []string{o.ConfigOut, o.PolicyOut} {
-		info, err := os.Stat(filepath.Dir(out))
-		if err != nil || !info.IsDir() {
-			return p, nil, nil, fmt.Errorf("artifact output parent directory must exist")
-		}
-		if !existing {
-			if _, err := os.Lstat(out); err == nil {
-				return p, nil, nil, fmt.Errorf("new-volume output path already exists; choose a new path before allocating")
-			} else if !errors.Is(err, os.ErrNotExist) {
-				return p, nil, nil, err
-			}
-			if err := probeStorageDirectory(filepath.Dir(out)); err != nil {
-				return p, nil, nil, fmt.Errorf("artifact output directory is not writable: %w", err)
-			}
-		}
-	}
-	dir, err := storageDirectory()
-	if err != nil {
-		return p, nil, nil, err
-	}
-	if err := prepareStorageDirectory(dir); err != nil {
-		return p, nil, nil, fmt.Errorf("preparing storage metadata directory: %w", err)
-	}
-	if err := probeStorageDirectory(dir); err != nil {
-		return p, nil, nil, fmt.Errorf("storage metadata directory is not writable: %w", err)
-	}
-	return p, config, policy, nil
+	return service.Preflight(scope, o, existing)
 }
 
 func runAutoUnlockVolumeCreate(cmd *cobra.Command, name string, factory storageStoreFactory) error {
@@ -304,140 +240,32 @@ func runAutoUnlockVolumeCreate(cmd *cobra.Command, name string, factory storageS
 	return configureVolumeStorage(cmd, store, v, p, o, config, policy, true)
 }
 
-func configureVolumeStorage(cmd *cobra.Command, store *volumeKeyStore, v volumeView, p storageProfile, o storageArtifactOptions, config, policy []byte, fresh bool) (resultErr error) {
+func configureVolumeStorage(cmd *cobra.Command, store *volumeKeyStore, v volumeView, p storageProfile, o storageArtifactOptions, config, policy []byte, fresh bool) error {
 	if !fresh {
-		if err := validateExistingSecretReference(o.ExistingSecret); err != nil {
+		if err := autounlock.ValidateExistingSecretReference(o.ExistingSecret); err != nil {
 			return err
 		}
 	}
-	r := storageReceipt{Version: storageSchemaVersion, Profile: p, VolumeID: strings.ToLower(v.ID), Mount: o.Mount, Tag: o.Tag, Domain: o.Domain, Generated: fresh, Phase: storagePhaseAllocated}
-	if fresh {
-		r.SecretName = volumeSecretName(p, r.VolumeID)
-	}
-	defer func() {
-		if resultErr != nil {
-			resultErr = fmt.Errorf("volume %s retained; auto-unlock phase %s: %w. Recover with tinfoil volume auto-unlock configure %s --project %s --mount %s --existing-secret %s and reviewed artifact/release flags; never recreate or format for recovery", v.ID, r.Phase, resultErr, shellQuote(v.ID), shellQuote(p.Scope.Repo), shellQuote(o.Mount), shellQuote(storageRecoveryReference(r)))
-		}
-	}()
-	if v.OrgID != "" && v.OrgID != p.Scope.OrgID {
-		return fmt.Errorf("volume organization does not match storage profile")
-	}
-	path, err := storageMetadataPath(p.Scope, r.VolumeID)
+	service, err := newStorageService()
+	var r storageReceipt
 	if err != nil {
-		return err
-	}
-	unlock, err := acquireStorageLock(path)
-	if err != nil {
-		return err
-	}
-	defer unlock()
-	previous, err := loadStorageReceipt(p.Scope, r.VolumeID)
-	hasReceipt := err == nil
-	if err == nil {
-		if fresh {
-			return fmt.Errorf("allocated volume ID already has a custody receipt; refusing new key")
-		}
-		if previous.Profile != p || previous.Mount != o.Mount {
-			return fmt.Errorf("existing custody profile/mount differs; refusing implicit reassignment")
-		}
-		r = previous
-		r.Tag, r.Domain = o.Tag, o.Domain
-		if !r.Generated && (r.SecretARN == "" || r.SecretVersion == "") {
-			r.SecretName = ""
-		}
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-	ref := r.KeySecret
-	if ref == "" {
-		ref = volumeSecretRef(r.VolumeID)
-	}
-	preparedConfig, ref, err := prepareVolumeConfig(config, p.KeyserverURL, o.Mount, ref, !fresh)
-	if err != nil {
-		return err
-	}
-	if r.KeySecret != "" && r.KeySecret != ref {
-		return fmt.Errorf("refusing to replace the original measured key-secret reference")
-	}
-	r.KeySecret = ref
-	if !fresh {
-		r.Phase = storagePhaseVerifying
-	}
-	if fresh {
-		if err := writeStorageJSON(path, r, fresh); err != nil {
-			return err
-		}
-	}
-	var stored storedVolumeKey
-	if fresh {
-		stored, err = store.create(cmd.Context(), r, func() error {
-			r.Phase = storagePhaseAttempted
-			return writeStorageJSON(path, r, false)
-		})
+		r = storageReceipt{Profile: p, VolumeID: strings.ToLower(v.ID), Mount: o.Mount, Generated: fresh, Phase: autounlock.PhaseAllocated}
+		err = &autounlock.RecoveryError{VolumeID: v.ID, Receipt: r, Err: err}
 	} else {
-		stored, err = store.read(cmd.Context(), o.ExistingSecret, &r)
-	}
-	if err != nil {
-		if !fresh && hasReceipt {
-			if saveErr := writeStorageJSON(path, r, false); saveErr != nil {
-				return errors.Join(err, fmt.Errorf("recording secret verification failure: %w", saveErr))
+		r, err = service.Configure(cmd.Context(), store, autounlock.ConfigureRequest{
+			VolumeID: v.ID, OrgID: v.OrgID, Profile: p, Options: o, Config: config, Policy: policy, Fresh: fresh,
+		})
+		if err == nil {
+			if outputErr := printStoragePrepared(cmd.OutOrStdout(), r); outputErr != nil {
+				err = &autounlock.RecoveryError{VolumeID: v.ID, Receipt: r, Err: outputErr}
 			}
 		}
-		return err
 	}
-	r.SecretName, r.SecretARN, r.SecretVersion = stored.Name, stored.ARN, stored.Version
-	r.Phase = storagePhaseStored
-	if fresh {
-		if err := writeStorageJSON(path, r, false); err != nil {
-			return err
-		}
+	var recovery *autounlock.RecoveryError
+	if errors.As(err, &recovery) {
+		return fmt.Errorf("%w. Recover with tinfoil volume auto-unlock configure %s --project %s --mount %s --existing-secret %s and reviewed artifact/release flags; never recreate or format for recovery", err, shellQuote(v.ID), shellQuote(p.Scope.Repo), shellQuote(o.Mount), shellQuote(recovery.Receipt.RecoveryReference()))
 	}
-	secretPath, err := storagePolicyPath(p, stored.Name)
-	if err != nil {
-		return err
-	}
-	preparedPolicy, err := prepareVolumePolicy(policy, r, secretPath)
-	if err != nil {
-		return err
-	}
-	if !fresh {
-		if err := preflightStorageArtifacts([]storageArtifact{{path: o.ConfigOut, data: preparedConfig}, {path: o.PolicyOut, data: preparedPolicy}}); err != nil {
-			return err
-		}
-		if err := writeStorageJSON(path, r, false); err != nil {
-			return err
-		}
-	}
-	if err := writeStorageArtifact(o.ConfigOut, preparedConfig); err != nil {
-		return err
-	}
-	if err := writeStorageArtifact(o.PolicyOut, preparedPolicy); err != nil {
-		return err
-	}
-	r.ConfigPath, err = filepath.Abs(o.ConfigOut)
-	if err != nil {
-		return err
-	}
-	r.PolicyPath, err = filepath.Abs(o.PolicyOut)
-	if err != nil {
-		return err
-	}
-	r.ConfigHash, r.PolicyHash = storageHash(preparedConfig), storageHash(preparedPolicy)
-	r.Phase = storagePhasePrepared
-	if err := writeStorageJSON(path, r, false); err != nil {
-		return err
-	}
-	return printStoragePrepared(cmd.OutOrStdout(), r)
-}
-
-func storageRecoveryReference(r storageReceipt) string {
-	if r.Generated {
-		return volumeSecretName(r.Profile, r.VolumeID)
-	}
-	if r.SecretARN != "" && r.SecretVersion != "" {
-		return r.SecretARN
-	}
-	return "<original-secret-name-or-arn>"
+	return err
 }
 
 func printStoragePrepared(out io.Writer, r storageReceipt) error {
@@ -452,37 +280,9 @@ func printStoragePrepared(out io.Writer, r storageReceipt) error {
 }
 
 func volumeStorageStatus(scope storageScope, id string) (string, string, error) {
-	p, err := loadStorageProfile(scope)
-	if errors.Is(err, os.ErrNotExist) {
-		return "UNKNOWN", "No local storage profile for this scope; this is not evidence of a locked disk or key loss. Unlock not observed.", nil
-	}
+	service, err := newStorageService()
 	if err != nil {
 		return "", "", err
 	}
-	r, err := loadStorageReceipt(scope, strings.ToLower(id))
-	if errors.Is(err, os.ErrNotExist) {
-		return "UNKNOWN", "No local volume receipt; ask the storage owner for configuration metadata. Unlock not observed.", nil
-	}
-	if err != nil {
-		return "", "", err
-	}
-	if r.Phase != storagePhasePrepared {
-		return "INCOMPLETE", "Recovery phase: " + r.Phase + "; unlock not observed", nil
-	}
-	if r.Profile != p || r.KeySecret == "" || r.SecretARN == "" || r.SecretVersion == "" || r.ConfigHash == "" || r.PolicyHash == "" {
-		return "STALE", "Local custody metadata disagrees; unlock not observed", nil
-	}
-	for path, hash := range map[string]string{r.ConfigPath: r.ConfigHash, r.PolicyPath: r.PolicyHash} {
-		data, err := os.ReadFile(path)
-		if err != nil {
-			if !errors.Is(err, os.ErrNotExist) {
-				return "", "", fmt.Errorf("reading local configuration evidence: %w", err)
-			}
-			return "STALE", "Prepared artifact is missing; unlock not observed", nil
-		}
-		if storageHash(data) != hash {
-			return "STALE", "Prepared artifact changed (measurements/policy require review); unlock not observed", nil
-		}
-	}
-	return "CONFIGURED_LOCAL", storageUnobserved, nil
+	return service.Status(scope, id)
 }

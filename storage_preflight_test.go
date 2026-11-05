@@ -14,6 +14,7 @@ import (
 	"github.com/aws/smithy-go/logging"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tinfoilsh/tinfoil-cli/internal/autounlock"
 )
 
 func TestStorageKnownPreflightFailuresDoNotAllocate(t *testing.T) {
@@ -88,7 +89,7 @@ func TestStorageCredentialFailuresPrecedeAllocationAndStayRedacted(t *testing.T)
 						return aws.Credentials{}, nil
 					})
 				}
-				return volumeKeyStoreFromAWSConfig(ctx, cfg)
+				return autounlock.NewAWSKeyStoreFromConfig(ctx, cfg)
 			}
 			args := append([]string{"volume", "create", "app-data", "--size", "30GiB", "--auto-unlock"}, storageCLIArtifactFlags(t)...)
 			_, err := executeStorageCLI(t, factory, args...)

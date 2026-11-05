@@ -1,4 +1,4 @@
-package main
+package autounlock
 
 import (
 	"bytes"
@@ -10,17 +10,21 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/tinfoilsh/tinfoil-cli/internal/statefile"
 	"go.yaml.in/yaml/v3"
 )
 
 const (
 	storageYAMLIndent           = 2
 	storageVolumeWorkloadPrefix = "volume-"
+	storageInputLimit           = 20 * 1024 * 1024
 )
 
 var storageTagPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/-]*$`)
+var storageSecretPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_-]*$`)
+var storageRepoPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*/[a-z0-9_.-]+$`)
 
-type storageArtifactOptions struct {
+type ArtifactOptions struct {
 	Project        string
 	Mount          string
 	Tag            string
@@ -32,14 +36,14 @@ type storageArtifactOptions struct {
 	ExistingSecret string
 }
 
-func (o storageArtifactOptions) validate(p storageProfile) error {
+func (o ArtifactOptions) validate(p Profile) error {
 	if o.Project == "" || o.Mount == "" || o.Tag == "" || o.ConfigFile == "" || o.ConfigOut == "" || o.PolicyOut == "" {
 		return fmt.Errorf("--project, --mount, --tag, --config-file, --config-out, and --policy-out are required")
 	}
 	if !storageTagPattern.MatchString(o.Tag) || strings.Contains(o.Tag, "..") {
 		return fmt.Errorf("--tag must be an exact release tag, not a wildcard")
 	}
-	if err := validateStorageDomain(o.Domain); err != nil {
+	if err := ValidateDomain(o.Domain); err != nil {
 		return err
 	}
 	if err := p.Validate(); err != nil {
@@ -185,7 +189,7 @@ func prepareVolumeConfig(raw []byte, endpoint, mount, ref string, existing bool)
 	}
 	if old := storageYAMLField(selected, "key-secret"); old != nil && existing {
 		ref = storageYAMLString(old)
-		if !plannedSecretName.MatchString(ref) {
+		if !storageSecretPattern.MatchString(ref) {
 			return nil, "", fmt.Errorf("existing key-secret is not a valid reference")
 		}
 	}
@@ -201,7 +205,7 @@ func prepareVolumeConfig(raw []byte, endpoint, mount, ref string, existing bool)
 	return out, ref, err
 }
 
-func storageReleaseWorkloadName(r storageReceipt) (string, error) {
+func storageReleaseWorkloadName(r Receipt) (string, error) {
 	identity, err := json.Marshal(struct {
 		Repo   string `json:"repo"`
 		Tag    string `json:"tag"`
@@ -213,11 +217,11 @@ func storageReleaseWorkloadName(r storageReceipt) (string, error) {
 	return storageVolumeWorkloadPrefix + r.VolumeID + "-" + storageHash(identity), nil
 }
 
-func prepareVolumePolicy(raw []byte, r storageReceipt, secretPath string) ([]byte, error) {
-	if !storageRepoPattern.MatchString(r.Profile.Scope.Repo) || !storageTagPattern.MatchString(r.Tag) || !plannedSecretName.MatchString(r.KeySecret) || !looksLikeUUID(r.VolumeID) || !storageNamePattern.MatchString(secretPath) {
+func prepareVolumePolicy(raw []byte, r Receipt, secretPath string) ([]byte, error) {
+	if !storageRepoPattern.MatchString(r.Profile.Scope.Repo) || !storageTagPattern.MatchString(r.Tag) || !storageSecretPattern.MatchString(r.KeySecret) || !validVolumeID(r.VolumeID) || !storageNamePattern.MatchString(secretPath) {
 		return nil, fmt.Errorf("policy requires exact repository, release, volume, and secret identities")
 	}
-	if err := validateStorageDomain(r.Domain); err != nil {
+	if err := ValidateDomain(r.Domain); err != nil {
 		return nil, err
 	}
 	fragment := len(raw) == 0
@@ -246,7 +250,7 @@ func prepareVolumePolicy(raw []byte, r storageReceipt, secretPath string) ([]byt
 		if w.Kind != yaml.MappingNode || !storageRepoPattern.MatchString(repo) || !storageTagPattern.MatchString(tag) || pins[pin] {
 			return nil, fmt.Errorf("ambiguous policy: each repo/tag must occur exactly once")
 		}
-		if err := validateStorageDomain(domain); err != nil {
+		if err := ValidateDomain(domain); err != nil {
 			return nil, fmt.Errorf("policy requires exact domain pins for every workload")
 		}
 		refs := storageYAMLField(w, "secrets")
@@ -255,7 +259,7 @@ func prepareVolumePolicy(raw []byte, r storageReceipt, secretPath string) ([]byt
 		}
 		for j := 0; j < len(refs.Content); j += 2 {
 			mapping := refs.Content[j+1]
-			if !plannedSecretName.MatchString(refs.Content[j].Value) || mapping.Kind != yaml.MappingNode || storageYAMLString(storageYAMLField(mapping, "path")) == "" || storageYAMLString(storageYAMLField(mapping, "field")) == "" {
+			if !storageSecretPattern.MatchString(refs.Content[j].Value) || mapping.Kind != yaml.MappingNode || storageYAMLString(storageYAMLField(mapping, "path")) == "" || storageYAMLString(storageYAMLField(mapping, "field")) == "" {
 				return nil, fmt.Errorf("existing policy contains an invalid secret mapping")
 			}
 		}
@@ -302,12 +306,20 @@ func prepareVolumePolicy(raw []byte, r storageReceipt, secretPath string) ([]byt
 	return encodeStorageYAML(doc)
 }
 
-func readStorageInput(path string) ([]byte, error) {
-	raw, err := readConfigInput(path)
-	if err != nil {
+func readStorageInput(path string, input io.Reader) ([]byte, error) {
+	if path != "-" {
+		file, err := os.Open(path)
+		if err != nil {
+			return nil, fmt.Errorf("cannot read local artifact input")
+		}
+		defer file.Close()
+		input = file
+	}
+	raw, err := io.ReadAll(io.LimitReader(input, storageInputLimit+1))
+	if err != nil || len(raw) > storageInputLimit || strings.TrimSpace(string(raw)) == "" {
 		return nil, fmt.Errorf("cannot read local artifact input")
 	}
-	return []byte(raw), nil
+	return raw, nil
 }
 
 type storageArtifact struct {
@@ -327,7 +339,7 @@ func preflightStorageArtifacts(artifacts []storageArtifact) error {
 		}
 	}
 	for _, path := range missing {
-		if err := probeStorageDirectory(filepath.Dir(path)); err != nil {
+		if err := statefile.ProbeDirectory(filepath.Dir(path)); err != nil {
 			return fmt.Errorf("artifact output directory is not writable: %w", err)
 		}
 	}
@@ -356,7 +368,7 @@ func writeStorageArtifact(path string, data []byte) error {
 	if matches {
 		return nil
 	}
-	if err := writeStorageFile(path, data, true); err != nil {
+	if err := statefile.Write(path, data, true); err != nil {
 		return fmt.Errorf("writing prepared artifact: %w", err)
 	}
 	return nil

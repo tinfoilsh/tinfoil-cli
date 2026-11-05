@@ -19,6 +19,7 @@ import (
 	"github.com/spf13/pflag"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tinfoilsh/tinfoil-cli/internal/autounlock"
 )
 
 type storageCPFixture struct {
@@ -132,7 +133,7 @@ func executeStorageCLI(t *testing.T, factory storageStoreFactory, args ...string
 
 func fakeStorageFactory(fake *fakeStorageAWS, random io.Reader) storageStoreFactory {
 	return func(context.Context, storageProfile) (*volumeKeyStore, error) {
-		return &volumeKeyStore{client: fake, random: random}, nil
+		return autounlock.NewKeyStore(fake, random), nil
 	}
 }
 
@@ -345,4 +346,21 @@ func TestStorageUncertainAllocationDoesNotRetry(t *testing.T) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	require.Equal(t, 1, f.allocations)
+}
+
+func TestStorageMetadataPathFailureRetainsAllocatedVolume(t *testing.T) {
+	t.Setenv(envConfigPath, "")
+	t.Setenv("HOME", "")
+	fake := &fakeStorageAWS{}
+	reject := &rejectingRandom{}
+	p := testStorageProfile()
+	err := configureVolumeStorage(&cobra.Command{}, autounlock.NewKeyStore(fake, reject), volumeView{ID: testVolumeID}, p, storageArtifactOptions{Mount: "data"}, nil, nil, true)
+	require.ErrorContains(t, err, "volume "+testVolumeID+" retained; auto-unlock phase allocated:")
+	require.ErrorContains(t, err, "locating home directory")
+	require.ErrorContains(t, err, "--existing-secret customer/volumes/"+testVolumeID+"/key")
+	var recovery *autounlock.RecoveryError
+	require.ErrorAs(t, err, &recovery)
+	require.Equal(t, testVolumeID, recovery.VolumeID)
+	require.Empty(t, fake.secretIDs)
+	require.Zero(t, reject.calls)
 }

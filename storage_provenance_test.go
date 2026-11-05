@@ -10,6 +10,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/secretsmanager/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tinfoilsh/tinfoil-cli/internal/autounlock"
 )
 
 type mappedStorageAWS struct {
@@ -60,7 +61,7 @@ func TestStorageFirstImportRejectsForeignProvenanceWithoutBinding(t *testing.T) 
 			}}
 			random := &rejectingRandom{}
 			factory := func(context.Context, storageProfile) (*volumeKeyStore, error) {
-				return &volumeKeyStore{client: mapped, random: random}, nil
+				return autounlock.NewKeyStore(mapped, random), nil
 			}
 			flags := storageCLIArtifactFlags(t)
 			const originalArtifact = "reviewed artifact must remain unchanged\n"

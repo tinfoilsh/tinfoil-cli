@@ -3,9 +3,9 @@ package main
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"net/url"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -15,23 +15,19 @@ import (
 )
 
 const (
-	storageDirMode        = 0o700
-	storageFileMode       = 0o600
-	storageSchemaVersion  = autounlock.SchemaVersion
-	storagePhaseAllocated = autounlock.PhaseAllocated
-	storagePhaseAttempted = autounlock.PhaseAttempted
-	storagePhaseStored    = autounlock.PhaseStored
-	storagePhaseVerifying = autounlock.PhaseVerifying
-	storagePhasePrepared  = autounlock.PhasePrepared
+	storageDirMode       = 0o700
+	storageFileMode      = 0o600
+	storageSchemaVersion = autounlock.SchemaVersion
 )
 
 var storageRepoPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*/[a-z0-9_.-]+$`)
-var storageNamePattern = regexp.MustCompile(`^[A-Za-z0-9/_+=.@-]+$`)
 var errStorageLocked = statefile.ErrLocked
 
 type storageScope = autounlock.Scope
 type storageProfile = autounlock.Profile
 type storageReceipt = autounlock.Receipt
+type storageArtifactOptions = autounlock.ArtifactOptions
+type volumeKeyStore = autounlock.KeyStore
 
 func storageHash(data []byte) string {
 	sum := sha256.Sum256(data)
@@ -46,19 +42,12 @@ func storageDirectory() (string, error) {
 	return filepath.Join(filepath.Dir(path), "storage"), nil
 }
 
-func storageMetadataPath(scope storageScope, volume string) (string, error) {
+func newStorageService() (*autounlock.Service, error) {
 	dir, err := storageDirectory()
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	name := "profile-" + scope.Key()
-	if volume != "" {
-		if !looksLikeUUID(volume) {
-			return "", fmt.Errorf("volume ID must be a UUID")
-		}
-		name = "volume-" + scope.Key() + "-" + strings.ToLower(volume)
-	}
-	return filepath.Join(dir, name+".json"), nil
+	return autounlock.NewService(dir, os.Stdin), nil
 }
 
 func readStorageJSON(path string, out any) error {
@@ -73,31 +62,8 @@ func writeStorageJSON(path string, value any, exclusive bool) error {
 	return statefile.WriteJSON(path, value, exclusive)
 }
 
-func probeStorageDirectory(dir string) error {
-	return statefile.ProbeDirectory(dir)
-}
-
 func writeStorageFile(path string, data []byte, exclusive bool) error {
 	return statefile.Write(path, data, exclusive)
-}
-
-func loadStorageProfile(scope storageScope) (storageProfile, error) {
-	path, err := storageMetadataPath(scope, "")
-	if err != nil {
-		return storageProfile{}, err
-	}
-	var p storageProfile
-	if err := readStorageJSON(path, &p); err != nil {
-		return p, err
-	}
-	if p.Version != storageSchemaVersion || p.Scope != scope {
-		return p, fmt.Errorf("storage profile scope/version mismatch")
-	}
-	return p, p.Validate()
-}
-
-func validateStorageDomain(domain string) error {
-	return autounlock.ValidateDomain(domain)
 }
 
 func resolveStorageScope(client *cpClient, identifier string) (storageScope, error) {
@@ -141,19 +107,4 @@ func resolveStorageScope(client *cpClient, identifier string) (storageScope, err
 
 func acquireStorageLock(path string) (func(), error) {
 	return statefile.Lock(path)
-}
-
-func loadStorageReceipt(scope storageScope, volume string) (storageReceipt, error) {
-	path, err := storageMetadataPath(scope, volume)
-	if err != nil {
-		return storageReceipt{}, err
-	}
-	var r storageReceipt
-	if err := readStorageJSON(path, &r); err != nil {
-		return r, err
-	}
-	if r.Version != storageSchemaVersion || r.Profile.Scope != scope || r.VolumeID != volume {
-		return r, errors.New("storage receipt scope/version mismatch")
-	}
-	return r, nil
 }
