@@ -277,11 +277,7 @@ func selectCreationMonitor(client *cpClient, identifier, userID string) (*contai
 		case 1:
 			identifier = rows[0].ID
 		default:
-			names := make([]string, len(rows))
-			for i, row := range rows {
-				names[i] = row.Name
-			}
-			return nil, fmt.Errorf("choose one of your Monitors with --monitor: %s", strings.Join(names, ", "))
+			return nil, fmt.Errorf("choose one of your Monitors with --monitor: %s", containerNames(rows))
 		}
 	}
 	row, err := managedRow(client, "monitor", identifier)
