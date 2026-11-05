@@ -43,23 +43,13 @@ const (
 	monitorRequestTimeout = time.Minute
 )
 
-// Monitor names are scoped to an account and control plane.
-type accountScope struct {
-	ControlplaneURL string `json:"controlplane_url"`
-	OrgID           string `json:"org_id,omitempty"`
-	UserID          string `json:"user_id"`
-	OrgName         string `json:"-"` // Display only; account identity must survive renames.
-	UserName        string `json:"-"`
-}
+type accountScope owner.Scope
 
 // Persist the domain, boot key and minimum generation.
 type monitorProfile = owner.Profile
 
 func (s accountScope) account() string {
-	if s.OrgID != "" {
-		return s.OrgID
-	}
-	return "personal"
+	return owner.Scope(s).Account()
 }
 
 var monitorBucketPattern = regexp.MustCompile(`^s3://[a-z0-9.-]+\?prefix=containers%2F([0-9a-f]{64})%2F[A-Za-z0-9-]+%2F&region=[a-z0-9-]+$`)

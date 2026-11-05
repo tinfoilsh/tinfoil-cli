@@ -14,17 +14,15 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"regexp"
 	"slices"
 	"strings"
 
 	"github.com/tinfoilsh/tinfoil-cli/internal/controlplane"
+	"github.com/tinfoilsh/tinfoil-cli/internal/owner"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/agent"
 	"golang.org/x/term"
 )
-
-var resourceNamePattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,62}$`)
 
 const (
 	keyStatePath         = controlplane.KeyStatePath
@@ -273,11 +271,11 @@ type umkRecord struct {
 }
 
 func umkRecordPath(scope accountScope, containerID string) (string, error) {
-	dir, err := accountDir(scope)
+	path, err := configPath()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(dir, "umk-"+storageHash([]byte(containerID))[:32]+".json"), nil
+	return owner.UMKRecordPath(path, owner.Scope(scope), containerID)
 }
 
 func newUMKRecord(kind, owner string) *umkRecord {
@@ -454,89 +452,12 @@ func measuredOwner(value string) (ssh.PublicKey, error) {
 	return ssh.NewPublicKey(ed25519.PublicKey(raw))
 }
 
-// Names make new directories readable; UUIDs identify existing credentials even
-// after a resource is renamed. Keep saved paths stable for installed SSH profiles.
 func resourceDir(scope accountScope, id, name string) (string, error) {
-	if !looksLikeUUID(id) {
-		return "", errors.New("invalid resource UUID")
-	}
-	accountDir, err := accountDir(scope)
+	path, err := configPath()
 	if err != nil {
 		return "", err
 	}
-	dir, err := existingCredentialDir(accountDir, id)
-	if err != nil || dir != "" {
-		return dir, err
-	}
-	name = strings.TrimSpace(name)
-	if !resourceNamePattern.MatchString(name) {
-		// Readable labels are optional, including on the first connection.
-		return filepath.Join(accountDir, id), nil
-	}
-	return filepath.Join(accountDir, name+"-"+id), nil
-}
-
-func accountDir(scope accountScope) (string, error) {
-	config, err := configPath()
-	if err != nil {
-		return "", err
-	}
-	data, _ := json.Marshal(scope)
-	root, accountID := filepath.Join(filepath.Dir(config), "resources"), storageHash(data)
-	dir, err := existingCredentialDir(root, accountID)
-	if err != nil || dir != "" {
-		return dir, err
-	}
-	return filepath.Join(root, accountDirectoryLabel(scope)+"-"+accountID), nil
-}
-
-func accountDirectoryLabel(scope accountScope) string {
-	name := strings.TrimSpace(scope.UserName)
-	if name == "" {
-		name = scope.UserID
-	}
-	account := "user-" + name
-	if scope.OrgID != "" {
-		name := strings.TrimSpace(scope.OrgName)
-		if name == "" {
-			name = scope.OrgID
-		}
-		account = "org-" + name
-	}
-	// Keep paths portable and bounded even when organization names contain
-	// separators or Unicode. The full scope hash retains their exact identity.
-	parts := strings.FieldsFunc(strings.ToLower(account), func(r rune) bool {
-		return !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '.' || r == '_')
-	})
-	label := strings.Join(parts, "-")
-	if len(label) > 120 {
-		label = label[:120]
-	}
-	return strings.Trim(label, ".-_")
-}
-
-// Resolve both readable directories and the deployed identifier-only layout.
-// A changed display name must not move credentials referenced by SSH profiles.
-func existingCredentialDir(parent, id string) (string, error) {
-	entries, err := os.ReadDir(parent)
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return "", err
-	}
-	var saved string
-	for _, entry := range entries {
-		if entry.Name() != id && !strings.HasSuffix(entry.Name(), "-"+id) {
-			continue
-		}
-		path := filepath.Join(parent, entry.Name())
-		if !entry.IsDir() {
-			return "", fmt.Errorf("credential path %s must be a directory", path)
-		}
-		if saved != "" {
-			return "", fmt.Errorf("multiple credential directories for %s: %s and %s; restore a single original credential directory", id, saved, path)
-		}
-		saved = path
-	}
-	return saved, nil
+	return owner.ResourceDir(path, owner.Scope(scope), id, name)
 }
 
 // A public identity file selects an ssh-agent key without copying its private key.
