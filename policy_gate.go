@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+	"github.com/tinfoilsh/tinfoil-cli/internal/trust"
 	"github.com/tinfoilsh/tinfoil-go/verify"
 	"golang.org/x/term"
 )
@@ -50,11 +51,11 @@ func gateConnectionPolicy(source string, in io.Reader, out io.Writer, interactiv
 		return err
 	}
 
-	if policy.matches(source) {
+	if policy.Matches(source) {
 		if policy.Mode == policyModeFrozen {
 			// Frozen means the CLI never writes the file, journal included;
 			// a first-seen config is still announced.
-			if _, tag, digest, err := verify.ParseReference(source); err == nil && (tag != "" || digest != "") && !policy.hasPin(source) {
+			if _, tag, digest, err := verify.ParseReference(source); err == nil && (tag != "" || digest != "") && !policy.HasPin(source) {
 				fmt.Fprintf(out, "New config (not journaled, mode: frozen): %s\n", source)
 			}
 			return nil
@@ -64,11 +65,11 @@ func gateConnectionPolicy(source string, in io.Reader, out io.Writer, interactiv
 	}
 
 	if policy.Mode == policyModeFrozen {
-		return fmt.Errorf("config %s is not allowed by %s (mode: frozen)\nAdd it to the file, pass --repo %s to pin this invocation, or --dangerous to skip the check", source, policy.path, source)
+		return fmt.Errorf("config %s is not allowed by %s (mode: frozen)\nAdd it to the file, pass --repo %s to pin this invocation, or --dangerous to skip the check", source, policy.Path(), source)
 	}
 
 	if !interactive {
-		return fmt.Errorf("config %s is not in your known configs (%s)\nPass --repo %s (after checking it is what you expect) to assert and record it, or --dangerous to skip the check", source, policy.path, source)
+		return fmt.Errorf("config %s is not in your known configs (%s)\nPass --repo %s (after checking it is what you expect) to assert and record it, or --dangerous to skip the check", source, policy.Path(), source)
 	}
 	accepted, err := promptTrustConfig(in, out, source, policy.Record)
 	if err != nil {
@@ -77,10 +78,10 @@ func gateConnectionPolicy(source string, in io.Reader, out io.Writer, interactiv
 	if !accepted {
 		return fmt.Errorf("refusing config %s", source)
 	}
-	if err := policy.recordTrust(source); err != nil {
+	if err := policy.RecordTrust(source); err != nil {
 		return fmt.Errorf("recording trust for %s: %w", source, err)
 	}
-	fmt.Fprintf(out, "Recorded %s as %s in %s\n", source, policy.Record, policy.path)
+	fmt.Fprintf(out, "Recorded %s as %s in %s\n", source, policy.Record, policy.Path())
 	return nil
 }
 
@@ -94,7 +95,7 @@ func journalPin(policy *connectionPolicy, source string, out io.Writer) {
 	if err != nil || (tag == "" && digest == "") {
 		return
 	}
-	fresh, err := policy.recordPin(source)
+	fresh, err := policy.RecordPin(source)
 	if err != nil {
 		fmt.Fprintf(out, "warning: could not journal %s: %v\n", source, err)
 		return
@@ -134,15 +135,9 @@ func seedTrustFromCreate(repoRef, revision string) {
 func assertTrustedSource(assertion, resolvedSource string) error {
 	assertion = strings.TrimSpace(assertion)
 	resolvedSource = strings.TrimSpace(resolvedSource)
-	if assertion == "" || resolvedSource == "" {
-		return fmt.Errorf("empty reference")
-	}
-	if !referenceMatches(assertion, resolvedSource) {
-		return fmt.Errorf("resolved config %s does not match --repo %s", resolvedSource, assertion)
-	}
-	level, err := referenceGranularity(assertion)
+	recordSource, level, err := trust.AssertionRecord(assertion, resolvedSource)
 	if err != nil {
-		return fmt.Errorf("--repo: %w", err)
+		return err
 	}
 	policy, err := loadConnectionPolicy()
 	if err != nil {
@@ -152,41 +147,18 @@ func assertTrustedSource(assertion, resolvedSource string) error {
 	// already matches: the typed granularity is an opt-in of its own, and it
 	// must survive a later pruning of the broader entries. Deduplication
 	// makes this a no-op when everything is already present.
-	recordSource := resolvedSource
-	if level == policyRecordPin {
-		recordSource = assertion
-	}
-	changed, err := policy.recordTrustAt(recordSource, level)
+	changed, err := policy.RecordTrustAt(recordSource, level)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "warning: could not record %s in known-configs: %v\n", resolvedSource, err)
 		return nil
 	}
 	if changed {
-		fmt.Fprintf(os.Stderr, "Recorded %s as %s in %s\n", recordSource, level, policy.path)
+		fmt.Fprintf(os.Stderr, "Recorded %s as %s in %s\n", recordSource, level, policy.Path())
 	}
 	if recordSource != resolvedSource {
 		journalPin(&policy, resolvedSource, os.Stderr)
 	}
 	return nil
-}
-
-// referenceGranularity classifies a caller-stated reference: a bare name is
-// an org, owner/name is a project, anything pinned is a pin.
-func referenceGranularity(ref string) (string, error) {
-	if !strings.Contains(ref, "/") {
-		if err := validateEntry(ref, policyRecordOrg); err != nil {
-			return "", err
-		}
-		return policyRecordOrg, nil
-	}
-	_, tag, digest, err := verify.ParseReference(ref)
-	if err != nil {
-		return "", err
-	}
-	if tag == "" && digest == "" {
-		return policyRecordProject, nil
-	}
-	return policyRecordPin, nil
 }
 
 func promptTrustConfig(in io.Reader, out io.Writer, source, level string) (bool, error) {

@@ -158,7 +158,7 @@ func TestRegistryConnectionPinsNameAndDigest(t *testing.T) {
 	require.Equal(t, repo, tunnel.repo)
 	policy, err := loadConnectionPolicy()
 	require.NoError(t, err)
-	require.True(t, policy.hasPin(repo), "explicit hash pin must be recorded")
+	require.True(t, policy.HasPin(repo), "explicit hash pin must be recorded")
 
 	for _, name := range []string{"", "/acme/other/v1.2.3"} {
 		invalid := descriptor

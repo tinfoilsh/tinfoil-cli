@@ -9,20 +9,13 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
-	configendorsement "github.com/tinfoilsh/tinfoil-go/endorsement/config"
-	"github.com/tinfoilsh/tinfoil-go/verify"
+	"github.com/tinfoilsh/tinfoil-cli/internal/trust"
 	"golang.org/x/term"
 )
 
 const registryEnrollmentPath = "/api/config-registry/v2/account"
 
-type registryEnrollment struct {
-	ControlplaneURL string   `json:"controlplane_url"`
-	AccountID       string   `json:"account_id"`
-	Label           string   `json:"label,omitempty"`
-	Namespaces      []string `json:"namespaces"`
-	RegistryID      string   `json:"registry_id"`
-}
+type registryEnrollment = trust.Enrollment
 
 type registryAccount struct {
 	OwnerKind  string   `json:"owner_kind"`
@@ -67,39 +60,11 @@ func newTrustRemoveCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			accountID := ""
-			for _, entry := range policy.Registries {
-				if entry.ControlplaneURL == controlplaneURL && entry.AccountID == args[0] {
-					accountID = entry.AccountID
-					break
-				}
-			}
-			if accountID == "" {
-				for _, entry := range policy.Registries {
-					if entry.ControlplaneURL == controlplaneURL && registryAccountMatches(entry, args[0]) {
-						if accountID != "" {
-							return fmt.Errorf("multiple private registries match %s; use the account ID shown by tinfoil trust", args[0])
-						}
-						accountID = entry.AccountID
-					}
-				}
-			}
-			remaining := slices.DeleteFunc(policy.Registries, func(e registryEnrollment) bool {
-				return e.ControlplaneURL == controlplaneURL && e.AccountID == accountID
-			})
-			if len(remaining) == len(policy.Registries) {
-				return fmt.Errorf("no registry enrollment for account %s", args[0])
-			}
-			policy.Registries = remaining
-			return policy.save()
+			return policy.RemoveRegistry(controlplaneURL, args[0])
 		},
 	}
 
 	return trustRemoveCmd
-}
-
-func registryAccountMatches(entry registryEnrollment, account string) bool {
-	return account != "" && (entry.AccountID == account || strings.EqualFold(entry.Label, account) || slices.Contains(entry.Namespaces, "/"+strings.TrimPrefix(account, "/")))
 }
 
 func printRegistries(out io.Writer, entries []registryEnrollment) {
@@ -123,27 +88,6 @@ func offerRegistryEnrollment(cmd *cobra.Command) {
 	if err != nil {
 		fmt.Fprintf(cmd.ErrOrStderr(), "Signed in, but private registry approval failed: %v\nRun tinfoil trust add to try again.\n", err)
 	}
-}
-
-func (e registryEnrollment) validate() error {
-	if e.AccountID == "" || len(e.Namespaces) == 0 {
-		return fmt.Errorf("registry enrollment requires an account and namespaces")
-	}
-	if err := validateControlplaneURL(e.ControlplaneURL); err != nil {
-		return err
-	}
-	if e.ControlplaneURL != strings.TrimRight(e.ControlplaneURL, "/") {
-		return fmt.Errorf("registry controlplane URL must not end with a slash")
-	}
-	for _, namespace := range e.Namespaces {
-		if !strings.HasPrefix(namespace, "/") {
-			return fmt.Errorf("registry namespace must start with a slash")
-		}
-		if err := configendorsement.ValidateIdentityComponent(strings.TrimPrefix(namespace, "/")); err != nil {
-			return err
-		}
-	}
-	return configendorsement.ValidateRegistryID(e.RegistryID)
 }
 
 func enrollRegistry(cmd *cobra.Command, cfg cliConfig, identity authContext, expectedRegistryID string, interactive bool) error {
@@ -175,7 +119,7 @@ func enrollRegistry(cmd *cobra.Command, cfg cliConfig, identity authContext, exp
 	if ownerKind != account.OwnerKind {
 		return fmt.Errorf("registry account does not match the logged-in context")
 	}
-	if err := entry.validate(); err != nil {
+	if err := entry.Validate(); err != nil {
 		return err
 	}
 	return acceptRegistry(cmd.InOrStdin(), cmd.ErrOrStderr(), entry, expectedRegistryID != "")
@@ -212,39 +156,10 @@ func acceptRegistry(in io.Reader, out io.Writer, entry registryEnrollment, expli
 	if err != nil {
 		return err
 	}
-	policy.Registries = slices.DeleteFunc(policy.Registries, func(e registryEnrollment) bool {
-		return e.ControlplaneURL == entry.ControlplaneURL && e.AccountID == entry.AccountID
-	})
-	policy.Registries = append(policy.Registries, entry)
-	if err := validateRegistryEnrollments(policy.Registries); err != nil {
-		return err
-	}
-	if err := policy.save(); err != nil {
+	if err := policy.AcceptRegistry(entry); err != nil {
 		return err
 	}
 	fmt.Fprintf(out, "Trusted private registry: %s.\n", entry.Label)
-	return nil
-}
-
-func validateRegistryEnrollments(entries []registryEnrollment) error {
-	for i, entry := range entries {
-		if err := entry.validate(); err != nil {
-			return err
-		}
-		for _, other := range entries[:i] {
-			if entry.ControlplaneURL != other.ControlplaneURL {
-				continue
-			}
-			if entry.AccountID == other.AccountID {
-				return fmt.Errorf("duplicate registry account enrollment")
-			}
-			for _, namespace := range entry.Namespaces {
-				if slices.Contains(other.Namespaces, namespace) {
-					return fmt.Errorf("registry namespace %s has conflicting enrollments", namespace)
-				}
-			}
-		}
-	}
 	return nil
 }
 
@@ -265,14 +180,6 @@ func registryControlplaneURL() (string, error) {
 	return cfg.ControlplaneURL, nil
 }
 
-func registrySigningOptions(source string) ([]verify.Option, error) {
-	ids, err := registryIDs(source)
-	if err != nil || len(ids) == 0 {
-		return nil, err
-	}
-	return []verify.Option{verify.WithConfigRegistryIDs(ids...)}, nil
-}
-
 func registryIDs(source string) ([]string, error) {
 	policy, err := loadConnectionPolicy()
 	if err != nil {
@@ -285,15 +192,5 @@ func registryIDs(source string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	repository, _, _, err := verify.ParseReference(source)
-	if err != nil {
-		return nil, err
-	}
-	org, _, _ := strings.Cut(repository, "/")
-	for _, entry := range policy.Registries {
-		if entry.ControlplaneURL == controlplaneURL && slices.Contains(entry.Namespaces, "/"+org) {
-			return []string{entry.RegistryID}, nil
-		}
-	}
-	return nil, nil
+	return policy.RegistryIDs(source, controlplaneURL, publicRegistry)
 }

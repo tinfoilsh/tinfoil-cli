@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -49,7 +50,7 @@ func TestGateMatchedJournalsNewPin(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !policy.hasPin(source) {
+	if !policy.HasPin(source) {
 		t.Fatalf("pin not journaled: %+v", policy)
 	}
 
@@ -120,16 +121,16 @@ func TestAssertTrustedSource(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !policy.hasPin(source) {
+			if !policy.HasPin(source) {
 				t.Fatalf("pin always records: %+v", policy)
 			}
-			if !tc.wantProject && !policy.hasPin(tc.assertion) {
+			if !tc.wantProject && !policy.HasPin(tc.assertion) {
 				t.Fatalf("asserted pin must persist independently of the resolved reference: %+v", policy)
 			}
-			if got := containsEntry(policy.Allow.Projects, "acme/api"); got != tc.wantProject {
+			if got := slices.Contains(policy.Allow.Projects, "acme/api"); got != tc.wantProject {
 				t.Fatalf("project recorded=%v want %v: %+v", got, tc.wantProject, policy)
 			}
-			if got := containsEntry(policy.Allow.Orgs, "acme"); got != tc.wantOrg {
+			if got := slices.Contains(policy.Allow.Orgs, "acme"); got != tc.wantOrg {
 				t.Fatalf("org recorded=%v want %v: %+v", got, tc.wantOrg, policy)
 			}
 			// The assertion's granularity must not become the store's
@@ -154,11 +155,11 @@ func TestAssertTrustedSourceRecordsUnderBroaderGrant(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !containsEntry(policy.Allow.Projects, "acme/api") || !policy.hasPin(source) {
+	if !slices.Contains(policy.Allow.Projects, "acme/api") || !policy.HasPin(source) {
 		t.Fatalf("assertion must persist under a broader grant: %+v", policy)
 	}
 	policy.Allow.Orgs = nil // simulate pruning the broader entry
-	if !policy.matches(source) {
+	if !policy.Matches(source) {
 		t.Fatal("asserted trust must survive pruning the org entry")
 	}
 }
@@ -189,7 +190,7 @@ func TestGatePromptYes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !policy.matches("acme/api@r2@" + testDigestB) {
+	if !policy.Matches("acme/api@r2@" + testDigestB) {
 		t.Fatalf("yes should record the project: %+v", policy)
 	}
 }
@@ -253,7 +254,7 @@ func TestSeedTrustFromCreate(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Default level project, inclusive going down: project + revision pin.
-	if !policy.matches("acme/api@v9@"+testDigestB) || !policy.hasPin("acme/api@v1.2.3") {
+	if !policy.Matches("acme/api@v9@"+testDigestB) || !policy.HasPin("acme/api@v1.2.3") {
 		t.Fatalf("seed incomplete: %+v", policy)
 	}
 
@@ -263,7 +264,7 @@ func TestSeedTrustFromCreate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(reloaded.Allow.Projects) != 1 || !reloaded.hasPin("acme/api@v1.2.4") {
+	if len(reloaded.Allow.Projects) != 1 || !reloaded.HasPin("acme/api@v1.2.4") {
 		t.Fatalf("re-seed wrong: %+v", reloaded)
 	}
 }
@@ -276,7 +277,7 @@ func TestSeedTrustFromCreateDigestRevision(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Project trust and the requested digest are both recorded.
-	if !policy.matches("acme/api@r1@"+testDigestB) || !policy.hasPin("acme/api@"+testDigestA) {
+	if !policy.Matches("acme/api@r1@"+testDigestB) || !policy.HasPin("acme/api@"+testDigestA) {
 		t.Fatalf("digest seed wrong: %+v", policy)
 	}
 }
@@ -296,7 +297,7 @@ func TestGateHashPinAcrossRevisions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !policy.hasPin(pin) || len(policy.Allow.Orgs)+len(policy.Allow.Projects) != 0 {
+	if !policy.HasPin(pin) || len(policy.Allow.Orgs)+len(policy.Allow.Projects) != 0 {
 		t.Fatalf("hash approval must not grant project trust: %+v", policy)
 	}
 	if err := gateConnectionPolicy("acme/api@r2@"+testDigestB, strings.NewReader(""), &strings.Builder{}, false, false); err == nil {

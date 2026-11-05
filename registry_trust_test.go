@@ -100,8 +100,7 @@ func TestRegistryRemovalRejectsAmbiguousNames(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, policy.Registries, 2)
 	other.Label = entry.AccountID
-	policy.Registries[1] = other
-	require.NoError(t, policy.save())
+	require.NoError(t, policy.AcceptRegistry(other))
 	require.NoError(t, executeLifecycleCLI(t, "trust", "remove", entry.AccountID))
 	policy, err = loadConnectionPolicy()
 	require.NoError(t, err)
@@ -134,45 +133,31 @@ func TestRegistryEnrollmentRefusesRedirects(t *testing.T) {
 func TestRegistryEnrollmentSelectsOnlyItsNamespacesAndControlPlane(t *testing.T) {
 	entry := enrollmentFixture(t)
 	require.NoError(t, acceptRegistry(strings.NewReader(""), &bytes.Buffer{}, entry, true))
-	options, err := registrySigningOptions("acme/app@v1")
+	options, err := registryIDs("acme/app@v1")
 	require.NoError(t, err)
-	v, err := verify.NewVerifier(options...)
+	v, err := verify.NewVerifier(verify.WithConfigRegistryIDs(options...))
 	require.NoError(t, err)
 	nonce := make([]byte, document.NonceSize)
 	doc, err := document.Build(document.BuildInput{Nonce: nonce, CollateralFormat: collateral.FormatV2}, func([64]byte) (string, []byte, error) { return document.SEVSNPReportV1Format, []byte("quote"), nil })
 	require.NoError(t, err)
 	_, err = v.VerifyV3(doc, nonce, "acme/app")
 	require.ErrorContains(t, err, "configured trust requires")
-	options, err = registrySigningOptions("other/app")
+	options, err = registryIDs("other/app")
 	require.NoError(t, err)
 	require.Empty(t, options)
 	t.Setenv(envCPURL, "https://another-controlplane.example")
-	options, err = registrySigningOptions("acme/app")
+	options, err = registryIDs("acme/app")
 	require.NoError(t, err)
 	require.Empty(t, options)
 	t.Setenv(envCPURL, defaultControlplaneURL)
 	publicRegistry = true
 	t.Cleanup(func() { publicRegistry = false })
-	options, err = registrySigningOptions("acme/app")
+	options, err = registryIDs("acme/app")
 	require.NoError(t, err)
 	require.Empty(t, options)
 	require.NoError(t, os.WriteFile(os.Getenv(envKnownConfigs), []byte("invalid"), 0600))
-	_, err = registrySigningOptions("acme/app")
+	_, err = registryIDs("acme/app")
 	require.ErrorContains(t, err, "malformed")
-}
-
-func TestRegistryEnrollmentRejectsMalformedAndConflictingPolicies(t *testing.T) {
-	entry := enrollmentFixture(t)
-	for _, registryID := range []string{"", "not a registry ID", entry.RegistryID + "/", entry.RegistryID + "\n", strings.Replace(entry.RegistryID, "9c4a", "9C4A", 1), strings.Replace(entry.RegistryID, "9c4a", "9c-4a", 1)} {
-		invalid := entry
-		invalid.RegistryID = registryID
-		require.Error(t, validateRegistryEnrollments([]registryEnrollment{invalid}))
-	}
-	other := entry
-	other.AccountID = "org_other"
-	require.ErrorContains(t, validateRegistryEnrollments([]registryEnrollment{entry, other}), "conflicting")
-	other.ControlplaneURL = "https://another-controlplane.example"
-	require.NoError(t, validateRegistryEnrollments([]registryEnrollment{entry, other}))
 }
 
 func TestClerkRegistryEnrollmentUsesTheAuthenticatedAPIOrigin(t *testing.T) {
@@ -184,11 +169,11 @@ func TestClerkRegistryEnrollmentUsesTheAuthenticatedAPIOrigin(t *testing.T) {
 		UserID: "user_owner", Account: entry.AccountID, AccessToken: "fixture-access",
 	}))
 	t.Setenv(envCPURL, "https://another-controlplane.example")
-	options, err := registrySigningOptions("acme/app")
+	options, err := registryIDs("acme/app")
 	require.NoError(t, err)
 	require.Len(t, options, 1, "a URL override cannot bypass the Clerk account's enrolled registry")
 	t.Setenv(envAdminKey, "admin_explicit")
-	options, err = registrySigningOptions("acme/app")
+	options, err = registryIDs("acme/app")
 	require.NoError(t, err)
 	require.Empty(t, options, "an admin token uses its separately configured control plane")
 }

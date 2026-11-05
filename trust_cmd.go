@@ -72,7 +72,7 @@ func newTrustSetCommand() *cobra.Command {
 				// A malformed store must be fixed by hand, not overwritten.
 				return err
 			}
-			if err := policy.setDefaults(trustSetMode, trustSetRecord); err != nil {
+			if err := policy.SetDefaults(trustSetMode, trustSetRecord); err != nil {
 				return err
 			}
 			if err := offerPrune(cmd, &policy); err != nil {
@@ -93,7 +93,7 @@ func newTrustSetCommand() *cobra.Command {
 // TTY. Declining (or no TTY) keeps them; the store printout's note says what
 // that means.
 func offerPrune(cmd *cobra.Command, policy *connectionPolicy) error {
-	broader := policy.broaderThan(policy.Record)
+	broader := policy.BroaderThan(policy.Record)
 	if trustSetRecord == "" || len(broader) == 0 {
 		return nil
 	}
@@ -119,11 +119,11 @@ func offerPrune(cmd *cobra.Command, policy *connectionPolicy) error {
 	// Reload before pruning: a connect in another terminal may have
 	// journaled a pin while the prompt waited, and pruning from the stale
 	// store would drop it.
-	fresh, err := loadConnectionPolicyFrom(policy.path)
+	fresh, err := loadConnectionPolicyFrom(policy.Path())
 	if err != nil {
-		return fmt.Errorf("re-reading %s before pruning: %w", policy.path, err)
+		return fmt.Errorf("re-reading %s before pruning: %w", policy.Path(), err)
 	}
-	if err := fresh.pruneBroaderThan(fresh.Record); err != nil {
+	if err := fresh.PruneBroaderThan(fresh.Record); err != nil {
 		return err
 	}
 	*policy = fresh
@@ -140,8 +140,8 @@ func plural(n int, one, many string) string {
 
 func printTrustStore(out io.Writer, policy connectionPolicy) {
 	printRegistries(out, policy.Registries)
-	fmt.Fprintf(out, "Store: %s", policy.path)
-	if _, err := os.Stat(policy.path); os.IsNotExist(err) {
+	fmt.Fprintf(out, "Store: %s", policy.Path())
+	if _, err := os.Stat(policy.Path()); os.IsNotExist(err) {
 		fmt.Fprint(out, " (not created yet)")
 	}
 	fmt.Fprintf(out, "\nMode:  %s", policy.Mode)
@@ -180,7 +180,7 @@ func printTrustStore(out io.Writer, policy connectionPolicy) {
 		section("Projects (any config)", policy.Allow.Projects, 0)
 		section("Pinned configs", policy.Allow.Pins, pinDisplayLimit)
 	}
-	if broader := policy.broaderThan(policy.Record); len(broader) > 0 {
+	if broader := policy.BroaderThan(policy.Record); len(broader) > 0 {
 		// Record controls what a yes records, never how existing entries
 		// match — after tightening, surviving broad lines are the loophole.
 		fmt.Fprintf(out, "\nNote: record is set to %s.\n%d broader entr%s above still grant%s more access. Prune with: tinfoil trust set --record %s --prune\n", policy.Record, len(broader), plural(len(broader), "y", "ies"), plural(len(broader), "s", ""), policy.Record)
