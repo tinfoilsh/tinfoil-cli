@@ -87,7 +87,7 @@ func newMKSession(cp *cpClient, scope accountScope) (*mkSession, error) {
 		}
 		return nil, noLocalKeys(reason + "; " + next)
 	}
-	return &mkSession{cp, dek.DEK, mkContext{fixedAPIOrigin, scope.UserID, dek.DEKID}}, nil
+	return &mkSession{cp, dek.DEK, mkContext{APIOrigin: fixedAPIOrigin, UserID: scope.UserID, DEKID: dek.DEKID}}, nil
 }
 
 func (s *mkSession) load(ctx context.Context) (*keyState, *mkPayload, error) {

@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/ed25519"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
 	"io"
@@ -26,6 +27,10 @@ func testSeed(t *testing.T) []byte {
 	seed := make([]byte, ed25519.SeedSize)
 	rand.Read(seed)
 	return seed
+}
+
+func ownerKeyString(public ed25519.PublicKey) string {
+	return "ed25519:" + base64.StdEncoding.EncodeToString(public)
 }
 
 func ensureOwnerSSHKey(path string, seed []byte) error {
@@ -109,7 +114,7 @@ func testLogin(t *testing.T, server *httptest.Server, keys *keyStateServer) (*cp
 	dekID := randomB64U(16)
 	require.NoError(t, writeCredential(dekRecordName(server.URL, grant.UserID), &syncedDEK{Version: 1, APIOrigin: server.URL, UserID: grant.UserID, DEKID: dekID, DEK: dek}))
 	if keys != nil {
-		sealed, err := sealMK(&mkPayload{Version: 1, Resources: []mkResource{}}, dek, mkContext{server.URL, grant.UserID, dekID})
+		sealed, err := sealMK(&mkPayload{Version: 1, Resources: []mkResource{}}, dek, mkContext{APIOrigin: server.URL, UserID: grant.UserID, DEKID: dekID})
 		require.NoError(t, err)
 		keys.revision, keys.dekID, keys.mk = 1, &dekID, &sealed
 	}

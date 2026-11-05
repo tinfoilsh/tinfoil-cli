@@ -721,7 +721,10 @@ func (b *terminalBrowser) open(launch string) error {
 	require.NoError(b.t, err)
 	recipient, err := hpke.NewDHKEMPublicKey(key)
 	require.NoError(b.t, err)
-	sealed, err := hpke.Seal(recipient, hpke.HKDFSHA256(), hpke.AES256GCM(), keySyncEnvelopeInfo(canonicalKeySyncRequest(request, targets)), plain)
+	const envelopeLabel = "tinfoil-cli-key-sync-envelope-v1\x00"
+	digest := sha256.Sum256(canonicalKeySyncRequest(request, targets))
+	info := append([]byte(envelopeLabel), digest[:]...)
+	sealed, err := hpke.Seal(recipient, hpke.HKDFSHA256(), hpke.AES256GCM(), info, plain)
 	require.NoError(b.t, err)
 	payload := base64.RawURLEncoding.EncodeToString(sealed)
 	target = keySyncCallback + "?payload=" + payload
@@ -770,7 +773,7 @@ func TestClerkLoginCeremony(t *testing.T) {
 	dek := make([]byte, 32)
 	rand.Read(dek)
 	dekID := randomB64U(16)
-	sealedMK, err := sealMK(&mkPayload{Version: 1, Resources: []mkResource{}}, dek, mkContext{server.URL, "user_owner", dekID})
+	sealedMK, err := sealMK(&mkPayload{Version: 1, Resources: []mkResource{}}, dek, mkContext{APIOrigin: server.URL, UserID: "user_owner", DEKID: dekID})
 	require.NoError(t, err)
 	keys.revision, keys.dekID, keys.mk = 1, &dekID, &sealedMK
 	newBrowser := func(t *testing.T) *terminalBrowser {

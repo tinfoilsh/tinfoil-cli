@@ -12,6 +12,7 @@ import (
 
 	"github.com/tinfoilsh/tinfoil-cli/internal/config"
 	"github.com/tinfoilsh/tinfoil-cli/internal/controlplane"
+	"github.com/tinfoilsh/tinfoil-cli/internal/keybundle"
 	"github.com/zalando/go-keyring"
 )
 
@@ -213,7 +214,7 @@ func currentGrant() (*clerkGrant, error) {
 		return nil, err
 	}
 	if grant.Version != 1 || !validID16(grant.Grant) || grant.Issuer != clerkIssuer || grant.ClientID != clerkCLIClientID ||
-		!userIDPattern.MatchString(grant.UserID) || !accountPattern.MatchString(grant.Account) || grant.AccessToken == "" {
+		!keybundle.ValidUserID(grant.UserID) || !keybundle.ValidAccount(grant.Account) || grant.AccessToken == "" {
 		return nil, errors.New("the saved login belongs to another CLI build or is damaged; run `tinfoil login`")
 	}
 	return &grant, nil

@@ -1,4 +1,4 @@
-package main
+package keybundle
 
 import (
 	"crypto/ecdh"
@@ -86,43 +86,43 @@ func loadOwnerContract(t *testing.T) ownerContractFixture {
 }
 
 func fixtureBytes(t *testing.T, text string) []byte {
-	decoded, err := decodeB64U(text, -1)
+	decoded, err := DecodeBase64URL(text, -1)
 	require.NoError(t, err)
 	return decoded
 }
 
-func (c contractKeySyncTargets) targets() keySyncTargets {
-	return keySyncTargets{c.Terminal, c.APIOrigin, c.Callback, c.Completion}
+func (c contractKeySyncTargets) targets() SyncTargets {
+	return SyncTargets{c.Terminal, c.APIOrigin, c.Callback, c.Completion}
 }
 
-func (c contractKeySyncRequest) request(t *testing.T) keySyncRequest {
-	return keySyncRequest{fixtureBytes(t, c.HPKEPublicKey), c.Request, c.UserID, c.Account, c.Expires}
+func (c contractKeySyncRequest) request(t *testing.T) SyncRequest {
+	return SyncRequest{fixtureBytes(t, c.HPKEPublicKey), c.Request, c.UserID, c.Account, c.Expires}
 }
 
 func TestOwnerContractMKOpensBothSealersAndRejectsChangedContext(t *testing.T) {
 	f := loadOwnerContract(t).MK
 	dek := fixtureBytes(t, f.DEK)
-	context := func(m map[string]string) mkContext { return mkContext{m["api_origin"], m["user_id"], m["dek_id"]} }
+	context := func(m map[string]string) Context { return Context{m["api_origin"], m["user_id"], m["dek_id"]} }
 	require.Len(t, f.Envelopes, 2)
 	for _, sealed := range f.Envelopes {
-		payload, err := openMK(sealed.Envelope, dek, context(f.Context))
+		payload, err := Open(sealed.Envelope, dek, context(f.Context))
 		require.NoError(t, err, sealed.SealedBy)
-		canonical, err := contractJSON(payload)
+		canonical, err := Marshal(payload)
 		require.NoError(t, err)
 		require.Equal(t, f.Plaintext, string(canonical), sealed.SealedBy)
 		for _, wrong := range f.WrongContext {
-			_, err := openMK(sealed.Envelope, dek, context(wrong.Context))
+			_, err := Open(sealed.Envelope, dek, context(wrong.Context))
 			require.Error(t, err, wrong.Case)
 		}
-		_, err = openMK(sealed.Envelope, fixtureBytes(t, f.WrongDEK), context(f.Context))
+		_, err = Open(sealed.Envelope, fixtureBytes(t, f.WrongDEK), context(f.Context))
 		require.Error(t, err)
 	}
 	for _, wrong := range f.WrongEnvelopes {
-		_, err := openMK(wrong.Envelope, dek, context(f.Context))
+		_, err := Open(wrong.Envelope, dek, context(f.Context))
 		require.Error(t, err, wrong.Case)
 	}
 	for _, invalid := range f.InvalidPlaintexts {
-		var payload mkPayload
+		var payload Payload
 		err := decodeCanonical([]byte(invalid.Plaintext), &payload)
 		if err == nil {
 			err = payload.validate()
@@ -130,12 +130,12 @@ func TestOwnerContractMKOpensBothSealersAndRejectsChangedContext(t *testing.T) {
 		require.Error(t, err, invalid.Case)
 	}
 
-	payload, err := openMK(f.Envelopes[0].Envelope, dek, context(f.Context))
+	payload, err := Open(f.Envelopes[0].Envelope, dek, context(f.Context))
 	require.NoError(t, err)
-	resealed, err := sealMK(payload, dek, context(f.Context))
+	resealed, err := Seal(payload, dek, context(f.Context))
 	require.NoError(t, err)
 	require.NotEqual(t, f.Envelopes[0].Envelope, resealed, "each seal uses a fresh nonce")
-	reopened, err := openMK(resealed, dek, context(f.Context))
+	reopened, err := Open(resealed, dek, context(f.Context))
 	require.NoError(t, err)
 	require.Equal(t, payload, reopened)
 }
@@ -144,8 +144,8 @@ func TestOwnerContractMKBoundsAreCoherentAndCheckedBeforeDecoding(t *testing.T) 
 	f := loadOwnerContract(t)
 	require.Equal(t, f.Limits.MKEnvelopeChars, maxMKEnvelopeChars)
 	require.Equal(t, f.Limits.MKPlaintextBytes, maxMKPlaintextBytes)
-	require.Equal(t, f.Limits.KeySyncPayloadChars, maxKeySyncPayloadChars)
-	require.Equal(t, f.Limits.BucketChars, maxBucketChars)
+	require.Equal(t, f.Limits.KeySyncPayloadChars, MaxKeySyncPayloadChars)
+	require.Equal(t, f.Limits.BucketChars, MaxBucketChars)
 	envelopeChars := func(plaintext int) int {
 		return len(mkEnvelopePrefix) + base64.RawURLEncoding.EncodedLen(12) + 1 + base64.RawURLEncoding.EncodedLen(plaintext+16)
 	}
@@ -153,54 +153,74 @@ func TestOwnerContractMKBoundsAreCoherentAndCheckedBeforeDecoding(t *testing.T) 
 	require.Greater(t, envelopeChars(maxMKPlaintextBytes+1), maxMKEnvelopeChars)
 
 	dek := fixtureBytes(t, f.MK.DEK)
-	context := mkContext{f.MK.Context["api_origin"], f.MK.Context["user_id"], f.MK.Context["dek_id"]}
+	context := Context{f.MK.Context["api_origin"], f.MK.Context["user_id"], f.MK.Context["dek_id"]}
 	head := mkEnvelopePrefix + base64.RawURLEncoding.EncodeToString(make([]byte, 12)) + "."
 	// Well-formed base64 of zeros: at the limit it reaches decryption, one past it is refused first.
-	_, err := openMK(head+strings.Repeat("A", maxMKEnvelopeChars-len(head)), dek, context)
+	_, err := Open(head+strings.Repeat("A", maxMKEnvelopeChars-len(head)), dek, context)
 	require.Error(t, err)
 	require.NotErrorIs(t, err, errMKFormat)
-	_, err = openMK(head+strings.Repeat("A", maxMKEnvelopeChars-len(head)+1), dek, context)
+	_, err = Open(head+strings.Repeat("A", maxMKEnvelopeChars-len(head)+1), dek, context)
 	require.ErrorIs(t, err, errMKFormat)
 }
 
 func TestOwnerContractKeySyncCodeAndEnvelope(t *testing.T) {
 	f := loadOwnerContract(t).KeySync
 	targets, request := f.Targets.targets(), f.Request.request(t)
-	require.Equal(t, f.LaunchURL, keySyncLaunchURL(request, targets))
-	require.Equal(t, f.Canonical, string(canonicalKeySyncRequest(request, targets)))
-	require.Equal(t, f.Code, confirmationCode([]byte(f.Canonical)))
+	require.Equal(t, f.LaunchURL, LaunchURL(request, targets))
+	require.Equal(t, f.Canonical, string(CanonicalRequest(request, targets)))
+	require.Equal(t, f.Code, ConfirmationCode([]byte(f.Canonical)))
 
 	private, err := ecdh.X25519().NewPrivateKey(fixtureBytes(t, f.RecipientKey))
 	require.NoError(t, err)
 	require.Equal(t, request.HPKEPublicKey, private.PublicKey().Bytes())
 	require.Len(t, f.Payloads, 2)
 	for _, payload := range f.Payloads {
-		envelope, err := openKeySyncEnvelope(private, request, targets, payload.Payload)
+		envelope, err := OpenSyncEnvelope(private, request, targets, payload.Payload)
 		require.NoError(t, err, payload.SealedBy)
-		plain, err := contractJSON(envelope)
+		plain, err := Marshal(envelope)
 		require.NoError(t, err)
 		require.Equal(t, f.EnvelopePlaintext, string(plain), payload.SealedBy)
 	}
 	for _, changed := range f.ChangedContexts {
 		changedTargets, changedRequest := changed.Targets.targets(), changed.Request.request(t)
-		code := confirmationCode(canonicalKeySyncRequest(changedRequest, changedTargets))
+		code := ConfirmationCode(CanonicalRequest(changedRequest, changedTargets))
 		require.Equal(t, changed.Code, code, changed.Case)
 		require.NotEqual(t, f.Code, code, changed.Case)
-		_, err := openKeySyncEnvelope(private, changedRequest, changedTargets, f.Payloads[0].Payload)
+		_, err := OpenSyncEnvelope(private, changedRequest, changedTargets, f.Payloads[0].Payload)
 		require.Error(t, err, changed.Case)
 	}
 
 	for _, reject := range f.PayloadRejects {
-		_, err := openKeySyncEnvelope(private, reject.Request.request(t), targets, reject.Payload)
+		_, err := OpenSyncEnvelope(private, reject.Request.request(t), targets, reject.Payload)
 		require.Error(t, err, reject.Case)
 	}
 	// Well-formed base64 at the limit reaches HPKE; one past it is refused before decoding.
-	_, err = openKeySyncEnvelope(private, request, targets, strings.Repeat("A", maxKeySyncPayloadChars))
+	_, err = OpenSyncEnvelope(private, request, targets, strings.Repeat("A", MaxKeySyncPayloadChars))
 	require.ErrorContains(t, err, "not sealed for this request")
-	_, err = openKeySyncEnvelope(private, request, targets, strings.Repeat("A", maxKeySyncPayloadChars+1))
+	_, err = OpenSyncEnvelope(private, request, targets, strings.Repeat("A", MaxKeySyncPayloadChars+1))
 	require.ErrorContains(t, err, "malformed key-sync callback")
 
-	var envelope keySyncEnvelope
+	var envelope SyncEnvelope
 	require.NoError(t, decodeCanonical([]byte(f.EnvelopePlaintext), &envelope))
-	require.Equal(t, f.CompletionURL, keySyncCompletionURL(targets, request.Request, envelope.UserID, "org_2fixtureB"))
+	require.Equal(t, f.CompletionURL, CompletionURL(targets, request.Request, envelope.UserID, "org_2fixtureB"))
+}
+
+func TestBindingUUIDFormat(t *testing.T) {
+	for _, id := range []string{
+		"00000000-0000-0000-0000-000000000000",
+		"abcdef12-3456-7890-abcd-ef1234567890",
+	} {
+		require.True(t, validLowerUUID(id))
+	}
+	for _, id := range []string{
+		"ABCDEF12-3456-7890-ABCD-EF1234567890",
+		"urn:uuid:abcdef12-3456-7890-abcd-ef1234567890",
+		"{abcdef12-3456-7890-abcd-ef1234567890}",
+		"abcdef1234567890abcdef1234567890",
+		"abcdef12-3456-7890-abcd-ef1234567890\n",
+		"abcdef12-3456-7890-abcd-ef123456789g",
+		"abcdef12_3456-7890-abcd-ef1234567890",
+	} {
+		require.False(t, validLowerUUID(id), id)
+	}
 }

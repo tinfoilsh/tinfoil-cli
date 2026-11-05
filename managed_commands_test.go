@@ -373,7 +373,7 @@ func TestSyncedCreateSavesKeysBeforeAllocation(t *testing.T) {
 			}
 			require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
 			require.Equal(t, "tmk", body.Mode)
-			payload := keys.payload(t, dek, mkContext{fixedAPIOrigin, "user_owner", *keys.dekID})
+			payload := keys.payload(t, dek, mkContext{APIOrigin: fixedAPIOrigin, UserID: "user_owner", DEKID: *keys.dekID})
 			saved := findKey(payload, func(k *mkResource) bool { return k.OwnerPublicKey == body.Owner })
 			require.NotNil(t, saved, "the key bundle holds the owner key before allocation")
 			require.Nil(t, saved.Binding)

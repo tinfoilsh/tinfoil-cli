@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"github.com/tinfoilsh/tinfoil-cli/internal/keybundle"
 	"golang.org/x/term"
 )
 
@@ -573,7 +574,7 @@ func (c *loginCeremony) saveSyncedKey(envelope *keySyncEnvelope) error {
 	if state.DEKID == nil || *state.DEKID != envelope.DEKID || state.EncryptedMK == nil {
 		return errors.New("the synced key does not match your current key bundle")
 	}
-	if _, err := openMK(*state.EncryptedMK, envelope.DEK, mkContext{c.targets.APIOrigin, c.grant.UserID, envelope.DEKID}); err != nil {
+	if _, err := openMK(*state.EncryptedMK, envelope.DEK, mkContext{APIOrigin: c.targets.APIOrigin, UserID: c.grant.UserID, DEKID: envelope.DEKID}); err != nil {
 		return fmt.Errorf("checking the synced key: %w", err)
 	}
 	dek := &syncedDEK{Version: 1, APIOrigin: c.targets.APIOrigin, UserID: c.grant.UserID, DEKID: envelope.DEKID, DEK: envelope.DEK}
@@ -656,9 +657,9 @@ func clerkIdentity(ctx context.Context, accessToken string) (userID, account str
 		UserID         string `json:"user_id"`
 		OrganizationID string `json:"org_id"`
 	}
-	if err := json.Unmarshal(reply, &identity); err != nil || !userIDPattern.MatchString(identity.Subject) ||
+	if err := json.Unmarshal(reply, &identity); err != nil || !keybundle.ValidUserID(identity.Subject) ||
 		(identity.UserID != "" && identity.UserID != identity.Subject) ||
-		(identity.OrganizationID != "" && (!strings.HasPrefix(identity.OrganizationID, "org_") || !accountPattern.MatchString(identity.OrganizationID))) {
+		(identity.OrganizationID != "" && (!strings.HasPrefix(identity.OrganizationID, "org_") || !keybundle.ValidAccount(identity.OrganizationID))) {
 		return "", "", errors.New("Clerk returned an invalid login identity")
 	}
 	account = identity.OrganizationID
