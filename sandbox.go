@@ -33,6 +33,8 @@ const (
 
 	// Controlplane gives a new sandbox this workspace size when none is chosen.
 	defaultWorkspaceSizeGB = 16
+	// sandboxWorkspaceSlot is the volume mount that holds a sandbox's workspace.
+	sandboxWorkspaceSlot = "workspace"
 )
 
 // sandboxWorkspaceSizesGB are the workspace volume sizes Controlplane accepts,
@@ -83,7 +85,7 @@ var sandboxStopCmd = &cobra.Command{
 	Args: cobra.ExactArgs(1), RunE: runSandboxAction("stop"),
 }
 var sandboxDeleteCmd = &cobra.Command{
-	Use: "delete [id|name]", Short: "Delete a sandbox, keeping its workspace volume",
+	Use: "delete [id|name]", Short: "Delete a sandbox and its workspace volume",
 	Args: cobra.ExactArgs(1), RunE: runSandboxAction("delete"),
 }
 
@@ -103,7 +105,14 @@ func runSandboxAction(action string) func(*cobra.Command, []string) error {
 		}
 		switch action {
 		case "delete":
-			fmt.Fprintf(cmd.ErrOrStderr(), "Deleting %s keeps its encrypted workspace volume and storage charges until `tinfoil volume delete` removes it. Keep your saved encryption credentials.\n", row.Name)
+			workspace := row.Volumes[sandboxWorkspaceSlot]
+			deleted := row.Name
+			if workspace == "" {
+				fmt.Fprintf(cmd.ErrOrStderr(), "Deleting %s. It has no attached workspace volume.\n", row.Name)
+			} else {
+				deleted += " and its workspace"
+				fmt.Fprintf(cmd.ErrOrStderr(), "Deleting %s permanently deletes its workspace volume and all of its data. To keep the workspace, stop the sandbox and run `tinfoil volume detach %s` before deleting it.\n", row.Name, workspace)
+			}
 			if err := confirmYes(sandboxYes, "sandbox delete"); err != nil {
 				return err
 			}
@@ -113,7 +122,7 @@ func runSandboxAction(action string) func(*cobra.Command, []string) error {
 			if err := forgetSandbox(row.Name, row.ID); err != nil {
 				return fmt.Errorf("%s is deleted, but %w", row.Name, err)
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "Deleted %s. Saved encryption credentials are kept. Remove any access grants in the Monitor UI.\n", row.Name)
+			fmt.Fprintf(cmd.OutOrStdout(), "Deleted %s. Saved encryption credentials are kept. Remove any access grants in the Monitor UI.\n", deleted)
 			return nil
 		case "stop":
 			stopped, err := stopContainer(client, *row)
@@ -292,7 +301,7 @@ func sandboxBinding(scope accountScope, target *workloadTarget) (mkBinding, erro
 	if err := requireRunningConnection("Sandbox", row); err != nil {
 		return mkBinding{}, err
 	}
-	volumeID, instance := row.Volumes["workspace"], env["SANDBOX_INSTANCE_ID"]
+	volumeID, instance := row.Volumes[sandboxWorkspaceSlot], env["SANDBOX_INSTANCE_ID"]
 	if len(row.Volumes) != 1 || !validLowerUUID(volumeID) {
 		return mkBinding{}, errors.New("sandbox has no unique workspace volume binding")
 	}

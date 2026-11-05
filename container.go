@@ -564,7 +564,11 @@ var containerDeleteCmd = &cobra.Command{
 			return err
 		}
 		fmt.Fprintf(os.Stderr, "Deleting %s (%s).\n", c.Name, c.ID)
-		fmt.Fprintln(os.Stderr, "This removes the container, its saved configuration, and its DNS records. Attached volumes are kept.")
+		volumes := "Attached volumes are kept."
+		if c.Repo == defaultSandboxRepo {
+			volumes = "Its attached workspace volume and all of its data are deleted too."
+		}
+		fmt.Fprintln(os.Stderr, "This removes the container, its saved configuration, and its DNS records. "+volumes)
 		if err := confirmYes(deleteYes, cmd.CommandPath()); err != nil {
 			return err
 		}

@@ -224,7 +224,7 @@ with those, storage keys are created on first open and kept only on that machine
 					if volume.ContainerID != "" {
 						return fmt.Errorf("volume %s is already attached to %s; stop and detach it before reuse", workspace, volumeContainerLabel(*volume))
 					}
-					body["volumes"] = map[string]string{"workspace": volume.ID}
+					body["volumes"] = map[string]string{sandboxWorkspaceSlot: volume.ID}
 				}
 				if sizeChosen {
 					body["workspace_size_gb"] = workspaceSize
