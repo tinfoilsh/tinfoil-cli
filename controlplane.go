@@ -1,16 +1,15 @@
 package main
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/tinfoilsh/tinfoil-cli/internal/controlplane"
 )
 
 const controlplaneUserAgentPrefix = "tinfoil-cli/"
@@ -36,34 +35,36 @@ func newCPClient(cfg cliConfig) *cpClient {
 		baseURL: strings.TrimRight(cfg.ControlplaneURL, "/"),
 		apiKey:  cfg.APIKey,
 		login:   cfg.login,
-		http: &http.Client{Timeout: 60 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error {
-			return errors.New("refusing a controlplane redirect")
-		}},
+		http:    &http.Client{Timeout: 60 * time.Second},
 	}
 }
 
-// cpError carries a structured error from the controlplane.
-type cpError struct {
-	Status  int
-	Method  string
-	Path    string
-	Code    string
-	Message string
-	Body    []byte
+type cpTokenSource struct{ client *cpClient }
+
+func (s cpTokenSource) Token(ctx context.Context) (string, error) {
+	if s.client.login != nil {
+		return s.client.login.accessToken(ctx)
+	}
+	return s.client.apiKey, nil
 }
+
+// cpError carries a structured error from the controlplane.
+type cpError controlplane.Error
 
 func (e *cpError) Error() string {
 	if e.Message != "" {
 		return humanVolumeMessage(secretDeliveryMessage(e.Message))
 	}
-	return fmt.Sprintf("controlplane returned HTTP %d for %s", e.Status, e.Path)
+	return e.Unwrap().Error()
 }
+
+func (e *cpError) Unwrap() error { return (*controlplane.Error)(e) }
 
 // errorHint returns a line to print after a failed command's error, or "".
 // Commands wrap controlplane errors in their own context, so the hint is
 // printed once at the end rather than inside the error text.
 func errorHint(err error) string {
-	var cp *cpError
+	var cp *controlplane.Error
 	if !errors.As(err, &cp) {
 		return ""
 	}
@@ -94,116 +95,18 @@ func (c *cpClient) doWithHeaders(method, path string, query url.Values, headers 
 }
 
 func (c *cpClient) doContext(ctx context.Context, method, path string, query url.Values, headers map[string]string, body any, out any) (int, error) {
-	if err := validateControlplaneURL(c.baseURL); err != nil {
-		return 0, err
+	client := controlplane.New(c.baseURL, version, c.http, cpTokenSource{client: c})
+	status, err := client.Do(ctx, method, path, query, headers, body, out)
+	if apiErr, ok := err.(*controlplane.Error); ok {
+		return status, (*cpError)(apiErr)
 	}
-	u := c.baseURL + path
-	if query != nil {
-		u += "?" + query.Encode()
-	}
-
-	var reader io.Reader
-	if body != nil {
-		buf, err := json.Marshal(body)
-		if err != nil {
-			return 0, fmt.Errorf("encoding request body: %w", err)
-		}
-		reader = bytes.NewReader(buf)
-	}
-
-	req, err := http.NewRequestWithContext(ctx, method, u, reader)
-	if err != nil {
-		return 0, fmt.Errorf("building request: %w", err)
-	}
-	token := c.apiKey
-	if c.login != nil {
-		if token, err = c.login.accessToken(ctx); err != nil {
-			return 0, err
-		}
-	}
-	if token != "" {
-		req.Header.Set("Authorization", "Bearer "+token)
-	}
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("User-Agent", controlplaneUserAgentPrefix+version)
-	for k, v := range headers {
-		req.Header.Set(k, v)
-	}
-
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return 0, fmt.Errorf("controlplane request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return resp.StatusCode, fmt.Errorf("reading response: %w", err)
-	}
-
-	if resp.StatusCode >= 400 {
-		return resp.StatusCode, &cpError{
-			Status:  resp.StatusCode,
-			Method:  method,
-			Path:    path,
-			Code:    extractErrorCode(respBody),
-			Message: extractErrorMessage(respBody),
-			Body:    respBody,
-		}
-	}
-
-	if out != nil && len(respBody) > 0 {
-		if err := json.Unmarshal(respBody, out); err != nil {
-			return resp.StatusCode, fmt.Errorf("decoding response: %w", err)
-		}
-	}
-	return resp.StatusCode, nil
+	return status, err
 }
 
-// pathf builds a controlplane URL path by url.PathEscape-ing each segment
-// before substituting it into the printf-style format. Use this anywhere a
-// path component comes from user input or unverified server data. Callers must
-// still reject exact `.` and `..` segments, which PathEscape leaves unchanged.
 func pathf(format string, segments ...string) string {
-	args := make([]any, len(segments))
-	for i, s := range segments {
-		args[i] = url.PathEscape(s)
-	}
-	return fmt.Sprintf(format, args...)
+	return controlplane.Pathf(format, segments...)
 }
 
-// extractErrorMessage best-effort decodes controlplane error payloads which
-// usually look like {"error":"..."} or {"message":"..."}.
 func extractErrorMessage(body []byte) string {
-	if len(body) == 0 {
-		return ""
-	}
-	var m map[string]any
-	if err := json.Unmarshal(body, &m); err == nil {
-		for _, key := range []string{"error", "message"} {
-			if v, ok := m[key].(string); ok && v != "" {
-				return v
-			}
-		}
-	}
-	s := strings.TrimSpace(string(body))
-	if len(s) > 240 {
-		s = s[:240] + "…"
-	}
-	return s
-}
-
-// extractErrorCode returns the machine-readable code of a controlplane error
-// payload such as {"error":"...","code":"SANDBOX_LIMIT_REACHED"}, or "".
-func extractErrorCode(body []byte) string {
-	var detail struct {
-		Code string `json:"code"`
-	}
-	if json.Unmarshal(body, &detail) != nil {
-		return ""
-	}
-	return detail.Code
+	return controlplane.ErrorMessage(body)
 }

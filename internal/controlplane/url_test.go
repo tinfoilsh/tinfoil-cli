@@ -1,4 +1,4 @@
-package main
+package controlplane
 
 import (
 	"strings"
@@ -30,7 +30,7 @@ func TestValidateControlplaneURL(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := validateControlplaneURL(tt.input)
+			err := ValidateURL(tt.input)
 			if tt.wantError {
 				if err == nil {
 					t.Fatalf("expected error for %q, got nil", tt.input)

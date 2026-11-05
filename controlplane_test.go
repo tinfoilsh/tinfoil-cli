@@ -2,12 +2,16 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/require"
+	"github.com/tinfoilsh/tinfoil-cli/internal/controlplane"
 )
 
 func TestPathfEscapesSegments(t *testing.T) {
@@ -132,6 +136,18 @@ func TestControlplaneErrorsKeepMessageAndHintAtLimits(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestControlplaneErrorAdapterPreservesRawIdentity(t *testing.T) {
+	raw := &controlplane.Error{Status: http.StatusConflict, Code: storageLimitExceeded, Message: "select a volume for required slot data", Body: []byte("raw response")}
+	display := (*cpError)(raw)
+	wrapped := fmt.Errorf("creation failed: %w", display)
+	var got *controlplane.Error
+	require.True(t, errors.As(wrapped, &got))
+	require.Same(t, raw, got)
+	require.Equal(t, "select a volume for required slot data", raw.Error())
+	require.Contains(t, wrapped.Error(), "required mount")
+	require.Equal(t, accountLimitsHint, errorHint(wrapped))
 }
 
 func TestVersionFlagUsesInjectedVersion(t *testing.T) {
