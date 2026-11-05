@@ -50,7 +50,7 @@ func newTestUpdateChecker(t *testing.T, current string, handler http.HandlerFunc
 	t.Cleanup(server.Close)
 
 	now := time.Date(2026, 9, 3, 12, 0, 0, 0, time.UTC)
-	checker := NewChecker(current, filepath.Join(t.TempDir(), CacheFileName), func() time.Time { return now })
+	checker := NewChecker(current, filepath.Join(t.TempDir(), CacheFileName), func() time.Time { return now }, nil)
 	checker.releaseURL = server.URL
 	checker.http = server.Client()
 	return checker, &requests

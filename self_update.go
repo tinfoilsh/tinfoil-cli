@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"os/signal"
 	"runtime"
@@ -19,9 +20,9 @@ type selfUpdateRunner interface {
 	Run(context.Context, bool) (selfupdate.Result, error)
 }
 
-func newDefaultSelfUpdater() selfUpdateRunner {
+func newDefaultSelfUpdater(currentVersion string, transport http.RoundTripper) selfUpdateRunner {
 	return selfupdate.NewUpdater(selfupdate.Options{
-		Version: version, GOOS: runtime.GOOS, GOARCH: runtime.GOARCH,
+		Version: currentVersion, GOOS: runtime.GOOS, GOARCH: runtime.GOARCH, Transport: transport,
 		Executable: os.Executable,
 	})
 }

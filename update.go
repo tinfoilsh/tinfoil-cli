@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"time"
@@ -18,12 +19,12 @@ const (
 	updateNoticeWait = 200 * time.Millisecond
 )
 
-func newUpdateChecker() (*selfupdate.Checker, error) {
+func newUpdateChecker(currentVersion string, transport http.RoundTripper) (*selfupdate.Checker, error) {
 	cfgPath, err := configPath()
 	if err != nil {
 		return nil, err
 	}
-	return selfupdate.NewChecker(version, filepath.Join(filepath.Dir(cfgPath), selfupdate.CacheFileName), time.Now), nil
+	return selfupdate.NewChecker(currentVersion, filepath.Join(filepath.Dir(cfgPath), selfupdate.CacheFileName), time.Now, transport), nil
 }
 
 // startUpdateCheck runs the release lookup in the background so it overlaps
@@ -31,11 +32,11 @@ func newUpdateChecker() (*selfupdate.Checker, error) {
 // updateNoticeWait for the lookup and reports the newer version, if there is
 // one; a lookup that is still in flight is abandoned so the command exits
 // promptly.
-func startUpdateCheck(streams commandIO) func() (string, bool) {
-	if !updateCheckEnabled(streams) {
+func startUpdateCheck(streams commandIO, currentVersion string, transport http.RoundTripper) func() (string, bool) {
+	if !updateCheckEnabled(streams, currentVersion) {
 		return func() (string, bool) { return "", false }
 	}
-	checker, err := newUpdateChecker()
+	checker, err := newUpdateChecker(currentVersion, transport)
 	if err != nil {
 		return func() (string, bool) { return "", false }
 	}
@@ -64,8 +65,8 @@ func startBackgroundUpdateCheck(newerVersion func() (string, bool), maxWait time
 
 // updateCheckEnabled skips the check for dev builds, when explicitly opted
 // out, and when stderr is not a terminal so scripts never see the notice.
-func updateCheckEnabled(streams commandIO) bool {
-	if version == defaultVersion {
+func updateCheckEnabled(streams commandIO, currentVersion string) bool {
+	if currentVersion == defaultVersion {
 		return false
 	}
 	if os.Getenv(envNoUpdateCheck) != "" {
@@ -74,6 +75,6 @@ func updateCheckEnabled(streams commandIO) bool {
 	return term.IsTerminal(streamFD(streams.err))
 }
 
-func printUpdateNotice(streams commandIO, latest string) {
-	fmt.Fprintf(streams.err, "\nwarning: a new version of tinfoil is available (%s -> %s)\nupdate with: %s\n", version, latest, updateCommand)
+func printUpdateNotice(streams commandIO, currentVersion, latest string) {
+	fmt.Fprintf(streams.err, "\nwarning: a new version of tinfoil is available (%s -> %s)\nupdate with: %s\n", currentVersion, latest, updateCommand)
 }

@@ -34,12 +34,16 @@ type Checker struct {
 	now        func() time.Time
 }
 
-func NewChecker(current, cachePath string, now func() time.Time) *Checker {
+func NewChecker(current, cachePath string, now func() time.Time, transport http.RoundTripper) *Checker {
+	client := updateHTTPClient(updateCheckTimeout)
+	if transport != nil {
+		client.Transport = transport
+	}
 	return &Checker{
 		current:    current,
 		releaseURL: latestReleaseURL,
 		cachePath:  cachePath,
-		http:       updateHTTPClient(updateCheckTimeout),
+		http:       client,
 		now:        now,
 	}
 }

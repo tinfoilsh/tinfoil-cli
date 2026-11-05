@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"regexp"
 	"slices"
@@ -101,7 +102,9 @@ func newRootCommandWithDependencies(dependencies commandDependencies) *cobra.Com
 	cmd.AddCommand(newAttestSSHCommand(&attestSSHOptions{}, &forwardOptions{}, &identityOptions{}, rootOpts, &trustOptions{}), newAttestationCommand(rootOpts), newLoginCommand(dependencies.browser()), newLogoutCommand(), newWhoamiCommand(),
 		newContainerCommand(&outputOptions{}, rootOpts), newDomainCommand(&outputOptions{}), newHttpCommand(&headersOptions{}, rootOpts), newModelCommand(&outputOptions{}), newProjectCommand(&outputOptions{}), newProxyCommand(&proxyOptions{}, rootOpts),
 		newRegistryCommand(&outputOptions{}), newRepoCommand(&outputOptions{}), newSCPCommand(&forwardOptions{}, rootOpts, &trustOptions{}, &tunnelOptions{}), newSecretCommand(&outputOptions{}), newSshCommand(&forwardOptions{}, rootOpts, &sshOptions{}, &trustOptions{}, &tunnelOptions{}), newSshKeyCommand(&outputOptions{}, &sshKeyOptions{}),
-		newTrustCommand(&trustOptions{}), newForwardCommand(&forwardOptions{}, rootOpts, &trustOptions{}, &tunnelOptions{}), newVolumeCommand(&outputOptions{}), newSelfUpdateCommand(newDefaultSelfUpdater))
+		newTrustCommand(&trustOptions{}), newForwardCommand(&forwardOptions{}, rootOpts, &trustOptions{}, &tunnelOptions{}), newVolumeCommand(&outputOptions{}), newSelfUpdateCommand(func() selfUpdateRunner {
+			return newDefaultSelfUpdater(commandVersion, dependencies.updateTransport)
+		}))
 	monitorIdentity, sandboxIdentity := &identityOptions{}, &identityOptions{}
 	monitorOutput, sandboxOutput := &outputOptions{}, &outputOptions{}
 	monitor, sandbox := newMonitorCommand(), newSandboxCommand(sandboxIdentity, sandboxOutput, rootOpts)
@@ -216,16 +219,16 @@ func main() {
 
 func run(args []string, dependencies commandDependencies) int {
 	rootCmd := newRootCommandWithDependencies(dependencies)
-	return runCommand(rootCmd, args)
+	return runCommand(rootCmd, args, dependencies.updateTransport)
 }
 
-func runCommand(rootCmd *cobra.Command, args []string) int {
+func runCommand(rootCmd *cobra.Command, args []string, updateTransport http.RoundTripper) int {
 	rootCmd.SilenceErrors = true
 	rootCmd.SilenceUsage = true
 	rootCmd.SetArgs(args)
 	waitForUpdateCheck := func() (string, bool) { return "", false }
 	if !isSelfUpdateCommand(rootCmd, args) {
-		waitForUpdateCheck = startUpdateCheck(commandStreams(rootCmd))
+		waitForUpdateCheck = startUpdateCheck(commandStreams(rootCmd), rootCmd.Version, updateTransport)
 	}
 
 	err := rootCmd.Execute()
@@ -238,7 +241,7 @@ func runCommand(rootCmd *cobra.Command, args []string) int {
 	}
 
 	if latest, ok := waitForUpdateCheck(); ok {
-		printUpdateNotice(commandStreams(rootCmd), latest)
+		printUpdateNotice(commandStreams(rootCmd), rootCmd.Version, latest)
 	}
 
 	if err != nil {

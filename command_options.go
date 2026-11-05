@@ -185,6 +185,7 @@ type sandboxEvidenceVerifier func(doc, nonce []byte, source string) (attestedEvi
 
 type commandDependencies struct {
 	version               string
+	updateTransport       http.RoundTripper
 	in                    io.Reader
 	out                   io.Writer
 	err                   io.Writer

@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -165,13 +166,13 @@ func TestRunnerReturnsStatusAfterCommandCleanup(t *testing.T) {
 		}}
 		root.SetOut(&output)
 		root.SetErr(&output)
-		require.Equal(t, status, runCommand(root, nil))
+		require.Equal(t, status, runCommand(root, nil, nil))
 		require.Equal(t, "cleaned up\n", output.String())
 	}
 	var stderr bytes.Buffer
 	root := &cobra.Command{Use: "test", RunE: func(*cobra.Command, []string) error { return errors.New("failed") }}
 	root.SetErr(&stderr)
-	require.Equal(t, 1, runCommand(root, nil))
+	require.Equal(t, 1, runCommand(root, nil, nil))
 	require.Contains(t, stderr.String(), "Error: failed")
 }
 
@@ -187,4 +188,33 @@ func TestRunnerRoutesAPIErrorHintsToItsErrorStream(t *testing.T) {
 	require.Empty(t, out.String())
 	require.Contains(t, stderr.String(), "Error: account limit")
 	require.Equal(t, 1, strings.Count(stderr.String(), accountLimitsHint))
+}
+
+func TestEachTreeSuppliesItsVersionToUpdateRequests(t *testing.T) {
+	var agents []string
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		agents = append(agents, r.Header.Get("User-Agent"))
+		require.Equal(t, "/repos/tinfoilsh/tinfoil-cli/releases/latest", r.URL.Path)
+		io.WriteString(w, testUpdateRelease)
+	}))
+	defer server.Close()
+	mirror, err := url.Parse(server.URL)
+	require.NoError(t, err)
+	transport := selfUpdateRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		clone := req.Clone(req.Context())
+		clone.URL.Scheme, clone.URL.Host, clone.Host = mirror.Scheme, mirror.Host, mirror.Host
+		return server.Client().Transport.RoundTrip(clone)
+	})
+	for _, current := range []string{"0.19.1", "0.20.1"} {
+		var output bytes.Buffer
+		root := newRootCommandWithDependencies(commandDependencies{version: current, out: &output, err: io.Discard, updateTransport: transport})
+		root.SetArgs([]string{"update", "--check", "--output", "json"})
+		require.NoError(t, root.Execute())
+		var result struct {
+			Current string `json:"current_version"`
+		}
+		require.NoError(t, json.Unmarshal(output.Bytes(), &result))
+		require.Equal(t, current, result.Current)
+	}
+	require.Equal(t, []string{"tinfoil-cli/0.19.1", "tinfoil-cli/0.20.1"}, agents)
 }
