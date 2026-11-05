@@ -148,6 +148,16 @@ func TestControlplaneErrorAdapterPreservesRawIdentity(t *testing.T) {
 	require.Equal(t, accountLimitsHint, errorHint(wrapped))
 }
 
+func TestOwnerOperationErrorsKeepCLIFormattingAndIdentity(t *testing.T) {
+	raw := &controlplane.Error{Status: http.StatusConflict, Message: "select a volume for required slot data"}
+	err := humanControlplaneError(fmt.Errorf("reading your key state: %w", raw))
+	require.EqualError(t, err, "reading your key state: select a volume for required mount data")
+	var got *controlplane.Error
+	require.ErrorAs(t, err, &got)
+	require.Same(t, raw, got)
+	require.Same(t, err, humanControlplaneError(err))
+}
+
 func TestVersionFlagUsesInjectedVersion(t *testing.T) {
 	setVersionForTest(t, "0.16.0")
 

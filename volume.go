@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+	"github.com/tinfoilsh/tinfoil-cli/internal/controlplane"
 )
 
 type volumeView struct {
@@ -34,12 +35,7 @@ type volumeList struct {
 	AvailableBytes int64        `json:"available_storage_bytes"`
 }
 
-// volumeSlot is a volume declared in tinfoil-config.yml. A key secret marks
-// the slot as required at deploy.
-type volumeSlot struct {
-	Name      string `json:"name"`
-	KeySecret string `json:"key_secret,omitempty"`
-}
+type volumeSlot = controlplane.VolumeSlot
 
 // volumeRequest is one --volume value: the volume and, optionally, the
 // declared slot it fills.

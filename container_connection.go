@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/tinfoilsh/tinfoil-cli/internal/controlplane"
 	configendorsement "github.com/tinfoilsh/tinfoil-go/endorsement/config"
 	"github.com/tinfoilsh/tinfoil-go/verify"
 )
@@ -21,18 +22,8 @@ const (
 	pendingDeploymentPrefix = "pending:"
 )
 
-type connectionDescriptor struct {
-	URL          string `json:"url"`
-	Repo         string `json:"repo"`
-	Tag          string `json:"tag"`
-	ConfigName   string `json:"config_name,omitempty"`
-	ConfigDigest string `json:"config_digest,omitempty"`
-}
-
-type containerConnections struct {
-	Production *connectionDescriptor `json:"production"`
-	Review     *connectionDescriptor `json:"review"`
-}
+type connectionDescriptor = controlplane.ConnectionDescriptor
+type containerConnections = controlplane.Connections
 
 type verifiedConnection struct {
 	connectionDescriptor

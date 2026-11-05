@@ -11,118 +11,17 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+	"github.com/tinfoilsh/tinfoil-cli/internal/controlplane"
 	"golang.org/x/term"
 )
 
-type containerNetworkPolicy struct {
-	Public     bool            `json:"public"`
-	EgressMode string          `json:"egress_mode"`
-	Egress     []containerPeer `json:"egress"`
-}
-
-type containerPeer struct {
-	ContainerID string          `json:"container_id"`
-	Port        int             `json:"port"`
-	Alias       *containerAlias `json:"alias,omitempty"`
-}
-
-type containerAlias struct {
-	IP   string `json:"ip"`
-	Port int    `json:"port"`
-}
-
-// containerView mirrors the controlplane's containerResponse. We only model
-// the fields the CLI actually displays or forwards; everything else stays in
-// RawMessage form so updates to the API don't break decoding here.
-type containerView struct {
-	Config        string                  `json:"config"`
-	NetworkPolicy *containerNetworkPolicy `json:"network_policy"`
-
-	ID                   string           `json:"id"`
-	Name                 string           `json:"name"`
-	Repo                 string           `json:"repo"`
-	Source               string           `json:"source,omitempty"`
-	ConfigName           string           `json:"config_name,omitempty"`
-	ProjectID            string           `json:"project_id"`
-	ClerkUserID          string           `json:"clerk_user_id,omitempty"`
-	Status               string           `json:"status"`
-	CurrentTag           string           `json:"current_tag"`
-	Domain               string           `json:"domain"`
-	InternalDomain       string           `json:"internal_domain"`
-	HostName             string           `json:"host_name"`
-	HostGpuType          string           `json:"host_gpu_type"`
-	HostCpuType          string           `json:"host_cpu_type"`
-	CPUs                 int              `json:"cpus"`
-	GPUs                 int              `json:"gpus"`
-	MemoryMB             int              `json:"memory_mb"`
-	Variables            json.RawMessage  `json:"variables"`
-	Secrets              []string         `json:"secrets"`
-	SSHKeys              []string         `json:"ssh_keys"`
-	Debug                bool             `json:"debug"`
-	Held                 bool             `json:"held"`
-	MarkLatestRelease    *bool            `json:"mark_latest_release,omitempty"`
-	DisableCCMode        bool             `json:"disable_cc_mode"`
-	GithubAppConnected   bool             `json:"github_app_connected"`
-	DisplayOrder         int32            `json:"display_order"`
-	UpdateTag            string           `json:"update_tag"`
-	UpdateStatus         string           `json:"update_status"`
-	UpdateType           string           `json:"update_type"`
-	UpdateStrategy       string           `json:"update_strategy"`
-	UpdateConfig         *candidateConfig `json:"update_config,omitempty"`
-	TinfoildDeploymentID string           `json:"tinfoild_deployment_id,omitempty"`
-	UpdateDeploymentID   string           `json:"update_deployment_id,omitempty"`
-	BootStages           bootStages       `json:"boot_stages"`
-	UpdateBootStages     bootStages       `json:"update_boot_stages"`
-	ErrorMessage         string           `json:"error_message"`
-	CreatedAt            string           `json:"created_at"`
-	UpdatedAt            string           `json:"updated_at"`
-	SSHPort              int              `json:"ssh_port"`
-	HostID               string           `json:"host_id,omitempty"`
-
-	LastDeployAttemptError string `json:"last_deploy_attempt_error,omitempty"`
-
-	Connections *containerConnections `json:"connections,omitempty"`
-	// VolumeSlots are the volumes tinfoil-config.yml declares; Volumes maps a
-	// slot to the attached volume ID. Only the single-container view has them.
-	VolumeSlots []volumeSlot      `json:"volume_slots,omitempty"`
-	Volumes     map[string]string `json:"volumes,omitempty"`
-
-	OwnerKeyMode   string `json:"owner_key_mode,omitempty"`
-	OwnerPublicKey string `json:"owner_public_key,omitempty"`
-}
-
-type candidateConfig struct {
-	Hold *bool `json:"hold,omitempty"`
-}
-
-func (c containerView) candidateHeld() bool {
-	if c.UpdateConfig != nil && c.UpdateConfig.Hold != nil {
-		return *c.UpdateConfig.Hold
-	}
-	return c.Held
-}
-
-// bootStage mirrors one entry of the boot progress tinfoild reports while a
-// deployment comes up. Stages nest.
-type bootStage struct {
-	Name   string      `json:"name"`
-	Status string      `json:"status"`
-	Detail string      `json:"detail,omitempty"`
-	Stages []bootStage `json:"stages,omitempty"`
-}
-
-type bootStages []bootStage
-
-func (stages *bootStages) UnmarshalJSON(raw []byte) error {
-	if strings.HasPrefix(strings.TrimSpace(string(raw)), `"`) {
-		var decoded []byte
-		if err := json.Unmarshal(raw, &decoded); err != nil {
-			return fmt.Errorf("decoding boot stages: %w", err)
-		}
-		raw = decoded
-	}
-	return json.Unmarshal(raw, (*[]bootStage)(stages))
-}
+type containerNetworkPolicy = controlplane.NetworkPolicy
+type containerPeer = controlplane.Peer
+type containerAlias = controlplane.Alias
+type containerView = controlplane.Container
+type candidateConfig = controlplane.CandidateConfig
+type bootStage = controlplane.BootStage
+type bootStages = controlplane.BootStages
 
 type hostInfo struct {
 	ID                 string `json:"id"`
@@ -1050,7 +949,7 @@ func renderContainerDetail(streams commandIO, outputOpts *outputOptions, c conta
 	if c.Debug {
 		fmt.Fprintf(streams.out, "Debug:        yes (SSH enabled, does not pass attestation)\n")
 	}
-	if c.UpdateTag != "" && c.candidateHeld() {
+	if c.UpdateTag != "" && c.CandidateHeld() {
 		fmt.Fprintf(streams.out, "Held:         yes (this version is waiting for review; promote to switch traffic)\n")
 	}
 	if c.DisableCCMode {

@@ -63,7 +63,7 @@ A reboot rotates the key, so rerun this after one.`,
 						return err
 					}
 					defer s.close()
-					if err := s.enroll(commandStreams(cmd), cmd.Context()); err != nil {
+					if err := s.enroll(cmd.Context()); err != nil {
 						return err
 					}
 					if attestSSHOpts.attestSSHName != "" {

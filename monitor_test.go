@@ -4,8 +4,12 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/ecdh"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/x509"
+	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"io"
 	"net"
@@ -23,21 +27,16 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/require"
+	"github.com/tinfoilsh/tinfoil-cli/internal/connection"
+	"github.com/tinfoilsh/tinfoil-cli/internal/owner"
 	"golang.org/x/crypto/ssh"
 )
 
 func TestManagedTrustPrecedesCredentials(t *testing.T) {
 	commandState := newCommandFixture()
-
 	t.Setenv(envKnownConfigs, filepath.Join(t.TempDir(), "known-configs.json"))
-	for _, test := range []struct{ kind, prefix string }{
-		{"sandbox", "/tinfoil/containers"},
-		{"monitor", "/tinfoil/containers"},
-		{"monitor", "/acme/confidential-agent-monitor"},
-		{"sandbox", "/user-9c4a7f21-e0b8-36d5-6a13-c8fe42d907ab/confidential-agent-sandbox"},
-	} {
+	for _, test := range []struct{ kind, prefix string }{{"sandbox", "/tinfoil/containers"}, {"monitor", "/tinfoil/containers"}, {"monitor", "/acme/confidential-agent-monitor"}, {"sandbox", "/user-9c4a7f21-e0b8-36d5-6a13-c8fe42d907ab/confidential-agent-sandbox"}} {
 		require.NoError(t, os.WriteFile(os.Getenv(envKnownConfigs), []byte(`{"mode":"frozen","allow":{}}`), 0600))
-
 		row := containerView{Repo: managedRepo(test.kind), Domain: "work.example", Config: "containers: [{env: [{OWNER: owner}]}]"}
 		row.ConfigName = test.prefix + "/" + storageHash([]byte(row.Config))
 		_, err := resolveWorkload(testStreams(), commandState.rootOpts, commandState.trustOpts, row, row.Repo, "")
@@ -57,7 +56,17 @@ func TestManagedTrustPrecedesCredentials(t *testing.T) {
 	}
 }
 
-func TestMonitorSessionAgainstRealMonitor(t *testing.T) {
+type monitorTestVerifier struct{ host ssh.PublicKey }
+
+func (v monitorTestVerifier) MonitorHost(string, string) (ssh.PublicKey, error) { return v.host, nil }
+func (v monitorTestVerifier) DirectEvidence(context.Context, string, string) (connection.Evidence, error) {
+	panic("unexpected sandbox verification")
+}
+func (v monitorTestVerifier) RelayEvidence(string, []byte, []byte) (connection.Evidence, error) {
+	panic("unexpected sandbox verification")
+}
+
+func TestMonitorPanelAndNativeTransportAgainstRealMonitor(t *testing.T) {
 	source := os.Getenv("TINFOIL_MONITOR_TEST_SOURCE")
 	if source == "" {
 		source = filepath.Join("..", "confidential-agent-monitor")
@@ -70,204 +79,63 @@ func TestMonitorSessionAgainstRealMonitor(t *testing.T) {
 	build.Dir, build.Env = source, append(os.Environ(), "GOWORK=off")
 	output, err := build.CombinedOutput()
 	require.NoError(t, err, string(output))
-
-	keys := &keyStateServer{}
-	cpServer := httptest.NewServer(keys)
-	defer cpServer.Close()
-	cp, scope, dek := testLogin(t, cpServer, keys)
-	mk, err := newMKSession(cp, scope)
+	home := t.TempDir()
+	seed := testSeed(t)
+	identity := filepath.Join(home, "owner")
+	require.NoError(t, ensureOwnerSSHKey(identity, seed))
+	hostPath := filepath.Join(home, "host")
+	hostSigner, err := ensureSSHIdentity(hostPath, nil)
 	require.NoError(t, err)
-	saved := newResourceKey("monitor")
-	_, err = mk.update(t.Context(), func(p *mkPayload) error { return addKey(p, saved) })
-	require.NoError(t, err)
-	minimum := func() uint64 {
-		return *findKey(keys.payload(t, dek, mk.context), func(r *mkResource) bool { return r.KeyID == saved.KeyID }).MinGeneration
-	}
-
-	hostKeyPath := filepath.Join(t.TempDir(), "host_key")
-	hostSigner, err := ensureSSHIdentity(hostKeyPath, nil)
-	require.NoError(t, err)
-	hostKey := hostSigner.PublicKey()
-	bucket, api, sshAddress := t.TempDir(), freeAddress(t), freeAddress(t)
-	start := func() func() {
-		cmd := exec.Command(binary, "-production", "-ssh-host-key", hostKeyPath,
-			"-bucket", "file://"+bucket+"?no_tmp_dir=1", "-api", api, "-listen", sshAddress)
-		cmd.Env = append(os.Environ(), "MONITOR_OWNER_PUBLIC_KEY="+saved.OwnerPublicKey)
-		var logs bytes.Buffer
-		cmd.Stderr = &logs
-		require.NoError(t, cmd.Start())
-		stop := func() {
-			cmd.Process.Kill()
-			cmd.Wait()
-			if t.Failed() {
-				t.Log(logs.String())
-			}
+	sshAddress := freeAddress(t)
+	cmd := exec.Command(binary, "-production", "-ssh-host-key", hostPath, "-owner-session-key", monitorOwnerSessionKey(t), "-bucket", "file://"+t.TempDir()+"?no_tmp_dir=1", "-api", freeAddress(t), "-listen", sshAddress)
+	cmd.Env = append(os.Environ(), "MONITOR_OWNER_PUBLIC_KEY="+ed25519PublicKeyString(seed))
+	var logs bytes.Buffer
+	cmd.Stderr = &logs
+	require.NoError(t, cmd.Start())
+	t.Cleanup(func() {
+		cmd.Process.Kill()
+		cmd.Wait()
+		if t.Failed() {
+			t.Log(logs.String())
 		}
-		require.Eventually(t, func() bool {
-			conn, err := net.Dial("tcp", sshAddress)
-			if err == nil {
-				conn.Close()
-			}
-			return err == nil
-		}, 10*time.Second, 50*time.Millisecond)
-		return stop
-	}
-	stop := start()
-	t.Cleanup(func() { stop() })
-	connect := func(seed, storage []byte, dir string) (*monitorSession, error) {
+	})
+	require.Eventually(t, func() bool {
 		conn, err := net.Dial("tcp", sshAddress)
-		require.NoError(t, err)
-		signer, err := ssh.NewSignerFromKey(ed25519.NewKeyFromSeed(seed))
-		require.NoError(t, err)
-		client, err := connectOwnerSigner(conn, "localhost", hostKey, signer, "owner")
-		if err != nil {
-			return nil, err
+		if err == nil {
+			conn.Close()
 		}
-		// A clean client opens with the minimum generation recovered from the key bundle.
-		_, err = updateProfile(dir, func(p *monitorProfile) error { p.Generation = max(p.Generation, minimum()); return nil })
-		require.NoError(t, err)
-		_, err = ensureSSHKey(filepath.Join(dir, monitorDeviceKeyName))
-		require.NoError(t, err)
-		m := &monitorSession{client: client, dir: dir, domain: "localhost", address: sshAddress, hostKey: hostKey,
-			keys: &resourceKeys{mode: "tmk", signer: signer, storageKey: bytes.Clone(storage), mk: mk, keyID: saved.KeyID, minGeneration: minimum()}}
-		m.request = func(method, path string, input, out any) error {
-			return monitorOwnerRequest(client, dir, method, path, input, out)
-		}
-		return m, nil
-	}
-	_, err = connect(testSeed(t), saved.StorageKey, t.TempDir())
-	require.Error(t, err, "another key cannot enter a locked Monitor")
-
-	dir := t.TempDir()
-	m, err := connect(saved.OwnerSeed, saved.StorageKey, dir)
-	require.NoError(t, err, "the measured owner can enter while locked")
-	defer m.close()
-	var health struct {
-		Locked bool   `json:"locked"`
-		State  string `json:"state"`
-	}
-	require.NoError(t, m.request(http.MethodGet, "/healthz", nil, &health))
-	require.Equal(t, "absent", health.State)
-	require.Error(t, m.request(http.MethodGet, "/policy", nil, nil))
-	require.ErrorContains(t, m.request(http.MethodPost, "/unlock", map[string]any{"storage_key": saved.StorageKey, "initialize": true}, nil), "initialize", "clients cannot direct initialization")
-	require.NoError(t, m.open(testStreams(), t.Context(), "monitor", saved.OwnerPublicKey, mkBinding{}, true))
-	require.NoError(t, m.request(http.MethodGet, "/healthz", nil, &health))
-	require.Equal(t, "present", health.State)
-
-	other, err := connect(saved.OwnerSeed, saved.StorageKey, t.TempDir())
-	require.NoError(t, err)
-	other.keys.storageKey = testSeed(t)
-	require.Error(t, other.unlock(false), "a wrong storage key is refused")
-	other.client.Close()
-	reported := m.view.HostKey
-	m.view.HostKey = authorizedLine(testSigner(t))
-	m.hostKey, hostKey = testSigner(t).PublicKey(), m.hostKey
-	require.ErrorContains(t, m.unlock(false), "attested")
-	m.hostKey = hostKey
-	require.NoError(t, m.unlock(false))
-	require.Equal(t, reported, m.view.HostKey)
-
-	agentSigner := testSigner(t)
-	agent := authorizedLine(agentSigner)
-	require.False(t, m.authorizes(agent))
-	require.NoError(t, m.enrollAgent(testStreams(), t.Context(), "sandbox-work", agent))
-	require.True(t, m.authorizes(agent))
-	var profile monitorProfile
-	require.NoError(t, readStorageJSON(filepath.Join(dir, monitorProfileFile), &profile))
-	require.Positive(t, profile.Generation)
-	require.Equal(t, profile.Generation, minimum(), "the observed generation is checkpointed into the key bundle")
-	// Keep a valid older Monitor object, copied while the Monitor is stopped.
-	stop()
-	snapshot := t.TempDir()
-	require.NoError(t, os.CopyFS(snapshot, os.DirFS(bucket)))
-	stop = start()
-	m, err = connect(saved.OwnerSeed, saved.StorageKey, dir)
-	require.NoError(t, err)
-	defer m.close()
-	require.NoError(t, m.unlock(true))
-	require.True(t, m.authorizes(agent), "a restarted Monitor keeps its enrolled identities")
-
-	// Exercise a sandbox reverse route through the real Monitor SSH server.
-	publisherSigner := testSigner(t)
-	conn, err := net.Dial("tcp", sshAddress)
-	require.NoError(t, err)
-	publisher, err := connectOwnerSigner(conn, "localhost", hostKey, publisherSigner, "sandbox-v2:22222222-2222-4222-8222-222222222222")
-	require.NoError(t, err)
-	defer publisher.Close()
-	route, err := publisher.Listen("tcp", "127.0.0.1:22")
-	require.NoError(t, err)
-	defer route.Close()
-	go func() {
-		for {
-			conn, err := route.Accept()
-			if err != nil {
-				return
-			}
-			go func() {
-				defer conn.Close()
-				io.Copy(conn, conn)
-			}()
-		}
-	}()
-	device, err := loadSigner(filepath.Join(dir, monitorDeviceKeyName))
-	require.NoError(t, err)
-	checkRoute := func(allowed bool) {
-		t.Helper()
-		conn, err := net.Dial("tcp", sshAddress)
-		require.NoError(t, err)
-		client, err := connectOwnerSigner(conn, "localhost", hostKey, device, monitorSSHUser)
-		require.NoError(t, err)
-		defer client.Close()
-		routed, err := client.DialContext(t.Context(), "tcp", net.JoinHostPort(routeName(publisherSigner.PublicKey()), "22"))
-		if !allowed {
-			var channel *ssh.OpenChannelError
-			require.ErrorAs(t, err, &channel)
-			require.Equal(t, ssh.Prohibited, channel.Reason)
-			return
-		}
-		require.NoError(t, err)
-		defer routed.Close()
-		timer := time.AfterFunc(5*time.Second, func() { client.Close() })
-		defer timer.Stop()
-		_, err = io.WriteString(routed, "sandbox reachable")
-		require.NoError(t, err)
-		reply := make([]byte, len("sandbox reachable"))
-		_, err = io.ReadFull(routed, reply)
-		require.NoError(t, err)
-		require.Equal(t, "sandbox reachable", string(reply))
-	}
-	checkRoute(true)
-	name := "device-" + storageHash([]byte(authorizedLine(device)))[:16]
-	require.NoError(t, m.request(http.MethodPost, "/policy/edits", map[string]any{"changes": []any{map[string]any{"path": []string{"identities", name, "routes"}, "value": false}}}, nil))
-	checkRoute(false)
-	require.NoError(t, m.unlock(true), "an explicit owner open restores this device")
-	checkRoute(true)
-	nativeSandboxTransport(t, sshAddress, hostKey, dir)
-
-	// A removed sandbox identity stays removed: re-enrollment is refused, including after a Monitor-only restart.
-	require.NoError(t, m.request(http.MethodPost, "/policy/edits", map[string]any{
-		"changes": []any{map[string]any{"path": []string{"identities", "sandbox-work"}, "delete": true}},
-	}, nil))
-	require.NoError(t, m.unlock(false))
-	require.False(t, m.authorizes(agent))
-	require.ErrorContains(t, m.enrollAgent(testStreams(), t.Context(), "sandbox-work", agent), "revoked")
-	m.checkpoint(testStreams(), t.Context())
-	removedAt := minimum()
-	require.Greater(t, removedAt, profile.Generation)
-
-	identity := filepath.Join(dir, "owner")
-	require.NoError(t, ensureOwnerSSHKey(identity, saved.OwnerSeed))
+		return err == nil
+	}, 10*time.Second, 50*time.Millisecond)
 	host, port, err := net.SplitHostPort(sshAddress)
 	require.NoError(t, err)
 	number, err := strconv.Atoi(port)
 	require.NoError(t, err)
-	sshProfileUnderTest := sshProfile{name: "personal", hostName: host, port: number, user: "owner", identityFile: identity, hostKey: hostKey, hostKeyAlias: "monitor.example"}
-	config, pins := filepath.Join(dir, "config"), filepath.Join(dir, "pins")
-	require.NoError(t, os.WriteFile(config, []byte(sshProfileUnderTest.render()), 0600))
+	scope := owner.Scope{ControlplaneURL: "https://cp.example", UserID: "user_owner"}
+	row := owner.Workload{Container: containerView{ID: "11111111-1111-4111-8111-111111111111", Name: "monitor", Domain: host, SSHPort: number, Status: statusRunning, OwnerKeyMode: "umk", OwnerPublicKey: ed25519PublicKeyString(seed)}, Environment: map[string]string{monitorOwnerEnv: ed25519PublicKeyString(seed), "TINFOIL_STORAGE_BUCKET": "s3://bucket?prefix=containers%2F" + storageHash([]byte("user:user_owner")) + "%2Fresource%2F&region=us-east-1"}}
+	service := &owner.Service{ConfigPath: filepath.Join(home, "config.json"), Home: func() (string, error) { return home, nil }, IdentityFile: identity}
+	session, err := service.ConnectMonitor(t.Context(), scope, nil, &row, true, monitorTestVerifier{host: hostSigner.PublicKey()})
+	require.NoError(t, err)
+	defer session.Close()
+	synced := containerView{ID: "22222222-2222-4222-8222-222222222222", Name: "synced", Status: statusRunning, ClerkUserID: scope.UserID, OwnerKeyMode: "tmk"}
+	policy := sandboxNetworkPolicy(row.ID)
+	synced.NetworkPolicy = &policy
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/api/containers/"+synced.ID, r.URL.Path)
+		json.NewEncoder(w).Encode(synced)
+	}))
+	defer api.Close()
+	commandState := newCommandFixture()
+	err = relinkSandbox(testStreams(), commandState.identityOpts, commandState.rootOpts, commandState.trustOpts, t.Context(), accountScope(scope), testCPClient(cliConfig{ControlplaneURL: api.URL}), &monitorSession{session}, row.ID, synced.ID)
+	require.ErrorContains(t, err, "a UMK Monitor cannot serve the synced sandbox", "custody must be checked before reviewing the missing workload configuration")
+	dir := fixtureResourceDirectory(service.ConfigPath, accountScope(scope), row.ID, row.Name)
+	nativeSandboxTransport(t, sshAddress, hostSigner.PublicKey(), dir)
+	ownerProfile := sshProfile{name: "personal", hostName: host, port: number, user: "owner", identityFile: identity, hostKey: hostSigner.PublicKey(), hostKeyAlias: "monitor.example"}
+	config, pins := filepath.Join(home, "owner_config"), filepath.Join(home, "owner_pins")
+	require.NoError(t, os.WriteFile(config, []byte(ownerProfile.render()), 0o600))
 	if _, err := exec.LookPath("ssh"); err == nil {
-		for index, key := range []ssh.PublicKey{hostKey, testHostKey(t)} {
-			sshProfileUnderTest.hostKey = key
-			require.NoError(t, os.WriteFile(pins, []byte(sshProfileUnderTest.pin()), 0600))
+		for index, key := range []ssh.PublicKey{hostSigner.PublicKey(), testHostKey(t)} {
+			ownerProfile.hostKey = key
+			require.NoError(t, os.WriteFile(pins, []byte(ownerProfile.pin()), 0o600))
 			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 			output, err := exec.CommandContext(ctx, "ssh", "-F", config, "-o", "BatchMode=yes", "-o", "UserKnownHostsFile="+pins, "personal", "true").CombinedOutput()
 			cancel()
@@ -278,12 +146,11 @@ func TestMonitorSessionAgainstRealMonitor(t *testing.T) {
 			}
 		}
 	}
-
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
-	outputReader, outputWriter := io.Pipe()
-	defer outputReader.Close()
-	defer outputWriter.Close()
+	reader, writer := io.Pipe()
+	defer reader.Close()
+	defer writer.Close()
 	var stderr bytes.Buffer
 	command := &cobra.Command{}
 	command.SetContext(ctx)
@@ -291,15 +158,15 @@ func TestMonitorSessionAgainstRealMonitor(t *testing.T) {
 	require.NoError(t, err)
 	defer input.Close()
 	command.SetIn(input)
-	command.SetOut(outputWriter)
+	command.SetOut(writer)
 	command.SetErr(&stderr)
 	done := make(chan error, 1)
 	go func() {
-		err := serveMonitorPanel(command, m.client, dir, "127.0.0.1:0", openBrowser)
-		outputWriter.Close()
+		err := serveMonitorPanel(command, &monitorSession{session}, "127.0.0.1:0", openBrowser)
+		writer.Close()
 		done <- err
 	}()
-	line, err := bufio.NewReader(outputReader).ReadString('\n')
+	line, err := bufio.NewReader(reader).ReadString('\n')
 	require.NoError(t, err)
 	panelURL := strings.TrimSpace(strings.TrimPrefix(line, "Local Monitor panel: "))
 	response, err := http.Get(panelURL)
@@ -314,25 +181,6 @@ func TestMonitorSessionAgainstRealMonitor(t *testing.T) {
 		t.Fatal("panel did not stop after cancellation")
 	}
 	require.NotContains(t, stderr.String(), "Press Enter", "noninteractive forwarding must not prompt")
-
-	// Monitor-only restart: a clean client recovers the minimum from the key bundle and reopens saved state.
-	stop()
-	stop = start()
-	restarted, err := connect(saved.OwnerSeed, saved.StorageKey, t.TempDir())
-	require.NoError(t, err)
-	require.NoError(t, restarted.unlock(false))
-	require.False(t, restarted.authorizes(agent), "reconnecting never restores a removed identity")
-	restarted.close()
-
-	// A valid but older Monitor object is refused by a clean client that recovered the newer minimum.
-	stop()
-	require.NoError(t, os.RemoveAll(bucket))
-	require.NoError(t, os.CopyFS(bucket, os.DirFS(snapshot)))
-	stop = start()
-	rolledBack, err := connect(saved.OwnerSeed, saved.StorageKey, t.TempDir())
-	require.NoError(t, err)
-	defer rolledBack.close()
-	require.ErrorContains(t, rolledBack.unlock(false), "older than")
 }
 
 // nativeSandboxTransport runs native ssh and scp with an installed sandbox profile that
@@ -347,8 +195,8 @@ func nativeSandboxTransport(t *testing.T, monitorAddress string, monitorKey ssh.
 	work := t.TempDir()
 	hostSigner, err := ensureSSHIdentity(filepath.Join(work, "sandbox_host"), nil)
 	require.NoError(t, err)
-	owner := filepath.Join(work, "owner")
-	ownerSigner, err := ensureSSHIdentity(owner, testSeed(t))
+	identity := filepath.Join(work, "owner")
+	ownerSigner, err := ensureSSHIdentity(identity, testSeed(t))
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(filepath.Join(work, "authorized_keys"), ssh.MarshalAuthorizedKey(ownerSigner.PublicKey()), 0o600))
 	sshdAddress := freeAddress(t)
@@ -362,8 +210,7 @@ func nativeSandboxTransport(t *testing.T, monitorAddress string, monitorKey ssh.
 			break
 		}
 	}
-	require.NoError(t, os.WriteFile(config, []byte(fmt.Sprintf("ListenAddress %s\nPort %s\nHostKey %s\nAuthorizedKeysFile %s\nStrictModes no\nUsePAM no\nPidFile none\nPasswordAuthentication no\nKbdInteractiveAuthentication no\nSubsystem sftp %s\n",
-		host, port, filepath.Join(work, "sandbox_host"), filepath.Join(work, "authorized_keys"), sftp)), 0o600))
+	require.NoError(t, os.WriteFile(config, []byte(fmt.Sprintf("ListenAddress %s\nPort %s\nHostKey %s\nAuthorizedKeysFile %s\nStrictModes no\nUsePAM no\nPidFile none\nPasswordAuthentication no\nKbdInteractiveAuthentication no\nSubsystem sftp %s\n", host, port, filepath.Join(work, "sandbox_host"), filepath.Join(work, "authorized_keys"), sftp)), 0o600))
 	daemon := exec.Command(sshd, "-D", "-e", "-f", config)
 	var daemonLog bytes.Buffer
 	daemon.Stderr = &daemonLog
@@ -382,7 +229,6 @@ func nativeSandboxTransport(t *testing.T, monitorAddress string, monitorKey ssh.
 		}
 		return err == nil
 	}, 10*time.Second, 50*time.Millisecond)
-
 	// The sandbox publishes its sshd on its reverse route with its boot host key.
 	conn, err := net.Dial("tcp", monitorAddress)
 	require.NoError(t, err)
@@ -405,18 +251,13 @@ func nativeSandboxTransport(t *testing.T, monitorAddress string, monitorKey ssh.
 				}
 				defer outbound.Close()
 				done := make(chan struct{})
-				go func() {
-					io.Copy(outbound, inbound)
-					outbound.(*net.TCPConn).CloseWrite()
-					close(done)
-				}()
+				go func() { io.Copy(outbound, inbound); outbound.(*net.TCPConn).CloseWrite(); close(done) }()
 				io.Copy(inbound, outbound)
 				inbound.Close()
 				<-done
 			}()
 		}
 	}()
-
 	current, err := user.Current()
 	require.NoError(t, err)
 	monitorHost, monitorPort, err := net.SplitHostPort(monitorAddress)
@@ -424,9 +265,7 @@ func nativeSandboxTransport(t *testing.T, monitorAddress string, monitorKey ssh.
 	monitorPortNumber, err := strconv.Atoi(monitorPort)
 	require.NoError(t, err)
 	home := t.TempDir()
-	profile := sshProfile{name: "work", hostName: routeName(hostSigner.PublicKey()), port: defaultSSHPort, hostKeyAlias: "work.sandbox.example",
-		user: current.Username, identityFile: owner, hostKey: hostSigner.PublicKey(), resourceID: "cp/org/user/resource",
-		jump: monitorJump("work", monitorHost, monitorPortNumber, monitorDir, monitorKey, "monitor.example")}
+	profile := sshProfile{name: "work", hostName: routeName(hostSigner.PublicKey()), port: defaultSSHPort, hostKeyAlias: "work.sandbox.example", user: current.Username, identityFile: identity, hostKey: hostSigner.PublicKey(), resourceID: "cp/org/user/resource", jump: monitorJump("work", monitorHost, monitorPortNumber, monitorDir, monitorKey, "monitor.example")}
 	require.NoError(t, installSandboxAlias(testStreams(), profile, home))
 	// ssh expands ~ from the passwd entry, so keep the run inside the temporary home.
 	installed, err := os.ReadFile(filepath.Join(home, ".ssh", "tinfoil", "work.conf"))
@@ -448,7 +287,6 @@ func nativeSandboxTransport(t *testing.T, monitorAddress string, monitorKey ssh.
 	output, err = native(nil, "ssh", "work", "cat "+remote)
 	require.NoError(t, err, string(output))
 	require.Equal(t, content, output)
-
 	upload := filepath.Join(home, "upload.bin")
 	data := make([]byte, 256<<10)
 	rand.Read(data)
@@ -460,23 +298,12 @@ func nativeSandboxTransport(t *testing.T, monitorAddress string, monitorKey ssh.
 	downloaded, err := os.ReadFile(filepath.Join(home, "downloaded.bin"))
 	require.NoError(t, err)
 	require.Equal(t, data, downloaded, "scp round-trips bytes through the Monitor route")
-
 	// A sandbox pin for another key is refused before authentication.
 	profile.hostKey = testHostKey(t)
 	require.NoError(t, os.WriteFile(filepath.Join(home, ".ssh", "tinfoil", "work.known_hosts"), []byte(profile.pin()), 0o600))
 	output, err = native(nil, "ssh", "work", "true")
 	require.Error(t, err)
 	require.Contains(t, string(output), "Host key verification failed")
-}
-
-func TestMonitorUnlockMissingDeviceKey(t *testing.T) {
-	dir := t.TempDir()
-	require.NoError(t, writeStorageJSON(filepath.Join(dir, monitorProfileFile), monitorProfile{Generation: 1}, false))
-	m := &monitorSession{dir: dir, keys: &resourceKeys{storageKey: testSeed(t)}}
-	err := m.unlock(true)
-	require.ErrorContains(t, err, "restore Monitor device key")
-	require.ErrorContains(t, err, filepath.Join(dir, monitorDeviceKeyName))
-	require.NoFileExists(t, filepath.Join(dir, monitorDeviceKeyName), "restoration must not replace a lost key")
 }
 
 func TestOpenMonitorBrowserOnEnter(t *testing.T) {
@@ -493,17 +320,9 @@ func TestOpenMonitorBrowserOnEnter(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, opener), []byte("#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$TINFOIL_TEST_BROWSER_RECORD\"\n"), 0700))
 	const panelURL = "http://127.0.0.1:43210/app/#session=test-token"
 	for _, test := range []struct {
-		name     string
-		input    string
-		canceled bool
-		opened   bool
-	}{
-		{name: "Enter", input: "\n", opened: true},
-		{name: "CRLF", input: "\r\n", opened: true},
-		{name: "EOF"},
-		{name: "EOF without Enter", input: " "},
-		{name: "canceled", input: "\n", canceled: true},
-	} {
+		name, input      string
+		canceled, opened bool
+	}{{name: "Enter", input: "\n", opened: true}, {name: "CRLF", input: "\r\n", opened: true}, {name: "EOF"}, {name: "EOF without Enter", input: " "}, {name: "canceled", input: "\n", canceled: true}} {
 		t.Run(test.name, func(t *testing.T) {
 			os.Remove(record)
 			ctx, cancel := context.WithCancel(t.Context())
@@ -551,7 +370,6 @@ func freeAddress(t *testing.T) string {
 	defer listener.Close()
 	return listener.Addr().String()
 }
-
 func testSigner(t *testing.T) ssh.Signer {
 	_, private, err := ed25519.GenerateKey(rand.Reader)
 	require.NoError(t, err)
@@ -559,7 +377,17 @@ func testSigner(t *testing.T) ssh.Signer {
 	require.NoError(t, err)
 	return signer
 }
-
 func authorizedLine(signer ssh.Signer) string {
 	return strings.TrimSpace(string(ssh.MarshalAuthorizedKey(signer.PublicKey())))
+}
+
+func monitorOwnerSessionKey(t *testing.T) string {
+	t.Helper()
+	key, err := ecdh.X25519().GenerateKey(rand.Reader)
+	require.NoError(t, err)
+	der, err := x509.MarshalPKCS8PrivateKey(key)
+	require.NoError(t, err)
+	path := filepath.Join(t.TempDir(), "owner-session.pem")
+	require.NoError(t, os.WriteFile(path, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}), 0o600))
+	return path
 }

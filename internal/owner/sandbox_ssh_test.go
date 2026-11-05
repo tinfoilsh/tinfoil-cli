@@ -1,4 +1,4 @@
-package main
+package owner
 
 import (
 	"bytes"
@@ -154,7 +154,7 @@ func testSandboxOwner(t *testing.T, seed []byte, reply func(ownerCall) any) (*sa
 	portNumber, err := strconv.Atoi(port)
 	require.NoError(t, err)
 	endpoint.session = &sandboxSession{box: containerView{Domain: "sandbox.example"}, keys: &resourceKeys{signer: signer},
-		expires: time.Now().Add(time.Hour), profile: sshProfile{hostName: hostname, port: portNumber, hostKey: host.PublicKey()}}
+		expires: time.Now().Add(time.Hour), profile: ConnectionInfo{HostName: hostname, Port: portNumber, HostKey: host.PublicKey()}}
 	return &sandboxOwner{dial: endpoint.session.dial, expires: endpoint.session.expires}, endpoint
 }
 
@@ -171,7 +171,7 @@ func TestSandboxOwnerSSH(t *testing.T) {
 			defer cancel()
 			switch mode {
 			case "wrong host":
-				endpoint.session.profile.hostKey = testSigner(t).PublicKey()
+				endpoint.session.profile.HostKey = testSigner(t).PublicKey()
 			case "wrong owner":
 				endpoint.session.keys.signer = testSigner(t)
 			case "expired":

@@ -192,7 +192,7 @@ func isTerminal(c containerView) bool {
 }
 
 func heldCandidateReady(c containerView) bool {
-	return c.UpdateStatus == updateStatusReady && c.candidateHeld() &&
+	return c.UpdateStatus == updateStatusReady && c.CandidateHeld() &&
 		c.UpdateType != updateTypeQueuedDeploy && c.UpdateType != updateStrategyReplace
 }
 
