@@ -2,7 +2,11 @@ package owner
 
 import (
 	"bytes"
+	"crypto/ecdh"
 	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/x509"
+	"encoding/pem"
 	"io"
 	"net"
 	"net/http"
@@ -10,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -47,19 +52,24 @@ func TestMonitorSessionAgainstRealMonitor(t *testing.T) {
 	require.NoError(t, err)
 	hostKey := hostSigner.PublicKey()
 	bucket, api, sshAddress := t.TempDir(), freeAddress(t), freeAddress(t)
+	ownerSessionKey := monitorOwnerSessionKey(t)
 	start := func() func() {
-		cmd := exec.Command(binary, "-production", "-ssh-host-key", hostKeyPath, "-bucket", "file://"+bucket+"?no_tmp_dir=1", "-api", api, "-listen", sshAddress)
+		cmd := exec.Command(binary, "-production", "-ssh-host-key", hostKeyPath, "-owner-session-key", ownerSessionKey, "-bucket", "file://"+bucket+"?no_tmp_dir=1", "-api", api, "-listen", sshAddress)
 		cmd.Env = append(os.Environ(), "MONITOR_OWNER_PUBLIC_KEY="+saved.OwnerPublicKey)
 		var logs bytes.Buffer
 		cmd.Stderr = &logs
 		require.NoError(t, cmd.Start())
+		var stopped sync.Once
 		stop := func() {
-			cmd.Process.Kill()
-			cmd.Wait()
-			if t.Failed() {
-				t.Log(logs.String())
-			}
+			stopped.Do(func() {
+				cmd.Process.Kill()
+				cmd.Wait()
+				if t.Failed() {
+					t.Log(logs.String())
+				}
+			})
 		}
+		t.Cleanup(stop)
 		require.Eventually(t, func() bool {
 			conn, err := net.Dial("tcp", sshAddress)
 			if err == nil {
@@ -70,7 +80,6 @@ func TestMonitorSessionAgainstRealMonitor(t *testing.T) {
 		return stop
 	}
 	stop := start()
-	t.Cleanup(func() { stop() })
 	connect := func(seed, storage []byte, dir string) (*Monitor, error) {
 		conn, err := net.Dial("tcp", sshAddress)
 		require.NoError(t, err)
@@ -232,4 +241,15 @@ func freeAddress(t *testing.T) string {
 	require.NoError(t, err)
 	defer listener.Close()
 	return listener.Addr().String()
+}
+
+func monitorOwnerSessionKey(t *testing.T) string {
+	t.Helper()
+	key, err := ecdh.X25519().GenerateKey(rand.Reader)
+	require.NoError(t, err)
+	der, err := x509.MarshalPKCS8PrivateKey(key)
+	require.NoError(t, err)
+	path := filepath.Join(t.TempDir(), "owner-session.pem")
+	require.NoError(t, os.WriteFile(path, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}), 0o600))
+	return path
 }

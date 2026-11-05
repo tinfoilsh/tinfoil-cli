@@ -4,8 +4,11 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/ecdh"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/x509"
+	"encoding/pem"
 	"fmt"
 	"io"
 	"net"
@@ -81,7 +84,7 @@ func TestMonitorPanelAndNativeTransportAgainstRealMonitor(t *testing.T) {
 	hostSigner, err := ensureSSHIdentity(hostPath, nil)
 	require.NoError(t, err)
 	sshAddress := freeAddress(t)
-	cmd := exec.Command(binary, "-production", "-ssh-host-key", hostPath, "-bucket", "file://"+t.TempDir()+"?no_tmp_dir=1", "-api", freeAddress(t), "-listen", sshAddress)
+	cmd := exec.Command(binary, "-production", "-ssh-host-key", hostPath, "-owner-session-key", monitorOwnerSessionKey(t), "-bucket", "file://"+t.TempDir()+"?no_tmp_dir=1", "-api", freeAddress(t), "-listen", sshAddress)
 	cmd.Env = append(os.Environ(), "MONITOR_OWNER_PUBLIC_KEY="+ed25519PublicKeyString(seed))
 	var logs bytes.Buffer
 	cmd.Stderr = &logs
@@ -346,4 +349,15 @@ func testSigner(t *testing.T) ssh.Signer {
 }
 func authorizedLine(signer ssh.Signer) string {
 	return strings.TrimSpace(string(ssh.MarshalAuthorizedKey(signer.PublicKey())))
+}
+
+func monitorOwnerSessionKey(t *testing.T) string {
+	t.Helper()
+	key, err := ecdh.X25519().GenerateKey(rand.Reader)
+	require.NoError(t, err)
+	der, err := x509.MarshalPKCS8PrivateKey(key)
+	require.NoError(t, err)
+	path := filepath.Join(t.TempDir(), "owner-session.pem")
+	require.NoError(t, os.WriteFile(path, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}), 0o600))
+	return path
 }
