@@ -431,7 +431,7 @@ func TestUnauthenticatedListDoesNotClaimAnEmptyAccount(t *testing.T) {
 
 	useTestClerk(t, "https://api.example")
 	for _, kind := range []string{"sandbox", "monitor"} {
-		cmd := newManagedStatusCmd(testAuthedClient, commandState.outputOpts, kind)
+		cmd := newManagedStatusCmd(commandState.pollingOpts, testAuthedClient, commandState.outputOpts, kind)
 		out, err := captureTestStdout(func() error { return cmd.RunE(cmd, nil) })
 		require.NoError(t, err)
 		require.Contains(t, string(out), "stored on this machine")

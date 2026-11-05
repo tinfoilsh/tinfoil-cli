@@ -29,22 +29,20 @@ type modelWrapJobView struct {
 	Logs       string  `json:"logs,omitempty"`
 }
 
-var (
-	modelWrapPollInterval = 10 * time.Second
-)
+const defaultModelWrapPollInterval = 10 * time.Second
 
-func newModelCommand(newClient authenticatedClientFactory, outputOpts *outputOptions) *cobra.Command {
+func newModelCommand(pollingOpts *pollingOptions, newClient authenticatedClientFactory, outputOpts *outputOptions) *cobra.Command {
 	modelCmd := &cobra.Command{
 		Use:     "model",
 		Aliases: []string{"models"},
 		Short:   "Prepare verified model weights for containers",
 	}
 	modelCmd.PersistentFlags().StringVarP(&outputOpts.outputFormat, "output", "o", "table", "Output format: table or json")
-	modelCmd.AddCommand(newModelWrapCommand(newClient, &modelWrapOptions{}, outputOpts), newModelUpdateCommand(newClient, &modelUpdateOptions{}, outputOpts), newModelListCommand(newClient, &modelListOptions{}, outputOpts), newModelStatusCommand(newClient, &modelStatusOptions{}, outputOpts), newModelDeleteCommand(newClient))
+	modelCmd.AddCommand(newModelWrapCommand(pollingOpts, newClient, &modelWrapOptions{}, outputOpts), newModelUpdateCommand(pollingOpts, newClient, &modelUpdateOptions{}, outputOpts), newModelListCommand(newClient, &modelListOptions{}, outputOpts), newModelStatusCommand(pollingOpts, newClient, &modelStatusOptions{}, outputOpts), newModelDeleteCommand(newClient))
 	return modelCmd
 }
 
-func newModelWrapCommand(newClient authenticatedClientFactory, modelWrapOpts *modelWrapOptions, outputOpts *outputOptions) *cobra.Command {
+func newModelWrapCommand(pollingOpts *pollingOptions, newClient authenticatedClientFactory, modelWrapOpts *modelWrapOptions, outputOpts *outputOptions) *cobra.Command {
 	modelWrapCmd := &cobra.Command{
 		Use:   "wrap [owner/model]",
 		Short: "Wrap Hugging Face weights into a verified artifact",
@@ -68,7 +66,7 @@ func newModelWrapCommand(newClient authenticatedClientFactory, modelWrapOpts *mo
 			if token != "" {
 				body["hf_token"] = token
 			}
-			return runModelWrapJob(commandStreams(cmd), outputOpts, client, body, modelWrapOpts.modelWrapWait, nil)
+			return runModelWrapJob(pollingOpts, commandStreams(cmd), outputOpts, client, body, modelWrapOpts.modelWrapWait, nil)
 		},
 	}
 	modelWrapCmd.Flags().StringVar(&modelWrapOpts.modelWrapHost, "host", "", "Host to wrap the model on (see 'tinfoil container hosts') [required]")
@@ -80,7 +78,7 @@ func newModelWrapCommand(newClient authenticatedClientFactory, modelWrapOpts *mo
 	return modelWrapCmd
 }
 
-func newModelUpdateCommand(newClient authenticatedClientFactory, modelUpdateOpts *modelUpdateOptions, outputOpts *outputOptions) *cobra.Command {
+func newModelUpdateCommand(pollingOpts *pollingOptions, newClient authenticatedClientFactory, modelUpdateOpts *modelUpdateOptions, outputOpts *outputOptions) *cobra.Command {
 	modelUpdateCmd := &cobra.Command{
 		Use:   "update [owner/model]",
 		Short: "Wrap a newer revision of a previously wrapped model",
@@ -131,7 +129,7 @@ release, then delete the old wrap job.`,
 			if outputOpts.outputFormat != "json" {
 				fmt.Fprintf(commandStreams(cmd).out, "Updating %s on %s: %s -> %s\n\n", repo, previous.Host, shortCommit(previous.Commit), shortCommit(target))
 			}
-			return runModelWrapJob(commandStreams(cmd), outputOpts, client, body, modelUpdateOpts.modelUpdateWait, func(job modelWrapJobView) {
+			return runModelWrapJob(pollingOpts, commandStreams(cmd), outputOpts, client, body, modelUpdateOpts.modelUpdateWait, func(job modelWrapJobView) {
 				if outputOpts.outputFormat != "json" && job.Status == "complete" {
 					fmt.Fprintf(commandStreams(cmd).out, "\nOnce the new config is released and deployed, reclaim the previous artifact with:\n  tinfoil model delete %s %s\n", previous.Host, previous.JobID)
 				}
@@ -172,7 +170,7 @@ func newModelListCommand(newClient authenticatedClientFactory, modelListOpts *mo
 	return modelListCmd
 }
 
-func newModelStatusCommand(newClient authenticatedClientFactory, modelStatusOpts *modelStatusOptions, outputOpts *outputOptions) *cobra.Command {
+func newModelStatusCommand(pollingOpts *pollingOptions, newClient authenticatedClientFactory, modelStatusOpts *modelStatusOptions, outputOpts *outputOptions) *cobra.Command {
 	modelStatusCmd := &cobra.Command{
 		Use:     "status [host] [job-id]",
 		Aliases: []string{"get"},
@@ -183,7 +181,7 @@ func newModelStatusCommand(newClient authenticatedClientFactory, modelStatusOpts
 			if err != nil {
 				return err
 			}
-			job, err := fetchModelWrapJob(commandStreams(cmd), client, args[0], args[1], modelStatusOpts.modelStatusWait)
+			job, err := fetchModelWrapJob(pollingOpts, commandStreams(cmd), client, args[0], args[1], modelStatusOpts.modelStatusWait)
 			if err != nil {
 				return err
 			}
@@ -252,9 +250,9 @@ func modelWrapFinished(status string) bool {
 
 // fetchModelWrapJob reads the job's current state, polling to a terminal
 // status when wait is set.
-func fetchModelWrapJob(streams commandIO, client *cpClient, host, jobID string, wait bool) (modelWrapJobView, error) {
+func fetchModelWrapJob(pollingOpts *pollingOptions, streams commandIO, client *cpClient, host, jobID string, wait bool) (modelWrapJobView, error) {
 	if wait {
-		job, err := waitForModelWrap(streams, client, host, jobID)
+		job, err := waitForModelWrap(pollingOpts, streams, client, host, jobID)
 		if err != nil {
 			return modelWrapJobView{}, err
 		}
@@ -282,13 +280,13 @@ func finishModelWrapJob(streams commandIO, outputOpts *outputOptions, job modelW
 // runModelWrapJob submits a wrap job, optionally polls it to a terminal
 // status, and finishes it, running epilogue on the rendered job. A waited-on
 // failure skips epilogue, which only concerns completed jobs.
-func runModelWrapJob(streams commandIO, outputOpts *outputOptions, client *cpClient, body map[string]any, wait bool, epilogue func(modelWrapJobView)) error {
+func runModelWrapJob(pollingOpts *pollingOptions, streams commandIO, outputOpts *outputOptions, client *cpClient, body map[string]any, wait bool, epilogue func(modelWrapJobView)) error {
 	var job modelWrapJobView
 	if _, err := client.do("POST", "/api/models/wrap", nil, body, &job); err != nil {
 		return err
 	}
 	if wait {
-		finished, err := waitForModelWrap(streams, client, job.Host, job.JobID)
+		finished, err := waitForModelWrap(pollingOpts, streams, client, job.Host, job.JobID)
 		if err != nil {
 			return err
 		}
@@ -371,7 +369,7 @@ func shortCommit(commit string) string {
 
 // waitForModelWrap polls the job until it reaches a terminal status,
 // reporting status changes on stderr so stdout stays machine-readable.
-func waitForModelWrap(streams commandIO, client *cpClient, host, jobID string) (*modelWrapJobView, error) {
+func waitForModelWrap(pollingOpts *pollingOptions, streams commandIO, client *cpClient, host, jobID string) (*modelWrapJobView, error) {
 	lastStatus := ""
 	for {
 		var job modelWrapJobView
@@ -385,7 +383,7 @@ func waitForModelWrap(streams commandIO, client *cpClient, host, jobID string) (
 			fmt.Fprintf(streams.err, "Wrap job %s: %s (large models can take several minutes)\n", jobID, job.Status)
 			lastStatus = job.Status
 		}
-		time.Sleep(modelWrapPollInterval)
+		time.Sleep(pollingOpts.modelWrapPollInterval)
 	}
 }
 

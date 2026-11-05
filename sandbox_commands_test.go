@@ -19,9 +19,11 @@ import (
 )
 
 func TestSandboxStartUsesSavedAliasWithoutMonitorLookup(t *testing.T) {
-	previous := followInterval
-	followInterval = 0
-	t.Cleanup(func() { followInterval = previous })
+	commandState := newCommandFixture()
+
+	previous := commandState.pollingOpts.followInterval
+	commandState.pollingOpts.followInterval = 0
+	t.Cleanup(func() { commandState.pollingOpts.followInterval = previous })
 	for _, tc := range []struct {
 		state   string
 		restart bool
@@ -55,7 +57,7 @@ func TestSandboxStartUsesSavedAliasWithoutMonitorLookup(t *testing.T) {
 				require.NoError(t, err)
 				return &http.Response{StatusCode: 200, Body: io.NopCloser(bytes.NewReader(body))}, nil
 			})
-			_, err := startSandboxRow(testStreams(), client, row, tc.restart)
+			_, err := startSandboxRow(commandState.pollingOpts, testStreams(), client, row, tc.restart)
 			require.ErrorContains(t, err, "test boot failure")
 			expected := []string{"/api/containers/work-id/deploy"}
 			if tc.restart && tc.state == statusRunning {
@@ -67,6 +69,8 @@ func TestSandboxStartUsesSavedAliasWithoutMonitorLookup(t *testing.T) {
 }
 
 func TestSandboxRequiresRestrictedAliasBeforeStoppingOrDeploying(t *testing.T) {
+	commandState := newCommandFixture()
+
 	const monitorID = "11111111-1111-4111-8111-111111111111"
 	row := containerView{ID: "work-id", Name: "work", Repo: defaultSandboxRepo, Config: "containers: [{env: []}]"}
 	peer := containerPeer{ContainerID: monitorID, Port: 22, Alias: &containerAlias{IP: "10.254.0.1", Port: 22}}
@@ -86,7 +90,7 @@ func TestSandboxRequiresRestrictedAliasBeforeStoppingOrDeploying(t *testing.T) {
 		row.NetworkPolicy = policy
 		for _, state := range []string{statusRunning, statusStopped} {
 			row.Status = state
-			_, err := startSandboxRow(testStreams(), client, row, state == statusRunning)
+			_, err := startSandboxRow(commandState.pollingOpts, testStreams(), client, row, state == statusRunning)
 			require.ErrorContains(t, err, "TCP alias")
 		}
 	}

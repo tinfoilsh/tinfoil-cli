@@ -53,6 +53,7 @@ func replaceTestCommand(root, replacement *cobra.Command) {
 }
 
 type commandFixture struct {
+	pollingOpts           *pollingOptions
 	dependencies          commandDependencies
 	attestSSHOpts         *attestSSHOptions
 	attestationVerifyOpts *attestationVerifyOptions
@@ -190,6 +191,7 @@ type commandFixture struct {
 
 func newCommandFixture() *commandFixture {
 	f := &commandFixture{
+		pollingOpts:           defaultPollingOptions(),
 		attestSSHOpts:         &attestSSHOptions{},
 		attestationVerifyOpts: &attestationVerifyOptions{},
 		containerCancelOpts:   &containerCancelOptions{},
@@ -236,18 +238,18 @@ func newCommandFixture() *commandFixture {
 	f.attestationCmd = newAttestationCommand(f.rootOpts)
 	f.attestationVerifyCmd = newAttestationVerifyCommand(f.attestationVerifyOpts, f.rootOpts)
 	f.containerCancelCmd = newContainerCancelCommand(testAuthedClient, f.containerCancelOpts)
-	f.containerCmd = newContainerCommand(testAuthedClient, f.outputOpts, f.rootOpts)
+	f.containerCmd = newContainerCommand(f.pollingOpts, testAuthedClient, f.outputOpts, f.rootOpts)
 	f.containerConnectCmd = newContainerConnectCommand(testAuthedClient, f.containerConnectOpts, f.proxyOpts, f.rootOpts, f.trustOpts)
-	f.containerCreateCmd = newContainerCreateCommand(testAuthedClient, f.containerCreateOpts, f.outputOpts, f.rootOpts, f.waitOpts)
+	f.containerCreateCmd = newContainerCreateCommand(f.pollingOpts, testAuthedClient, f.containerCreateOpts, f.outputOpts, f.rootOpts, f.waitOpts)
 	f.containerDeleteCmd = newContainerDeleteCommand(testAuthedClient, f.containerDeleteOpts)
-	f.containerDeployCmd = newContainerDeployCommand(testAuthedClient, f.containerDeployOpts, f.outputOpts, f.waitOpts)
+	f.containerDeployCmd = newContainerDeployCommand(f.pollingOpts, testAuthedClient, f.containerDeployOpts, f.outputOpts, f.waitOpts)
 	f.containerGetCmd = newContainerGetCommand(testAuthedClient, f.outputOpts)
 	f.containerHostsCmd = newContainerHostsCommand(testAuthedClient, f.outputOpts)
 	f.containerListCmd = newContainerListCommand(testAuthedClient, f.outputOpts)
 	f.containerMetricsCmd = newContainerMetricsCommand(testAuthedClient, f.containerMetricsOpts)
-	f.containerPromoteCmd = newContainerPromoteCommand(testAuthedClient, f.outputOpts, f.waitOpts)
+	f.containerPromoteCmd = newContainerPromoteCommand(f.pollingOpts, testAuthedClient, f.outputOpts, f.waitOpts)
 	f.containerStopCmd = newContainerStopCommand(testAuthedClient, f.outputOpts)
-	f.containerUpdateCmd = newContainerUpdateCommand(testAuthedClient, f.containerUpdateOpts, f.outputOpts, f.waitOpts)
+	f.containerUpdateCmd = newContainerUpdateCommand(f.pollingOpts, testAuthedClient, f.containerUpdateOpts, f.outputOpts, f.waitOpts)
 	f.domainAddCmd = newDomainAddCommand(testAuthedClient, f.outputOpts)
 	f.domainCmd = newDomainCommand(testAuthedClient, f.outputOpts)
 	f.domainDeleteCmd = newDomainDeleteCommand(testAuthedClient)
@@ -259,12 +261,12 @@ func newCommandFixture() *commandFixture {
 	f.httpPostCmd = newHttpPostCommand(f.headersOpts, f.httpPostOpts, f.rootOpts)
 	f.loginCmd = newLoginCommand(testAccounts(), openBrowser)
 	f.logoutCmd = newLogoutCommand(testAccounts())
-	f.modelCmd = newModelCommand(testAuthedClient, f.outputOpts)
+	f.modelCmd = newModelCommand(f.pollingOpts, testAuthedClient, f.outputOpts)
 	f.modelDeleteCmd = newModelDeleteCommand(testAuthedClient)
 	f.modelListCmd = newModelListCommand(testAuthedClient, f.modelListOpts, f.outputOpts)
-	f.modelStatusCmd = newModelStatusCommand(testAuthedClient, f.modelStatusOpts, f.outputOpts)
-	f.modelUpdateCmd = newModelUpdateCommand(testAuthedClient, f.modelUpdateOpts, f.outputOpts)
-	f.modelWrapCmd = newModelWrapCommand(testAuthedClient, f.modelWrapOpts, f.outputOpts)
+	f.modelStatusCmd = newModelStatusCommand(f.pollingOpts, testAuthedClient, f.modelStatusOpts, f.outputOpts)
+	f.modelUpdateCmd = newModelUpdateCommand(f.pollingOpts, testAuthedClient, f.modelUpdateOpts, f.outputOpts)
+	f.modelWrapCmd = newModelWrapCommand(f.pollingOpts, testAuthedClient, f.modelWrapOpts, f.outputOpts)
 	f.monitorCmd = newMonitorCommand()
 	f.projectCmd = newProjectCommand(testAuthedClient, f.outputOpts)
 	f.projectGetCmd = newProjectGetCommand(testAuthedClient, f.outputOpts)
@@ -293,12 +295,12 @@ func newCommandFixture() *commandFixture {
 	f.repoSecretListCmd = newRepoSecretListCommand(testAuthedClient, f.outputOpts)
 	f.repoSecretSetCmd = newRepoSecretSetCommand(testAuthedClient, f.secretValueOpts)
 	f.rootCmd = newRootCommand()
-	f.sandboxCmd = newSandboxCommand(testAuthedClient, testScopeClient, f.identityOpts, f.outputOpts, f.rootOpts)
-	f.sandboxDeleteCmd = newSandboxDeleteCommand(testAuthedClient, testScopeClient, f.identityOpts, f.outputOpts, f.rootOpts, f.sandboxActionOpts, f.trustOpts)
-	f.sandboxRestartCmd = newSandboxRestartCommand(testAuthedClient, testScopeClient, f.identityOpts, f.outputOpts, f.rootOpts, f.sandboxActionOpts, f.trustOpts)
-	f.sandboxStartCmd = newSandboxStartCommand(testAuthedClient, testScopeClient, f.identityOpts, f.outputOpts, f.rootOpts, f.sandboxActionOpts, f.trustOpts)
-	f.sandboxStatusCmd = newSandboxStatusCommand(testAuthedClient, f.outputOpts)
-	f.sandboxStopCmd = newSandboxStopCommand(testAuthedClient, testScopeClient, f.identityOpts, f.outputOpts, f.rootOpts, f.sandboxActionOpts, f.trustOpts)
+	f.sandboxCmd = newSandboxCommand(f.pollingOpts, testAuthedClient, testScopeClient, f.identityOpts, f.outputOpts, f.rootOpts)
+	f.sandboxDeleteCmd = newSandboxDeleteCommand(f.pollingOpts, testAuthedClient, testScopeClient, f.identityOpts, f.outputOpts, f.rootOpts, f.sandboxActionOpts, f.trustOpts)
+	f.sandboxRestartCmd = newSandboxRestartCommand(f.pollingOpts, testAuthedClient, testScopeClient, f.identityOpts, f.outputOpts, f.rootOpts, f.sandboxActionOpts, f.trustOpts)
+	f.sandboxStartCmd = newSandboxStartCommand(f.pollingOpts, testAuthedClient, testScopeClient, f.identityOpts, f.outputOpts, f.rootOpts, f.sandboxActionOpts, f.trustOpts)
+	f.sandboxStatusCmd = newSandboxStatusCommand(f.pollingOpts, testAuthedClient, f.outputOpts)
+	f.sandboxStopCmd = newSandboxStopCommand(f.pollingOpts, testAuthedClient, testScopeClient, f.identityOpts, f.outputOpts, f.rootOpts, f.sandboxActionOpts, f.trustOpts)
 	f.secretCmd = newSecretCommand(testAuthedClient, f.outputOpts)
 	f.secretCreateCmd = newSecretCreateCommand(testAuthedClient, f.secretValueOpts)
 	f.secretDeleteCmd = newSecretDeleteCommand(testAuthedClient)

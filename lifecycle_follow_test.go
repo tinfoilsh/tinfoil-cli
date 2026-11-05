@@ -63,10 +63,10 @@ func TestFollowDeploymentGeneration(t *testing.T) {
 	} {
 		for _, render := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/render=%t", tt.name, render), func(t *testing.T) {
-				previousInterval, previousOutput, previousNoWait := followInterval, commandState.outputOpts.outputFormat, commandState.waitOpts.noWait
-				followInterval, commandState.outputOpts.outputFormat, commandState.waitOpts.noWait = 0, "table", false
+				previousInterval, previousOutput, previousNoWait := commandState.pollingOpts.followInterval, commandState.outputOpts.outputFormat, commandState.waitOpts.noWait
+				commandState.pollingOpts.followInterval, commandState.outputOpts.outputFormat, commandState.waitOpts.noWait = 0, "table", false
 				t.Cleanup(func() {
-					followInterval, commandState.outputOpts.outputFormat, commandState.waitOpts.noWait = previousInterval, previousOutput, previousNoWait
+					commandState.pollingOpts.followInterval, commandState.outputOpts.outputFormat, commandState.waitOpts.noWait = previousInterval, previousOutput, previousNoWait
 				})
 				fixture := func(fields string) string { return `{"id":"` + testContainerID + `","name":"app",` + fields + `}` }
 				polls := 0
@@ -89,12 +89,12 @@ func TestFollowDeploymentGeneration(t *testing.T) {
 				progress, err := captureTestStderr(func() error {
 					if render {
 						_, err := captureTestStdout(func() error {
-							return followAndRender(testStreams(), commandState.outputOpts, commandState.waitOpts, client, initial, nil)
+							return followAndRender(commandState.pollingOpts, testStreams(), commandState.outputOpts, commandState.waitOpts, client, initial, nil)
 						})
 						return err
 					}
 					var err error
-					final, err = followContainer(testStreams(), client, initial.ID, initial)
+					final, err = followContainer(commandState.pollingOpts, testStreams(), client, initial.ID, initial)
 					return err
 				})
 				if tt.wantErr == "" && err != nil || tt.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tt.wantErr)) {

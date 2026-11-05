@@ -23,21 +23,21 @@ import (
 
 const managedKindAnnotation = "managed-kind"
 
-func addManagedCommands(newClient authenticatedClientFactory, newScope scopeClientFactory, identityOpts *identityOptions, outputOpts *outputOptions, group *cobra.Command) {
+func addManagedCommands(pollingOpts *pollingOptions, newClient authenticatedClientFactory, newScope scopeClientFactory, identityOpts *identityOptions, outputOpts *outputOptions, group *cobra.Command) {
 	if group.Name() == "monitor" {
-		start := newManagedContainerCmd(newClient, outputOpts, "monitor", "start")
+		start := newManagedContainerCmd(pollingOpts, newClient, outputOpts, "monitor", "start")
 		start.Short = "Start a stopped or failed Monitor"
 		group.AddCommand(start, newMonitorStopCmd(newScope, outputOpts), newMonitorDeleteCmd(newScope))
 	}
 	group.PersistentFlags().StringVarP(&outputOpts.outputFormat, "output", "o", "table", "Output format: table or json")
 	group.PersistentFlags().StringVar(&identityOpts.attestSSHIdentity, "identity", "", "Owner SSH identity file")
-	update := newManagedContainerCmd(newClient, outputOpts, group.Name(), "update")
+	update := newManagedContainerCmd(pollingOpts, newClient, outputOpts, group.Name(), "update")
 	update.Long = "Review and apply a release update, switching traffic automatically. The shared update plan and downtime confirmation still apply, including with --no-wait."
-	metrics := newManagedContainerCmd(newClient, outputOpts, group.Name(), "metrics")
-	group.AddCommand(update, metrics, newManagedCreateCmd(newScope, identityOpts, outputOpts, &waitOptions{}, group.Name()))
+	metrics := newManagedContainerCmd(pollingOpts, newClient, outputOpts, group.Name(), "metrics")
+	group.AddCommand(update, metrics, newManagedCreateCmd(pollingOpts, newScope, identityOpts, outputOpts, &waitOptions{}, group.Name()))
 }
 
-func newManagedContainerCmd(newClient authenticatedClientFactory, outputOpts *outputOptions, kind, name string) *cobra.Command {
+func newManagedContainerCmd(pollingOpts *pollingOptions, newClient authenticatedClientFactory, outputOpts *outputOptions, kind, name string) *cobra.Command {
 	cmd := &cobra.Command{
 		Use: name + " [id|name]", Args: cobra.ExactArgs(1),
 		Annotations: map[string]string{managedKindAnnotation: kind},
@@ -48,13 +48,13 @@ func newManagedContainerCmd(newClient authenticatedClientFactory, outputOpts *ou
 		opts := &containerDeployOptions{}
 		cmd.Short = "Deploy a stopped or failed " + kind
 		cmd.RunE = func(cmd *cobra.Command, args []string) error {
-			return runContainerDeploy(newClient, opts, outputOpts, wait, cmd, args)
+			return runContainerDeploy(pollingOpts, newClient, opts, outputOpts, wait, cmd, args)
 		}
 	case "update":
 		opts := &containerUpdateOptions{}
 		cmd.Short = "Update a running " + kind + " to a new tag or configuration"
 		cmd.RunE = func(cmd *cobra.Command, args []string) error {
-			return runContainerUpdate(newClient, opts, outputOpts, wait, cmd, args)
+			return runContainerUpdate(pollingOpts, newClient, opts, outputOpts, wait, cmd, args)
 		}
 		cmd.Flags().StringVar(&opts.updateTag, "tag", "", "Release tag to update to")
 		cmd.Flags().BoolVar(&opts.updateYes, "yes", false, "Approve the update plan, including any downtime")
@@ -200,7 +200,7 @@ func newMonitorDeleteCmd(newScope scopeClientFactory) *cobra.Command {
 	return cmd
 }
 
-func newManagedCreateCmd(newScope scopeClientFactory, identityOpts *identityOptions, outputOpts *outputOptions, waitOpts *waitOptions, kind string) *cobra.Command {
+func newManagedCreateCmd(pollingOpts *pollingOptions, newScope scopeClientFactory, identityOpts *identityOptions, outputOpts *outputOptions, waitOpts *waitOptions, kind string) *cobra.Command {
 	var tag, publicKey, monitor, workspace string
 	var workspaceSize int
 	cmd := &cobra.Command{
@@ -264,7 +264,7 @@ with those, storage keys are created on first open and kept only on that machine
 			}
 			// Provisioning and storage attachment belong to Controlplane. Follow
 			// the returned deployment exactly like an ordinary container.
-			return createFollowupError(created, "", followAndRender(commandStreams(cmd), outputOpts, waitOpts, client, created, nil))
+			return createFollowupError(created, "", followAndRender(pollingOpts, commandStreams(cmd), outputOpts, waitOpts, client, created, nil))
 		},
 	}
 	cmd.Flags().StringVar(&tag, "tag", "", "Published release tag [required]")
@@ -369,7 +369,7 @@ func managedRow(client *cpClient, kind, identifier string) (*containerView, erro
 	return row, nil
 }
 
-func newManagedStatusCmd(newClient authenticatedClientFactory, outputOpts *outputOptions, kind string) *cobra.Command {
+func newManagedStatusCmd(pollingOpts *pollingOptions, newClient authenticatedClientFactory, outputOpts *outputOptions, kind string) *cobra.Command {
 	var watch bool
 	cmd := &cobra.Command{
 		Use: "status [id|name]", Aliases: []string{"get", "list", "ls"}, Short: "Show status, boot details and connection instructions", Args: cobra.MaximumNArgs(1),
@@ -406,7 +406,7 @@ func newManagedStatusCmd(newClient authenticatedClientFactory, outputOpts *outpu
 			ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 			defer cancel()
 			var previous *containerView
-			_, err = pollContainer(ctx, client, row.ID, *row, 0, func(current containerView) (bool, error) {
+			_, err = pollContainer(pollingOpts, ctx, client, row.ID, *row, 0, func(current containerView) (bool, error) {
 				if err := checkManagedKind(kind, current); err != nil {
 					return false, err
 				}

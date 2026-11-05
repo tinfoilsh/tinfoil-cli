@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,7 +13,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/require"
@@ -226,4 +229,43 @@ func TestEachTreeSuppliesItsVersionToUpdateRequests(t *testing.T) {
 		require.Equal(t, current, result.Current)
 	}
 	require.Equal(t, []string{"tinfoil-cli/0.19.1", "tinfoil-cli/0.20.1"}, agents)
+}
+
+func TestCommandPollingSettingsAreInvocationOwned(t *testing.T) {
+	const id = "11111111-1111-4111-8111-111111111111"
+	var mu sync.Mutex
+	requests := map[string]int{}
+	var cancelFast context.CancelFunc
+	commandAPI(t, func(w http.ResponseWriter, r *http.Request) {
+		agent := r.Header.Get("User-Agent")
+		mu.Lock()
+		requests[agent]++
+		count := requests[agent]
+		mu.Unlock()
+		if agent == "tinfoil-cli/fast" && count == 2 {
+			cancelFast()
+		}
+		json.NewEncoder(w).Encode(containerView{ID: id, Name: "monitor", Repo: monitorRepo, Status: statusRunning})
+	})
+	polling := defaultPollingOptions()
+	polling.followInterval = time.Hour
+	slow := newRootCommandWithDependencies(commandDependencies{version: "slow", polling: polling, out: io.Discard, err: io.Discard})
+	polling.followInterval = 0
+	fast := newRootCommandWithDependencies(commandDependencies{version: "fast", polling: polling, out: io.Discard, err: io.Discard})
+	const deadline = 250 * time.Millisecond
+	slowContext, cancelSlow := context.WithTimeout(t.Context(), deadline)
+	defer cancelSlow()
+	slow.SetContext(slowContext)
+	for _, root := range []*cobra.Command{slow, fast} {
+		root.SetArgs([]string{"monitor", "status", id, "--watch"})
+	}
+	require.ErrorIs(t, slow.Execute(), context.DeadlineExceeded)
+	fastContext, cancel := context.WithTimeout(t.Context(), deadline)
+	cancelFast = cancel
+	defer cancel()
+	fast.SetContext(fastContext)
+	require.NoError(t, fast.Execute())
+	mu.Lock()
+	defer mu.Unlock()
+	require.Equal(t, map[string]int{"tinfoil-cli/slow": 1, "tinfoil-cli/fast": 2}, requests)
 }

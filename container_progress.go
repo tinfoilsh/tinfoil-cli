@@ -33,9 +33,7 @@ const (
 	followTimeout = 30 * time.Minute
 )
 
-// followInterval is how often followContainer polls. A variable so tests can
-// shorten it.
-var followInterval = 2 * time.Second
+const defaultFollowInterval = 2 * time.Second
 
 // statusLabel is the status as shown to users: the API value in sentence
 // case, with "started" spelled out as the health-check phase it is.
@@ -149,12 +147,12 @@ func activeBootStage(stages []bootStage) string {
 // reaches a terminal state, printing each change the way the dashboard shows
 // it. JSON output and --no-wait print the initial response only. Exits
 // non-zero when the container or its update candidate fails.
-func followAndRender(streams commandIO, outputOpts *outputOptions, waitOpts *waitOptions, client *cpClient, c containerView, attached map[string]volumeView) error {
+func followAndRender(pollingOpts *pollingOptions, streams commandIO, outputOpts *outputOptions, waitOpts *waitOptions, client *cpClient, c containerView, attached map[string]volumeView) error {
 	if err := renderContainerDetail(streams, outputOpts, c, attached); err != nil {
 		return err
 	}
 	if outputOpts.outputFormat != "json" && !waitOpts.noWait && !isTerminal(c) {
-		final, err := followContainer(streams, client, c.ID, c)
+		final, err := followContainer(pollingOpts, streams, client, c.ID, c)
 		if err == nil {
 			printChangedContainerConnections(streams.out, c, final)
 		}
@@ -221,7 +219,7 @@ func followedDeploymentState(c containerView, deploymentID string) (bool, error)
 // followContainer polls the container until isTerminal, printing one line per
 // observed change. The last line is left in place; intermediate lines are
 // overwritten when stderr is a terminal.
-func followContainer(streams commandIO, client *cpClient, id string, initial containerView) (containerView, error) {
+func followContainer(pollingOpts *pollingOptions, streams commandIO, client *cpClient, id string, initial containerView) (containerView, error) {
 	deploymentID := initial.UpdateDeploymentID
 	if deploymentID == "" && initial.UpdateTag == "" && initial.UpdateType == "" {
 		deploymentID = initial.TinfoildDeploymentID
@@ -251,7 +249,7 @@ func followContainer(streams commandIO, client *cpClient, id string, initial con
 	}
 	defer finish()
 
-	return pollContainer(context.Background(), client, id, initial, followTimeout, func(current containerView) (bool, error) {
+	return pollContainer(pollingOpts, context.Background(), client, id, initial, followTimeout, func(current containerView) (bool, error) {
 		done, err := followedDeploymentState(current, deploymentID)
 		if err != nil {
 			return false, err
@@ -265,7 +263,7 @@ func followContainer(streams commandIO, client *cpClient, id string, initial con
 	})
 }
 
-func pollContainer(parent context.Context, client *cpClient, id string, current containerView, timeout time.Duration, observe func(containerView) (bool, error)) (containerView, error) {
+func pollContainer(pollingOpts *pollingOptions, parent context.Context, client *cpClient, id string, current containerView, timeout time.Duration, observe func(containerView) (bool, error)) (containerView, error) {
 	ctx := parent
 	if timeout > 0 {
 		var cancel context.CancelFunc
@@ -289,7 +287,7 @@ func pollContainer(parent context.Context, client *cpClient, id string, current 
 		select {
 		case <-ctx.Done():
 			continue
-		case <-time.After(followInterval):
+		case <-time.After(pollingOpts.followInterval):
 		}
 		var next containerView
 		if _, err := client.doContext(ctx, "GET", pathf("/api/containers/%s", id), nil, nil, nil, &next); err != nil {
@@ -308,7 +306,7 @@ func postContainerAction(client *cpClient, id, action string, body any) (contain
 	return row, err
 }
 
-func stopContainer(client *cpClient, row containerView) (containerView, error) {
+func stopContainer(pollingOpts *pollingOptions, client *cpClient, row containerView) (containerView, error) {
 	if row.Status != statusStopped && row.Status != statusStopping && row.Status != statusFailed {
 		var err error
 		row, err = postContainerAction(client, row.ID, "stop", nil)
@@ -316,7 +314,7 @@ func stopContainer(client *cpClient, row containerView) (containerView, error) {
 			return row, err
 		}
 	}
-	return pollContainer(context.Background(), client, row.ID, row, followTimeout, func(current containerView) (bool, error) {
+	return pollContainer(pollingOpts, context.Background(), client, row.ID, row, followTimeout, func(current containerView) (bool, error) {
 		if !sameContainerConfig(row, current) {
 			return false, fmt.Errorf("%s changed while stopping; inspect its configuration before restarting", row.Name)
 		}

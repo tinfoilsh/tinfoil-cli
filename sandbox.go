@@ -42,56 +42,56 @@ func workspaceSizeChoices(unit string) string {
 	return strings.Join(sizes[:last], ", ") + ", or " + sizes[last]
 }
 
-func newSandboxCommand(newClient authenticatedClientFactory, newScope scopeClientFactory, identityOpts *identityOptions, outputOpts *outputOptions, rootOpts *rootOptions) *cobra.Command {
+func newSandboxCommand(pollingOpts *pollingOptions, newClient authenticatedClientFactory, newScope scopeClientFactory, identityOpts *identityOptions, outputOpts *outputOptions, rootOpts *rootOptions) *cobra.Command {
 	sandboxCmd := &cobra.Command{
 		Use: "sandbox", Aliases: []string{"sandboxes"}, Short: "Manage your confidential sandboxes",
 	}
-	sandboxCmd.AddCommand(newSandboxStatusCommand(newClient, outputOpts), newSandboxStartCommand(newClient, newScope, identityOpts, outputOpts, rootOpts, &sandboxActionOptions{}, &trustOptions{}), newSandboxRestartCommand(newClient, newScope, identityOpts, outputOpts, rootOpts, &sandboxActionOptions{}, &trustOptions{}), newSandboxStopCommand(newClient, newScope, identityOpts, outputOpts, rootOpts, &sandboxActionOptions{}, &trustOptions{}), newSandboxDeleteCommand(newClient, newScope, identityOpts, outputOpts, rootOpts, &sandboxActionOptions{}, &trustOptions{}))
+	sandboxCmd.AddCommand(newSandboxStatusCommand(pollingOpts, newClient, outputOpts), newSandboxStartCommand(pollingOpts, newClient, newScope, identityOpts, outputOpts, rootOpts, &sandboxActionOptions{}, &trustOptions{}), newSandboxRestartCommand(pollingOpts, newClient, newScope, identityOpts, outputOpts, rootOpts, &sandboxActionOptions{}, &trustOptions{}), newSandboxStopCommand(pollingOpts, newClient, newScope, identityOpts, outputOpts, rootOpts, &sandboxActionOptions{}, &trustOptions{}), newSandboxDeleteCommand(pollingOpts, newClient, newScope, identityOpts, outputOpts, rootOpts, &sandboxActionOptions{}, &trustOptions{}))
 	return sandboxCmd
 }
 
-func newSandboxStatusCommand(newClient authenticatedClientFactory, outputOpts *outputOptions) *cobra.Command {
-	sandboxStatusCmd := newManagedStatusCmd(newClient, outputOpts, "sandbox")
+func newSandboxStatusCommand(pollingOpts *pollingOptions, newClient authenticatedClientFactory, outputOpts *outputOptions) *cobra.Command {
+	sandboxStatusCmd := newManagedStatusCmd(pollingOpts, newClient, outputOpts, "sandbox")
 
 	return sandboxStatusCmd
 }
 
-func newSandboxStartCommand(newClient authenticatedClientFactory, newScope scopeClientFactory, identityOpts *identityOptions, outputOpts *outputOptions, rootOpts *rootOptions, sandboxActionOpts *sandboxActionOptions, trustOpts *trustOptions) *cobra.Command {
+func newSandboxStartCommand(pollingOpts *pollingOptions, newClient authenticatedClientFactory, newScope scopeClientFactory, identityOpts *identityOptions, outputOpts *outputOptions, rootOpts *rootOptions, sandboxActionOpts *sandboxActionOptions, trustOpts *trustOptions) *cobra.Command {
 	sandboxStartCmd := &cobra.Command{
 		Use: "start [id|name]", Short: "Start a sandbox and enroll this machine's keys",
-		Args: cobra.ExactArgs(1), RunE: runSandboxAction(newClient, newScope, identityOpts, outputOpts, rootOpts, sandboxActionOpts, trustOpts, "start"),
+		Args: cobra.ExactArgs(1), RunE: runSandboxAction(pollingOpts, newClient, newScope, identityOpts, outputOpts, rootOpts, sandboxActionOpts, trustOpts, "start"),
 	}
 	addTrustDangerousFlag(trustOpts, sandboxStartCmd)
 	sandboxStartCmd.Flags().Bool("no-enroll", false, "Boot without unlocking or enrolling this machine's keys")
 	return sandboxStartCmd
 }
-func newSandboxRestartCommand(newClient authenticatedClientFactory, newScope scopeClientFactory, identityOpts *identityOptions, outputOpts *outputOptions, rootOpts *rootOptions, sandboxActionOpts *sandboxActionOptions, trustOpts *trustOptions) *cobra.Command {
+func newSandboxRestartCommand(pollingOpts *pollingOptions, newClient authenticatedClientFactory, newScope scopeClientFactory, identityOpts *identityOptions, outputOpts *outputOptions, rootOpts *rootOptions, sandboxActionOpts *sandboxActionOptions, trustOpts *trustOptions) *cobra.Command {
 	sandboxRestartCmd := &cobra.Command{
 		Use: "restart [id|name]", Short: "Restart a sandbox and enroll this machine's keys",
-		Args: cobra.ExactArgs(1), RunE: runSandboxAction(newClient, newScope, identityOpts, outputOpts, rootOpts, sandboxActionOpts, trustOpts, "restart"),
+		Args: cobra.ExactArgs(1), RunE: runSandboxAction(pollingOpts, newClient, newScope, identityOpts, outputOpts, rootOpts, sandboxActionOpts, trustOpts, "restart"),
 	}
 	addTrustDangerousFlag(trustOpts, sandboxRestartCmd)
 	sandboxRestartCmd.Flags().Bool("no-enroll", false, "Boot without unlocking or enrolling this machine's keys")
 	return sandboxRestartCmd
 }
-func newSandboxStopCommand(newClient authenticatedClientFactory, newScope scopeClientFactory, identityOpts *identityOptions, outputOpts *outputOptions, rootOpts *rootOptions, sandboxActionOpts *sandboxActionOptions, trustOpts *trustOptions) *cobra.Command {
+func newSandboxStopCommand(pollingOpts *pollingOptions, newClient authenticatedClientFactory, newScope scopeClientFactory, identityOpts *identityOptions, outputOpts *outputOptions, rootOpts *rootOptions, sandboxActionOpts *sandboxActionOptions, trustOpts *trustOptions) *cobra.Command {
 	sandboxStopCmd := &cobra.Command{
 		Use: "stop [id|name]", Short: "Stop a sandbox, keeping its workspace",
-		Args: cobra.ExactArgs(1), RunE: runSandboxAction(newClient, newScope, identityOpts, outputOpts, rootOpts, sandboxActionOpts, trustOpts, "stop"),
+		Args: cobra.ExactArgs(1), RunE: runSandboxAction(pollingOpts, newClient, newScope, identityOpts, outputOpts, rootOpts, sandboxActionOpts, trustOpts, "stop"),
 	}
 
 	return sandboxStopCmd
 }
-func newSandboxDeleteCommand(newClient authenticatedClientFactory, newScope scopeClientFactory, identityOpts *identityOptions, outputOpts *outputOptions, rootOpts *rootOptions, sandboxActionOpts *sandboxActionOptions, trustOpts *trustOptions) *cobra.Command {
+func newSandboxDeleteCommand(pollingOpts *pollingOptions, newClient authenticatedClientFactory, newScope scopeClientFactory, identityOpts *identityOptions, outputOpts *outputOptions, rootOpts *rootOptions, sandboxActionOpts *sandboxActionOptions, trustOpts *trustOptions) *cobra.Command {
 	sandboxDeleteCmd := &cobra.Command{
 		Use: "delete [id|name]", Short: "Delete a sandbox and its workspace volume",
-		Args: cobra.ExactArgs(1), RunE: runSandboxAction(newClient, newScope, identityOpts, outputOpts, rootOpts, sandboxActionOpts, trustOpts, "delete"),
+		Args: cobra.ExactArgs(1), RunE: runSandboxAction(pollingOpts, newClient, newScope, identityOpts, outputOpts, rootOpts, sandboxActionOpts, trustOpts, "delete"),
 	}
 	sandboxDeleteCmd.Flags().BoolVar(&sandboxActionOpts.sandboxYes, "yes", false, "Skip the confirmation prompt")
 	return sandboxDeleteCmd
 }
 
-func runSandboxAction(newClient authenticatedClientFactory, newScope scopeClientFactory, identityOpts *identityOptions, outputOpts *outputOptions, rootOpts *rootOptions, sandboxActionOpts *sandboxActionOptions, trustOpts *trustOptions, action string) func(*cobra.Command, []string) error {
+func runSandboxAction(pollingOpts *pollingOptions, newClient authenticatedClientFactory, newScope scopeClientFactory, identityOpts *identityOptions, outputOpts *outputOptions, rootOpts *rootOptions, sandboxActionOpts *sandboxActionOptions, trustOpts *trustOptions, action string) func(*cobra.Command, []string) error {
 	return func(cmd *cobra.Command, args []string) error {
 		client, err := newClient(commandStreams(cmd))
 		if err != nil {
@@ -127,13 +127,13 @@ func runSandboxAction(newClient authenticatedClientFactory, newScope scopeClient
 			fmt.Fprintf(cmd.OutOrStdout(), "Deleted %s. Saved encryption credentials are kept. Remove any access grants in the Monitor UI.\n", deleted)
 			return nil
 		case "stop":
-			stopped, err := stopContainer(client, *row)
+			stopped, err := stopContainer(pollingOpts, client, *row)
 			if err != nil {
 				return err
 			}
 			return renderContainer(commandStreams(cmd), outputOpts, stopped)
 		case "start", "restart":
-			started, err := startSandboxRow(commandStreams(cmd), client, *row, action == "restart")
+			started, err := startSandboxRow(pollingOpts, commandStreams(cmd), client, *row, action == "restart")
 			if err != nil {
 				return err
 			}
@@ -167,14 +167,14 @@ func runSandboxAction(newClient authenticatedClientFactory, newScope scopeClient
 	}
 }
 
-func startSandboxRow(streams commandIO, client *cpClient, row containerView, restart bool) (containerView, error) {
+func startSandboxRow(pollingOpts *pollingOptions, streams commandIO, client *cpClient, row containerView, restart bool) (containerView, error) {
 	if restart || row.Status == statusStopped || row.Status == statusFailed {
 		if err := validateSandboxNetwork(row); err != nil {
 			return row, err
 		}
 		var err error
 		if restart {
-			row, err = stopContainer(client, row)
+			row, err = stopContainer(pollingOpts, client, row)
 			if err != nil {
 				return row, err
 			}
@@ -189,7 +189,7 @@ func startSandboxRow(streams commandIO, client *cpClient, row containerView, res
 		return row, err
 	}
 	if row.Status != statusRunning {
-		return followContainer(streams, client, row.ID, row)
+		return followContainer(pollingOpts, streams, client, row.ID, row)
 	}
 	return row, nil
 }

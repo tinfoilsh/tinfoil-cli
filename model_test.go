@@ -32,7 +32,7 @@ func configureModelCommandTest(commandState *commandFixture, t *testing.T, serve
 	previousUpdateToken := commandState.modelUpdateOpts.modelUpdateHFToken
 	previousUpdateTokenFile := commandState.modelUpdateOpts.modelUpdateHFTokenFile
 	previousUpdateWait := commandState.modelUpdateOpts.modelUpdateWait
-	previousInterval := modelWrapPollInterval
+	previousInterval := commandState.pollingOpts.modelWrapPollInterval
 	tokenFlag := commandState.modelWrapCmd.Flags().Lookup("hf-token")
 	tokenFileFlag := commandState.modelWrapCmd.Flags().Lookup("hf-token-file")
 	updateTokenFlag := commandState.modelUpdateCmd.Flags().Lookup("hf-token")
@@ -57,7 +57,7 @@ func configureModelCommandTest(commandState *commandFixture, t *testing.T, serve
 		commandState.modelUpdateOpts.modelUpdateHFToken = previousUpdateToken
 		commandState.modelUpdateOpts.modelUpdateHFTokenFile = previousUpdateTokenFile
 		commandState.modelUpdateOpts.modelUpdateWait = previousUpdateWait
-		modelWrapPollInterval = previousInterval
+		commandState.pollingOpts.modelWrapPollInterval = previousInterval
 		tokenFlag.Changed = previousTokenChanged
 		tokenFileFlag.Changed = previousTokenFileChanged
 		updateTokenFlag.Changed = previousUpdateTokenChanged
@@ -181,7 +181,7 @@ func TestModelWrapWaitPollsUntilComplete(t *testing.T) {
 	configureModelCommandTest(commandState, t, server.URL)
 	commandState.modelWrapOpts.modelWrapHost = "gpu-1"
 	commandState.modelWrapOpts.modelWrapWait = true
-	modelWrapPollInterval = time.Millisecond
+	commandState.pollingOpts.modelWrapPollInterval = time.Millisecond
 
 	output, err := captureTestStdout(func() error {
 		return commandState.modelWrapCmd.RunE(commandState.modelWrapCmd, []string{"acme/model"})
@@ -222,7 +222,7 @@ func TestModelWrapWaitFailsOnFailedJob(t *testing.T) {
 	configureModelCommandTest(commandState, t, server.URL)
 	commandState.modelWrapOpts.modelWrapHost = "gpu-1"
 	commandState.modelWrapOpts.modelWrapWait = true
-	modelWrapPollInterval = time.Millisecond
+	commandState.pollingOpts.modelWrapPollInterval = time.Millisecond
 
 	output, err := captureTestStdout(func() error {
 		return commandState.modelWrapCmd.RunE(commandState.modelWrapCmd, []string{"acme/model"})
@@ -278,7 +278,7 @@ func TestModelStatusWaitFailsOnFailedJob(t *testing.T) {
 
 	configureModelCommandTest(commandState, t, server.URL)
 	commandState.modelStatusOpts.modelStatusWait = true
-	modelWrapPollInterval = time.Millisecond
+	commandState.pollingOpts.modelWrapPollInterval = time.Millisecond
 
 	output, err := captureTestStdout(func() error {
 		return commandState.modelStatusCmd.RunE(commandState.modelStatusCmd, []string{"gpu-1", "job-1"})
@@ -499,7 +499,7 @@ func TestModelUpdateWaitPrintsReclaimHint(t *testing.T) {
 	commandState.modelUpdateOpts.modelUpdateHost = "gpu-1"
 	commandState.modelUpdateOpts.modelUpdateCommit = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 	commandState.modelUpdateOpts.modelUpdateWait = true
-	modelWrapPollInterval = time.Millisecond
+	commandState.pollingOpts.modelWrapPollInterval = time.Millisecond
 
 	output, err := captureTestStdout(func() error {
 		return commandState.modelUpdateCmd.RunE(commandState.modelUpdateCmd, []string{"acme/model"})

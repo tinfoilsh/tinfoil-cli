@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"time"
 
 	"github.com/tinfoilsh/tinfoil-cli/internal/auth"
 )
@@ -193,6 +194,7 @@ type connectionDependencies struct {
 }
 
 type commandDependencies struct {
+	polling               *pollingOptions
 	volumeStore           storageStoreFactory
 	authSettings          *auth.BuildSettings
 	credentials           credentialStoreFactory
@@ -206,6 +208,15 @@ type commandDependencies struct {
 	serveProxy            func(string, http.Handler) error
 	openBrowser           func(string) error
 	verifySandboxEvidence sandboxEvidenceVerifier
+}
+
+type pollingOptions struct {
+	followInterval        time.Duration
+	modelWrapPollInterval time.Duration
+}
+
+func defaultPollingOptions() *pollingOptions {
+	return &pollingOptions{followInterval: defaultFollowInterval, modelWrapPollInterval: defaultModelWrapPollInterval}
 }
 
 func (d commandDependencies) browser() func(string) error {

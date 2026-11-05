@@ -29,15 +29,15 @@ func TestFollowReadyPrintsVerifiedCandidateRequest(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, reviewContainerFixture) }))
 	defer server.Close()
 	configureContainerPromotionTest(commandState, t, server.URL)
-	oldInterval := followInterval
-	followInterval = time.Millisecond
-	t.Cleanup(func() { followInterval = oldInterval })
+	oldInterval := commandState.pollingOpts.followInterval
+	commandState.pollingOpts.followInterval = time.Millisecond
+	t.Cleanup(func() { commandState.pollingOpts.followInterval = oldInterval })
 	commandState.outputOpts.outputFormat, commandState.waitOpts.noWait = "table", false
 	c := reviewContainer(t)
 	c.UpdateStatus = statusDeploying
 	c.Connections.Review = nil
 	out, err := captureTestStdout(func() error {
-		return followAndRender(testStreams(), commandState.outputOpts, commandState.waitOpts, testCPClient(cliConfig{ControlplaneURL: server.URL}), c, nil)
+		return followAndRender(commandState.pollingOpts, testStreams(), commandState.outputOpts, commandState.waitOpts, testCPClient(cliConfig{ControlplaneURL: server.URL}), c, nil)
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -90,9 +90,9 @@ func TestCreateRunningPrintsVerifiedNextStep(t *testing.T) {
 	defer server.Close()
 	configureContainerPromotionTest(commandState, t, server.URL)
 	commandState.waitOpts.noWait = false
-	oldInterval := followInterval
-	followInterval = time.Millisecond
-	t.Cleanup(func() { followInterval = oldInterval })
+	oldInterval := commandState.pollingOpts.followInterval
+	commandState.pollingOpts.followInterval = time.Millisecond
+	t.Cleanup(func() { commandState.pollingOpts.followInterval = oldInterval })
 	out, err := captureTestStdout(func() error {
 		return executeLifecycleCLI(commandState, t, "container", "create", "app", "--repo", "acme/app", "--tag", "v1", "-o", "table")
 	})
@@ -353,13 +353,13 @@ func TestFollowConnectionGuidancePreservesChangesWithoutDuplicates(t *testing.T)
 		}, wantErr: "workload failed"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			previousInterval, previousOutput, previousNoWait := followInterval, commandState.outputOpts.outputFormat, commandState.waitOpts.noWait
-			followInterval, commandState.outputOpts.outputFormat, commandState.waitOpts.noWait = 0, "table", tc.noWait
+			previousInterval, previousOutput, previousNoWait := commandState.pollingOpts.followInterval, commandState.outputOpts.outputFormat, commandState.waitOpts.noWait
+			commandState.pollingOpts.followInterval, commandState.outputOpts.outputFormat, commandState.waitOpts.noWait = 0, "table", tc.noWait
 			if tc.json {
 				commandState.outputOpts.outputFormat = "json"
 			}
 			t.Cleanup(func() {
-				followInterval, commandState.outputOpts.outputFormat, commandState.waitOpts.noWait = previousInterval, previousOutput, previousNoWait
+				commandState.pollingOpts.followInterval, commandState.outputOpts.outputFormat, commandState.waitOpts.noWait = previousInterval, previousOutput, previousNoWait
 			})
 			initial, final := reviewContainer(t), reviewContainer(t)
 			if !tc.terminal {
@@ -384,7 +384,7 @@ func TestFollowConnectionGuidancePreservesChangesWithoutDuplicates(t *testing.T)
 			_, err = captureTestStderr(func() error {
 				var runErr error
 				stdout, runErr = captureTestStdout(func() error {
-					return followAndRender(testStreams(), commandState.outputOpts, commandState.waitOpts, client, initial, nil)
+					return followAndRender(commandState.pollingOpts, testStreams(), commandState.outputOpts, commandState.waitOpts, client, initial, nil)
 				})
 				return runErr
 			})

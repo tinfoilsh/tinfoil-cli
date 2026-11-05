@@ -187,11 +187,11 @@ func TestManagedStatusFiltersAndWatches(t *testing.T) {
 		require.NoError(t, json.Unmarshal(out, &rows))
 		require.Len(t, rows, 1)
 	}
-	previous := followInterval
-	followInterval = time.Millisecond
-	t.Cleanup(func() { followInterval = previous })
+	previous := commandState.pollingOpts.followInterval
+	commandState.pollingOpts.followInterval = time.Millisecond
+	t.Cleanup(func() { commandState.pollingOpts.followInterval = previous })
 	commandState.outputOpts.outputFormat = "table"
-	cmd := newManagedStatusCmd(testAuthedClient, commandState.outputOpts, "monitor")
+	cmd := newManagedStatusCmd(commandState.pollingOpts, testAuthedClient, commandState.outputOpts, "monitor")
 	cmd.SetContext(ctx)
 	require.NoError(t, cmd.Flags().Set("watch", "true"))
 	out, err := captureTestStdout(func() error { return cmd.RunE(cmd, []string{row.ID}) })
@@ -219,7 +219,7 @@ func TestSandboxStatusShowsWorkspaceSize(t *testing.T) {
 		}
 	})
 	commandState.outputOpts.outputFormat = "table"
-	cmd := newManagedStatusCmd(testAuthedClient, commandState.outputOpts, "sandbox")
+	cmd := newManagedStatusCmd(commandState.pollingOpts, testAuthedClient, commandState.outputOpts, "sandbox")
 	out, err := captureTestStdout(func() error { return cmd.RunE(cmd, []string{testContainerID}) })
 	require.NoError(t, err)
 	require.Contains(t, string(out), "Volumes:      workspace ← work-ws (32 GB)\n")
@@ -272,10 +272,10 @@ func testUserKey(t *testing.T) (string, string) {
 func TestManagedCreateUsesContainerRecovery(t *testing.T) {
 	commandState := newCommandFixture()
 
-	previousIdentity, previousInterval := commandState.identityOpts.attestSSHIdentity, followInterval
-	commandState.identityOpts.attestSSHIdentity, followInterval = "", 0
+	previousIdentity, previousInterval := commandState.identityOpts.attestSSHIdentity, commandState.pollingOpts.followInterval
+	commandState.identityOpts.attestSSHIdentity, commandState.pollingOpts.followInterval = "", 0
 	t.Cleanup(func() {
-		commandState.identityOpts.attestSSHIdentity, followInterval = previousIdentity, previousInterval
+		commandState.identityOpts.attestSSHIdentity, commandState.pollingOpts.followInterval = previousIdentity, previousInterval
 	})
 	for _, kind := range []string{"monitor", "sandbox"} {
 		for _, state := range []string{"follow", "no-wait", "json", "uncertain", "attached"} {
@@ -336,7 +336,7 @@ func TestManagedCreateUsesContainerRecovery(t *testing.T) {
 				if state == "json" {
 					commandState.outputOpts.outputFormat = "json"
 				}
-				cmd := newManagedCreateCmd(testScopeClient, commandState.identityOpts, commandState.outputOpts, commandState.waitOpts, kind)
+				cmd := newManagedCreateCmd(commandState.pollingOpts, testScopeClient, commandState.identityOpts, commandState.outputOpts, commandState.waitOpts, kind)
 				cmd.SetContext(t.Context())
 				args := []string{"--tag", "v1", "work", "--owner-public-key", publicFile}
 				if state == "no-wait" {
@@ -409,14 +409,14 @@ func TestSyncedCreateSavesKeysBeforeAllocation(t *testing.T) {
 	defer server.Close()
 	_, _, dek = testLogin(t, server, keys)
 	commandState.outputOpts.outputFormat = "table"
-	cmd := newManagedCreateCmd(testScopeClient, commandState.identityOpts, commandState.outputOpts, commandState.waitOpts, "monitor")
+	cmd := newManagedCreateCmd(commandState.pollingOpts, testScopeClient, commandState.identityOpts, commandState.outputOpts, commandState.waitOpts, "monitor")
 	cmd.SetContext(t.Context())
 	require.NoError(t, cmd.ParseFlags([]string{"--tag", "v1", "--no-wait", "work"}))
 	_, err := captureTestStdout(func() error { return cmd.RunE(cmd, cmd.Flags().Args()) })
 	require.NoError(t, err)
 	require.Equal(t, []string{"monitor"}, created)
 
-	cmd = newManagedCreateCmd(testScopeClient, commandState.identityOpts, commandState.outputOpts, commandState.waitOpts, "sandbox")
+	cmd = newManagedCreateCmd(commandState.pollingOpts, testScopeClient, commandState.identityOpts, commandState.outputOpts, commandState.waitOpts, "sandbox")
 	cmd.SetContext(t.Context())
 	require.NoError(t, cmd.ParseFlags([]string{"--tag", "v1", "--no-wait", "--monitor", monitor.ID, "work"}))
 	_, err = captureTestStdout(func() error { return cmd.RunE(cmd, cmd.Flags().Args()) })
@@ -473,7 +473,7 @@ func TestSandboxCreateWorkspaceSize(t *testing.T) {
 				}
 			})
 			commandState.outputOpts.outputFormat = "table"
-			cmd := newManagedCreateCmd(testScopeClient, commandState.identityOpts, commandState.outputOpts, commandState.waitOpts, "sandbox")
+			cmd := newManagedCreateCmd(commandState.pollingOpts, testScopeClient, commandState.identityOpts, commandState.outputOpts, commandState.waitOpts, "sandbox")
 			cmd.SetContext(t.Context())
 			require.NoError(t, cmd.ParseFlags(append([]string{"--tag", "v1", "--monitor", monitorID, "--no-wait", "--owner-public-key", publicFile, "work"}, tt.args...)))
 			_, err := captureTestStdout(func() error { return cmd.RunE(cmd, cmd.Flags().Args()) })

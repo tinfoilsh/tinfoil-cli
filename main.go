@@ -91,6 +91,10 @@ func newRootCommand() *cobra.Command {
 }
 
 func newRootCommandWithDependencies(dependencies commandDependencies) *cobra.Command {
+	pollingOpts := defaultPollingOptions()
+	if dependencies.polling != nil {
+		*pollingOpts = *dependencies.polling
+	}
 	rootOpts := &rootOptions{connections: connectionDependencies{
 		proxyClient: dependencies.proxyClient, serveProxy: dependencies.serveProxy,
 		verifySandboxEvidence: dependencies.verifySandboxEvidence,
@@ -128,18 +132,18 @@ func newRootCommandWithDependencies(dependencies commandDependencies) *cobra.Com
 	cmd.MarkFlagsMutuallyExclusive("config", "public-registry")
 	configureRootCommand(rootOpts, cmd)
 	cmd.AddCommand(newAttestSSHCommand(accounts.authedClient, accounts.currentScope, &attestSSHOptions{}, &forwardOptions{}, &identityOptions{}, rootOpts, &trustOptions{}), newAttestationCommand(rootOpts), newLoginCommand(accounts, dependencies.browser()), newLogoutCommand(accounts), newWhoamiCommand(accounts),
-		newContainerCommand(accounts.authedClient, &outputOptions{}, rootOpts), newDomainCommand(accounts.authedClient, &outputOptions{}), newHttpCommand(&headersOptions{}, rootOpts), newModelCommand(accounts.authedClient, &outputOptions{}), newProjectCommand(accounts.authedClient, &outputOptions{}), newProxyCommand(&proxyOptions{}, rootOpts),
+		newContainerCommand(pollingOpts, accounts.authedClient, &outputOptions{}, rootOpts), newDomainCommand(accounts.authedClient, &outputOptions{}), newHttpCommand(&headersOptions{}, rootOpts), newModelCommand(pollingOpts, accounts.authedClient, &outputOptions{}), newProjectCommand(accounts.authedClient, &outputOptions{}), newProxyCommand(&proxyOptions{}, rootOpts),
 		newRegistryCommand(accounts.authedClient, &outputOptions{}), newRepoCommand(accounts.authedClient, &outputOptions{}), newSCPCommand(accounts.authedClient, &forwardOptions{}, rootOpts, &trustOptions{}, &tunnelOptions{}), newSecretCommand(accounts.authedClient, &outputOptions{}), newSshCommand(accounts.authedClient, &forwardOptions{}, rootOpts, &sshOptions{}, &trustOptions{}, &tunnelOptions{}), newSshKeyCommand(accounts.authedClient, &outputOptions{}, &sshKeyOptions{}),
 		newTrustCommand(accounts, &trustOptions{}), newForwardCommand(accounts.authedClient, &forwardOptions{}, rootOpts, &trustOptions{}, &tunnelOptions{}), newVolumeCommand(accounts.authedClient, volumeStore, &outputOptions{}), newSelfUpdateCommand(func() selfUpdateRunner {
 			return newDefaultSelfUpdater(commandVersion, dependencies.updateTransport)
 		}))
 	monitorIdentity, sandboxIdentity := &identityOptions{}, &identityOptions{}
 	monitorOutput, sandboxOutput := &outputOptions{}, &outputOptions{}
-	monitor, sandbox := newMonitorCommand(), newSandboxCommand(accounts.authedClient, accounts.currentScope, sandboxIdentity, sandboxOutput, rootOpts)
+	monitor, sandbox := newMonitorCommand(), newSandboxCommand(pollingOpts, accounts.authedClient, accounts.currentScope, sandboxIdentity, sandboxOutput, rootOpts)
 	monitor.AddCommand(newMonitorOpenCommand(accounts.currentScope, monitorIdentity, rootOpts, &trustOptions{}, dependencies.browser()))
-	monitor.AddCommand(newManagedStatusCmd(accounts.authedClient, monitorOutput, "monitor"))
-	addManagedCommands(accounts.authedClient, accounts.currentScope, monitorIdentity, monitorOutput, monitor)
-	addManagedCommands(accounts.authedClient, accounts.currentScope, sandboxIdentity, sandboxOutput, sandbox)
+	monitor.AddCommand(newManagedStatusCmd(pollingOpts, accounts.authedClient, monitorOutput, "monitor"))
+	addManagedCommands(pollingOpts, accounts.authedClient, accounts.currentScope, monitorIdentity, monitorOutput, monitor)
+	addManagedCommands(pollingOpts, accounts.authedClient, accounts.currentScope, sandboxIdentity, sandboxOutput, sandbox)
 	cmd.AddCommand(monitor, sandbox)
 	create, _, _ := cmd.Find([]string{"container", "create"})
 	create.MarkFlagsMutuallyExclusive("config", "repo")

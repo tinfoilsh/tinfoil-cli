@@ -14,13 +14,15 @@ import (
 )
 
 func TestPollContainerHonorsDeadline(t *testing.T) {
-	oldInterval := followInterval
-	t.Cleanup(func() { followInterval = oldInterval })
+	commandState := newCommandFixture()
+
+	oldInterval := commandState.pollingOpts.followInterval
+	t.Cleanup(func() { commandState.pollingOpts.followInterval = oldInterval })
 	for _, scenario := range []string{"sleep", "request", "late success"} {
 		t.Run(scenario, func(t *testing.T) {
-			followInterval = 0
+			commandState.pollingOpts.followInterval = 0
 			if scenario == "sleep" {
-				followInterval = time.Hour
+				commandState.pollingOpts.followInterval = time.Hour
 			}
 			requests := 0
 			client := testCPClient(cliConfig{ControlplaneURL: "https://cp.example"})
@@ -41,7 +43,7 @@ func TestPollContainerHonorsDeadline(t *testing.T) {
 			})
 			observations := 0
 			started := time.Now()
-			_, err := pollContainer(context.Background(), client, "work", containerView{Name: "work", Status: statusDeploying}, 20*time.Millisecond, func(row containerView) (bool, error) {
+			_, err := pollContainer(commandState.pollingOpts, context.Background(), client, "work", containerView{Name: "work", Status: statusDeploying}, 20*time.Millisecond, func(row containerView) (bool, error) {
 				observations++
 				return row.Status == statusRunning, nil
 			})
@@ -92,9 +94,9 @@ func TestUpdateLabelDistinguishesHeldFromAutoSwitch(t *testing.T) {
 func TestFollowContainerStopsAtTerminalStateAndFailsOnFailed(t *testing.T) {
 	commandState := newCommandFixture()
 
-	previousInterval := followInterval
-	followInterval = time.Millisecond
-	t.Cleanup(func() { followInterval = previousInterval })
+	previousInterval := commandState.pollingOpts.followInterval
+	commandState.pollingOpts.followInterval = time.Millisecond
+	t.Cleanup(func() { commandState.pollingOpts.followInterval = previousInterval })
 
 	var polls atomic.Int32
 	statuses := []string{statusDeploying, statusStarted, statusFailed}
@@ -114,7 +116,7 @@ func TestFollowContainerStopsAtTerminalStateAndFailsOnFailed(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = captureTestStdout(func() error {
-		return followAndRender(testStreams(), commandState.outputOpts, commandState.waitOpts, client, containerView{ID: testContainerID, Name: "app", Status: statusPending, TinfoildDeploymentID: "deploy-1"}, nil)
+		return followAndRender(commandState.pollingOpts, testStreams(), commandState.outputOpts, commandState.waitOpts, client, containerView{ID: testContainerID, Name: "app", Status: statusPending, TinfoildDeploymentID: "deploy-1"}, nil)
 	})
 	if err == nil || err.Error() != "health check failed" {
 		t.Fatalf("error = %v, want the container's error message", err)
@@ -139,7 +141,7 @@ func TestFollowAndRenderExitsNonZeroWhenInitialResponseAlreadyFailed(t *testing.
 		t.Run(mode.name, func(t *testing.T) {
 			commandState.waitOpts.noWait, commandState.outputOpts.outputFormat = mode.noWait, mode.format
 			_, err := captureTestStdout(func() error {
-				return followAndRender(testStreams(), commandState.outputOpts, commandState.waitOpts, nil, containerView{ID: testContainerID, Name: "app", Status: statusFailed, ErrorMessage: "boot failed"}, nil)
+				return followAndRender(commandState.pollingOpts, testStreams(), commandState.outputOpts, commandState.waitOpts, nil, containerView{ID: testContainerID, Name: "app", Status: statusFailed, ErrorMessage: "boot failed"}, nil)
 			})
 			if err == nil || err.Error() != "boot failed" {
 				t.Fatalf("error = %v, want the container's error message", err)

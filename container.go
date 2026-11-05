@@ -36,7 +36,7 @@ const (
 	containerSourceLocal    = "local"
 )
 
-func newContainerCommand(newClient authenticatedClientFactory, outputOpts *outputOptions, rootOpts *rootOptions) *cobra.Command {
+func newContainerCommand(pollingOpts *pollingOptions, newClient authenticatedClientFactory, outputOpts *outputOptions, rootOpts *rootOptions) *cobra.Command {
 	containerCmd := &cobra.Command{
 		Use:     "container",
 		Aliases: []string{"containers", "ct"},
@@ -45,12 +45,12 @@ func newContainerCommand(newClient authenticatedClientFactory, outputOpts *outpu
 	containerCmd.PersistentFlags().StringVarP(&outputOpts.outputFormat, "output", "o", "table", "Output format: table or json")
 	containerCmd.AddCommand(newContainerListCommand(newClient, outputOpts))
 	containerCmd.AddCommand(newContainerGetCommand(newClient, outputOpts))
-	containerCmd.AddCommand(newContainerCreateCommand(newClient, &containerCreateOptions{}, outputOpts, rootOpts, &waitOptions{}))
+	containerCmd.AddCommand(newContainerCreateCommand(pollingOpts, newClient, &containerCreateOptions{}, outputOpts, rootOpts, &waitOptions{}))
 	containerCmd.AddCommand(newContainerDeleteCommand(newClient, &containerDeleteOptions{}))
-	containerCmd.AddCommand(newContainerDeployCommand(newClient, &containerDeployOptions{}, outputOpts, &waitOptions{}))
+	containerCmd.AddCommand(newContainerDeployCommand(pollingOpts, newClient, &containerDeployOptions{}, outputOpts, &waitOptions{}))
 	containerCmd.AddCommand(newContainerStopCommand(newClient, outputOpts))
-	containerCmd.AddCommand(newContainerUpdateCommand(newClient, &containerUpdateOptions{}, outputOpts, &waitOptions{}))
-	containerCmd.AddCommand(newContainerPromoteCommand(newClient, outputOpts, &waitOptions{}))
+	containerCmd.AddCommand(newContainerUpdateCommand(pollingOpts, newClient, &containerUpdateOptions{}, outputOpts, &waitOptions{}))
+	containerCmd.AddCommand(newContainerPromoteCommand(pollingOpts, newClient, outputOpts, &waitOptions{}))
 	containerCmd.AddCommand(newContainerCancelCommand(newClient, &containerCancelOptions{}))
 	containerCmd.AddCommand(newContainerMetricsCommand(newClient, &containerMetricsOptions{}))
 	containerCmd.AddCommand(newContainerHostsCommand(newClient, outputOpts))
@@ -114,7 +114,7 @@ func newContainerGetCommand(newClient authenticatedClientFactory, outputOpts *ou
 	return containerGetCmd
 }
 
-func newContainerCreateCommand(newClient authenticatedClientFactory, containerCreateOpts *containerCreateOptions, outputOpts *outputOptions, rootOpts *rootOptions, waitOpts *waitOptions) *cobra.Command {
+func newContainerCreateCommand(pollingOpts *pollingOptions, newClient authenticatedClientFactory, containerCreateOpts *containerCreateOptions, outputOpts *outputOptions, rootOpts *rootOptions, waitOpts *waitOptions) *cobra.Command {
 	containerCreateCmd := &cobra.Command{
 		Use:   "create [name]",
 		Short: "Create a new container",
@@ -312,7 +312,7 @@ func newContainerCreateCommand(newClient authenticatedClientFactory, containerCr
 				if len(requests) > 0 {
 					return createFollowupError(created, replaceID, fmt.Errorf("the returned configuration declares no mounts; --volume was not applied"))
 				}
-				return createFollowupError(created, replaceID, followAndRender(commandStreams(cmd), outputOpts, waitOpts, client, created, nil))
+				return createFollowupError(created, replaceID, followAndRender(pollingOpts, commandStreams(cmd), outputOpts, waitOpts, client, created, nil))
 			}
 			if len(requests) > 0 {
 				if err := attachVolumes(client, &created, requests, volumes); err != nil {
@@ -329,7 +329,7 @@ func newContainerCreateCommand(newClient authenticatedClientFactory, containerCr
 			if err != nil {
 				return createFollowupError(created, replaceID, fmt.Errorf("deploy was accepted (status %s), but could not load attached volumes: %w", deployed.Status, err))
 			}
-			return createFollowupError(created, replaceID, followAndRender(commandStreams(cmd), outputOpts, waitOpts, client, deployed, attached))
+			return createFollowupError(created, replaceID, followAndRender(pollingOpts, commandStreams(cmd), outputOpts, waitOpts, client, deployed, attached))
 		},
 	}
 	containerCreateCmd.Flags().BoolVar(&waitOpts.noWait, "no-wait", false, "Return once the request is accepted")
@@ -404,7 +404,7 @@ func newContainerDeleteCommand(newClient authenticatedClientFactory, containerDe
 	return containerDeleteCmd
 }
 
-func newContainerDeployCommand(newClient authenticatedClientFactory, containerDeployOpts *containerDeployOptions, outputOpts *outputOptions, waitOpts *waitOptions) *cobra.Command {
+func newContainerDeployCommand(pollingOpts *pollingOptions, newClient authenticatedClientFactory, containerDeployOpts *containerDeployOptions, outputOpts *outputOptions, waitOpts *waitOptions) *cobra.Command {
 	containerDeployCmd := &cobra.Command{
 		Use:   "deploy [id|name]",
 		Short: "Deploy a stopped or failed container",
@@ -412,7 +412,7 @@ func newContainerDeployCommand(newClient authenticatedClientFactory, containerDe
 To change a running container, use "tinfoil container update".`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runContainerDeploy(newClient, containerDeployOpts, outputOpts, waitOpts, cmd, args)
+			return runContainerDeploy(pollingOpts, newClient, containerDeployOpts, outputOpts, waitOpts, cmd, args)
 		},
 	}
 	containerDeployCmd.Flags().BoolVar(&waitOpts.noWait, "no-wait", false, "Return once the request is accepted")
@@ -459,7 +459,7 @@ func newContainerStopCommand(newClient authenticatedClientFactory, outputOpts *o
 	return containerStopCmd
 }
 
-func newContainerUpdateCommand(newClient authenticatedClientFactory, containerUpdateOpts *containerUpdateOptions, outputOpts *outputOptions, waitOpts *waitOptions) *cobra.Command {
+func newContainerUpdateCommand(pollingOpts *pollingOptions, newClient authenticatedClientFactory, containerUpdateOpts *containerUpdateOptions, outputOpts *outputOptions, waitOpts *waitOptions) *cobra.Command {
 	containerUpdateCmd := &cobra.Command{
 		Use:   "update [id|name]",
 		Short: "Update a running container to a new tag or configuration",
@@ -467,7 +467,7 @@ func newContainerUpdateCommand(newClient authenticatedClientFactory, containerUp
 update has downtime.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runContainerUpdate(newClient, containerUpdateOpts, outputOpts, waitOpts, cmd, args)
+			return runContainerUpdate(pollingOpts, newClient, containerUpdateOpts, outputOpts, waitOpts, cmd, args)
 		},
 	}
 	containerUpdateCmd.Flags().BoolVar(&waitOpts.noWait, "no-wait", false, "Return once the request is accepted")
@@ -528,7 +528,7 @@ func newContainerHostsCommand(newClient authenticatedClientFactory, outputOpts *
 	return containerHostsCmd
 }
 
-func newContainerPromoteCommand(newClient authenticatedClientFactory, outputOpts *outputOptions, waitOpts *waitOptions) *cobra.Command {
+func newContainerPromoteCommand(pollingOpts *pollingOptions, newClient authenticatedClientFactory, outputOpts *outputOptions, waitOpts *waitOptions) *cobra.Command {
 	containerPromoteCmd := &cobra.Command{
 		Use:   "promote [id|name]",
 		Short: "Switch traffic to an update that was held for review",
@@ -549,7 +549,7 @@ func newContainerPromoteCommand(newClient authenticatedClientFactory, outputOpts
 			if outputOpts.outputFormat != "json" {
 				fmt.Fprintf(commandStreams(cmd).out, "Promoted update on %s; traffic is switching to %s.\n", c.Name, promoted.CurrentTag)
 			}
-			return followAndRender(commandStreams(cmd), outputOpts, waitOpts, client, promoted, nil)
+			return followAndRender(pollingOpts, commandStreams(cmd), outputOpts, waitOpts, client, promoted, nil)
 		},
 	}
 	containerPromoteCmd.Flags().BoolVar(&waitOpts.noWait, "no-wait", false, "Return once the request is accepted")
@@ -1083,7 +1083,7 @@ func prettyJSON(raw json.RawMessage) []byte {
 	return out
 }
 
-func runContainerDeploy(newClient authenticatedClientFactory, containerDeployOpts *containerDeployOptions, outputOpts *outputOptions, waitOpts *waitOptions, cmd *cobra.Command, args []string) error {
+func runContainerDeploy(pollingOpts *pollingOptions, newClient authenticatedClientFactory, containerDeployOpts *containerDeployOptions, outputOpts *outputOptions, waitOpts *waitOptions, cmd *cobra.Command, args []string) error {
 	body, err := buildLifecycleBody(cmd,
 		containerDeployOpts.deployTag, containerDeployOpts.deployVariables, containerDeployOpts.deploySecrets, containerDeployOpts.deploySSHKeys,
 		containerDeployOpts.deployDebug, containerDeployOpts.deployMarkLatestRelease, containerDeployOpts.deployCustomDomain, containerDeployOpts.deployHost,
@@ -1145,10 +1145,10 @@ func runContainerDeploy(newClient authenticatedClientFactory, containerDeployOpt
 	if err != nil {
 		return err
 	}
-	return followAndRender(commandStreams(cmd), outputOpts, waitOpts, client, deployed, attached)
+	return followAndRender(pollingOpts, commandStreams(cmd), outputOpts, waitOpts, client, deployed, attached)
 }
 
-func runContainerUpdate(newClient authenticatedClientFactory, containerUpdateOpts *containerUpdateOptions, outputOpts *outputOptions, waitOpts *waitOptions, cmd *cobra.Command, args []string) error {
+func runContainerUpdate(pollingOpts *pollingOptions, newClient authenticatedClientFactory, containerUpdateOpts *containerUpdateOptions, outputOpts *outputOptions, waitOpts *waitOptions, cmd *cobra.Command, args []string) error {
 	body, err := buildLifecycleBody(cmd,
 		containerUpdateOpts.updateTag, containerUpdateOpts.updateVariables, containerUpdateOpts.updateSecrets, containerUpdateOpts.updateSSHKeys,
 		containerUpdateOpts.updateDebug, containerUpdateOpts.updateMarkLatestRelease, containerUpdateOpts.updateCustomDomain, "",
@@ -1183,7 +1183,7 @@ func runContainerUpdate(newClient authenticatedClientFactory, containerUpdateOpt
 	}); err != nil {
 		return err
 	}
-	return followAndRender(commandStreams(cmd), outputOpts, waitOpts, client, updated, nil)
+	return followAndRender(pollingOpts, commandStreams(cmd), outputOpts, waitOpts, client, updated, nil)
 }
 
 func runContainerMetrics(newClient authenticatedClientFactory, containerMetricsOpts *containerMetricsOptions, cmd *cobra.Command, args []string) error {
