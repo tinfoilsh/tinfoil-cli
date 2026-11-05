@@ -596,7 +596,7 @@ func TestMonitorRestartRelinksOnlyAuthorizedSandboxes(t *testing.T) {
 	require.NoError(t, err)
 	t.Setenv(envKnownConfigs, filepath.Join(t.TempDir(), "known-configs.json"))
 	require.NoError(t, os.WriteFile(os.Getenv(envKnownConfigs), policy, 0o600))
-	commandState.rootOpts.dependencies.verifySandboxEvidence = func(doc, _ []byte, source string) (attestedEvidence, error) {
+	commandState.rootOpts.connections.verifySandboxEvidence = func(doc, _ []byte, source string) (attestedEvidence, error) {
 		for _, f := range fixtures {
 			if strings.Contains(string(doc), f.instance) && strings.Contains(source, storageHash(doc)) {
 				host, err := x509.MarshalPKIXPublicKey(f.host.PublicKey().(ssh.CryptoPublicKey).CryptoPublicKey())

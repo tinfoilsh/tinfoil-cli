@@ -55,7 +55,7 @@ func TestReviewConnectInvalidHostFailsBeforeProxy(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { json.NewEncoder(w).Encode(c) }))
 	defer server.Close()
 	configureContainerPromotionTest(commandState, t, server.URL)
-	commandState.rootOpts.dependencies.proxyClient = func(context.Context, string, string) (*http.Client, error) {
+	commandState.dependencies.proxyClient = func(context.Context, string, string) (*http.Client, error) {
 		t.Fatal("invalid descriptor reached proxy initialization")
 		return nil, nil
 	}
@@ -200,7 +200,7 @@ func TestReviewConnectCommandUsesActualDescriptor(t *testing.T) {
 	defer server.Close()
 	configureContainerPromotionTest(commandState, t, server.URL)
 	gateEnv(t, `{"allow":{"projects":["acme/app"]}}`) // the gate is not under test here
-	commandState.rootOpts.dependencies.proxyClient = func(_ context.Context, host, source string) (*http.Client, error) {
+	commandState.dependencies.proxyClient = func(_ context.Context, host, source string) (*http.Client, error) {
 		if host != strings.TrimPrefix(upstream.URL, "https://") || source != "acme/app@v2" {
 			t.Fatalf("proxy target %s %s", host, source)
 		}
@@ -216,7 +216,7 @@ func TestReviewConnectCommandUsesActualDescriptor(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			var response []byte
-			commandState.rootOpts.dependencies.serveProxy = func(address string, handler http.Handler) error {
+			commandState.dependencies.serveProxy = func(address string, handler http.Handler) error {
 				if address != test.address {
 					t.Fatalf("proxy listener %q, want %q", address, test.address)
 				}
@@ -256,7 +256,7 @@ func TestConnectCommandFailsClosedWithoutTrustStore(t *testing.T) {
 	defer server.Close()
 	configureContainerPromotionTest(commandState, t, server.URL)
 	gateEnv(t, "") // empty store, nothing allowed
-	commandState.rootOpts.dependencies.proxyClient = func(context.Context, string, string) (*http.Client, error) {
+	commandState.dependencies.proxyClient = func(context.Context, string, string) (*http.Client, error) {
 		t.Fatal("untrusted config reached proxy initialization")
 		return nil, nil
 	}

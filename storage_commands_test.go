@@ -81,7 +81,7 @@ func newStorageCPFixture(commandState *commandFixture, t *testing.T) *storageCPF
 func executeStorageCLI(commandState *commandFixture, t *testing.T, factory storageStoreFactory, args ...string) (string, error) {
 	t.Helper()
 	var output bytes.Buffer
-	dependencies := commandState.rootOpts.dependencies
+	dependencies := commandState.dependencies
 	dependencies.volumeStore = factory
 	dependencies.in, dependencies.out, dependencies.err = strings.NewReader(""), &output, &output
 	root := newRootCommandWithDependencies(dependencies)

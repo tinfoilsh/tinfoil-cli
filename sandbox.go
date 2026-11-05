@@ -585,7 +585,7 @@ type relayReply struct {
 }
 
 func sandboxVerifier(rootOpts *rootOptions) sandboxEvidenceVerifier {
-	if verify := rootOpts.dependencies.verifySandboxEvidence; verify != nil {
+	if verify := rootOpts.connections.verifySandboxEvidence; verify != nil {
 		return verify
 	}
 	return func(doc, nonce []byte, source string) (attestedEvidence, error) {

@@ -53,6 +53,7 @@ func replaceTestCommand(root, replacement *cobra.Command) {
 }
 
 type commandFixture struct {
+	dependencies          commandDependencies
 	attestSSHOpts         *attestSSHOptions
 	attestationVerifyOpts *attestationVerifyOptions
 	containerCancelOpts   *containerCancelOptions

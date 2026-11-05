@@ -388,7 +388,7 @@ func openOwnerChannel(client *ssh.Client, dir, host, token string) (ssh.Channel,
 	return owner.OpenChannel(client, dir, host, token)
 }
 
-func newMonitorOpenCommand(newScope scopeClientFactory, identityOpts *identityOptions, rootOpts *rootOptions, trustOpts *trustOptions) *cobra.Command {
+func newMonitorOpenCommand(newScope scopeClientFactory, identityOpts *identityOptions, rootOpts *rootOptions, trustOpts *trustOptions, openBrowser func(string) error) *cobra.Command {
 	command := &cobra.Command{
 		Use: "open [id|name]", Short: "Unlock and forward the Monitor UI over attested SSH", Args: cobra.ExactArgs(1),
 		Long: "Also restores this device's sandbox connectivity.",
@@ -415,7 +415,7 @@ func newMonitorOpenCommand(newScope scopeClientFactory, identityOpts *identityOp
 			for _, failure := range relinkSandboxes(commandStreams(cmd), identityOpts, rootOpts, trustOpts, cmd.Context(), scope, cp, m, row.ID) {
 				fmt.Fprintf(cmd.ErrOrStderr(), "Could not re-link %v\n", failure)
 			}
-			return serveMonitorPanel(cmd, m.client, m.dir, "127.0.0.1:0", rootOpts.dependencies.browser())
+			return serveMonitorPanel(cmd, m.client, m.dir, "127.0.0.1:0", openBrowser)
 		},
 	}
 	addTrustDangerousFlag(trustOpts, command)

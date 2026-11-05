@@ -91,7 +91,10 @@ func newRootCommand() *cobra.Command {
 }
 
 func newRootCommandWithDependencies(dependencies commandDependencies) *cobra.Command {
-	rootOpts := &rootOptions{dependencies: dependencies}
+	rootOpts := &rootOptions{connections: connectionDependencies{
+		proxyClient: dependencies.proxyClient, serveProxy: dependencies.serveProxy,
+		verifySandboxEvidence: dependencies.verifySandboxEvidence,
+	}}
 	commandVersion := dependencies.version
 	if commandVersion == "" {
 		commandVersion = version
@@ -133,7 +136,7 @@ func newRootCommandWithDependencies(dependencies commandDependencies) *cobra.Com
 	monitorIdentity, sandboxIdentity := &identityOptions{}, &identityOptions{}
 	monitorOutput, sandboxOutput := &outputOptions{}, &outputOptions{}
 	monitor, sandbox := newMonitorCommand(), newSandboxCommand(accounts.authedClient, accounts.currentScope, sandboxIdentity, sandboxOutput, rootOpts)
-	monitor.AddCommand(newMonitorOpenCommand(accounts.currentScope, monitorIdentity, rootOpts, &trustOptions{}))
+	monitor.AddCommand(newMonitorOpenCommand(accounts.currentScope, monitorIdentity, rootOpts, &trustOptions{}, dependencies.browser()))
 	monitor.AddCommand(newManagedStatusCmd(accounts.authedClient, monitorOutput, "monitor"))
 	addManagedCommands(accounts.authedClient, accounts.currentScope, monitorIdentity, monitorOutput, monitor)
 	addManagedCommands(accounts.authedClient, accounts.currentScope, sandboxIdentity, sandboxOutput, sandbox)

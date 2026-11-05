@@ -70,7 +70,7 @@ func runProxy(proxyOpts *proxyOptions, rootOpts *rootOptions, cmd *cobra.Command
 			rootOpts.repo = router.Repo()
 			httpClient = router.Client
 		}
-	} else if client := rootOpts.dependencies.proxyClient; client != nil {
+	} else if client := rootOpts.connections.proxyClient; client != nil {
 		httpClient, err = client(cmd.Context(), rootOpts.enclaveHost, rootOpts.repo)
 	} else {
 		opts, parseErr := verificationOptions(rootOpts, rootOpts.repo, "")
@@ -106,7 +106,7 @@ func runProxy(proxyOpts *proxyOptions, rootOpts *rootOptions, cmd *cobra.Command
 		"address":      addr,
 		"enclave_host": rootOpts.enclaveHost,
 	}).Info("starting HTTP proxy server")
-	serve := rootOpts.dependencies.serveProxy
+	serve := rootOpts.connections.serveProxy
 	if serve == nil {
 		serve = http.ListenAndServe
 	}

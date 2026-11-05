@@ -174,7 +174,7 @@ type repoConfigPROptions struct {
 
 type rootOptions struct {
 	registryOrigin   func() (string, error)
-	dependencies     commandDependencies
+	connections      connectionDependencies
 	enclaveHost      string
 	localConfigBytes []byte
 	localConfigFile  string
@@ -185,6 +185,12 @@ type rootOptions struct {
 }
 
 type sandboxEvidenceVerifier func(doc, nonce []byte, source string) (attestedEvidence, error)
+
+type connectionDependencies struct {
+	proxyClient           func(context.Context, string, string) (*http.Client, error)
+	serveProxy            func(string, http.Handler) error
+	verifySandboxEvidence sandboxEvidenceVerifier
+}
 
 type commandDependencies struct {
 	volumeStore           storageStoreFactory
