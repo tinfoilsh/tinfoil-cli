@@ -327,6 +327,14 @@ func panelToken() string {
 }
 
 func (m *Monitor) Close() { m.close() }
+
+func (m *Monitor) ValidateSandboxCustody(row controlplane.Container) error {
+	if m.keys.mode == "umk" && row.OwnerKeyMode == "tmk" {
+		return fmt.Errorf("a UMK Monitor cannot serve the synced sandbox %s", row.Name)
+	}
+	return nil
+}
+
 func (m *Monitor) OpenChannel(host, token string) (ssh.Channel, error) {
 	return OpenChannel(m.client, m.dir, host, token)
 }

@@ -8,11 +8,13 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/x509"
+	"encoding/json"
 	"encoding/pem"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"os/user"
@@ -113,6 +115,16 @@ func TestMonitorPanelAndNativeTransportAgainstRealMonitor(t *testing.T) {
 	session, err := service.ConnectMonitor(t.Context(), scope, nil, &row, true, monitorTestVerifier{host: hostSigner.PublicKey()})
 	require.NoError(t, err)
 	defer session.Close()
+	synced := containerView{ID: "22222222-2222-4222-8222-222222222222", Name: "synced", Status: statusRunning, ClerkUserID: scope.UserID, OwnerKeyMode: "tmk"}
+	policy := sandboxNetworkPolicy(row.ID)
+	synced.NetworkPolicy = &policy
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/api/containers/"+synced.ID, r.URL.Path)
+		json.NewEncoder(w).Encode(synced)
+	}))
+	defer api.Close()
+	err = relinkSandbox(t.Context(), accountScope(scope), newCPClient(cliConfig{ControlplaneURL: api.URL}), &monitorSession{session}, row.ID, synced.ID)
+	require.ErrorContains(t, err, "a UMK Monitor cannot serve the synced sandbox", "custody must be checked before reviewing the missing workload configuration")
 	dir := fixtureResourceDirectory(service.ConfigPath, accountScope(scope), row.ID, row.Name)
 	nativeSandboxTransport(t, sshAddress, hostSigner.PublicKey(), dir)
 	ownerProfile := sshProfile{name: "personal", hostName: host, port: number, user: "owner", identityFile: identity, hostKey: hostSigner.PublicKey(), hostKeyAlias: "monitor.example"}

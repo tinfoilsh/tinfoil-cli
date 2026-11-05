@@ -77,6 +77,8 @@ type Sandbox struct {
 	noMonitor bool
 }
 
+// OpenSandbox transfers the Monitor connection to the returned sandbox session.
+// On failure, the caller still owns the Monitor.
 func (s *Service) OpenSandbox(ctx context.Context, scope Scope, cp *controlplane.Client, target *Workload, monitor *Monitor, verifier Verifier) (_ *Sandbox, err error) {
 	row := target.Container
 	binding, err := SandboxBinding(scope, target)
@@ -171,13 +173,15 @@ func (service *Service) openSandbox(scope Scope, target *Workload, binding mkBin
 	return s, nil
 }
 
+// RelinkSandbox keeps the shared Monitor open and returns only public connection
+// information after releasing the sandbox's in-memory keys.
 func (service *Service) RelinkSandbox(ctx context.Context, scope Scope, cp *controlplane.Client, m *Monitor, monitorID, id string, target *Workload, verifier Verifier) (*ConnectionInfo, error) {
 	row := &target.Container
 	if row.ID != id || row.ClerkUserID != scope.UserID || row.Status != "running" || !SandboxNetworkMatches(*row) || row.NetworkPolicy.Egress[0].ContainerID != monitorID {
 		return nil, errors.New("its inventory changed while re-linking")
 	}
-	if m.keys.mode == "umk" && row.OwnerKeyMode == "tmk" {
-		return nil, fmt.Errorf("a UMK Monitor cannot serve the synced sandbox %s", row.Name)
+	if err := m.ValidateSandboxCustody(*row); err != nil {
+		return nil, err
 	}
 	binding, err := SandboxBinding(scope, target)
 	if err != nil {

@@ -293,6 +293,9 @@ func relinkSandbox(ctx context.Context, scope accountScope, cp *cpClient, m *mon
 	if row.ID != id || row.ClerkUserID != scope.UserID || row.Status != statusRunning || !sandboxNetworkMatches(*row) || row.NetworkPolicy.Egress[0].ContainerID != monitorID {
 		return errors.New("its inventory changed while re-linking")
 	}
+	if err := m.ValidateSandboxCustody(*row); err != nil {
+		return err
+	}
 	target, err := resolveWorkload(*row, defaultSandboxRepo, "")
 	if err != nil {
 		return err
