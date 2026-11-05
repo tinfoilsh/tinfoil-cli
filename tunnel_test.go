@@ -338,7 +338,7 @@ func TestNativeSSHProfilePinsDialHost(t *testing.T) {
 		wantHost     string
 		wantPort     int
 	}{
-		{name: "managed container", published: 11234, wantHost: "console.tinfoil.sh", wantPort: 11234},
+		{name: "managed container", published: 11234, wantHost: "debug.tinfoil.sh", wantPort: 11234},
 		{name: "managed override", published: 11234, hostOverride: "forwarder.test", portOverride: 2222, wantHost: "forwarder.test", wantPort: 2222},
 		{name: "bare hostname", wantHost: "enclave.test", wantPort: 22},
 		{name: "bare hostname with port", portOverride: 2222, wantHost: "enclave.test", wantPort: 2222},

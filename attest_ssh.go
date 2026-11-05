@@ -28,7 +28,7 @@ import (
 const attestedHostKeyID = "host-ssh"
 
 // managedSSHHost forwards controlplane-assigned SSH ports to their enclaves.
-const managedSSHHost = "console.tinfoil.sh"
+const managedSSHHost = "debug.tinfoil.sh"
 
 // Profiles live under ~/.ssh so the Include and UserKnownHostsFile paths stay relative.
 const sshIncludeGlob = "tinfoil/*.conf"
@@ -50,7 +50,7 @@ func init() {
 	rootCmd.AddCommand(attestSSHCmd)
 	flags := attestSSHCmd.Flags()
 	flags.StringVar(&attestSSHName, "name", "", "Host alias for the profile (default: HOST)")
-	flags.StringVar(&attestSSHHost, "ssh-host", "", "Hostname ssh dials (default: console.tinfoil.sh for a container with a published SSH port, else HOST)")
+	flags.StringVar(&attestSSHHost, "ssh-host", "", "Hostname ssh dials (default: debug.tinfoil.sh for a container with a published SSH port, else HOST)")
 	flags.StringVar(&attestSSHUser, "user", "root", "Login user written to the profile")
 	flags.UintVar(&attestSSHPort, "ssh-port", 0, "Port ssh dials (default: the container's published SSH port, else 22)")
 	flags.StringVar(&attestSSHIdentity, "identity", "", "IdentityFile written to the profile")
