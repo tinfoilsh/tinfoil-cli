@@ -737,6 +737,9 @@ var containerMetricsCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
+		if err := checkManagedKind(cmd.Annotations[managedKindAnnotation], *c); err != nil {
+			return err
+		}
 		q := url.Values{"time": []string{metricsTime}}
 		var raw json.RawMessage
 		if _, err := client.do("GET", pathf("/api/containers/%s/metrics", c.ID), q, nil, &raw); err != nil {

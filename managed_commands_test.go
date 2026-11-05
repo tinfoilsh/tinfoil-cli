@@ -30,7 +30,7 @@ func TestManagedAliasesRejectWrongKindBeforeMutation(t *testing.T) {
 		json.NewEncoder(w).Encode(row)
 	})
 	for _, kind := range []string{"sandbox", "monitor"} {
-		for _, verb := range []string{"start", "stop", "delete", "update"} {
+		for _, verb := range []string{"start", "stop", "delete", "update", "metrics"} {
 			for _, debug := range []bool{false, true} {
 				row.Repo, row.Debug = "other/repo", debug
 				if debug {
@@ -40,6 +40,27 @@ func TestManagedAliasesRejectWrongKindBeforeMutation(t *testing.T) {
 			}
 		}
 	}
+}
+
+func TestManagedMetricsUseTheChosenWindow(t *testing.T) {
+	row := containerView{ID: testContainerID, Name: "work", Repo: defaultSandboxRepo}
+	window := ""
+	managedTestAPI(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method + " " + r.URL.Path {
+		case "GET /api/containers/" + row.ID:
+			json.NewEncoder(w).Encode(row)
+		case "GET /api/containers/" + row.ID + "/metrics":
+			window = r.URL.Query().Get("time")
+			w.Write([]byte(`{"data_points":[]}`))
+		default:
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+			http.NotFound(w, r)
+		}
+	})
+	out, err := captureTestStdout(func() error { return executeLifecycleCLI(t, "sandbox", "metrics", row.ID, "--time", "1h") })
+	require.NoError(t, err)
+	require.Equal(t, "1h", window)
+	require.Contains(t, string(out), `"data_points"`)
 }
 
 func TestMonitorStopAndDeleteIncludeItsSandboxes(t *testing.T) {

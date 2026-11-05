@@ -32,7 +32,8 @@ func init() {
 		group.PersistentFlags().StringVar(&attestSSHIdentity, "identity", "", "Owner SSH identity file")
 		update := newManagedContainerCmd(group.Name(), "update", containerUpdateCmd, "tag", "yes", "no-wait")
 		update.Long = "Review and apply a release update, switching traffic automatically. The shared update plan and downtime confirmation still apply, including with --no-wait."
-		group.AddCommand(update, newManagedCreateCmd(group.Name()))
+		metrics := newManagedContainerCmd(group.Name(), "metrics", containerMetricsCmd, "time")
+		group.AddCommand(update, metrics, newManagedCreateCmd(group.Name()))
 	}
 }
 
