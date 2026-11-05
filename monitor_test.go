@@ -115,6 +115,23 @@ func TestMonitorPanelAndNativeTransportAgainstRealMonitor(t *testing.T) {
 	defer session.Close()
 	dir := fixtureResourceDirectory(service.ConfigPath, accountScope(scope), row.ID, row.Name)
 	nativeSandboxTransport(t, sshAddress, hostSigner.PublicKey(), dir)
+	ownerProfile := sshProfile{name: "personal", hostName: host, port: number, user: "owner", identityFile: identity, hostKey: hostSigner.PublicKey(), hostKeyAlias: "monitor.example"}
+	config, pins := filepath.Join(home, "owner_config"), filepath.Join(home, "owner_pins")
+	require.NoError(t, os.WriteFile(config, []byte(ownerProfile.render()), 0o600))
+	if _, err := exec.LookPath("ssh"); err == nil {
+		for index, key := range []ssh.PublicKey{hostSigner.PublicKey(), testHostKey(t)} {
+			ownerProfile.hostKey = key
+			require.NoError(t, os.WriteFile(pins, []byte(ownerProfile.pin()), 0o600))
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			output, err := exec.CommandContext(ctx, "ssh", "-F", config, "-o", "BatchMode=yes", "-o", "UserKnownHostsFile="+pins, "personal", "true").CombinedOutput()
+			cancel()
+			require.Error(t, err, "Monitor refuses interactive sessions")
+			require.Equal(t, index != 0, strings.Contains(string(output), "Host key verification failed"), string(output))
+			if index == 0 {
+				require.Contains(t, string(output), "open failed")
+			}
+		}
+	}
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
 	reader, writer := io.Pipe()

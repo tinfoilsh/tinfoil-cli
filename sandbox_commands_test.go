@@ -200,3 +200,33 @@ func TestContainedProfileJumpsThroughMonitorAndKeepsItsAlias(t *testing.T) {
 	require.Error(t, pins("work.acme.sandboxes.tinfoil.dev:22", remote, boot), "the previous boot is no longer trusted")
 	require.Error(t, pins("work.acme.sandboxes.tinfoil.dev:22", remote, monitorKey), "Monitor cannot impersonate the sandbox")
 }
+
+func TestRepinSandboxKeepsAliasesAndOtherResources(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	dir := filepath.Join(home, ".ssh", "tinfoil")
+	require.NoError(t, os.MkdirAll(dir, 0o700))
+	const resource = "https://cp.example//user_owner/resource"
+	alias := filepath.Join(dir, "saved-alias.conf")
+	require.NoError(t, os.WriteFile(alias, []byte("# tinfoil-resource: "+resource+"\nHost saved-alias\n"), 0o600))
+	const other = "# tinfoil-resource: another/resource\nHost other\n"
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "other.conf"), []byte(other), 0o600))
+	host, monitor := testHostKey(t), testHostKey(t)
+	session := &sandboxSession{profile: sshProfile{resourceID: resource, name: "renamed-work", hostName: routeName(host), port: defaultSSHPort, user: sandboxLoginUser,
+		identityFile: filepath.Join(home, "owner"), hostKey: host, hostKeyAlias: "work.example", jump: monitorJump("renamed-work", "monitor.example", defaultSSHPort, home, monitor, "monitor.example")}}
+	require.NoError(t, session.repinInstalled())
+	config, err := os.ReadFile(alias)
+	require.NoError(t, err)
+	require.Contains(t, string(config), "Host saved-alias\n")
+	require.Contains(t, string(config), "ProxyJump saved-alias.monitor\n")
+	pins, err := knownhosts.New(filepath.Join(dir, "saved-alias.known_hosts"))
+	require.NoError(t, err)
+	remote := &net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: defaultSSHPort}
+	require.NoError(t, pins("work.example:22", remote, host))
+	require.NoError(t, pins("monitor.example:22", remote, monitor))
+	retained, err := os.ReadFile(filepath.Join(dir, "other.conf"))
+	require.NoError(t, err)
+	require.Equal(t, other, string(retained))
+	require.NoFileExists(t, filepath.Join(dir, "other.known_hosts"))
+	require.NoFileExists(t, filepath.Join(dir, "renamed-work.conf"), "re-linking only updates installed aliases")
+}
