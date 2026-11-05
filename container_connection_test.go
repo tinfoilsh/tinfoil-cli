@@ -7,7 +7,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -56,6 +55,10 @@ func TestReviewConnectInvalidHostFailsBeforeProxy(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { json.NewEncoder(w).Encode(c) }))
 	defer server.Close()
 	configureContainerPromotionTest(commandState, t, server.URL)
+	commandState.rootOpts.dependencies.proxyClient = func(context.Context, string, string) (*http.Client, error) {
+		t.Fatal("invalid descriptor reached proxy initialization")
+		return nil, nil
+	}
 	_, err := captureTestStdout(func() error {
 		return executeLifecycleCLI(commandState, t, "container", "connect", testContainerID, "--review")
 	})
@@ -203,23 +206,41 @@ func TestReviewConnectCommandUsesActualDescriptor(t *testing.T) {
 		}
 		return upstream.Client(), nil
 	}
-	var response []byte
-	commandState.rootOpts.dependencies.serveProxy = func(_ string, handler http.Handler) error {
-		proxy := httptest.NewServer(handler)
-		defer proxy.Close()
-		res, err := proxy.Client().Get(proxy.URL + "/check")
-		if err != nil {
-			return err
-		}
-		defer res.Body.Close()
-		response, err = io.ReadAll(res.Body)
-		return err
-	}
-	_, err := captureTestStdout(func() error {
-		return executeLifecycleCLI(commandState, t, "container", "connect", testContainerID, "--review")
-	})
-	if err != nil || string(response) != "review response" {
-		t.Fatalf("connect err=%v response=%q", err, response)
+	for _, test := range []struct {
+		name    string
+		flags   []string
+		address string
+	}{
+		{name: "defaults", address: "127.0.0.1:8080"},
+		{name: "explicit listener", flags: []string{"--bind", "127.0.0.2", "--port", "43123"}, address: "127.0.0.2:43123"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var response []byte
+			commandState.rootOpts.dependencies.serveProxy = func(address string, handler http.Handler) error {
+				if address != test.address {
+					t.Fatalf("proxy listener %q, want %q", address, test.address)
+				}
+				proxy := httptest.NewServer(handler)
+				defer proxy.Close()
+				res, err := proxy.Client().Get(proxy.URL + "/check")
+				if err != nil {
+					return err
+				}
+				defer res.Body.Close()
+				response, err = io.ReadAll(res.Body)
+				return err
+			}
+			args := append([]string{"container", "connect", testContainerID, "--review"}, test.flags...)
+			out, err := captureTestStdout(func() error {
+				return executeLifecycleCLI(commandState, t, args...)
+			})
+			if err != nil || string(response) != "review response" {
+				t.Fatalf("connect err=%v response=%q", err, response)
+			}
+			if !strings.Contains(string(out), upstream.URL+" (expected acme/app@v2)") {
+				t.Fatalf("missing selected endpoint and reference: %s", out)
+			}
+		})
 	}
 }
 
@@ -235,17 +256,14 @@ func TestConnectCommandFailsClosedWithoutTrustStore(t *testing.T) {
 	defer server.Close()
 	configureContainerPromotionTest(commandState, t, server.URL)
 	gateEnv(t, "") // empty store, nothing allowed
+	commandState.rootOpts.dependencies.proxyClient = func(context.Context, string, string) (*http.Client, error) {
+		t.Fatal("untrusted config reached proxy initialization")
+		return nil, nil
+	}
 	// Force a non-TTY stdin so the gate takes the fail-closed branch even
 	// when the test runs under a terminal.
-	pipeR, pipeW, err := os.Pipe()
-	if err != nil {
-		t.Fatal(err)
-	}
-	pipeW.Close()
-	oldStdin := os.Stdin
-	os.Stdin = pipeR
-	t.Cleanup(func() { os.Stdin = oldStdin; pipeR.Close() })
-	_, err = captureTestStdout(func() error { return executeLifecycleCLI(commandState, t, "container", "connect", testContainerID) })
+	commandState.rootCmd.SetIn(strings.NewReader(""))
+	_, err := captureTestStdout(func() error { return executeLifecycleCLI(commandState, t, "container", "connect", testContainerID) })
 	if err == nil || !strings.Contains(err.Error(), "--repo") {
 		t.Fatalf("expected fail-closed with guidance, got %v", err)
 	}
