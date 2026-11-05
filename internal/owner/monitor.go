@@ -330,5 +330,35 @@ func (m *Monitor) Close() { m.close() }
 func (m *Monitor) OpenChannel(host, token string) (ssh.Channel, error) {
 	return OpenChannel(m.client, m.dir, host, token)
 }
-func (m *Monitor) Wait() error       { return m.client.Wait() }
-func (m *Monitor) Disconnect() error { return m.client.Close() }
+
+func (m *Monitor) ForwardPanel(ctx context.Context, listener net.Listener, token string) error {
+	ctx, stop := context.WithCancel(ctx)
+	defer stop()
+	go func() { m.client.Wait(); stop() }()
+	go func() { <-ctx.Done(); listener.Close(); m.client.Close() }()
+	for {
+		local, err := listener.Accept()
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil
+			}
+			return err
+		}
+		go func() {
+			defer local.Close()
+			stop := context.AfterFunc(ctx, func() { local.Close() })
+			defer stop()
+			remote, err := m.OpenChannel(listener.Addr().String(), token)
+			if err != nil {
+				return
+			}
+			defer remote.Close()
+			done := make(chan struct{})
+			go func() { io.Copy(remote, local); remote.CloseWrite(); close(done) }()
+			io.Copy(local, remote)
+			local.Close()
+			remote.Close()
+			<-done
+		}()
+	}
+}

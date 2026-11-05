@@ -141,8 +141,6 @@ func serveMonitorPanel(cmd *cobra.Command, monitor *monitorSession, address stri
 		return err
 	}
 	probe.Close()
-	go func() { monitor.Wait(); stop() }()
-	go func() { <-ctx.Done(); listener.Close(); monitor.Disconnect() }()
 	url := fmt.Sprintf("http://%s/app/#session=%s", listener.Addr(), session)
 	fmt.Fprintf(cmd.OutOrStdout(), "Local Monitor panel: %s\n", url)
 	fmt.Fprintln(cmd.ErrOrStderr(), "Keep this command running. Ctrl-C closes the SSH connection. Owner credentials stay out of the browser.")
@@ -155,31 +153,7 @@ func serveMonitorPanel(cmd *cobra.Command, monitor *monitorSession, address stri
 			}
 		}()
 	}
-	for {
-		local, err := listener.Accept()
-		if err != nil {
-			if ctx.Err() != nil {
-				return nil
-			}
-			return err
-		}
-		go func() {
-			defer local.Close()
-			stop := context.AfterFunc(ctx, func() { local.Close() })
-			defer stop()
-			remote, err := monitor.OpenChannel(listener.Addr().String(), session)
-			if err != nil {
-				return
-			}
-			defer remote.Close()
-			done := make(chan struct{})
-			go func() { io.Copy(remote, local); remote.CloseWrite(); close(done) }()
-			io.Copy(local, remote)
-			local.Close()
-			remote.Close()
-			<-done
-		}()
-	}
+	return monitor.ForwardPanel(ctx, listener, session)
 }
 
 func openMonitorBrowserOnEnter(ctx context.Context, input io.Reader, url string) error {
