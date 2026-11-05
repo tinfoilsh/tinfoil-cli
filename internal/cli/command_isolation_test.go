@@ -214,6 +214,25 @@ func TestRunnerKeepsDeprecationSeparateFromHelp(t *testing.T) {
 	require.Equal(t, 2, strings.Count(diagnostic.String(), `Command "proxy" is deprecated`))
 }
 
+func TestRunnerPreservesUnknownCommandGuidance(t *testing.T) {
+	t.Setenv(envNoUpdateCheck, "1")
+	for _, test := range []struct {
+		args []string
+		path string
+	}{
+		{[]string{"not-a-command"}, "tinfoil"},
+		{[]string{"hep"}, "tinfoil"},
+	} {
+		t.Run(strings.Join(test.args, " "), func(t *testing.T) {
+			var output, diagnostic bytes.Buffer
+			require.Equal(t, 1, run(test.args, commandDependencies{out: &output, err: &diagnostic}))
+			require.Empty(t, output.String())
+			require.Contains(t, diagnostic.String(), "Error: unknown command")
+			require.Contains(t, diagnostic.String(), "Run '"+test.path+" --help' for usage.\n")
+		})
+	}
+}
+
 func TestEachTreeSuppliesItsVersionToUpdateRequests(t *testing.T) {
 	var agents []string
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

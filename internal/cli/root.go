@@ -245,6 +245,9 @@ func runCommand(rootCmd *cobra.Command, args []string, updateTransport http.Roun
 	var exited *processExit
 	if err != nil && !errors.As(err, &exited) {
 		fmt.Fprintln(rootCmd.ErrOrStderr(), "Error:", err)
+		if command, _, lookupErr := rootCmd.Find(args); lookupErr != nil {
+			fmt.Fprintf(rootCmd.ErrOrStderr(), "Run '%s --help' for usage.\n", command.CommandPath())
+		}
 	}
 	if hint := errorHint(err); hint != "" {
 		fmt.Fprintln(rootCmd.ErrOrStderr(), hint)
