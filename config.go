@@ -9,9 +9,9 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
-	"strings"
 	"time"
 
+	"github.com/tinfoilsh/tinfoil-cli/internal/config"
 	"github.com/zalando/go-keyring"
 )
 
@@ -235,15 +235,15 @@ func syncedKey(login *clerkGrant, userID string) (*syncedDEK, error) {
 }
 
 const (
-	defaultControlplaneURL = "https://api.tinfoil.sh"
+	defaultControlplaneURL = config.DefaultControlplaneURL
 
-	envAdminKey     = "TINFOIL_ADMIN_KEY"
-	envAPIKey       = "TINFOIL_API_KEY"
+	envAdminKey     = config.EnvAdminKey
+	envAPIKey       = config.EnvAPIKey
 	envTunnelAPIKey = "TINFOIL_TUNNEL_API_KEY"
 
-	adminKeyPrefix = "admin_"
-	envCPURL       = "TINFOIL_CONTROLPLANE_URL"
-	envConfigPath  = "TINFOIL_CONFIG"
+	adminKeyPrefix = config.AdminKeyPrefix
+	envCPURL       = config.EnvControlplaneURL
+	envConfigPath  = config.EnvConfigPath
 )
 
 type cliConfig struct {
@@ -253,104 +253,30 @@ type cliConfig struct {
 }
 
 func configPath() (string, error) {
-	if p := os.Getenv(envConfigPath); p != "" {
-		return p, nil
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", fmt.Errorf("locating home directory: %w", err)
-	}
-	return filepath.Join(home, ".tinfoil", "config.json"), nil
+	return config.Path()
 }
 
 func loadConfig() (cliConfig, string, error) {
-	path, err := configPath()
+	result, err := config.Load()
 	if err != nil {
 		return cliConfig{}, "", err
 	}
-
-	cfg := cliConfig{ControlplaneURL: defaultControlplaneURL}
-
-	// Reading the saved file is best-effort. A corrupt file (mid-write
-	// truncation, hand-editing typo) must not lock the user out — the env
-	// vars TINFOIL_API_KEY / TINFOIL_CONTROLPLANE_URL are documented as
-	// overrides, and `tinfoil login` itself goes through this path so a
-	// hard error here would also prevent rewriting the bad file.
-	if data, ferr := os.ReadFile(path); ferr == nil {
-		if jerr := json.Unmarshal(data, &cfg); jerr != nil {
-			fmt.Fprintf(os.Stderr, "warning: ignoring malformed %s (%v); falling back to defaults and env overrides\n", path, jerr)
-			cfg = cliConfig{ControlplaneURL: defaultControlplaneURL}
-		}
-	} else if !errors.Is(ferr, os.ErrNotExist) {
-		fmt.Fprintf(os.Stderr, "warning: cannot read %s (%v); falling back to defaults and env overrides\n", path, ferr)
+	if result.Diagnostic != nil {
+		fmt.Fprintf(os.Stderr, "warning: %v\n", result.Diagnostic)
 	}
-
-	if v := strings.TrimSpace(os.Getenv(envCPURL)); v != "" {
-		cfg.ControlplaneURL = v
-	}
-	if v := envAdminAPIKey(); v != "" {
-		cfg.APIKey = v
-	}
-
-	if cfg.ControlplaneURL == "" {
-		cfg.ControlplaneURL = defaultControlplaneURL
-	}
-	cfg.ControlplaneURL = strings.TrimRight(cfg.ControlplaneURL, "/")
-
-	return cfg, path, nil
+	return cliConfig{ControlplaneURL: result.Config.ControlplaneURL, APIKey: result.Config.APIKey}, result.Path, nil
 }
 
-// envAdminAPIKey returns the admin key override from the environment.
-// TINFOIL_ADMIN_KEY takes precedence. TINFOIL_API_KEY is shared with the
-// inference SDKs and commonly holds a tk_ key, so it only counts when it
-// actually carries an admin key; otherwise the saved login stays in effect.
 func envAdminAPIKey() string {
-	if v := strings.TrimSpace(os.Getenv(envAdminKey)); v != "" {
-		return v
-	}
-	if v := strings.TrimSpace(os.Getenv(envAPIKey)); strings.HasPrefix(v, adminKeyPrefix) {
-		return v
-	}
-	return ""
+	return config.EnvAdminAPIKey()
 }
 
 func saveConfig(cfg cliConfig) (string, error) {
-	path, err := configPath()
-	if err != nil {
-		return "", err
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return path, fmt.Errorf("creating %s: %w", filepath.Dir(path), err)
-	}
-
-	data, err := json.MarshalIndent(cfg, "", "  ")
-	if err != nil {
-		return path, fmt.Errorf("encoding config: %w", err)
-	}
-
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, append(data, '\n'), 0o600); err != nil {
-		return path, fmt.Errorf("writing %s: %w", tmp, err)
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		_ = os.Remove(tmp)
-		return path, fmt.Errorf("renaming to %s: %w", path, err)
-	}
-	return path, nil
+	return config.Save(config.Config{ControlplaneURL: cfg.ControlplaneURL, APIKey: cfg.APIKey})
 }
 
 func deleteConfig() (string, bool, error) {
-	path, err := configPath()
-	if err != nil {
-		return "", false, err
-	}
-	if err := os.Remove(path); err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return path, false, nil
-		}
-		return path, false, fmt.Errorf("removing %s: %w", path, err)
-	}
-	return path, true, nil
+	return config.Delete()
 }
 
 // requireAuth returns the loaded config or an error explaining how to
