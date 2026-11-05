@@ -83,7 +83,7 @@ func (s *Service) OpenSandbox(ctx context.Context, scope Scope, cp *controlplane
 	if err != nil {
 		return nil, err
 	}
-	dir, err := ResourceDir(s.ConfigPath, scope, row.ID, row.Name)
+	dir, err := resourceDirectory(s.ConfigPath, scope, row.ID, row.Name)
 	if err != nil {
 		return nil, err
 	}
@@ -94,7 +94,7 @@ func (s *Service) OpenSandbox(ctx context.Context, scope Scope, cp *controlplane
 	return s.openSandbox(scope, target, binding, monitor, keys, dir, verifier)
 }
 
-func SandboxBinding(scope Scope, target *Workload) (mkBinding, error) {
+func SandboxBinding(scope Scope, target *Workload) (keybundle.Binding, error) {
 	row, env := target.Container, target.Environment
 	if err := requireRunningConnection("Sandbox", row); err != nil {
 		return mkBinding{}, err
@@ -183,7 +183,7 @@ func (service *Service) RelinkSandbox(ctx context.Context, scope Scope, cp *cont
 	if err != nil {
 		return nil, err
 	}
-	dir, err := ResourceDir(service.ConfigPath, scope, row.ID, row.Name)
+	dir, err := resourceDirectory(service.ConfigPath, scope, row.ID, row.Name)
 	if err != nil {
 		return nil, err
 	}

@@ -255,7 +255,7 @@ func (m *Monitor) checkpoint(ctx context.Context) {
 }
 
 func (s *Service) monitorRecord(scope Scope, row *Workload) (string, error) {
-	dir, err := ResourceDir(s.ConfigPath, scope, row.ID, row.Name)
+	dir, err := resourceDirectory(s.ConfigPath, scope, row.ID, row.Name)
 	if err != nil {
 		return "", err
 	}

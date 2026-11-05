@@ -411,6 +411,31 @@ func TestAccountDirectoryLabelsAreSafeAndBounded(t *testing.T) {
 	}
 }
 
+func TestAccountDirectoriesUseDisplayNamesWithoutChangingIdentity(t *testing.T) {
+	for _, tc := range []struct {
+		scope  Scope
+		prefix string
+	}{
+		{Scope{ControlplaneURL: "https://cp.example", OrgID: "org_1", UserID: "user_1", OrgName: "Acme Labs"}, "org-acme-labs-"},
+		{Scope{ControlplaneURL: "https://cp.example", UserID: "user_1", UserName: "Ada Lovelace"}, "user-ada-lovelace-"},
+		{Scope{ControlplaneURL: "https://cp.example", UserID: "user_1"}, "user-user_1-"},
+	} {
+		config := filepath.Join(t.TempDir(), "config.json")
+		const id = "11111111-1111-4111-8111-111111111111"
+		dir, err := resourceDirectory(config, tc.scope, id, "work")
+		require.NoError(t, err)
+		identity := tc.scope
+		identity.OrgName, identity.UserName = "", ""
+		encoded, err := json.Marshal(identity)
+		require.NoError(t, err)
+		require.Equal(t, tc.prefix+hash(encoded), filepath.Base(filepath.Dir(dir)))
+		savedResource(t, dir)
+		renamed, err := resourceDirectory(config, identity, id, "")
+		require.NoError(t, err)
+		require.Equal(t, dir, renamed)
+	}
+}
+
 func TestResourceDirectoriesSurviveRenameAndSeparateRecreatedResources(t *testing.T) {
 	t.Setenv(envConfigPath, filepath.Join(t.TempDir(), "config.json"))
 	scope := accountScope{ControlplaneURL: "https://cp.example", OrgID: "org", UserID: "owner", OrgName: "Acme"}

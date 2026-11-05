@@ -38,7 +38,7 @@ func hash(data []byte) string {
 
 // Names make new directories readable; UUIDs identify existing credentials even
 // after a resource is renamed. Keep saved paths stable for installed SSH profiles.
-func ResourceDir(configPath string, scope Scope, id, name string) (string, error) {
+func resourceDirectory(configPath string, scope Scope, id, name string) (string, error) {
 	if !resourceIDPattern.MatchString(id) {
 		return "", errors.New("invalid resource UUID")
 	}
@@ -93,7 +93,7 @@ func accountDirectoryLabel(scope Scope) string {
 	return strings.Trim(label, ".-_")
 }
 
-func UMKRecordPath(configPath string, scope Scope, containerID string) (string, error) {
+func umkPath(configPath string, scope Scope, containerID string) (string, error) {
 	dir, err := accountDir(configPath, scope)
 	if err != nil {
 		return "", err

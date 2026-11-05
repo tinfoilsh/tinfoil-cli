@@ -110,10 +110,10 @@ func saveUMKRecord(path string, record *umkRecord) (*umkRecord, error) {
 	return testService().saveUMKRecord(path, record)
 }
 func resourceDir(scope Scope, id, name string) (string, error) {
-	return ResourceDir(os.Getenv(envConfigPath), scope, id, name)
+	return resourceDirectory(os.Getenv(envConfigPath), scope, id, name)
 }
 func umkRecordPath(scope Scope, id string) (string, error) {
-	return UMKRecordPath(os.Getenv(envConfigPath), scope, id)
+	return umkPath(os.Getenv(envConfigPath), scope, id)
 }
 func monitorRecord(scope Scope, row *workloadTarget) (string, error) {
 	return testService().monitorRecord(scope, &Workload{Container: row.containerView, Source: row.source, Environment: row.env})

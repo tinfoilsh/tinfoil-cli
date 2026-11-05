@@ -36,6 +36,25 @@ func whileSignedIn(login *clerkGrant, write func() error) error {
 	return service.WhileSignedIn(login, write)
 }
 
+func fixtureResourceDirectory(config string, scope accountScope, id, name string) string {
+	data, _ := json.Marshal(scope)
+	label := "user-" + scope.UserID
+	if scope.OrgID != "" {
+		label = "org-" + scope.OrgID
+	}
+	return filepath.Join(filepath.Dir(config), "resources", label+"-"+storageHash(data), name+"-"+id)
+}
+
+func resourceDir(scope accountScope, id, name string) (string, error) {
+	config, err := configPath()
+	return fixtureResourceDirectory(config, scope, id, name), err
+}
+
+func umkRecordPath(scope accountScope, id string) (string, error) {
+	dir, err := resourceDir(scope, id, "fixture")
+	return filepath.Join(filepath.Dir(dir), "umk-"+storageHash([]byte(id))[:32]+".json"), err
+}
+
 func testSeed(t *testing.T) []byte {
 	t.Helper()
 	seed := make([]byte, ed25519.SeedSize)
@@ -203,10 +222,10 @@ func testLogin(t *testing.T, server *httptest.Server, keys *keyStateServer) (*cp
 }
 
 func TestAccountDirectoriesUseAuthenticatedDisplayNames(t *testing.T) {
-	for _, test := range []struct{ name, response, prefix, orgID string }{
-		{"organization", `{"context_type":"organization","organization":{"id":"org_1","name":"Acme Labs"},"user_id":"user_1"}`, "org-acme-labs-", "org_1"},
-		{"personal", `{"context_type":"personal","organization":null,"user_id":"user_1","user_name":"Ada Lovelace"}`, "user-ada-lovelace-", ""},
-		{"older API", `{"context_type":"personal","organization":null,"user_id":"user_1"}`, "user-user_1-", ""},
+	for _, test := range []struct{ name, response, orgID, orgName, userName string }{
+		{"organization", `{"context_type":"organization","organization":{"id":"org_1","name":"Acme Labs"},"user_id":"user_1"}`, "org_1", "Acme Labs", ""},
+		{"personal", `{"context_type":"personal","organization":null,"user_id":"user_1","user_name":"Ada Lovelace"}`, "", "", "Ada Lovelace"},
+		{"older API", `{"context_type":"personal","organization":null,"user_id":"user_1"}`, "", "", ""},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -223,17 +242,7 @@ func TestAccountDirectoriesUseAuthenticatedDisplayNames(t *testing.T) {
 			t.Setenv(envAdminKey, "admin_test")
 			scope, _, err := currentScope()
 			require.NoError(t, err)
-			row := containerView{ID: "11111111-1111-4111-8111-111111111111", Name: "work", Repo: defaultSandboxRepo}
-			dir, err := resourceDir(scope, row.ID, row.Name)
-			require.NoError(t, err)
-			data, err := json.Marshal(accountScope{ControlplaneURL: server.URL, OrgID: test.orgID, UserID: "user_1"})
-			require.NoError(t, err)
-			require.Equal(t, test.prefix+storageHash(data), filepath.Base(filepath.Dir(dir)), "display names must not change the deployed scope hash")
-			require.NoError(t, writeStorageJSON(filepath.Join(dir, monitorProfileFile), monitorProfile{Generation: 7}, true))
-			scope.OrgName, scope.UserName, row.Name = "", "", ""
-			got, err := resourceDir(scope, row.ID, row.Name)
-			require.NoError(t, err)
-			require.Equal(t, dir, got, "lookup must not need either display name")
+			require.Equal(t, accountScope{ControlplaneURL: server.URL, OrgID: test.orgID, UserID: "user_1", OrgName: test.orgName, UserName: test.userName}, scope)
 		})
 	}
 }

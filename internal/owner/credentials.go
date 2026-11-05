@@ -92,23 +92,6 @@ func loadSigner(path string) (ssh.Signer, error) {
 	return ssh.ParsePrivateKey(data)
 }
 
-// A predictable temp name lets anyone who can write the directory pre-create a symlink we would follow.
-func writeAtomic(path string, data []byte) error {
-	tmp, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".*.tmp")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(tmp.Name())
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	return os.Rename(tmp.Name(), path)
-}
-
 func (s *mkSession) load(ctx context.Context) (*controlplane.KeyState, *mkPayload, error) {
 	state, err := s.cp.KeyState(ctx)
 	if err != nil {
@@ -264,7 +247,7 @@ func (s *Service) resolveResourceKeys(ctx context.Context, cp *controlplane.Clie
 		return keys, err
 	case "umk":
 		var err error
-		if keys.umkPath, err = UMKRecordPath(s.ConfigPath, scope, row.ID); err != nil {
+		if keys.umkPath, err = umkPath(s.ConfigPath, scope, row.ID); err != nil {
 			return nil, err
 		}
 		var record umkRecord
@@ -536,7 +519,7 @@ func (s *Service) userSigner(name, owner, dir string) (ssh.Signer, string, func(
 			for _, signer := range signers {
 				if bytes.Equal(signer.PublicKey().Marshal(), public.Marshal()) {
 					path := filepath.Join(dir, "owner.pub")
-					if err := writeAtomic(path, ssh.MarshalAuthorizedKey(public)); err != nil {
+					if err := statefile.Replace(path, ssh.MarshalAuthorizedKey(public)); err != nil {
 						conn.Close()
 						return nil, "", close, err
 					}

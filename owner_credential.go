@@ -14,22 +14,6 @@ import (
 
 type noLocalKeys = owner.NoLocalKeys
 
-func resourceDir(scope accountScope, id, name string) (string, error) {
-	path, err := configPath()
-	if err != nil {
-		return "", err
-	}
-	return owner.ResourceDir(path, owner.Scope(scope), id, name)
-}
-
-func umkRecordPath(scope accountScope, id string) (string, error) {
-	path, err := configPath()
-	if err != nil {
-		return "", err
-	}
-	return owner.UMKRecordPath(path, owner.Scope(scope), id)
-}
-
 func removeExportedKeys() error {
 	path, err := configPath()
 	if err != nil {
