@@ -3,17 +3,15 @@ package main
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
-	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
-	"syscall"
 
 	"github.com/tinfoilsh/tinfoil-cli/internal/autounlock"
+	"github.com/tinfoilsh/tinfoil-cli/internal/statefile"
 )
 
 const (
@@ -29,7 +27,7 @@ const (
 
 var storageRepoPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*/[a-z0-9_.-]+$`)
 var storageNamePattern = regexp.MustCompile(`^[A-Za-z0-9/_+=.@-]+$`)
-var errStorageLocked = errors.New("locked by another running tinfoil command")
+var errStorageLocked = statefile.ErrLocked
 
 type storageScope = autounlock.Scope
 type storageProfile = autounlock.Profile
@@ -64,97 +62,23 @@ func storageMetadataPath(scope storageScope, volume string) (string, error) {
 }
 
 func readStorageJSON(path string, out any) error {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return err
-	}
-	if err := json.Unmarshal(data, out); err != nil {
-		return fmt.Errorf("invalid storage metadata; restore it from a trusted backup")
-	}
-	return nil
+	return statefile.ReadJSON(path, out)
 }
 
 func prepareStorageDirectory(dir string) error {
-	if err := os.MkdirAll(dir, storageDirMode); err != nil {
-		return err
-	}
-	info, err := os.Lstat(dir)
-	if err != nil {
-		return err
-	}
-	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
-		return fmt.Errorf("storage directory must not be a symlink")
-	}
-	return os.Chmod(dir, storageDirMode)
+	return statefile.PrepareDirectory(dir)
 }
 
 func writeStorageJSON(path string, value any, exclusive bool) error {
-	data, err := json.MarshalIndent(value, "", "  ")
-	if err != nil {
-		return fmt.Errorf("encoding storage metadata: %w", err)
-	}
-	if err := prepareStorageDirectory(filepath.Dir(path)); err != nil {
-		return fmt.Errorf("preparing storage directory: %w", err)
-	}
-	return writeStorageFile(path, append(data, '\n'), exclusive)
+	return statefile.WriteJSON(path, value, exclusive)
 }
 
 func probeStorageDirectory(dir string) error {
-	f, err := os.CreateTemp(dir, ".storage-probe-*")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(f.Name())
-	if err := f.Close(); err != nil {
-		return err
-	}
-	path := f.Name() + ".json"
-	defer os.Remove(path)
-	if err := writeStorageFile(path, []byte("{}\n"), true); err != nil {
-		return err
-	}
-	if err := writeStorageFile(path, []byte("{}\n"), false); err != nil {
-		return err
-	}
-	if err := os.Remove(path); err != nil {
-		return err
-	}
-	return os.Remove(f.Name())
+	return statefile.ProbeDirectory(dir)
 }
 
-// The temporary file is synced before publication; exclusive publication
-// prevents concurrent commands from replacing an existing custody record.
 func writeStorageFile(path string, data []byte, exclusive bool) error {
-	f, err := os.CreateTemp(filepath.Dir(path), ".storage-*")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(f.Name())
-	if _, err := f.Write(data); err != nil {
-		_ = f.Close()
-		return err
-	}
-	if err := f.Sync(); err != nil {
-		_ = f.Close()
-		return err
-	}
-	if err := f.Close(); err != nil {
-		return err
-	}
-	if exclusive {
-		err = os.Link(f.Name(), path)
-	} else {
-		err = os.Rename(f.Name(), path)
-	}
-	if err != nil {
-		return err
-	}
-	dir, err := os.Open(filepath.Dir(path))
-	if err != nil {
-		return err
-	}
-	defer dir.Close()
-	return dir.Sync()
+	return statefile.Write(path, data, exclusive)
 }
 
 func loadStorageProfile(scope storageScope) (storageProfile, error) {
@@ -216,22 +140,7 @@ func resolveStorageScope(client *cpClient, identifier string) (storageScope, err
 }
 
 func acquireStorageLock(path string) (func(), error) {
-	if err := prepareStorageDirectory(filepath.Dir(path)); err != nil {
-		return nil, err
-	}
-	f, err := os.OpenFile(path+".lock", os.O_CREATE|os.O_WRONLY|syscall.O_NOFOLLOW, storageFileMode)
-	if err != nil {
-		return nil, err
-	}
-	// The kernel releases the lock when the process exits; removing the file would race a waiting locker.
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		f.Close()
-		if errors.Is(err, syscall.EWOULDBLOCK) {
-			return nil, fmt.Errorf("%s is %w", path, errStorageLocked)
-		}
-		return nil, err
-	}
-	return func() { _ = f.Close() }, nil
+	return statefile.Lock(path)
 }
 
 func loadStorageReceipt(scope storageScope, volume string) (storageReceipt, error) {

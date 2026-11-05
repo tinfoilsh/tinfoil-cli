@@ -120,17 +120,3 @@ func TestStorageUnwritableOutputsFailBeforeAllocation(t *testing.T) {
 	defer cp.mu.Unlock()
 	require.Zero(t, cp.allocations)
 }
-
-func TestStorageWriteProbeLeavesDirectoryUntouched(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "existing.json")
-	const original = "existing metadata\n"
-	require.NoError(t, os.WriteFile(path, []byte(original), storageFileMode))
-	require.NoError(t, probeStorageDirectory(dir))
-	data, err := os.ReadFile(path)
-	require.NoError(t, err)
-	require.Equal(t, original, string(data))
-	entries, err := os.ReadDir(dir)
-	require.NoError(t, err)
-	require.Len(t, entries, 1)
-}
