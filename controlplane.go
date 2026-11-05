@@ -43,7 +43,11 @@ type cpTokenSource struct{ client *cpClient }
 
 func (s cpTokenSource) Token(ctx context.Context) (string, error) {
 	if s.client.login != nil {
-		return s.client.login.accessToken(ctx)
+		service, err := authService()
+		if err != nil {
+			return "", err
+		}
+		return service.TokenSource(s.client.login).Token(ctx)
 	}
 	return s.client.apiKey, nil
 }

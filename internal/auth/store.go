@@ -46,12 +46,12 @@ type credentialSlot struct {
 	Deleted bool            `json:"deleted,omitempty"`
 }
 
-func (s *Store) File(name string) string {
+func (s *Store) file(name string) string {
 	return filepath.Join(s.dir, name+".json")
 }
 
 func (s *Store) readSlot(name string) (string, *credentialSlot, error) {
-	path := s.File(name)
+	path := s.file(name)
 	var slot credentialSlot
 	if err := statefile.ReadJSON(path, &slot); errors.Is(err, os.ErrNotExist) {
 		return path, nil, nil
@@ -61,7 +61,7 @@ func (s *Store) readSlot(name string) (string, *credentialSlot, error) {
 	return path, &slot, nil
 }
 
-func (s *Store) Read(name string, out any) (bool, error) {
+func (s *Store) read(name string, out any) (bool, error) {
 	_, slot, err := s.readSlot(name)
 	if err != nil || slot == nil || slot.Deleted {
 		return false, err
@@ -76,7 +76,7 @@ func (s *Store) Read(name string, out any) (bool, error) {
 	return true, json.Unmarshal([]byte(secret), out)
 }
 
-func (s *Store) Write(name string, value any) error {
+func (s *Store) write(name string, value any) error {
 	data, err := json.Marshal(value)
 	if err != nil {
 		return err
@@ -114,7 +114,7 @@ func writeCredentialSlot(path string, slot credentialSlot) error {
 	return statefile.Write(path, encoded, false)
 }
 
-func (s *Store) Delete(name string) error {
+func (s *Store) delete(name string) error {
 	path, slot, err := s.readSlot(name)
 	if slot == nil && err == nil {
 		return nil
@@ -131,8 +131,8 @@ func (s *Store) Delete(name string) error {
 	return nil
 }
 
-func (s *Store) WithLock(fn func() error) error {
-	path := s.File("credentials")
+func (s *Store) withLock(fn func() error) error {
+	path := s.file("credentials")
 	unlock, err := statefile.Lock(path)
 	for deadline := time.Now().Add(credentialLockWait); errors.Is(err, statefile.ErrLocked) && time.Now().Before(deadline); {
 		time.Sleep(credentialLockRetry)

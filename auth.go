@@ -3,43 +3,19 @@ package main
 import (
 	"bufio"
 	"context"
-	"crypto/ecdh"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"html"
 	"io"
-	"log"
-	"net"
-	"net/http"
-	"net/url"
 	"os"
 	"os/signal"
-	"path/filepath"
-	"slices"
 	"strings"
-	"sync"
 	"syscall"
-	"time"
 
 	"github.com/spf13/cobra"
-	"github.com/tinfoilsh/tinfoil-cli/internal/keybundle"
+	"github.com/tinfoilsh/tinfoil-cli/internal/auth"
 	"golang.org/x/term"
-)
-
-const (
-	loginListenPort    = "49152"
-	loginCallbackHost  = "localhost:" + loginListenPort
-	oauthCallbackHost  = "127.0.0.1:" + loginListenPort
-	oauthDonePath      = "/oauth/done"
-	loginDonePath      = "/callback/done"
-	loginLifetime      = 10 * time.Minute
-	loginCompleteWait  = 30 * time.Second
-	accessTokenSlack   = 60
-	maxOAuthReplyBytes = 64 << 10
 )
 
 func newLoginCommand() *cobra.Command {
@@ -239,554 +215,75 @@ func randomB64U(n int) string {
 	return base64.RawURLEncoding.EncodeToString(data)
 }
 
-type loginCeremony struct {
-	ctx      context.Context
-	scopes   []string
-	state    string
-	verifier string
-	expires  int64
-	syncKeys bool
-	targets  keySyncTargets
-
-	authorized chan struct{}
-	grant      *clerkGrant
-	authErr    error
-	private    *ecdh.PrivateKey
-	request    keySyncRequest
-
-	mu            sync.Mutex
-	oauthConsumed bool
-	consumed      bool
-	finished      chan struct{}
-	sent          chan struct{}
-	err           error
+func authService() (*auth.Service, error) {
+	store, err := credentialStore()
+	if err != nil {
+		return nil, err
+	}
+	settings := auth.BuildSettings{Targets: cliTargets, ClientID: clerkCLIClientID, APIScope: clerkCLIAPIScope, Issuer: clerkIssuer, APIOrigin: fixedAPIOrigin}
+	return auth.New(settings, store, nil, version, auth.Lifecycle{
+		CleanupResources: removeExportedKeys,
+		LoginCommitted: func() error {
+			cfg, path, err := loadConfig()
+			if err == nil && cfg.APIKey != "" && envAdminAPIKey() == "" {
+				if _, statErr := os.Stat(path); statErr == nil {
+					_, _, err = deleteConfig()
+				}
+			}
+			return err
+		},
+	}), nil
 }
 
 func clerkLogin(cmd *cobra.Command, syncKeys bool) error {
-	scopes, err := clerkScopes()
-	if err != nil {
-		return err
-	}
-	var targets keySyncTargets
-	if syncKeys {
-		targets, err = fixedKeySyncTargets()
-		if err != nil {
-			return err
-		}
-	}
-	listeners, err := listenLoopback()
+	service, err := authService()
 	if err != nil {
 		return err
 	}
 	ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
-	expires := time.Now().Add(loginLifetime)
-	ctx, stop := context.WithDeadline(ctx, expires)
-	defer stop()
-	ceremony := &loginCeremony{ctx: ctx, scopes: scopes, state: randomB64U(32), verifier: randomB64U(32),
-		expires: expires.Unix(), syncKeys: syncKeys, targets: targets,
-		authorized: make(chan struct{}), finished: make(chan struct{}), sent: make(chan struct{})}
-	server := &http.Server{Handler: ceremony, ReadHeaderTimeout: 10 * time.Second, ErrorLog: log.New(io.Discard, "", 0)}
-	for _, listener := range listeners {
-		go server.Serve(listener)
-		defer listener.Close()
+	result, err := service.Login(ctx, syncKeys, auth.LoginProgress{
+		Authorize: func(launch string) {
+			if !syncKeys {
+				fmt.Fprintln(cmd.ErrOrStderr(), "Tip: run `tinfoil login --sync` to also sync your sandbox keys.")
+			}
+			fmt.Fprintf(cmd.ErrOrStderr(), "Opening Clerk sign-in. If no browser opens, visit:\n\n  %s\n\nWaiting for sign-in (Ctrl-C cancels)...\n", launch)
+			go func() {
+				if err := openBrowser(launch); err != nil {
+					fmt.Fprintf(cmd.ErrOrStderr(), "Could not open your browser: %v\n", err)
+				}
+			}()
+		},
+		SignedIn: func(userID, account string) {
+			fmt.Fprintf(cmd.OutOrStdout(), "Signed in as %s (account %s).\n", userID, account)
+		},
+		SyncCode: func(code string) {
+			fmt.Fprintf(cmd.ErrOrStderr(), "\nEnter this code in the browser tab that just opened:\n\n    %s\n\nCtrl-C skips key sync and keeps your login.\n", code)
+		},
+	})
+	if err != nil {
+		return err
 	}
-	defer server.Close()
-
-	launch := clerkAuthorizationURL(ceremony.state, ceremony.verifier, scopes)
-	if !syncKeys {
-		fmt.Fprintln(cmd.ErrOrStderr(), "Tip: run `tinfoil login --sync` to also sync your sandbox keys.")
-	}
-	fmt.Fprintf(cmd.ErrOrStderr(), "Opening Clerk sign-in. If no browser opens, visit:\n\n  %s\n\nWaiting for sign-in (Ctrl-C cancels)...\n", launch)
-	go func() {
-		if err := openBrowser(launch); err != nil {
-			fmt.Fprintf(cmd.ErrOrStderr(), "Could not open your browser: %v\n", err)
-		}
-	}()
-	select {
-	case <-ceremony.authorized:
-	case <-ctx.Done():
-		select {
-		case <-ceremony.authorized:
-		default:
-			return fmt.Errorf("sign-in did not complete: %w", context.Cause(ctx))
-		}
-	}
-	if ceremony.authErr == nil {
-		fmt.Fprintf(cmd.OutOrStdout(), "Signed in as %s (account %s).\n", ceremony.grant.UserID, ceremony.grant.Account)
-		if syncKeys && ceremony.private != nil {
-			fmt.Fprintf(cmd.ErrOrStderr(), "\nEnter this code in the browser tab that just opened:\n\n    %s\n\nCtrl-C skips key sync and keeps your login.\n",
-				confirmationCode(canonicalKeySyncRequest(ceremony.request, targets)))
-		}
-	}
-	select {
-	case <-ceremony.finished:
-	case <-ctx.Done():
-		select {
-		case <-ceremony.finished:
-		default:
-			return fmt.Errorf("signed in, but key sync did not complete: %w; run `tinfoil login --sync` to try again", context.Cause(ctx))
-		}
-	}
-	// Let the browser receive its clean completion page before closing the listener.
-	select {
-	case <-ceremony.sent:
-	case <-ctx.Done():
-	case <-time.After(loginCompleteWait):
-	}
-	shutdown, done := context.WithTimeout(context.Background(), loginCompleteWait)
-	defer done()
-	server.Shutdown(shutdown)
-	if ceremony.authErr != nil {
-		return ceremony.authErr
-	}
-	if ceremony.err != nil {
-		return fmt.Errorf("signed in, but key sync failed: %w", ceremony.err)
-	}
-	if syncKeys {
+	if result.KeysSynced {
 		fmt.Fprintln(cmd.OutOrStdout(), "Sandbox keys synced to this machine.")
 	}
 	offerRegistryEnrollment(cmd)
 	return nil
 }
 
-func clerkAuthorizationURL(state, verifier string, scopes []string) string {
-	challenge := sha256.Sum256([]byte(verifier))
-	query := url.Values{"response_type": {"code"}, "client_id": {clerkCLIClientID}, "redirect_uri": {oauthCallback},
-		"scope": {strings.Join(scopes, " ")}, "state": {state}, "code_challenge_method": {"S256"},
-		"code_challenge": {base64.RawURLEncoding.EncodeToString(challenge[:])}, "resource": {fixedAPIOrigin}}
-	return clerkIssuer + "/oauth/authorize?" + query.Encode()
-}
-
-func listenLoopback() ([]net.Listener, error) {
-	v4, err := net.Listen("tcp4", net.JoinHostPort("127.0.0.1", loginListenPort))
-	if err != nil {
-		return nil, fmt.Errorf("the sign-in callback port %s is unavailable (%w); close the program using it and retry", loginListenPort, err)
-	}
-	v6, err := net.Listen("tcp6", net.JoinHostPort("::1", loginListenPort))
-	if err == nil {
-		return []net.Listener{v4, v6}, nil
-	}
-	if errors.Is(err, syscall.EADDRINUSE) {
-		v4.Close()
-		return nil, fmt.Errorf("the sign-in callback port %s is in use on [::1]; close the program using it and retry", loginListenPort)
-	}
-	return []net.Listener{v4}, nil
-}
-
-func (c *loginCeremony) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	header := w.Header()
-	header.Set("Cache-Control", "no-store")
-	header.Set("Referrer-Policy", "no-referrer")
-	header.Set("X-Content-Type-Options", "nosniff")
-	header.Set("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'")
-	host := loginCallbackHost
-	if r.URL.Path == "/oauth/callback" || r.URL.Path == oauthDonePath {
-		host = oauthCallbackHost
-	}
-	if r.Method != http.MethodGet || r.Host != host {
-		loginPage(w, http.StatusBadRequest, "This is not a Tinfoil sign-in request.")
-		return
-	}
-	switch r.URL.Path {
-	case "/oauth/callback":
-		c.oauthCallback(w, r)
-	case oauthDonePath:
-		select {
-		case <-c.authorized:
-		case <-r.Context().Done():
-			return
-		}
-		if c.authErr == nil && c.syncKeys && c.private != nil {
-			http.Redirect(w, r, keySyncLaunchURL(c.request, c.targets), http.StatusSeeOther)
-			return
-		}
-		c.done(w, r)
-	case "/callback":
-		c.keyCallback(w, r)
-	case loginDonePath:
-		c.done(w, r)
-	default:
-		loginPage(w, http.StatusNotFound, "Not found.")
-	}
-}
-
-func parseOAuthCallback(query, state string) (code, failure string, err error) {
-	bad := errors.New("the Clerk authorization reply is malformed or belongs to another sign-in")
-	values, parseErr := url.ParseQuery(query)
-	if parseErr != nil || len(query) > 8192 || values.Get("state") != state {
-		return "", "", bad
-	}
-	for name, value := range values {
-		if !slices.Contains([]string{"code", "state", "iss", "error", "error_description", "error_uri"}, name) || len(value) != 1 || len(value[0]) > 2048 {
-			return "", "", bad
-		}
-	}
-	if issuer, present := values["iss"]; present && issuer[0] != clerkIssuer {
-		return "", "", bad
-	}
-	code, failure = values.Get("code"), values.Get("error")
-	if (code == "") == (failure == "") ||
-		(code != "" && (values.Has("error") || values.Has("error_description") || values.Has("error_uri") || !printableASCII(code))) ||
-		(failure != "" && (values.Has("code") || !printableASCII(failure))) {
-		return "", "", bad
-	}
-	return code, failure, nil
-}
-
-func (c *loginCeremony) oauthCallback(w http.ResponseWriter, r *http.Request) {
-	code, failure, err := parseOAuthCallback(r.URL.RawQuery, c.state)
-	if err != nil || c.ctx.Err() != nil || time.Now().Unix() >= c.expires {
-		loginPage(w, http.StatusBadRequest, "This Clerk authorization reply is invalid or expired.")
-		return
-	}
-	c.mu.Lock()
-	consumed := c.oauthConsumed
-	c.oauthConsumed = true
-	c.mu.Unlock()
-	if consumed {
-		loginPage(w, http.StatusConflict, "This authorization reply was already used.")
-		return
-	}
-	go c.authorize(code, failure)
-	// Remove the authorization code from the browser URL before the exchange finishes.
-	http.Redirect(w, r, oauthDonePath, http.StatusSeeOther)
-}
-
-func (c *loginCeremony) authorize(code, failure string) {
-	defer close(c.authorized)
-	if failure != "" {
-		c.authErr = fmt.Errorf("Clerk authorization failed: %s", failure)
-	} else {
-		c.grant, c.authErr = c.redeem(code)
-	}
-	if c.authErr == nil && c.syncKeys {
-		c.private, c.err = ecdh.X25519().GenerateKey(rand.Reader)
-		if c.err == nil {
-			c.request = keySyncRequest{HPKEPublicKey: c.private.PublicKey().Bytes(), Request: randomB64U(32),
-				UserID: c.grant.UserID, Account: c.grant.Account, Expires: c.expires}
-		}
-	}
-	if c.authErr != nil || !c.syncKeys || c.private == nil {
-		close(c.finished)
-	}
-}
-
-func (c *loginCeremony) keyCallback(w http.ResponseWriter, r *http.Request) {
-	select {
-	case <-c.authorized:
-	default:
-		loginPage(w, http.StatusBadRequest, "Sign in with Clerk before syncing keys.")
-		return
-	}
-	if c.authErr != nil || !c.syncKeys || c.private == nil {
-		loginPage(w, http.StatusBadRequest, "No key sync was requested.")
-		return
-	}
-	values, err := url.ParseQuery(r.URL.RawQuery)
-	payload := values["payload"]
-	if err != nil || len(r.URL.RawQuery) > len("payload=")+maxKeySyncPayloadChars || len(values) != 1 || len(payload) != 1 {
-		loginPage(w, http.StatusBadRequest, "The key-sync reply is malformed.")
-		return
-	}
-	envelope, err := openKeySyncEnvelope(c.private, c.request, c.targets, payload[0])
-	if err != nil || c.ctx.Err() != nil || time.Now().Unix() >= c.request.Expires {
-		if envelope != nil {
-			clear(envelope.DEK)
-		}
-		loginPage(w, http.StatusBadRequest, "The key-sync reply does not match this terminal's request or has expired.")
-		return
-	}
-	c.mu.Lock()
-	consumed := c.consumed
-	c.consumed = true
-	c.mu.Unlock()
-	if consumed {
-		clear(envelope.DEK)
-		loginPage(w, http.StatusConflict, "This key-sync reply was already used.")
-		return
-	}
-	go func() {
-		defer close(c.finished)
-		defer clear(envelope.DEK)
-		c.err = c.saveSyncedKey(envelope)
-	}()
-	http.Redirect(w, r, loginDonePath, http.StatusSeeOther)
-}
-
-func (c *loginCeremony) done(w http.ResponseWriter, r *http.Request) {
-	select {
-	case <-c.finished:
-	case <-r.Context().Done():
-		return
-	}
-	defer func() {
-		c.mu.Lock()
-		defer c.mu.Unlock()
-		select {
-		case <-c.sent:
-		default:
-			close(c.sent)
-		}
-	}()
-	if c.authErr != nil {
-		loginPage(w, http.StatusBadRequest, "Sign-in failed. Return to your terminal for details.")
-		return
-	}
-	if c.err != nil {
-		loginPage(w, http.StatusBadRequest, "You are signed in, but keys were not synced. Return to your terminal for details.")
-		return
-	}
-	if c.syncKeys {
-		http.Redirect(w, r, keySyncCompletionURL(c.targets, c.request.Request, c.grant.UserID, c.grant.Account), http.StatusSeeOther)
-		return
-	}
-	loginPage(w, http.StatusOK, "You are signed in to the Tinfoil CLI. You can close this tab and return to your terminal.")
-}
-
-func loginPage(w http.ResponseWriter, status int, message string) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.WriteHeader(status)
-	fmt.Fprintf(w, "<!doctype html><title>Tinfoil CLI</title><p>%s</p>", html.EscapeString(message))
-}
-
-func (c *loginCeremony) redeem(code string) (*clerkGrant, error) {
-	tokens, err := clerkToken(c.ctx, url.Values{"grant_type": {"authorization_code"}, "code": {code},
-		"redirect_uri": {oauthCallback}, "code_verifier": {c.verifier}}, c.scopes)
-	if err != nil {
-		return nil, err
-	}
-	if tokens.RefreshToken == "" {
-		return nil, errors.New("Clerk granted no refresh token")
-	}
-	userID, account, err := clerkIdentity(c.ctx, tokens.AccessToken)
-	if err != nil {
-		return nil, fmt.Errorf("checking the new login: %w", err)
-	}
-	grant := &clerkGrant{Version: 1, Grant: randomB64U(16), Issuer: clerkIssuer, ClientID: clerkCLIClientID,
-		UserID: userID, Account: account, AccessToken: tokens.AccessToken, RefreshToken: tokens.RefreshToken,
-		ExpiresAt: time.Now().Unix() + tokens.ExpiresIn}
-	if err := commitLogin(c.ctx, grant); err != nil {
-		return nil, err
-	}
-	return grant, nil
-}
-
-func (c *loginCeremony) saveSyncedKey(envelope *keySyncEnvelope) error {
-	cfg := cliConfig{ControlplaneURL: c.targets.APIOrigin, login: c.grant}
-	state, err := fetchKeyState(c.ctx, newCPClient(cfg))
-	if err != nil {
-		return err
-	}
-	if state.DEKID == nil || *state.DEKID != envelope.DEKID || state.EncryptedMK == nil {
-		return errors.New("the synced key does not match your current key bundle")
-	}
-	if _, err := openMK(*state.EncryptedMK, envelope.DEK, mkContext{APIOrigin: c.targets.APIOrigin, UserID: c.grant.UserID, DEKID: envelope.DEKID}); err != nil {
-		return fmt.Errorf("checking the synced key: %w", err)
-	}
-	dek := &syncedDEK{Version: 1, APIOrigin: c.targets.APIOrigin, UserID: c.grant.UserID, DEKID: envelope.DEKID, DEK: envelope.DEK}
-	return whileSignedIn(c.grant, func() error {
-		if err := c.ctx.Err(); err != nil {
-			return err
-		}
-		return writeCredential(dekRecordName(dek.APIOrigin, dek.UserID), dek)
-	})
-}
-
-func commitLogin(ctx context.Context, grant *clerkGrant) error {
-	return withCredentialLock(func() error {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		var previous clerkGrant
-		if found, _ := readCredential(loginRecordName, &previous); found && previous.UserID != grant.UserID {
-			if err := removeLocalCredentials(&previous); err != nil {
-				return err
-			}
-		}
-		if err := writeCredential(loginRecordName, grant); err != nil {
-			return err
-		}
-		cfg, path, err := loadConfig()
-		if err == nil && cfg.APIKey != "" && envAdminAPIKey() == "" {
-			if _, statErr := os.Stat(path); statErr == nil {
-				_, _, err = deleteConfig()
-			}
-		}
-		return err
-	})
-}
-
-type clerkTokens struct {
-	AccessToken  string  `json:"access_token"`
-	RefreshToken string  `json:"refresh_token"`
-	TokenType    string  `json:"token_type"`
-	ExpiresIn    int64   `json:"expires_in"`
-	Scope        *string `json:"scope"`
-}
-
-func clerkToken(ctx context.Context, form url.Values, scopes []string) (*clerkTokens, error) {
-	form.Set("client_id", clerkCLIClientID)
-	form.Set("resource", fixedAPIOrigin)
-	reply, err := clerkPost(ctx, "/oauth/token", form)
-	if err != nil {
-		return nil, err
-	}
-	var tokens clerkTokens
-	if err := json.Unmarshal(reply, &tokens); err != nil || tokens.AccessToken == "" || !strings.EqualFold(tokens.TokenType, "bearer") ||
-		tokens.ExpiresIn <= 0 || tokens.ExpiresIn > maxSafeInteger {
-		return nil, errors.New("Clerk returned an invalid token response")
-	}
-	// An omitted scope means the requested one (RFC 6749 section 5.1).
-	if tokens.Scope != nil {
-		granted := strings.Fields(*tokens.Scope)
-		for _, scope := range scopes {
-			if !slices.Contains(granted, scope) {
-				return nil, fmt.Errorf("Clerk did not grant the %q scope this CLI requires", scope)
-			}
-		}
-	}
-	return &tokens, nil
-}
-
-func clerkIdentity(ctx context.Context, accessToken string) (userID, account string, err error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, clerkIssuer+"/oauth/userinfo", nil)
-	if err != nil {
-		return "", "", err
-	}
-	req.Header.Set("Authorization", "Bearer "+accessToken)
-	reply, err := clerkRequest(req)
-	if err != nil {
-		return "", "", err
-	}
-	var identity struct {
-		Subject        string `json:"sub"`
-		UserID         string `json:"user_id"`
-		OrganizationID string `json:"org_id"`
-	}
-	if err := json.Unmarshal(reply, &identity); err != nil || !keybundle.ValidUserID(identity.Subject) ||
-		(identity.UserID != "" && identity.UserID != identity.Subject) ||
-		(identity.OrganizationID != "" && (!strings.HasPrefix(identity.OrganizationID, "org_") || !keybundle.ValidAccount(identity.OrganizationID))) {
-		return "", "", errors.New("Clerk returned an invalid login identity")
-	}
-	account = identity.OrganizationID
-	if account == "" {
-		account = "personal"
-	}
-	return identity.Subject, account, nil
-}
-
-func clerkPost(ctx context.Context, path string, form url.Values) ([]byte, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, clerkIssuer+path, strings.NewReader(form.Encode()))
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	return clerkRequest(req)
-}
-
-func clerkRequest(req *http.Request) ([]byte, error) {
-	ctx, cancel := context.WithTimeout(req.Context(), time.Minute)
-	defer cancel()
-	req = req.WithContext(ctx)
-	req.Header.Set("Accept", "application/json")
-	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("Clerk: %w", err)
-	}
-	defer resp.Body.Close()
-	reply, err := io.ReadAll(io.LimitReader(resp.Body, maxOAuthReplyBytes+1))
-	if err != nil || len(reply) > maxOAuthReplyBytes {
-		return nil, errors.Join(errors.New("Clerk reply is unreadable or too large"), err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		var oauth struct {
-			Error string `json:"error"`
-		}
-		json.Unmarshal(reply, &oauth)
-		return nil, fmt.Errorf("Clerk %s: %d %s", req.URL.Path, resp.StatusCode, oauth.Error)
-	}
-	return reply, nil
-}
-
-func (g *clerkGrant) accessToken(ctx context.Context) (string, error) {
-	var token string
-	err := withCredentialLock(func() error {
-		current, err := currentGrant()
-		if err != nil {
-			return err
-		}
-		if current == nil || current.Grant != g.Grant {
-			return errors.New("this login has ended; run `tinfoil login`")
-		}
-		if time.Now().Unix() < current.ExpiresAt-accessTokenSlack {
-			token = current.AccessToken
-			return nil
-		}
-		scopes, err := clerkScopes()
-		if err != nil {
-			return err
-		}
-		tokens, err := clerkToken(ctx, url.Values{"grant_type": {"refresh_token"}, "refresh_token": {current.RefreshToken}}, scopes)
-		if err != nil {
-			return fmt.Errorf("renewing your login failed; run `tinfoil login`: %w", err)
-		}
-		userID, account, err := clerkIdentity(ctx, tokens.AccessToken)
-		if err != nil {
-			return fmt.Errorf("checking the renewed login: %w", err)
-		}
-		if userID != current.UserID || account != current.Account {
-			return errors.New("the renewed login belongs to a different account; run `tinfoil login`")
-		}
-		current.AccessToken, current.ExpiresAt = tokens.AccessToken, time.Now().Unix()+tokens.ExpiresIn
-		if tokens.RefreshToken != "" {
-			current.RefreshToken = tokens.RefreshToken
-		}
-		if err := writeCredential(loginRecordName, current); err != nil {
-			return err
-		}
-		token = current.AccessToken
-		return nil
-	})
-	return token, err
-}
-
 func clerkLogout(out io.Writer) error {
-	return withCredentialLock(func() error {
-		var grant clerkGrant
-		found, readErr := readCredential(loginRecordName, &grant)
-		if found && grant.RefreshToken != "" && grant.ClientID != "" {
-			form := url.Values{"token": {grant.RefreshToken}, "token_type_hint": {"refresh_token"}, "client_id": {grant.ClientID}}
-			if _, err := clerkPost(context.Background(), "/oauth/token/revoke", form); err != nil {
-				fmt.Fprintf(out, "Could not revoke the Clerk login (%v); removing it locally anyway.\n", err)
-			}
-		}
-		if !found {
-			grant = clerkGrant{}
-		}
-		if err := removeLocalCredentials(&grant); err != nil {
-			return err
-		}
-		if found {
-			fmt.Fprintf(out, "Signed out %s and removed synced keys from this machine.\n", grant.UserID)
-		}
-		return readErr
-	})
-}
-
-func removeLocalCredentials(grant *clerkGrant) error {
-	errs := []error{deleteCredential(loginRecordName)}
-	if grant.UserID != "" {
-		errs = append(errs, deleteCredential(dekRecordName(fixedAPIOrigin, grant.UserID)))
+	service, err := authService()
+	if err != nil {
+		return err
 	}
-	if pattern, err := credentialFile("dek-*"); err == nil {
-		files, _ := filepath.Glob(pattern)
-		for _, file := range files {
-			errs = append(errs, deleteCredential(strings.TrimSuffix(filepath.Base(file), ".json")))
-		}
+	result, err := service.Logout(context.Background())
+	if result.RevocationError != nil {
+		fmt.Fprintf(out, "Could not revoke the Clerk login (%v); removing it locally anyway.\n", result.RevocationError)
 	}
-	return errors.Join(append(errs, removeExportedKeys())...)
+	if result.Removed {
+		fmt.Fprintf(out, "Signed out %s and removed synced keys from this machine.\n", result.UserID)
+	}
+	return err
 }
 
 func credentialEnvSource() string {

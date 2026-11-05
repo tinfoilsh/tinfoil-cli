@@ -18,6 +18,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/tinfoilsh/tinfoil-cli/internal/controlplane"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/agent"
 	"golang.org/x/term"
@@ -26,7 +27,7 @@ import (
 var resourceNamePattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,62}$`)
 
 const (
-	keyStatePath         = "/api/sandboxes/owner-key"
+	keyStatePath         = controlplane.KeyStatePath
 	maxKeyStateConflicts = 8
 )
 
@@ -36,27 +37,17 @@ type noLocalKeys string
 
 func (e noLocalKeys) Error() string { return string(e) }
 
-type keyState struct {
-	Revision    uint64          `json:"revision"`
-	DEKID       *string         `json:"dek_id"`
-	EncryptedMK *string         `json:"encrypted_mk"`
-	Recovery    json.RawMessage `json:"recovery"`
-}
+type keyState = controlplane.KeyState
 
-type keyStateWrite struct {
-	ExpectedRevision uint64          `json:"expected_revision"`
-	DEKID            string          `json:"dek_id"`
-	EncryptedMK      string          `json:"encrypted_mk"`
-	Recovery         json.RawMessage `json:"recovery"`
-}
+type keyStateWrite = controlplane.KeyStateWrite
 
 func fetchKeyState(ctx context.Context, cp *cpClient) (*keyState, error) {
 	var state keyState
 	if _, err := cp.doContext(ctx, "GET", keyStatePath, nil, nil, nil, &state); err != nil {
 		return nil, fmt.Errorf("reading your key state: %w", err)
 	}
-	if state.DEKID != nil && !validID16(*state.DEKID) || (state.DEKID == nil) != (state.EncryptedMK == nil) {
-		return nil, errors.New("controlplane returned an invalid key state")
+	if err := state.Validate(); err != nil {
+		return nil, err
 	}
 	return &state, nil
 }
@@ -124,7 +115,7 @@ func (s *mkSession) update(ctx context.Context, change func(*mkPayload) error) (
 		if err != nil {
 			return nil, err
 		}
-		_, err = s.cp.doContext(ctx, "PUT", keyStatePath, nil, nil, keyStateWrite{state.Revision, s.context.DEKID, sealed, state.Recovery}, nil)
+		_, err = s.cp.doContext(ctx, "PUT", keyStatePath, nil, nil, keyStateWrite{ExpectedRevision: state.Revision, DEKID: s.context.DEKID, EncryptedMK: sealed, Recovery: state.Recovery}, nil)
 		var definite *cpError
 		if err == nil {
 			return payload, nil
@@ -346,16 +337,11 @@ func (k *resourceKeys) generateUMKKeys(kind, owner string, binding mkBinding) er
 }
 
 func whileSignedIn(login *clerkGrant, write func() error) error {
-	return withCredentialLock(func() error {
-		current, err := currentGrant()
-		if err != nil {
-			return err
-		}
-		if login == nil || current == nil || current.Grant != login.Grant {
-			return errors.New("you signed out while connecting; run `tinfoil login --sync`")
-		}
-		return write()
-	})
+	service, err := authService()
+	if err != nil {
+		return err
+	}
+	return service.WhileSignedIn(login, write)
 }
 
 func exportTMKIdentity(login *clerkGrant, dir string, seed []byte) (string, error) {
