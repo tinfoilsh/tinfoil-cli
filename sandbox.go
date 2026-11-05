@@ -3,25 +3,15 @@ package main
 import (
 	"bytes"
 	"context"
-	"crypto/ed25519"
-	"crypto/sha256"
-	"encoding/base32"
-	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"net"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/tinfoilsh/tinfoil-cli/internal/owner"
-	"github.com/tinfoilsh/tinfoil-go/verify/document"
-	"golang.org/x/crypto/ssh"
 )
 
 const (
@@ -29,8 +19,8 @@ const (
 	sandboxLoginUser   = "sandbox"
 	sandboxOwnerEnv    = "SANDBOX_OWNER_PUBLIC_KEY"
 	tmkOwnerKeyName    = "owner_tmk_ed25519"
-	sandboxBootTimeout = 10 * time.Minute
-
+	monitorSSHUser     = "device"
+	monitorJumpSuffix  = ".monitor"
 	// Controlplane gives a new sandbox this workspace size when none is chosen.
 	defaultWorkspaceSizeGB = 16
 	// sandboxWorkspaceSlot is the volume mount that holds a sandbox's workspace.
@@ -207,64 +197,27 @@ func startSandboxRow(client *cpClient, row containerView, restart bool) (contain
 }
 
 func sandboxNetworkPolicy(monitorID string) containerNetworkPolicy {
-	return containerNetworkPolicy{EgressMode: "restricted", Egress: []containerPeer{{
-		ContainerID: monitorID, Port: 22, Alias: &containerAlias{IP: "10.254.0.1", Port: 22},
-	}}}
+	return containerNetworkPolicy{EgressMode: "restricted", Egress: []containerPeer{{ContainerID: monitorID, Port: 22, Alias: &containerAlias{IP: "10.254.0.1", Port: 22}}}}
 }
-
-// The fixed endpoint is usable only with an explicit matching alias policy.
-func sandboxNetworkMatches(row containerView) bool {
-	policy := row.NetworkPolicy
-	if policy == nil || policy.Public || policy.EgressMode != "restricted" || len(policy.Egress) != 1 {
-		return false
-	}
-	peer := policy.Egress[0]
-	return looksLikeUUID(peer.ContainerID) && peer.Port == 22 && peer.Alias != nil &&
-		*peer.Alias == (containerAlias{IP: "10.254.0.1", Port: 22})
-}
-
+func sandboxNetworkMatches(row containerView) bool { return owner.SandboxNetworkMatches(row) }
 func validateSandboxNetwork(row containerView) error {
 	env, err := measuredEnvironment(row.Config)
 	if err != nil {
 		return err
 	}
-	if env["NO_MONITOR"] == "1" {
-		if row.NetworkPolicy != nil {
-			return errors.New("sandbox with NO_MONITOR=1 must have no network policy")
-		}
-		return nil
-	}
-	if !sandboxNetworkMatches(row) {
-		return errors.New("sandbox requires a private TCP alias for its selected Monitor; update its network policy")
-	}
-	return nil
+	return owner.ValidateSandboxNetwork(row, env)
+}
+func sandboxBinding(scope accountScope, target *workloadTarget) (mkBinding, error) {
+	return owner.SandboxBinding(owner.Scope(scope), ownerWorkload(target))
 }
 
-const (
-	sandboxOwnerProtocol = "sandbox-owner-v1"
-	sandboxOwnerRequest  = "sudo -n -- curl -sS --fail-with-body --unix-socket /run/workspace/owner.sock http://sandbox"
-	sandboxStatusCommand = sandboxOwnerRequest + "/status"
-	sandboxEnrollCommand = sandboxOwnerRequest + "/enroll --data-binary @-"
-	ownerConnectTimeout  = owner.ConnectTimeout
-
-	// Monitor routes to a sandbox boot by a name derived from its SSH host key.
-	sandboxRouteSuffix = ".sandbox.invalid"
-	// The device key authorizes routes to enrolled sandboxes.
-	monitorSSHUser    = "device"
-	monitorJumpSuffix = ".monitor"
-)
-
-// One command keeps one verified sandbox connection through enrollment and SSH setup.
 type sandboxSession struct {
-	box       containerView
-	keys      *resourceKeys
-	binding   mkBinding
-	expires   time.Time
-	monitor   *monitorSession
-	owner     *sandboxOwner
-	profile   sshProfile
-	noMonitor bool
+	*owner.Sandbox
+	profile sshProfile
 }
+
+func (s *sandboxSession) close()                           { s.Close() }
+func (s *sandboxSession) enroll(ctx context.Context) error { return s.Enroll(ctx) }
 
 func connectSandbox(ctx context.Context, target *workloadTarget) (_ *sandboxSession, err error) {
 	scope, cp, err := currentScope()
@@ -272,8 +225,7 @@ func connectSandbox(ctx context.Context, target *workloadTarget) (_ *sandboxSess
 		return nil, err
 	}
 	row := target.containerView
-	binding, err := sandboxBinding(scope, target)
-	if err != nil {
+	if _, err := sandboxBinding(scope, target); err != nil {
 		return nil, err
 	}
 	var monitor *monitorSession
@@ -299,96 +251,19 @@ func connectSandbox(ctx context.Context, target *workloadTarget) (_ *sandboxSess
 			return nil, err
 		}
 	}
-	dir, err := resourceDir(scope, row.ID, row.Name)
+	service, err := ownerService(cp)
 	if err != nil {
 		return nil, err
 	}
-	keys, err := resolveResourceKeys(ctx, cp, scope, row, "sandbox", binding, dir, true)
+	var m *owner.Monitor
+	if monitor != nil {
+		m = monitor.Monitor
+	}
+	s, err := service.OpenSandbox(ctx, owner.Scope(scope), cp.transport(), ownerWorkload(target), m, ownerVerifier{})
 	if err != nil {
 		return nil, err
 	}
-	return openSandbox(scope, cp, target, binding, monitor, keys, dir)
-}
-
-func sandboxBinding(scope accountScope, target *workloadTarget) (mkBinding, error) {
-	row, env := target.containerView, target.env
-	if err := requireRunningConnection("Sandbox", row); err != nil {
-		return mkBinding{}, err
-	}
-	volumeID, instance := row.Volumes[sandboxWorkspaceSlot], env["SANDBOX_INSTANCE_ID"]
-	if len(row.Volumes) != 1 || !validLowerUUID(volumeID) {
-		return mkBinding{}, errors.New("sandbox has no unique workspace volume binding")
-	}
-	if !validLowerUUID(instance) {
-		return mkBinding{}, errors.New("sandbox release lacks a measured instance ID; use compatible templates")
-	}
-	if env[sandboxOwnerEnv] != row.OwnerPublicKey {
-		return mkBinding{}, errors.New("sandbox's measured owner is not its owner key")
-	}
-	if err := validateSandboxNetwork(row); err != nil {
-		return mkBinding{}, err
-	}
-	if env["NO_MONITOR"] == "1" && (row.SSHPort < 1 || row.SSHPort > maxConnectionPort) {
-		return mkBinding{}, errors.New("sandbox has no published SSH port")
-	}
-	return mkBinding{Account: scope.account(), ContainerID: row.ID, InstanceID: &instance, VolumeID: &volumeID}, nil
-}
-
-func openSandbox(scope accountScope, cp *cpClient, target *workloadTarget, binding mkBinding, monitor *monitorSession, keys *resourceKeys, dir string) (_ *sandboxSession, err error) {
-	row := target.containerView
-	noMonitor := monitor == nil
-	s := &sandboxSession{box: row, noMonitor: noMonitor, binding: binding, keys: keys, monitor: monitor}
-	defer func() {
-		if err != nil {
-			keys.close()
-		}
-	}()
-	identity := keys.identity
-	if keys.mode == "tmk" {
-		if identity, err = exportTMKIdentity(cp.login, dir, keys.ownerSeed); err != nil {
-			return nil, err
-		}
-	}
-	resourceID := scope.ControlplaneURL + "/" + scope.OrgID + "/" + scope.UserID + "/" + row.ID
-	if noMonitor {
-		defer startConnectionProgress(os.Stderr, "Verifying sandbox attestation and SSH host key for "+row.Domain)()
-		secure, err := newVerifiedClient(row.Domain, target.source, "")
-		if err != nil {
-			return nil, err
-		}
-		verified, err := secure.EnsureVerified(context.Background())
-		if err != nil {
-			return nil, fmt.Errorf("verifying %s: %w", row.Domain, err)
-		}
-		host, err := endorsedHostKey(row.Domain, verified)
-		if err != nil {
-			return nil, err
-		}
-		s.expires = verified.FreshnessExpiresAt()
-		s.profile = sshProfile{name: row.Name, hostName: row.Domain, port: row.SSHPort, hostKeyAlias: row.Domain,
-			user: sandboxLoginUser, identityFile: identity, hostKey: host, resourceID: resourceID}
-		fmt.Fprintf(os.Stderr, "Sandbox %s attestation verified.\nWarning: sandbox has NO_MONITOR=1; its network traffic is not being tunneled through Monitor.\n", row.Name)
-		return s, nil
-	}
-	s.owner = &sandboxOwner{request: monitor.request, instance: *binding.InstanceID, dial: s.dial}
-	stop := startConnectionProgress(os.Stderr, "Requesting sandbox attestation through Monitor's relay")
-	verified, err := s.owner.attest(target.source)
-	stop()
-	if err != nil {
-		return nil, fmt.Errorf("sandbox attestation through Monitor: %w", err)
-	}
-	host, err := endorsedHostKey(row.Domain, verified)
-	if err != nil {
-		return nil, err
-	}
-	s.expires = verified.FreshnessExpiresAt()
-	fmt.Fprintf(os.Stderr, "Sandbox %s attestation verified.\n", row.Name)
-	address, port, _ := net.SplitHostPort(monitor.address)
-	portNumber, _ := strconv.Atoi(port)
-	s.profile = sshProfile{name: row.Name, hostName: routeName(host), port: defaultSSHPort, hostKeyAlias: row.Domain,
-		user: sandboxLoginUser, identityFile: identity, hostKey: host, resourceID: resourceID,
-		jump: monitorJump(row.Name, address, portNumber, monitor.dir, monitor.hostKey, monitor.domain)}
-	return s, nil
+	return &sandboxSession{Sandbox: s, profile: ownerSSHProfile(s.Connection())}, nil
 }
 
 func relinkSandboxes(ctx context.Context, scope accountScope, cp *cpClient, m *monitorSession, monitorID string) []error {
@@ -398,8 +273,7 @@ func relinkSandboxes(ctx context.Context, scope accountScope, cp *cpClient, m *m
 	}
 	var failures []error
 	for _, listed := range rows {
-		if listed.Repo != defaultSandboxRepo || listed.Debug || listed.Status != statusRunning || listed.ClerkUserID != scope.UserID ||
-			!sandboxNetworkMatches(listed) || listed.NetworkPolicy.Egress[0].ContainerID != monitorID {
+		if listed.Repo != defaultSandboxRepo || listed.Debug || listed.Status != statusRunning || listed.ClerkUserID != scope.UserID || !sandboxNetworkMatches(listed) || listed.NetworkPolicy.Egress[0].ContainerID != monitorID {
 			continue
 		}
 		if err := relinkSandbox(ctx, scope, cp, m, monitorID, listed.ID); err != nil && !errors.As(err, new(noLocalKeys)) {
@@ -417,279 +291,29 @@ func relinkSandbox(ctx context.Context, scope accountScope, cp *cpClient, m *mon
 	if row.ID != id || row.ClerkUserID != scope.UserID || row.Status != statusRunning || !sandboxNetworkMatches(*row) || row.NetworkPolicy.Egress[0].ContainerID != monitorID {
 		return errors.New("its inventory changed while re-linking")
 	}
-	if m.keys.mode == "umk" && row.OwnerKeyMode == "tmk" {
-		return fmt.Errorf("a UMK Monitor cannot serve the synced sandbox %s", row.Name)
-	}
 	target, err := resolveWorkload(*row, defaultSandboxRepo, "")
 	if err != nil {
 		return err
 	}
-	binding, err := sandboxBinding(scope, target)
+	service, err := ownerService(cp)
 	if err != nil {
 		return err
 	}
-	dir, err := resourceDir(scope, row.ID, row.Name)
-	if err != nil {
+	connection, err := service.RelinkSandbox(ctx, owner.Scope(scope), cp.transport(), m.Monitor, monitorID, id, ownerWorkload(target), ownerVerifier{})
+	if err != nil || connection == nil {
 		return err
 	}
-	keys, err := resolveResourceKeys(ctx, cp, scope, *row, "sandbox", binding, dir, false)
-	if err != nil {
-		return err
-	}
-	if !m.authorizes(monitorIdentity(keys.monitorIdentitySeed)) {
-		keys.close()
-		return nil
-	}
-	s, err := openSandbox(scope, cp, target, binding, m, keys, dir)
-	if err != nil {
-		return err
-	}
-	defer keys.close()
-	status, err := s.status(ctx)
-	if err != nil {
-		return err
-	}
-	if status.MonitorIdentity == nil || *status.MonitorIdentity != monitorIdentity(keys.monitorIdentitySeed) {
-		return fmt.Errorf("its saved Monitor identity is not active; run `tinfoil sandbox start %s`", row.Name)
-	}
-	if host := authorizedKeyLine(m.hostKey); status.MonitorHostKey == nil || *status.MonitorHostKey != host {
-		fmt.Fprintln(os.Stderr, "Re-linking sandbox "+row.Name+" to the current Monitor boot")
-		if err := s.enrollSandbox(ctx, status.Volume, host); err != nil {
-			return err
-		}
-	}
+	s := &sandboxSession{profile: ownerSSHProfile(*connection)}
 	return s.repinInstalled()
 }
 
-func (s *sandboxSession) close() {
-	if s.keys != nil {
-		s.keys.close()
+func ownerSSHProfile(info owner.ConnectionInfo) sshProfile {
+	p := sshProfile{resourceID: info.ResourceID, name: info.Name, hostName: info.HostName, port: info.Port, user: info.User, identityFile: info.IdentityFile, hostKey: info.HostKey, hostKeyAlias: info.HostKeyAlias, noAgent: info.NoAgent}
+	if info.Jump != nil {
+		jump := ownerSSHProfile(*info.Jump)
+		p.jump = &jump
 	}
-	if s.monitor != nil {
-		s.monitor.close()
-	}
-}
-
-// monitorJump is the hop through the Monitor. It must present the device key:
-// the Monitor gives its owner key (by default the user's ~/.ssh/id_ed25519)
-// an owner-only session that cannot open routes to sandboxes, and that key is
-// usually in ssh-agent. The device key is an unencrypted file, so the hop needs
-// no agent.
-func monitorJump(sandbox, host string, port int, dir string, hostKey ssh.PublicKey, domain string) *sshProfile {
-	return &sshProfile{name: sandbox + monitorJumpSuffix, hostName: host, port: port, user: monitorSSHUser, identityFile: filepath.Join(dir, monitorDeviceKeyName), hostKey: hostKey, hostKeyAlias: domain, noAgent: true}
-}
-
-type sandboxStatus struct {
-	Protocol        string  `json:"protocol"`
-	InstanceID      string  `json:"instance_id"`
-	Volume          string  `json:"volume"`
-	MonitorIdentity *string `json:"monitor_identity"`
-	MonitorHostKey  *string `json:"monitor_host_key"`
-}
-
-func (s *sandboxSession) enroll(ctx context.Context) error {
-	if !time.Now().Before(s.expires) {
-		return errors.New("sandbox attestation expired; verify it again before unlocking")
-	}
-	if s.noMonitor {
-		return s.unlockDirect(ctx)
-	}
-	name := s.box.Name
-	status, err := s.status(ctx)
-	if err != nil {
-		return err
-	}
-	agent := ""
-	if s.keys.monitorIdentitySeed != nil {
-		agent = monitorIdentity(s.keys.monitorIdentitySeed)
-	}
-	host := authorizedKeyLine(s.monitor.hostKey)
-	switch {
-	case status.MonitorIdentity != nil && *status.MonitorIdentity != agent:
-		return fmt.Errorf("sandbox %s holds a different Monitor identity than its saved keys", name)
-	case status.MonitorIdentity == nil && (agent == "" || !s.monitor.authorizes(agent)):
-		if s.keys.storageKey == nil {
-			if err := s.keys.generateUMKKeys("sandbox", s.box.OwnerPublicKey, s.binding); err != nil {
-				return err
-			}
-			agent = monitorIdentity(s.keys.monitorIdentitySeed)
-		}
-		fmt.Fprintln(os.Stderr, "Registering sandbox "+name+" with Monitor")
-		if err := s.monitor.enrollAgent(ctx, "sandbox-"+name, agent); err != nil {
-			return err
-		}
-		return s.enrollSandbox(ctx, status.Volume, host)
-	case !s.monitor.authorizes(agent):
-		return fmt.Errorf("Monitor no longer authorizes sandbox %s; restore its identity in the Monitor UI, then retry", name)
-	case status.MonitorIdentity == nil || status.Volume != "unlocked":
-		return s.enrollSandbox(ctx, status.Volume, host)
-	case status.MonitorHostKey == nil || *status.MonitorHostKey != host:
-		fmt.Fprintln(os.Stderr, "Re-linking sandbox "+name+" to the current Monitor boot")
-		return s.enrollSandbox(ctx, status.Volume, host)
-	}
-	return nil
-}
-
-func (s *sandboxSession) status(ctx context.Context) (sandboxStatus, error) {
-	var status sandboxStatus
-	if err := s.owner.call(ctx, sandboxStatusCommand, nil, &status); err != nil {
-		return status, err
-	}
-	if status.Protocol != sandboxOwnerProtocol || status.InstanceID != s.owner.instance {
-		return status, errors.New("sandbox owner status names another protocol or instance")
-	}
-	return status, nil
-}
-
-func (s *sandboxSession) enrollSandbox(ctx context.Context, volume, host string) error {
-	if volume != "unlocked" {
-		fmt.Fprintln(os.Stderr, "Unlocking sandbox "+s.box.Name+" encrypted workspace")
-	}
-	input := struct {
-		MonitorIdentitySeed b64u   `json:"monitor_identity_seed"`
-		MonitorHostKey      string `json:"monitor_host_key"`
-		DiskKey             b64u   `json:"disk_key"`
-		AllowInitialize     bool   `json:"allow_initialize"`
-	}{s.keys.monitorIdentitySeed, host, s.keys.storageKey, true}
-	var status sandboxStatus
-	if err := s.owner.call(ctx, sandboxEnrollCommand, input, &status); err != nil {
-		return fmt.Errorf("%w; rerun `tinfoil sandbox start %s` to reconcile", err, s.box.Name)
-	}
-	if status.Volume != "unlocked" {
-		return fmt.Errorf("sandbox %s workspace is still %s; rerun `tinfoil sandbox start %s`", s.box.Name, status.Volume, s.box.Name)
-	}
-	fmt.Fprintf(os.Stderr, "Prepared %s over attested SSH.\n", s.box.Name)
-	return nil
-}
-
-func monitorIdentity(seed []byte) string {
-	private := ed25519.NewKeyFromSeed(seed)
-	defer clear(private)
-	public, _ := ssh.NewPublicKey(private.Public())
-	return authorizedKeyLine(public)
-}
-
-func authorizedKeyLine(key ssh.PublicKey) string {
-	return strings.TrimSpace(string(ssh.MarshalAuthorizedKey(key)))
-}
-
-type sandboxOwner struct {
-	request  func(method, path string, input, out any) error
-	instance string
-	dial     func(context.Context) (*ssh.Client, error)
-	expires  time.Time
-}
-
-type relayReply struct {
-	Status int    `json:"status"`
-	Body   string `json:"body"`
-}
-
-var verifySandboxEvidence = func(doc, nonce []byte, source string) (attestedEvidence, error) {
-	options, err := verificationOptions(source, "")
-	if err != nil {
-		return nil, err
-	}
-	return options.Verifier.VerifyV3(doc, nonce, source)
-}
-
-func (o *sandboxOwner) attest(source string) (attestedEvidence, error) {
-	nonce, err := document.RandomNonce()
-	if err != nil {
-		return nil, err
-	}
-	input := struct {
-		InstanceID string `json:"instance_id"`
-		Nonce      string `json:"nonce"`
-	}{o.instance, hex.EncodeToString(nonce)}
-	var reply relayReply
-	if err := o.request(http.MethodPost, "/sandboxes/relay", input, &reply); err != nil {
-		return nil, err
-	}
-	if reply.Status != http.StatusOK {
-		return nil, fmt.Errorf("sandbox attestation returned HTTP %d", reply.Status)
-	}
-	doc, err := decodeB64U(reply.Body, -1)
-	if err != nil {
-		return nil, err
-	}
-	verified, err := verifySandboxEvidence(doc, nonce, source)
-	if err != nil {
-		return nil, err
-	}
-	o.expires = verified.FreshnessExpiresAt()
-	return verified, nil
-}
-
-// The inner SSH connection owns and closes its Monitor device connection.
-type sandboxRouteConn struct {
-	net.Conn
-	client *ssh.Client
-}
-
-func (c *sandboxRouteConn) Close() error {
-	return errors.Join(c.Conn.Close(), c.client.Close())
-}
-
-func (m *monitorSession) dialSandbox(ctx context.Context, host ssh.PublicKey) (net.Conn, error) {
-	device, err := loadSigner(filepath.Join(m.dir, monitorDeviceKeyName))
-	if err != nil {
-		return nil, err
-	}
-	conn, err := (&net.Dialer{Timeout: ownerConnectTimeout}).DialContext(ctx, "tcp", m.address)
-	if err != nil {
-		return nil, err
-	}
-	stop := context.AfterFunc(ctx, func() { conn.Close() })
-	defer stop()
-	client, err := connectOwnerSigner(conn, m.domain, m.hostKey, device, monitorSSHUser)
-	if err != nil {
-		return nil, err
-	}
-	route, err := client.DialContext(ctx, "tcp", net.JoinHostPort(routeName(host), strconv.Itoa(defaultSSHPort)))
-	if err != nil {
-		client.Close()
-		return nil, err
-	}
-	return &sandboxRouteConn{Conn: route, client: client}, nil
-}
-
-func (s *sandboxSession) dial(ctx context.Context) (*ssh.Client, error) {
-	if !time.Now().Before(s.expires) {
-		return nil, errors.New("sandbox attestation expired; verify it again before unlocking")
-	}
-	var conn net.Conn
-	var err error
-	if s.monitor != nil {
-		conn, err = s.monitor.dialSandbox(ctx, s.profile.hostKey)
-	} else {
-		address := net.JoinHostPort(s.profile.hostName, strconv.Itoa(s.profile.port))
-		conn, err = (&net.Dialer{Timeout: ownerConnectTimeout}).DialContext(ctx, "tcp", address)
-	}
-	if err != nil {
-		return nil, err
-	}
-	stop := context.AfterFunc(ctx, func() { conn.Close() })
-	defer stop()
-	return connectOwnerSigner(conn, s.box.Domain, s.profile.hostKey, s.keys.signer, sandboxLoginUser)
-}
-
-func (o *sandboxOwner) call(ctx context.Context, command string, input, out any) error {
-	ctx, cancel := context.WithDeadline(ctx, o.expires)
-	defer cancel()
-	var body []byte
-	if input != nil {
-		var err error
-		if body, err = json.Marshal(input); err != nil {
-			return err
-		}
-		defer clear(body)
-	}
-	reply, err := sendOwnerCommand(ctx, o.dial, command, body)
-	if err != nil {
-		return err
-	}
-	return json.Unmarshal([]byte(reply), out)
+	return p
 }
 
 func (s *sandboxSession) install() error {
@@ -767,55 +391,4 @@ func forgetSandbox(name, id string) error {
 		}
 	}
 	return nil
-}
-
-func loadSSHKey(path string) (string, error) {
-	signer, err := loadSigner(path)
-	if err != nil {
-		return "", err
-	}
-	return strings.TrimSpace(string(ssh.MarshalAuthorizedKey(signer.PublicKey()))), nil
-}
-
-func loadSigner(path string) (ssh.Signer, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-	return ssh.ParsePrivateKey(data)
-}
-
-func routeName(key ssh.PublicKey) string {
-	digest := sha256.Sum256(key.Marshal())
-	return strings.ToLower(base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(digest[:])) + sandboxRouteSuffix
-}
-
-func (s *sandboxSession) unlockDirect(ctx context.Context) error {
-	ctx, cancel := context.WithDeadline(ctx, s.expires)
-	defer cancel()
-	volume, err := sendOwnerCommand(ctx, s.dial, "/usr/local/bin/workspace-unlock --status", nil)
-	if err != nil {
-		return fmt.Errorf("workspace status: %w", err)
-	}
-	switch volume {
-	case "unlocked":
-		return nil
-	case "locked":
-	default:
-		return fmt.Errorf("unexpected workspace status %q", volume)
-	}
-	if s.keys.storageKey == nil {
-		if err := s.keys.generateUMKKeys("sandbox", s.box.OwnerPublicKey, s.binding); err != nil {
-			return err
-		}
-	}
-	fmt.Fprintln(os.Stderr, "Unlocking sandbox "+s.box.Name+" encrypted workspace")
-	if _, err := sendOwnerCommand(ctx, s.dial, "/usr/local/bin/workspace-unlock --initialize", s.keys.storageKey); err != nil {
-		return fmt.Errorf("unlock workspace: %w; retry with `tinfoil sandbox start %s`", err, s.box.Name)
-	}
-	return nil
-}
-
-func sendOwnerCommand(ctx context.Context, dial func(context.Context) (*ssh.Client, error), command string, body []byte) (string, error) {
-	return owner.SendCommand(ctx, dial, command, body)
 }

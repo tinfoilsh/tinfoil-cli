@@ -1,9 +1,8 @@
-package main
+package owner
 
 import (
 	"bytes"
 	"crypto/ed25519"
-	"crypto/x509"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -14,7 +13,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -24,150 +22,10 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"github.com/tinfoilsh/tinfoil-cli/internal/controlplane"
 	"github.com/tinfoilsh/tinfoil-go/verify/document"
 	"golang.org/x/crypto/ssh"
-	"golang.org/x/crypto/ssh/knownhosts"
 )
-
-func TestSandboxStartUsesSavedAliasWithoutMonitorLookup(t *testing.T) {
-	previous := followInterval
-	followInterval = 0
-	t.Cleanup(func() { followInterval = previous })
-	for _, tc := range []struct {
-		state   string
-		restart bool
-	}{
-		{statusStopped, false}, {statusFailed, false},
-		{statusStopped, true}, {statusFailed, true}, {statusRunning, true}, {statusStopping, true},
-	} {
-		t.Run(fmt.Sprintf("%s/restart=%t", tc.state, tc.restart), func(t *testing.T) {
-			const monitorID = "11111111-1111-4111-8111-111111111111"
-			row := containerView{ID: "work-id", Name: "work", Repo: defaultSandboxRepo, Status: tc.state, UpdateStatus: statusFailed,
-				ConfigName:    "/tinfoil/containers/saved-digest",
-				Config:        "containers: [{env: []}]",
-				NetworkPolicy: &containerNetworkPolicy{EgressMode: "restricted", Egress: []containerPeer{{ContainerID: monitorID, Port: 22, Alias: &containerAlias{IP: "10.254.0.1", Port: 22}}}}}
-			var mutations []string
-			client := newCPClient(cliConfig{ControlplaneURL: "https://cp.example"})
-			client.http.Transport = lifecycleTransport(func(r *http.Request) (*http.Response, error) {
-				require.Nil(t, r.Body, "start and restart must not send boot variables")
-				if r.Method == "POST" {
-					mutations = append(mutations, r.URL.Path)
-				}
-				switch r.Method + " " + r.URL.Path {
-				case "GET /api/containers/work-id":
-					row.Status = statusStopped
-				case "POST /api/containers/work-id/stop":
-					row.Status = statusStopping
-				case "POST /api/containers/work-id/deploy":
-					// Stop before enrollment while checking that boot errors propagate.
-					row.Status, row.ErrorMessage, row.UpdateStatus = statusFailed, "test boot failure", ""
-				default:
-					t.Errorf("unexpected request: %s", r.URL.Path)
-				}
-				body, err := json.Marshal(row)
-				require.NoError(t, err)
-				return &http.Response{StatusCode: 200, Body: io.NopCloser(bytes.NewReader(body))}, nil
-			})
-			_, err := startSandboxRow(client, row, tc.restart)
-			require.ErrorContains(t, err, "test boot failure")
-			expected := []string{"/api/containers/work-id/deploy"}
-			if tc.restart && tc.state == statusRunning {
-				expected = append([]string{"/api/containers/work-id/stop"}, expected...)
-			}
-			require.Equal(t, expected, mutations)
-		})
-	}
-}
-
-func TestSandboxRequiresRestrictedAliasBeforeStoppingOrDeploying(t *testing.T) {
-	const monitorID = "11111111-1111-4111-8111-111111111111"
-	row := containerView{ID: "work-id", Name: "work", Repo: defaultSandboxRepo,
-		Config: "containers: [{env: []}]"}
-	peer := containerPeer{ContainerID: monitorID, Port: 22, Alias: &containerAlias{IP: "10.254.0.1", Port: 22}}
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		t.Errorf("invalid policy made a request: %s %s", r.Method, r.URL.Path)
-	}))
-	defer server.Close()
-	client := newCPClient(cliConfig{ControlplaneURL: server.URL, APIKey: "test"})
-	for _, policy := range []*containerNetworkPolicy{nil, {}, {Public: true}, {EgressMode: "unrestricted"},
-		{EgressMode: "restricted", Egress: []containerPeer{{ContainerID: monitorID, Port: 22}}},
-		{Public: true, EgressMode: "restricted", Egress: []containerPeer{peer}},
-		{EgressMode: "restricted", Egress: []containerPeer{{ContainerID: monitorID, Port: 443, Alias: peer.Alias}}},
-		{EgressMode: "restricted", Egress: []containerPeer{{ContainerID: "other", Port: 22, Alias: peer.Alias}}},
-		{EgressMode: "restricted", Egress: []containerPeer{{ContainerID: monitorID, Port: 22, Alias: &containerAlias{IP: "100.127.255.253", Port: 22}}}},
-		{EgressMode: "restricted", Egress: []containerPeer{{ContainerID: monitorID, Port: 22, Alias: &containerAlias{IP: "10.254.0.1", Port: 23}}}},
-		{EgressMode: "restricted", Egress: []containerPeer{peer, peer}}} {
-		row.NetworkPolicy = policy
-		for _, state := range []string{statusRunning, statusStopped} {
-			row.Status = state
-			_, err := startSandboxRow(client, row, state == statusRunning)
-			require.ErrorContains(t, err, "TCP alias")
-		}
-	}
-	row.NetworkPolicy = &containerNetworkPolicy{EgressMode: "restricted", Egress: []containerPeer{peer}}
-	require.NoError(t, validateSandboxNetwork(row))
-}
-
-func TestSandboxDeleteKeepsCredentialsAndRemovesOwnedProfile(t *testing.T) {
-	owner := ed25519PublicKeyString(testSeed(t))
-	const workspaceID = "22222222-2222-4222-8222-222222222222"
-	row := containerView{ID: "11111111-1111-4111-8111-111111111111", Name: "work", Repo: defaultSandboxRepo, Status: statusRunning,
-		OwnerKeyMode: "umk", OwnerPublicKey: owner, Volumes: map[string]string{sandboxWorkspaceSlot: workspaceID}}
-	deleted := false
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.Method + " " + r.URL.Path {
-		case "GET /api/auth/context":
-			json.NewEncoder(w).Encode(authContext{ContextType: "personal", UserID: "owner"})
-		case "GET /api/containers":
-			if deleted {
-				json.NewEncoder(w).Encode([]containerView{})
-			} else {
-				json.NewEncoder(w).Encode([]containerView{row})
-			}
-		case "GET /api/containers/" + row.ID:
-			if deleted {
-				http.NotFound(w, r)
-				return
-			}
-			json.NewEncoder(w).Encode(row)
-		case "DELETE /api/containers/" + row.ID:
-			deleted = true
-			w.WriteHeader(http.StatusNoContent)
-		default:
-			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
-			http.NotFound(w, r)
-		}
-	}))
-	defer server.Close()
-	configureContainerPromotionTest(t, server.URL)
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("USERPROFILE", home)
-	oldYes := sandboxYes
-	sandboxYes = true
-	t.Cleanup(func() { sandboxYes = oldYes })
-	profile := filepath.Join(home, ".ssh", "tinfoil", "work.conf")
-	require.NoError(t, os.MkdirAll(filepath.Dir(profile), 0700))
-	require.NoError(t, os.WriteFile(profile, []byte("# tinfoil-resource: "+server.URL+"//owner/"+row.ID+"\n"), 0600))
-	credential, err := umkRecordPath(accountScope{ControlplaneURL: server.URL, UserID: "owner"}, row.ID)
-	require.NoError(t, err)
-	_, err = saveUMKRecord(credential, newUMKRecord("sandbox", owner))
-	require.NoError(t, err)
-	before, err := os.ReadFile(credential)
-	require.NoError(t, err)
-	var warning strings.Builder
-	sandboxDeleteCmd.SetErr(&warning)
-	t.Cleanup(func() { sandboxDeleteCmd.SetErr(nil) })
-	for _, identifier := range []string{row.Name, row.ID} {
-		require.NoError(t, sandboxDeleteCmd.RunE(sandboxDeleteCmd, []string{identifier}))
-	}
-	require.Contains(t, warning.String(), "permanently deletes its workspace volume")
-	require.Contains(t, warning.String(), "`tinfoil volume detach "+workspaceID+"`")
-	after, err := os.ReadFile(credential)
-	require.NoError(t, err)
-	require.Equal(t, before, after, "deletion must preserve encryption and owner signing keys")
-	require.NoFileExists(t, profile)
-}
 
 func TestSandboxAttestationRelayUsesCurrentSchema(t *testing.T) {
 	const instance = "22222222-2222-4222-8222-222222222222"
@@ -194,74 +52,20 @@ func TestSandboxAttestationRelayUsesCurrentSchema(t *testing.T) {
 		json.NewEncoder(w).Encode(map[string]any{"status": http.StatusOK, "body": base64.RawURLEncoding.EncodeToString(doc)})
 	}))
 	defer server.Close()
-	client := newCPClient(cliConfig{ControlplaneURL: server.URL})
+	client := controlplane.New(server.URL, "test", server.Client(), nil)
 	owner := sandboxOwner{instance: instance, request: func(method, path string, input, out any) error {
-		_, err := client.do(method, path, nil, input, out)
+		_, err := client.Do(t.Context(), method, path, nil, nil, input, out)
 		return err
 	}}
-	previous := verifySandboxEvidence
-	t.Cleanup(func() { verifySandboxEvidence = previous })
 	verificationError := errors.New("verification stopped")
-	verifySandboxEvidence = func(raw, nonce []byte, reference string) (attestedEvidence, error) {
+	verifier := relayVerifier(func(_ string, reference string, raw, nonce []byte) (VerifiedHost, error) {
 		require.Equal(t, doc, raw)
 		require.Equal(t, <-challenges, nonce)
 		require.Equal(t, source, reference)
-		return nil, verificationError
-	}
-	_, err := owner.attest(source)
+		return VerifiedHost{}, verificationError
+	})
+	_, err := owner.attest("sandbox.example", source, verifier)
 	require.ErrorIs(t, err, verificationError)
-}
-
-func TestContainedProfileJumpsThroughMonitorAndKeepsItsAlias(t *testing.T) {
-	program, err := exec.LookPath("ssh")
-	if err != nil {
-		t.Skip("OpenSSH client unavailable")
-	}
-	home := t.TempDir()
-	dir := filepath.Join(home, ".ssh", "tinfoil")
-	require.NoError(t, os.MkdirAll(dir, 0o700))
-	boot, monitorKey := testHostKey(t), testHostKey(t)
-	profile := sshProfile{resourceID: "cp/org/user/resource", name: "work", hostName: routeName(boot), port: defaultSSHPort, user: sandboxLoginUser, identityFile: "/keys/my work/owner_ed25519", hostKey: boot, hostKeyAlias: "work.acme.sandboxes.tinfoil.dev",
-		jump: monitorJump("work", "203.0.113.8", 22042, "/keys/personal", monitorKey, "personal.acme.monitors.tinfoil.dev")}
-
-	other := []byte("Host work\n  HostName work.example\n  IdentityFile ~/.ssh/id_work\n")
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "work.conf"), other, 0o600))
-	require.ErrorContains(t, installSandboxAlias(profile, home), "profile of another resource")
-	kept, err := os.ReadFile(filepath.Join(dir, "work.conf"))
-	require.NoError(t, err)
-	require.Equal(t, other, kept, "another host keeps its alias")
-
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "work.conf"), []byte("# tinfoil-resource: cp/org/user/resource\nHost work\n"), 0600))
-	require.NoError(t, installSandboxAlias(profile, home))
-	updated, err := os.ReadFile(filepath.Join(dir, "work.conf"))
-	require.NoError(t, err)
-	require.Contains(t, string(updated), "IdentityFile \"/keys/my work/owner_ed25519\"\n")
-
-	rebooted := testHostKey(t)
-	profile.hostName, profile.hostKey = routeName(rebooted), rebooted
-	require.NoError(t, installSandboxAlias(profile, home), "a new boot replaces this sandbox's own profile")
-
-	path := filepath.Join(dir, "work.conf")
-	for host, expected := range map[string][]string{
-		"work":         {"hostname " + strings.ToLower(routeName(rebooted)), "proxyjump work.monitor", "hostkeyalias work.acme.sandboxes.tinfoil.dev", "user sandbox", "stricthostkeychecking true"},
-		"work.monitor": {"hostname 203.0.113.8", "port 22042", "hostkeyalias personal.acme.monitors.tinfoil.dev", "identityfile /keys/personal/device_ed25519", "identityagent none"},
-	} {
-		data, err := exec.Command(program, "-G", "-F", path, host).Output()
-		require.NoError(t, err)
-		for _, want := range expected {
-			require.Contains(t, string(data), want+"\n", host)
-		}
-	}
-	data, err := exec.Command(program, "-G", "-F", path, "work").Output()
-	require.NoError(t, err)
-	require.NotContains(t, string(data), "identityagent none\n", "the sandbox hop may still use an agent-held owner key")
-	pins, err := knownhosts.New(filepath.Join(dir, "work.known_hosts"))
-	require.NoError(t, err)
-	remote := &net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: defaultSSHPort}
-	require.NoError(t, pins("work.acme.sandboxes.tinfoil.dev:22", remote, rebooted))
-	require.NoError(t, pins("personal.acme.monitors.tinfoil.dev:22", remote, monitorKey))
-	require.Error(t, pins("work.acme.sandboxes.tinfoil.dev:22", remote, boot), "the previous boot is no longer trusted")
-	require.Error(t, pins("work.acme.sandboxes.tinfoil.dev:22", remote, monitorKey), "Monitor cannot impersonate the sandbox")
 }
 
 type fakeOwnerTransport struct {
@@ -340,7 +144,7 @@ func TestSandboxEnrollDecidesFromMonitorIdentityAndSandboxStatus(t *testing.T) {
 			keys := &resourceKeys{mode: "tmk", signer: signer, monitorIdentitySeed: bytes.Clone(monitorIdentitySeed), storageKey: testSeed(t)}
 			scope := accountScope{ControlplaneURL: "https://cp.example", UserID: "user_owner"}
 			if test.noLocalKeys {
-				keys = &resourceKeys{mode: "umk", signer: signer}
+				keys = &resourceKeys{service: testService(), mode: "umk", signer: signer}
 				keys.umkPath, err = umkRecordPath(scope, "11111111-1111-4111-8111-111111111111")
 				require.NoError(t, err)
 			}
@@ -453,14 +257,14 @@ func TestDirectProfileUnlocksOverAttestedOwnerSSH(t *testing.T) {
 			owner := ed25519PublicKeyString(seed)
 			keys := &resourceKeys{mode: "tmk", signer: signer, storageKey: bytes.Repeat([]byte{0, 1, 2, 10}, 8)}
 			if test.noLocalKeys {
-				keys = &resourceKeys{mode: "umk", signer: signer}
+				keys = &resourceKeys{service: testService(), mode: "umk", signer: signer}
 				keys.umkPath, err = umkRecordPath(accountScope{ControlplaneURL: "https://cp.example", UserID: "user_owner"}, "11111111-1111-4111-8111-111111111111")
 				require.NoError(t, err)
 			}
 			instance, volumeID := "22222222-2222-4222-8222-222222222222", "33333333-3333-4333-8333-333333333333"
 			s := &sandboxSession{box: containerView{Name: "work", Domain: "sandbox.invalid", OwnerPublicKey: owner}, keys: keys, noMonitor: true, expires: time.Now().Add(time.Hour),
 				binding: mkBinding{Account: "personal", ContainerID: "11111111-1111-4111-8111-111111111111", InstanceID: &instance, VolumeID: &volumeID},
-				profile: sshProfile{hostName: address, port: portNumber, hostKey: host.PublicKey()}}
+				profile: ConnectionInfo{HostName: address, Port: portNumber, HostKey: host.PublicKey()}}
 			err := s.enroll(t.Context())
 			require.NoError(t, err)
 			status := <-calls
@@ -481,7 +285,7 @@ func TestDirectProfileUnlocksOverAttestedOwnerSSH(t *testing.T) {
 func TestUnlockRequiresUnexpiredAttestationBeforeDial(t *testing.T) {
 	for _, expiry := range []time.Time{{}, time.Now().Add(-time.Second)} {
 		for _, noMonitor := range []bool{false, true} {
-			session := sandboxSession{expires: expiry, noMonitor: noMonitor, keys: &resourceKeys{}, profile: sshProfile{hostKey: testHostKey(t)}}
+			session := sandboxSession{expires: expiry, noMonitor: noMonitor, keys: &resourceKeys{}, profile: ConnectionInfo{HostKey: testHostKey(t)}}
 			require.ErrorContains(t, session.enroll(t.Context()), "attestation expired")
 		}
 	}
@@ -503,7 +307,7 @@ func TestMonitorRestartRelinksOnlyAuthorizedSandboxes(t *testing.T) {
 	routes := map[string]string{}
 	fixtures := map[string]*fixture{}
 	var rows []containerView
-	for i, name := range []string{"a", "b", "removed", "nokeys", "unbound", "wrongbinding", "rebooted", "elsewhere", "untrusted"} {
+	for i, name := range []string{"a", "b", "removed", "nokeys", "unbound", "wrongbinding", "rebooted", "elsewhere"} {
 		f := &fixture{name: name, id: fmt.Sprintf("1111111%d-1111-4111-8111-111111111111", i), instance: fmt.Sprintf("2222222%d-2222-4222-8222-222222222222", i),
 			volume: fmt.Sprintf("3333333%d-3333-4333-8333-333333333333", i), key: newResourceKey("sandbox"), host: testSigner(t), monitor: monitorID}
 		agent := monitorIdentity(f.key.MonitorIdentitySeed)
@@ -563,7 +367,7 @@ func TestMonitorRestartRelinksOnlyAuthorizedSandboxes(t *testing.T) {
 	mk, err := newMKSession(cp, scope)
 	require.NoError(t, err)
 	_, err = mk.update(t.Context(), func(p *mkPayload) error {
-		for _, name := range []string{"a", "b", "removed", "unbound", "wrongbinding", "rebooted", "elsewhere", "untrusted"} {
+		for _, name := range []string{"a", "b", "removed", "unbound", "wrongbinding", "rebooted", "elsewhere"} {
 			f := fixtures[name]
 			key := f.key
 			if name != "unbound" {
@@ -582,32 +386,14 @@ func TestMonitorRestartRelinksOnlyAuthorizedSandboxes(t *testing.T) {
 	require.NoError(t, err)
 	revision := keys.revision
 
-	var trusted []string
-	for _, row := range rows {
-		if row.Name != "untrusted" {
-			target, err := parseConnectionDescriptor(connectionDescriptor{URL: "https://" + row.Domain, ConfigName: row.ConfigName, ConfigDigest: storageHash([]byte(row.Config))})
-			require.NoError(t, err)
-			trusted = append(trusted, target.source)
-		}
-	}
-	policy, err := json.Marshal(map[string]any{"mode": "frozen", "allow": map[string]any{"pins": trusted}})
-	require.NoError(t, err)
-	t.Setenv(envKnownConfigs, filepath.Join(t.TempDir(), "known-configs.json"))
-	require.NoError(t, os.WriteFile(os.Getenv(envKnownConfigs), policy, 0o600))
-	previous := verifySandboxEvidence
-	verifySandboxEvidence = func(doc, _ []byte, source string) (attestedEvidence, error) {
+	verifier := relayVerifier(func(_ string, source string, doc, _ []byte) (VerifiedHost, error) {
 		for _, f := range fixtures {
 			if strings.Contains(string(doc), f.instance) && strings.Contains(source, storageHash(doc)) {
-				host, err := x509.MarshalPKIXPublicKey(f.host.PublicKey().(ssh.CryptoPublicKey).CryptoPublicKey())
-				require.NoError(t, err)
-				return &testEvidence{expires: time.Now().Add(time.Hour), keys: []document.CryptoMaterialItem{
-					{ID: "host-ssh", Format: document.KeySPKIV1Format, Data: hex.EncodeToString(host)},
-				}}, nil
+				return VerifiedHost{Key: f.host.PublicKey(), Expires: time.Now().Add(time.Hour)}, nil
 			}
 		}
-		return nil, errors.New("unknown evidence")
-	}
-	t.Cleanup(func() { verifySandboxEvidence = previous })
+		return VerifiedHost{}, errors.New("unknown evidence")
+	})
 
 	relayed := map[string]int{}
 	var monitorCalls []string
@@ -618,7 +404,7 @@ func TestMonitorRestartRelinksOnlyAuthorizedSandboxes(t *testing.T) {
 	m.view.Config.Identities = map[string]struct {
 		Key string `json:"key"`
 	}{}
-	for _, name := range []string{"a", "b", "nokeys", "unbound", "wrongbinding", "rebooted", "elsewhere", "untrusted"} {
+	for _, name := range []string{"a", "b", "nokeys", "unbound", "wrongbinding", "rebooted", "elsewhere"} {
 		m.view.Config.Identities["sandbox-"+name] = struct {
 			Key string `json:"key"`
 		}{monitorIdentity(fixtures[name].key.MonitorIdentitySeed)}
@@ -644,14 +430,31 @@ func TestMonitorRestartRelinksOnlyAuthorizedSandboxes(t *testing.T) {
 		return errors.New("only attestation uses the HTTP relay")
 	}
 
-	home, err := os.UserHomeDir()
-	require.NoError(t, err)
-	profiles := filepath.Join(home, ".ssh", "tinfoil")
-	require.NoError(t, os.MkdirAll(profiles, 0o700))
-	resourceID := scope.ControlplaneURL + "/" + scope.OrgID + "/" + scope.UserID + "/" + fixtures["a"].id
-	require.NoError(t, os.WriteFile(filepath.Join(profiles, "a-alias.conf"), []byte("# tinfoil-resource: "+resourceID+"\nHost a-alias\n"), 0o600))
-
-	failures := relinkSandboxes(t.Context(), scope, cp, m, monitorID)
+	connections := map[string]*ConnectionInfo{}
+	relink := func(id string) error {
+		var row containerView
+		_, err := cp.Do(t.Context(), "GET", "/api/containers/"+id, nil, nil, nil, &row)
+		if err != nil {
+			return err
+		}
+		f := fixtures[row.Name]
+		target := &Workload{Container: row, Source: row.ConfigName, Environment: map[string]string{sandboxOwnerEnv: f.key.OwnerPublicKey, "SANDBOX_INSTANCE_ID": f.instance}}
+		info, err := cp.service.RelinkSandbox(t.Context(), scope, cp.Client, m, monitorID, id, target, verifier)
+		if info != nil {
+			connections[row.Name] = info
+		}
+		return err
+	}
+	relinkAll := func() []error {
+		var failures []error
+		for _, row := range rows {
+			if err := relink(row.ID); err != nil && !errors.As(err, new(NoLocalKeys)) {
+				failures = append(failures, fmt.Errorf("sandbox %s: %w", row.Name, err))
+			}
+		}
+		return failures
+	}
+	failures := relinkAll()
 	var reported []string
 	for _, failure := range failures {
 		reported = append(reported, failure.Error())
@@ -661,8 +464,7 @@ func TestMonitorRestartRelinksOnlyAuthorizedSandboxes(t *testing.T) {
 	require.Contains(t, all, "sandbox wrongbinding:")
 	require.Contains(t, all, "no longer matches")
 	require.Contains(t, all, "sandbox rebooted: its saved Monitor identity is not active")
-	require.Contains(t, all, "sandbox untrusted: config")
-	require.Contains(t, all, "is not allowed")
+	require.Contains(t, all, "sandbox elsewhere: its inventory changed")
 	host := authorizedKeyLine(newHost)
 	for _, name := range []string{"a", "b"} {
 		f := fixtures[name]
@@ -677,25 +479,23 @@ func TestMonitorRestartRelinksOnlyAuthorizedSandboxes(t *testing.T) {
 	}
 	require.Equal(t, []string{"GET /status"}, []string{fixtures["rebooted"].owner.calls()[0].Method + " " + fixtures["rebooted"].owner.calls()[0].Path})
 	require.Len(t, fixtures["rebooted"].owner.calls(), 1, "a rebooted sandbox is not enrolled or unlocked here")
-	for _, name := range []string{"removed", "nokeys", "unbound", "wrongbinding", "elsewhere", "untrusted"} {
+	for _, name := range []string{"removed", "nokeys", "unbound", "wrongbinding", "elsewhere"} {
 		require.Zero(t, relayed[name], "%s is not contacted", name)
 	}
 	require.Empty(t, monitorCalls, "no Monitor enrollment, unlock or restore")
 	require.Equal(t, revision, keys.revision, "re-linking never writes the key bundle")
 
-	pins, err := os.ReadFile(filepath.Join(profiles, "a-alias.known_hosts"))
-	require.NoError(t, err)
-	require.Contains(t, string(pins), "monitor.example "+strings.TrimSpace(authorizedKeyLine(newHost)), "the installed jump profile pins the new Monitor key")
-	conf, err := os.ReadFile(filepath.Join(profiles, "a-alias.conf"))
-	require.NoError(t, err)
-	require.Contains(t, string(conf), "ProxyJump a-alias.monitor")
-	require.NoFileExists(t, filepath.Join(profiles, "b.conf"), "re-linking installs no new profile")
+	require.Len(t, connections, 2)
+	require.Equal(t, newHost.Marshal(), connections["a"].Jump.HostKey.Marshal())
+	require.Equal(t, "monitor.example", connections["a"].Jump.HostKeyAlias)
+	require.Equal(t, "a.monitor", connections["a"].Jump.Name)
+	require.Equal(t, routeName(fixtures["a"].host.PublicKey()), connections["a"].HostName)
 
 	// A second open finds every pin current and changes nothing.
 	for _, name := range []string{"a", "b"} {
 		fixtures[name].owner.reset()
 	}
-	require.Len(t, relinkSandboxes(t.Context(), scope, cp, m, monitorID), 3)
+	require.Len(t, relinkAll(), 3)
 	for _, name := range []string{"a", "b"} {
 		require.Len(t, fixtures[name].owner.calls(), 1, "%s: status only", name)
 	}
@@ -711,7 +511,7 @@ func TestMonitorRestartRelinksOnlyAuthorizedSandboxes(t *testing.T) {
 			changedCreator.Store(tc.changedCreator)
 			m.keys.mode = tc.mode
 			before := relayed["a"]
-			err := relinkSandbox(t.Context(), scope, cp, m, monitorID, fixtures["a"].id)
+			err := relink(fixtures["a"].id)
 			require.ErrorContains(t, err, tc.want)
 			require.Equal(t, before, relayed["a"], "invalid ownership or custody must not contact the sandbox")
 			require.Equal(t, revision, keys.revision, "re-linking does not change key state")

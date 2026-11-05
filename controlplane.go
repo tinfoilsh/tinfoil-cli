@@ -99,12 +99,16 @@ func (c *cpClient) doWithHeaders(method, path string, query url.Values, headers 
 }
 
 func (c *cpClient) doContext(ctx context.Context, method, path string, query url.Values, headers map[string]string, body any, out any) (int, error) {
-	client := controlplane.New(c.baseURL, version, c.http, cpTokenSource{client: c})
+	client := c.transport()
 	status, err := client.Do(ctx, method, path, query, headers, body, out)
 	if apiErr, ok := err.(*controlplane.Error); ok {
 		return status, (*cpError)(apiErr)
 	}
 	return status, err
+}
+
+func (c *cpClient) transport() *controlplane.Client {
+	return controlplane.New(c.baseURL, version, c.http, cpTokenSource{client: c})
 }
 
 func pathf(format string, segments ...string) string {

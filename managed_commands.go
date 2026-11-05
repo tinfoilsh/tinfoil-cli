@@ -17,6 +17,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/spf13/cobra"
+	"github.com/tinfoilsh/tinfoil-cli/internal/owner"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -292,18 +293,15 @@ func selectCreationMonitor(client *cpClient, identifier, userID string) (*contai
 
 func prepareResourceKeys(ctx context.Context, client *cpClient, scope accountScope, kind string, userKeys bool, publicKey string) (string, string, error) {
 	if !userKeys {
-		mk, err := newMKSession(client, scope)
+		service, err := ownerService(client)
 		if err != nil {
 			return "", "", fmt.Errorf("%w, or create it with your own key using --owner-public-key FILE", err)
 		}
-		key := newResourceKey(kind)
-		defer clear(key.OwnerSeed)
-		defer clear(key.StorageKey)
-		defer clear(key.MonitorIdentitySeed)
-		if _, err := mk.update(ctx, func(p *mkPayload) error { return addKey(p, key) }); err != nil {
+		public, err := service.PrepareResourceKeys(ctx, client.transport(), owner.Scope(scope), kind)
+		if err != nil {
 			return "", "", err
 		}
-		return "tmk", key.OwnerPublicKey, nil
+		return "tmk", public, nil
 	}
 	owner, err := creationOwnerKey(publicKey, attestSSHIdentity)
 	if err != nil {
