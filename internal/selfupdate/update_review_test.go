@@ -1,4 +1,4 @@
-package main
+package selfupdate
 
 import (
 	"bufio"
@@ -49,7 +49,7 @@ func TestSelfUpdatePreservesGroupOwnership(t *testing.T) {
 	require.NoError(t, os.Chmod(f.target, 0o750))
 	before, err := os.Stat(f.target)
 	require.NoError(t, err)
-	_, err = f.u.run(context.Background(), false)
+	_, err = f.u.Run(context.Background(), false)
 	require.NoError(t, err)
 	f.assertTarget(t, testUpdatedCLI)
 	after, err := os.Stat(f.target)
@@ -57,40 +57,6 @@ func TestSelfUpdatePreservesGroupOwnership(t *testing.T) {
 	require.Equal(t, before.Sys().(*syscall.Stat_t).Uid, after.Sys().(*syscall.Stat_t).Uid)
 	require.Equal(t, before.Sys().(*syscall.Stat_t).Gid, after.Sys().(*syscall.Stat_t).Gid)
 	require.Equal(t, before.Mode(), after.Mode())
-}
-
-func TestSelfUpdateReportsResultWriteFailure(t *testing.T) {
-	for _, format := range []string{"text", "json"} {
-		for _, action := range []string{"install", "check", "current"} {
-			t.Run(format+"/"+action, func(t *testing.T) {
-				f := newSelfUpdateFixture(t)
-				args := []string{"update", "-o", format}
-				if action == "check" {
-					args = append(args, "--check")
-				}
-				if action == "current" {
-					f.u.current = testUpdateVersion
-				}
-				root := newRootCommand()
-				root.AddCommand(newSelfUpdateCommand(func() *selfUpdater { return f.u }))
-				root.SetArgs(args)
-				root.SetOut(failingUpdateWriter{})
-				root.SetErr(io.Discard)
-				err := root.Execute()
-				require.ErrorIs(t, err, os.ErrPermission)
-				require.ErrorContains(t, err, "writing result failed")
-				if action == "install" {
-					resolved, resolveErr := filepath.EvalSymlinks(f.target)
-					require.NoError(t, resolveErr)
-					require.ErrorContains(t, err, "tinfoil "+testUpdateVersion+" is installed at "+resolved)
-					f.assertTarget(t, testUpdatedCLI)
-				} else {
-					require.ErrorContains(t, err, "no executable was changed")
-					f.assertTarget(t, testOriginalCLI)
-				}
-			})
-		}
-	}
 }
 
 func TestSelfUpdateAllowsUnmanagedCellarPaths(t *testing.T) {
@@ -101,7 +67,7 @@ func TestSelfUpdateAllowsUnmanagedCellarPaths(t *testing.T) {
 			require.NoError(t, os.MkdirAll(filepath.Dir(target), 0o700))
 			require.NoError(t, os.Rename(f.target, target))
 			f.target = target
-			_, err := f.u.run(context.Background(), false)
+			_, err := f.u.Run(context.Background(), false)
 			require.NoError(t, err)
 			f.assertTarget(t, testUpdatedCLI)
 		})
@@ -149,7 +115,7 @@ func TestSelfUpdateOwnershipFailurePreservesOriginal(t *testing.T) {
 				return os.ErrPermission
 			}
 			f.u.rename = func(string, string) error { t.Fatal("ownership failure reached rename"); return nil }
-			_, err := f.u.run(context.Background(), false)
+			_, err := f.u.Run(context.Background(), false)
 			require.True(t, called)
 			require.ErrorIs(t, err, os.ErrPermission)
 			require.ErrorContains(t, err, "preserving executable ownership")
@@ -162,7 +128,7 @@ func TestSelfUpdateOwnershipFailurePreservesOriginal(t *testing.T) {
 func TestSelfUpdateSkipsUnnecessaryChown(t *testing.T) {
 	f := newSelfUpdateFixture(t)
 	f.u.chown = func(*os.File, int, int) error { t.Fatal("unnecessary chown"); return nil }
-	_, err := f.u.run(context.Background(), false)
+	_, err := f.u.Run(context.Background(), false)
 	require.NoError(t, err)
 	f.assertTarget(t, testUpdatedCLI)
 }
@@ -264,7 +230,7 @@ func TestSelfUpdateCheckRejectsCancellationAtResponseEOF(t *testing.T) {
 		}
 		return resp, err
 	})
-	result, err := f.u.run(ctx, true)
+	result, err := f.u.Run(ctx, true)
 	require.ErrorIs(t, err, context.Canceled)
 	require.Empty(t, result.Status)
 	require.Equal(t, 1, f.requestCount())
@@ -294,7 +260,7 @@ func TestSelfUpdateHTTPSRedirectToCDN(t *testing.T) {
 		}
 		return transport.RoundTrip(req)
 	})
-	_, err := f.u.run(context.Background(), false)
+	_, err := f.u.Run(context.Background(), false)
 	require.NoError(t, err)
 	require.True(t, redirected)
 	require.Equal(t, 4, f.requestCount())
@@ -340,7 +306,7 @@ func TestSelfUpdateResponseBodyClose(t *testing.T) {
 					}
 					return resp, nil
 				})
-				_, err := f.u.run(context.Background(), false)
+				_, err := f.u.Run(context.Background(), false)
 				require.ErrorIs(t, err, closeErr)
 				require.ErrorContains(t, err, "closing update response")
 				if status != http.StatusOK {
@@ -359,7 +325,7 @@ func TestSelfUpdateStaleProcessBeforeSnapshot(t *testing.T) {
 	target := filepath.Join(dir, "old-cli")
 	replacement := filepath.Join(dir, "new-cli")
 	for _, build := range []struct{ path, version string }{{target, "0.18.9"}, {replacement, "0.20.0"}} {
-		cmd := exec.Command("go", "test", "-c", "-ldflags", "-X main.version="+build.version, "-o", build.path, ".")
+		cmd := exec.Command("go", "test", "-c", "-ldflags", "-X github.com/tinfoilsh/tinfoil-cli/internal/selfupdate.testProcessVersion="+build.version, "-o", build.path, ".")
 		cmd.Env = append(os.Environ(), "GOWORK=off")
 		out, err := cmd.CombinedOutput()
 		require.NoError(t, err, string(out))
@@ -401,16 +367,19 @@ func TestSelfUpdateStaleProcessBeforeSnapshot(t *testing.T) {
 	require.Equal(t, want, sha256.Sum256(installed))
 }
 
+var testProcessVersion string
+
 func TestSelfUpdateStaleProcessHelper(t *testing.T) {
 	if os.Getenv(updateHelperEnv) != "1" {
 		return
 	}
+	require.Equal(t, "0.18.9", testProcessVersion)
 	_, err := fmt.Fprint(os.Stdout, updateHelperReady)
 	require.NoError(t, err)
 	var signal [1]byte
 	_, err = io.ReadFull(os.Stdin, signal[:])
 	require.NoError(t, err)
-	u := &selfUpdater{executable: os.Executable, inspectExecutable: snapshotExecutable, validateExecutable: verifyRunningExecutable}
+	u := &Updater{executable: os.Executable, inspectExecutable: snapshotExecutable, validateExecutable: verifyRunningExecutable}
 	_, _, err = u.snapshot(context.Background())
 	require.ErrorContains(t, err, "installed executable does not match the running build")
 }

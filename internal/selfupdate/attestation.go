@@ -1,4 +1,4 @@
-package main
+package selfupdate
 
 import (
 	"context"
@@ -55,10 +55,10 @@ type attestationEnvelope struct {
 // the expected tag. Every check is mandatory; there is no fallback to
 // checksum-only updates. The attestations endpoint is normally the GitHub
 // API; callers pass it so tests can serve their own listing.
-func verifyUpdateAttestation(ctx context.Context, client *http.Client, archive []byte, tag string, endpointBase string) error {
+func verifyUpdateAttestation(ctx context.Context, client *http.Client, archive []byte, tag, endpointBase, current string) error {
 	digest := sha256.Sum256(archive)
 	endpoint := endpointBase + "/sha256:" + hex.EncodeToString(digest[:])
-	data, err := fetchUpdateData(ctx, client, endpoint, version, attestationsLimit)
+	data, err := fetchUpdateData(ctx, client, endpoint, current, attestationsLimit)
 	if err != nil {
 		return fmt.Errorf("fetching attestations: %w", err)
 	}
@@ -76,7 +76,7 @@ func verifyUpdateAttestation(ctx context.Context, client *http.Client, archive [
 	expectedSAN := fmt.Sprintf(`^https://github\.com/tinfoilsh/tinfoil-cli/\.github/workflows/release\.yml@refs/tags/%s$`, regexp.QuoteMeta(tag))
 	var lastErr error
 	for _, att := range envelope.Attestations {
-		ok, err := verifyOneAttestation(ctx, client, att.BundleURL, digest, expectedSAN)
+		ok, err := verifyOneAttestation(ctx, client, att.BundleURL, digest, expectedSAN, current)
 		if err != nil {
 			lastErr = err
 			continue
@@ -94,11 +94,11 @@ func verifyUpdateAttestation(ctx context.Context, client *http.Client, archive [
 // verifyOneAttestation fetches one bundle and verifies it end to end. It
 // returns (true, nil) when the bundle authenticates the archive and (false,
 // err) when it does not.
-func verifyOneAttestation(ctx context.Context, client *http.Client, bundleURL string, digest [sha256.Size]byte, expectedSAN string) (bool, error) {
+func verifyOneAttestation(ctx context.Context, client *http.Client, bundleURL string, digest [sha256.Size]byte, expectedSAN, current string) (bool, error) {
 	if !strings.HasPrefix(bundleURL, "https://") {
 		return false, errors.New("attestation bundle URL is not HTTPS")
 	}
-	compressed, err := fetchUpdateData(ctx, client, bundleURL, version, attestationsLimit)
+	compressed, err := fetchUpdateData(ctx, client, bundleURL, current, attestationsLimit)
 	if err != nil {
 		return false, fmt.Errorf("fetching attestation bundle: %w", err)
 	}

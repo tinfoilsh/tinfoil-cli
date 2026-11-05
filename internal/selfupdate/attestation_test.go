@@ -1,4 +1,4 @@
-package main
+package selfupdate
 
 import (
 	"bytes"
@@ -69,6 +69,9 @@ func fixtureArchiveDigest(t *testing.T) [sha256.Size]byte {
 
 func TestVerifyUpdateAttestationWalksListingToBundle(t *testing.T) {
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("User-Agent"); got != "tinfoil-cli/"+testUpdateVersion {
+			t.Errorf("attestation user agent = %q, want version %q", got, testUpdateVersion)
+		}
 		switch {
 		case r.URL.Path == "/bundle":
 			w.Header().Set("Content-Type", "application/x-snappy")
@@ -83,7 +86,7 @@ func TestVerifyUpdateAttestationWalksListingToBundle(t *testing.T) {
 	defer server.Close()
 
 	archive := []byte("not the attested archive")
-	err := verifyUpdateAttestation(context.Background(), server.Client(), archive, "v0.19.9", server.URL)
+	err := verifyUpdateAttestation(context.Background(), server.Client(), archive, "v0.19.9", server.URL, testUpdateVersion)
 	require.Error(t, err)
 	// The walk reached the bundle and its subjects; the mismatch is the
 	// digest, not the transport.
@@ -96,7 +99,7 @@ func TestVerifyUpdateAttestationFailsClosedOnMissingListing(t *testing.T) {
 	defer server.Close()
 
 	archive := []byte("an unattested archive")
-	err := verifyUpdateAttestation(context.Background(), server.Client(), archive, "v0.19.9", server.URL)
+	err := verifyUpdateAttestation(context.Background(), server.Client(), archive, "v0.19.9", server.URL, testUpdateVersion)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "attestations")
 }
@@ -110,7 +113,7 @@ func TestVerifyOneAttestationVerifiesRealBundle(t *testing.T) {
 	}))
 	defer server.Close()
 
-	ok, err := verifyOneAttestation(context.Background(), server.Client(), server.URL, digest, expectedSAN)
+	ok, err := verifyOneAttestation(context.Background(), server.Client(), server.URL, digest, expectedSAN, testUpdateVersion)
 	require.NoError(t, err)
 	require.True(t, ok)
 }
@@ -124,7 +127,7 @@ func TestVerifyOneAttestationRejectsWrongTag(t *testing.T) {
 	}))
 	defer server.Close()
 
-	ok, err := verifyOneAttestation(context.Background(), server.Client(), server.URL, digest, expectedSAN)
+	ok, err := verifyOneAttestation(context.Background(), server.Client(), server.URL, digest, expectedSAN, testUpdateVersion)
 	require.Error(t, err)
 	require.False(t, ok)
 }
@@ -143,14 +146,14 @@ func TestVerifyOneAttestationRejectsTamperedBundle(t *testing.T) {
 	}))
 	defer server.Close()
 
-	ok, verifyErr := verifyOneAttestation(context.Background(), server.Client(), server.URL, digest, expectedSAN)
+	ok, verifyErr := verifyOneAttestation(context.Background(), server.Client(), server.URL, digest, expectedSAN, testUpdateVersion)
 	require.Error(t, verifyErr)
 	require.False(t, ok)
 }
 
 func TestVerifyOneAttestationRejectsNonHTTPSBundleURL(t *testing.T) {
 	digest := fixtureArchiveDigest(t)
-	ok, err := verifyOneAttestation(context.Background(), http.DefaultClient, "http://example.test/bundle", digest, "x")
+	ok, err := verifyOneAttestation(context.Background(), http.DefaultClient, "http://example.test/bundle", digest, "x", testUpdateVersion)
 	require.Error(t, err)
 	require.False(t, ok)
 	require.Contains(t, err.Error(), "not HTTPS")
@@ -165,7 +168,7 @@ func TestVerifyOneAttestationRejectsWrongDigest(t *testing.T) {
 	}))
 	defer server.Close()
 
-	ok, err := verifyOneAttestation(context.Background(), server.Client(), server.URL, digest, expectedSAN)
+	ok, err := verifyOneAttestation(context.Background(), server.Client(), server.URL, digest, expectedSAN, testUpdateVersion)
 	require.Error(t, err)
 	require.False(t, ok)
 }
@@ -183,7 +186,7 @@ func TestVerifyOneAttestationRejectsOversizedDecodedBundle(t *testing.T) {
 	}))
 	defer server.Close()
 
-	ok, err := verifyOneAttestation(context.Background(), server.Client(), server.URL, digest, "x")
+	ok, err := verifyOneAttestation(context.Background(), server.Client(), server.URL, digest, "x", testUpdateVersion)
 	require.Error(t, err)
 	require.False(t, ok)
 	require.Contains(t, err.Error(), "decompressed size limit")
@@ -194,11 +197,47 @@ func TestSelfUpdateRefusesUpdateWhenAttestationFails(t *testing.T) {
 	f.u.verifyAttestation = func(context.Context, *http.Client, []byte, string) error {
 		return fmt.Errorf("no valid attestation")
 	}
-	_, err := f.u.run(context.Background(), false)
+	_, err := f.u.Run(context.Background(), false)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "refusing update without a valid release attestation")
 	f.assertTarget(t, testOriginalCLI)
 	require.Equal(t, 3, f.requestCount())
+}
+
+func TestSelfUpdateUsesMandatoryAttestationVerifier(t *testing.T) {
+	for _, missing := range []bool{true, false} {
+		t.Run(fmt.Sprintf("missing=%t", missing), func(t *testing.T) {
+			f := newSelfUpdateFixture(t)
+			f.u.verifyAttestation = nil
+			f.intercept = func(w http.ResponseWriter, r *http.Request) bool {
+				switch {
+				case strings.HasSuffix(r.URL.Path, "/attestations/bundle"):
+					_, _ = w.Write(fixtureBundleSnappy)
+				case strings.Contains(r.URL.Path, "/attestations/sha256:"):
+					if missing {
+						_ = json.NewEncoder(w).Encode(attestationEnvelope{})
+					} else {
+						_ = json.NewEncoder(w).Encode(attestationEnvelope{Attestations: []struct {
+							BundleURL string `json:"bundle_url"`
+						}{{BundleURL: attestationsBaseURL + "/bundle"}}})
+					}
+				default:
+					return false
+				}
+				return true
+			}
+			_, err := f.u.Run(context.Background(), false)
+			require.ErrorContains(t, err, "refusing update without a valid release attestation")
+			if missing {
+				require.ErrorContains(t, err, "release has no attestations")
+				require.Equal(t, 4, f.requestCount())
+			} else {
+				require.ErrorContains(t, err, "attestation does not verify")
+				require.Equal(t, 5, f.requestCount())
+			}
+			f.assertTarget(t, testOriginalCLI)
+		})
+	}
 }
 
 func TestSelfUpdateAttestationSeesArchiveAndTag(t *testing.T) {
@@ -210,9 +249,9 @@ func TestSelfUpdateAttestationSeesArchiveAndTag(t *testing.T) {
 		seenArchive = append([]byte(nil), archive...)
 		return nil
 	}
-	result, err := f.u.run(context.Background(), false)
+	result, err := f.u.Run(context.Background(), false)
 	require.NoError(t, err)
-	require.Equal(t, updateStatusInstalled, result.Status)
+	require.Equal(t, StatusInstalled, result.Status)
 	require.Equal(t, "v"+testUpdateVersion, seenTag)
 	require.Equal(t, f.archive, seenArchive)
 }
