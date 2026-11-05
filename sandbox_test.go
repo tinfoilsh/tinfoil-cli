@@ -110,8 +110,9 @@ func TestSandboxRequiresRestrictedAliasBeforeStoppingOrDeploying(t *testing.T) {
 
 func TestSandboxDeleteKeepsCredentialsAndRemovesOwnedProfile(t *testing.T) {
 	owner := ed25519PublicKeyString(testSeed(t))
+	const workspaceID = "22222222-2222-4222-8222-222222222222"
 	row := containerView{ID: "11111111-1111-4111-8111-111111111111", Name: "work", Repo: defaultSandboxRepo, Status: statusRunning,
-		OwnerKeyMode: "umk", OwnerPublicKey: owner}
+		OwnerKeyMode: "umk", OwnerPublicKey: owner, Volumes: map[string]string{sandboxWorkspaceSlot: workspaceID}}
 	deleted := false
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method + " " + r.URL.Path {
@@ -154,9 +155,14 @@ func TestSandboxDeleteKeepsCredentialsAndRemovesOwnedProfile(t *testing.T) {
 	require.NoError(t, err)
 	before, err := os.ReadFile(credential)
 	require.NoError(t, err)
+	var warning strings.Builder
+	sandboxDeleteCmd.SetErr(&warning)
+	t.Cleanup(func() { sandboxDeleteCmd.SetErr(nil) })
 	for _, identifier := range []string{row.Name, row.ID} {
 		require.NoError(t, sandboxDeleteCmd.RunE(sandboxDeleteCmd, []string{identifier}))
 	}
+	require.Contains(t, warning.String(), "permanently deletes its workspace volume")
+	require.Contains(t, warning.String(), "`tinfoil volume detach "+workspaceID+"`")
 	after, err := os.ReadFile(credential)
 	require.NoError(t, err)
 	require.Equal(t, before, after, "deletion must preserve encryption and owner signing keys")

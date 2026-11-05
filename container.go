@@ -556,15 +556,22 @@ var containerDeleteCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		c, err := resolveContainer(client, args[0])
+		c, err := resolveContainerDetail(client, args[0])
 		if err != nil {
 			return err
 		}
-		if err := checkManagedKind(cmd.Annotations[managedKindAnnotation], *c); err != nil {
+		if err := refuseStandaloneMonitor(*c, "delete"); err != nil {
 			return err
 		}
 		fmt.Fprintf(os.Stderr, "Deleting %s (%s).\n", c.Name, c.ID)
-		fmt.Fprintln(os.Stderr, "This removes the container, its saved configuration, and its DNS records. Attached volumes are kept.")
+		volumes := "Attached volumes are kept."
+		if c.Repo == defaultSandboxRepo {
+			volumes = "It has no attached workspace volume."
+			if c.Volumes[sandboxWorkspaceSlot] != "" {
+				volumes = "Its workspace volume and all of its data are deleted too."
+			}
+		}
+		fmt.Fprintln(os.Stderr, "This removes the container, its saved configuration, and its DNS records. "+volumes)
 		if err := confirmYes(deleteYes, cmd.CommandPath()); err != nil {
 			return err
 		}
@@ -661,7 +668,7 @@ var containerStopCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		if err := checkManagedKind(cmd.Annotations[managedKindAnnotation], *c); err != nil {
+		if err := refuseStandaloneMonitor(*c, "stop"); err != nil {
 			return err
 		}
 		stopped, err := postContainerAction(client, c.ID, "stop", nil)
@@ -669,11 +676,7 @@ var containerStopCmd = &cobra.Command{
 			return err
 		}
 		if outputFormat != "json" {
-			startCommand := "container deploy"
-			if kind := cmd.Annotations[managedKindAnnotation]; kind != "" {
-				startCommand = kind + " start"
-			}
-			fmt.Printf("Stopping %s. Its configuration and volumes are kept; run \"tinfoil %s %s\" to bring it back.\n", c.Name, startCommand, c.Name)
+			fmt.Printf("Stopping %s. Its configuration and volumes are kept; run \"tinfoil container deploy %s\" to bring it back.\n", c.Name, c.Name)
 		}
 		return renderContainer(stopped)
 	},
@@ -735,6 +738,9 @@ var containerMetricsCmd = &cobra.Command{
 		}
 		c, err := resolveContainer(client, args[0])
 		if err != nil {
+			return err
+		}
+		if err := checkManagedKind(cmd.Annotations[managedKindAnnotation], *c); err != nil {
 			return err
 		}
 		q := url.Values{"time": []string{metricsTime}}
