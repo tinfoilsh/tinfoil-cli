@@ -26,9 +26,7 @@ func init() {
 	monitorCmd.AddCommand(newManagedStatusCmd("monitor"))
 	start := newManagedContainerCmd("monitor", "start", containerDeployCmd, "no-wait")
 	start.Short = "Start a stopped or failed Monitor"
-	monitorCmd.AddCommand(start,
-		newManagedContainerCmd("monitor", "stop", containerStopCmd),
-		newManagedContainerCmd("monitor", "delete", containerDeleteCmd, "yes"))
+	monitorCmd.AddCommand(start, newMonitorStopCmd(), newMonitorDeleteCmd())
 	for _, group := range []*cobra.Command{sandboxCmd, monitorCmd} {
 		group.PersistentFlags().StringVarP(&outputFormat, "output", "o", "table", "Output format: table or json")
 		group.PersistentFlags().StringVar(&attestSSHIdentity, "identity", "", "Owner SSH identity file")
@@ -60,6 +58,127 @@ func checkManagedKind(kind string, row containerView) error {
 		return fmt.Errorf("%s is not a production %s", row.Name, kind)
 	}
 	return nil
+}
+
+// Controlplane stops and deletes a Monitor only together with the sandboxes
+// that route through it, since they lose their network without it.
+func refuseStandaloneMonitor(row containerView, verb string) error {
+	if checkManagedKind("monitor", row) != nil {
+		return nil
+	}
+	return fmt.Errorf("%s is a Monitor; %s it together with its sandboxes with `tinfoil monitor %s %s`", row.Name, verb, verb, row.Name)
+}
+
+// resolveOwnMonitor returns a Monitor the caller created and the sandboxes
+// that route through it. Only a Monitor's creator can stop or delete it.
+func resolveOwnMonitor(scope accountScope, client *cpClient, identifier string) (*containerView, []containerView, error) {
+	monitor, err := managedRow(client, "monitor", identifier)
+	if err != nil {
+		return nil, nil, err
+	}
+	if monitor.ClerkUserID != scope.UserID {
+		return nil, nil, fmt.Errorf("Monitor %s was created by another user; only its creator can stop or delete it", monitor.Name)
+	}
+	var rows []containerView
+	if _, err := client.do("GET", "/api/containers", nil, nil, &rows); err != nil {
+		return nil, nil, err
+	}
+	sandboxes := slices.DeleteFunc(rows, func(row containerView) bool {
+		return row.Repo != defaultSandboxRepo || row.ClerkUserID != monitor.ClerkUserID || !routesThrough(row, monitor.ID)
+	})
+	return monitor, sandboxes, nil
+}
+
+func routesThrough(row containerView, monitorID string) bool {
+	return row.NetworkPolicy != nil && slices.ContainsFunc(row.NetworkPolicy.Egress, func(peer containerPeer) bool {
+		return strings.EqualFold(peer.ContainerID, monitorID)
+	})
+}
+
+func containerNames(rows []containerView) string {
+	names := make([]string, len(rows))
+	for i, row := range rows {
+		names[i] = row.Name
+	}
+	return strings.Join(names, ", ")
+}
+
+func newMonitorStopCmd() *cobra.Command {
+	return &cobra.Command{
+		Use: "stop [id|name]", Short: "Stop a Monitor together with its sandboxes", Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			scope, client, err := currentScope()
+			if err != nil {
+				return err
+			}
+			monitor, sandboxes, err := resolveOwnMonitor(scope, client, args[0])
+			if err != nil {
+				return err
+			}
+			if len(sandboxes) == 0 {
+				fmt.Fprintf(cmd.ErrOrStderr(), "Stopping Monitor %s.\n", monitor.Name)
+			} else {
+				fmt.Fprintf(cmd.ErrOrStderr(), "Stopping Monitor %s and its sandboxes %s. Their workspaces are kept and still billed for storage.\n", monitor.Name, containerNames(sandboxes))
+			}
+			if _, err := client.do("POST", pathf("/api/monitors/%s/stop", monitor.ID), nil, nil, nil); err != nil {
+				return err
+			}
+			stopped, err := resolveContainerDetail(client, monitor.ID)
+			if err != nil {
+				return err
+			}
+			restart := fmt.Sprintf("Run \"tinfoil monitor start %s\" to bring it back", monitor.Name)
+			if len(sandboxes) > 0 {
+				restart += ", then \"tinfoil sandbox start NAME\" for each sandbox"
+			}
+			fmt.Fprintln(cmd.ErrOrStderr(), restart+".")
+			return renderContainer(*stopped)
+		},
+	}
+}
+
+func newMonitorDeleteCmd() *cobra.Command {
+	var yes bool
+	cmd := &cobra.Command{
+		Use: "delete [id|name]", Aliases: containerDeleteCmd.Aliases, Short: "Delete a Monitor together with its sandboxes and their workspaces", Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			scope, client, err := currentScope()
+			if err != nil {
+				return err
+			}
+			monitor, sandboxes, err := resolveOwnMonitor(scope, client, args[0])
+			if err != nil {
+				return err
+			}
+			deleted := "Monitor " + monitor.Name
+			if len(sandboxes) > 0 {
+				deleted += " and its sandboxes " + containerNames(sandboxes)
+			}
+			fmt.Fprintf(cmd.ErrOrStderr(), "Deleting %s.\n", deleted)
+			if len(sandboxes) == 0 {
+				fmt.Fprintln(cmd.ErrOrStderr(), "This permanently deletes the Monitor and all of its data.")
+			} else {
+				fmt.Fprintln(cmd.ErrOrStderr(), "This permanently deletes them, with the sandboxes' workspaces and all of their data.")
+			}
+			if err := confirmYes(yes, cmd.CommandPath()); err != nil {
+				return err
+			}
+			if _, err := client.do("DELETE", pathf("/api/monitors/%s", monitor.ID), nil, nil, nil); err != nil {
+				return err
+			}
+			var forgetErr error
+			for _, sandbox := range sandboxes {
+				forgetErr = errors.Join(forgetErr, forgetSandbox(sandbox.Name, sandbox.ID))
+			}
+			if forgetErr != nil {
+				return fmt.Errorf("deleted %s, but %w", deleted, forgetErr)
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "Deleted %s. Saved encryption credentials are kept.\n", deleted)
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&yes, "yes", false, "Skip interactive confirmation")
+	return cmd
 }
 
 func newManagedCreateCmd(kind string) *cobra.Command {

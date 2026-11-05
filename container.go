@@ -560,7 +560,7 @@ var containerDeleteCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		if err := checkManagedKind(cmd.Annotations[managedKindAnnotation], *c); err != nil {
+		if err := refuseStandaloneMonitor(*c, "delete"); err != nil {
 			return err
 		}
 		fmt.Fprintf(os.Stderr, "Deleting %s (%s).\n", c.Name, c.ID)
@@ -661,7 +661,7 @@ var containerStopCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		if err := checkManagedKind(cmd.Annotations[managedKindAnnotation], *c); err != nil {
+		if err := refuseStandaloneMonitor(*c, "stop"); err != nil {
 			return err
 		}
 		stopped, err := postContainerAction(client, c.ID, "stop", nil)
@@ -669,11 +669,7 @@ var containerStopCmd = &cobra.Command{
 			return err
 		}
 		if outputFormat != "json" {
-			startCommand := "container deploy"
-			if kind := cmd.Annotations[managedKindAnnotation]; kind != "" {
-				startCommand = kind + " start"
-			}
-			fmt.Printf("Stopping %s. Its configuration and volumes are kept; run \"tinfoil %s %s\" to bring it back.\n", c.Name, startCommand, c.Name)
+			fmt.Printf("Stopping %s. Its configuration and volumes are kept; run \"tinfoil container deploy %s\" to bring it back.\n", c.Name, c.Name)
 		}
 		return renderContainer(stopped)
 	},

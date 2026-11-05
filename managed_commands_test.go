@@ -42,6 +42,68 @@ func TestManagedAliasesRejectWrongKindBeforeMutation(t *testing.T) {
 	}
 }
 
+func TestMonitorStopAndDeleteIncludeItsSandboxes(t *testing.T) {
+	const otherMonitorID = "33333333-3333-4333-8333-333333333333"
+	monitor := containerView{ID: testContainerID, Name: "mon", Repo: monitorRepo, ClerkUserID: "owner", Status: statusRunning}
+	routed := func(id, name, repo, user, monitorID string) containerView {
+		policy := sandboxNetworkPolicy(monitorID)
+		return containerView{ID: id, Name: name, Repo: repo, ClerkUserID: user, NetworkPolicy: &policy}
+	}
+	work := routed("11111111-1111-4111-8111-111111111111", "work", defaultSandboxRepo, "owner", monitor.ID)
+	other := routed("22222222-2222-4222-8222-222222222222", "other", defaultSandboxRepo, "owner", otherMonitorID)
+	var mutations []string
+	managedTestAPI(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method + " " + r.URL.Path {
+		case "GET /api/auth/context":
+			json.NewEncoder(w).Encode(authContext{ContextType: "personal", UserID: "owner"})
+		case "GET /api/containers":
+			json.NewEncoder(w).Encode([]containerView{monitor, work, other,
+				routed("44444444-4444-4444-8444-444444444444", "member", defaultSandboxRepo, "member", monitor.ID),
+				routed("55555555-5555-4555-8555-555555555555", "app", "acme/app", "owner", monitor.ID)})
+		case "GET /api/containers/" + monitor.ID:
+			json.NewEncoder(w).Encode(monitor)
+		default:
+			mutations = append(mutations, r.Method+" "+r.URL.Path)
+			w.WriteHeader(http.StatusNoContent)
+		}
+	})
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	profiles := filepath.Join(home, ".ssh", "tinfoil")
+	require.NoError(t, os.MkdirAll(profiles, 0700))
+	for _, sandbox := range []containerView{work, other} {
+		owned := "# tinfoil-resource: " + os.Getenv(envCPURL) + "//owner/" + sandbox.ID + "\n"
+		require.NoError(t, os.WriteFile(filepath.Join(profiles, sandbox.Name+".conf"), []byte(owned), 0600))
+	}
+	var stderr strings.Builder
+	previousStderr := rootCmd.ErrOrStderr()
+	rootCmd.SetErr(&stderr)
+	t.Cleanup(func() { rootCmd.SetErr(previousStderr) })
+	run := func(args ...string) error {
+		stderr.Reset()
+		_, err := captureTestStdout(func() error { return executeLifecycleCLI(t, args...) })
+		return err
+	}
+
+	require.NoError(t, run("monitor", "stop", "mon"))
+	require.Contains(t, stderr.String(), "Stopping Monitor mon and its sandboxes work.")
+	require.NoError(t, run("monitor", "delete", "mon", "--yes"))
+	require.Contains(t, stderr.String(), "Deleting Monitor mon and its sandboxes work.")
+	require.Equal(t, []string{"POST /api/monitors/" + monitor.ID + "/stop", "DELETE /api/monitors/" + monitor.ID}, mutations)
+	require.NoFileExists(t, filepath.Join(profiles, "work.conf"))
+	require.FileExists(t, filepath.Join(profiles, "other.conf"))
+
+	mutations = nil
+	for _, verb := range []string{"stop", "delete"} {
+		require.ErrorContains(t, run("container", verb, "mon"), "`tinfoil monitor "+verb+" mon`")
+	}
+	monitor.ClerkUserID = "member"
+	require.ErrorContains(t, run("monitor", "stop", "mon"), "created by another user")
+	require.ErrorContains(t, run("monitor", "delete", "mon", "--yes"), "created by another user")
+	require.Empty(t, mutations)
+}
+
 func TestManagedUpdatesUseContainerPlan(t *testing.T) {
 	for _, kind := range []string{"sandbox", "monitor"} {
 		calls := []string{}
