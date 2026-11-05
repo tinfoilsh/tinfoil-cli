@@ -194,7 +194,7 @@ func (k *resourceKeys) close() {
 	}
 }
 
-func resolveResourceKeys(ctx context.Context, cp *cpClient, scope accountScope, row containerView, kind string, binding mkBinding, dir string, bind bool) (*resourceKeys, error) {
+func resolveResourceKeys(identityOpts *identityOptions, ctx context.Context, cp *cpClient, scope accountScope, row containerView, kind string, binding mkBinding, dir string, bind bool) (*resourceKeys, error) {
 	if _, err := measuredOwner(row.OwnerPublicKey); err != nil {
 		return nil, err
 	}
@@ -253,7 +253,7 @@ func resolveResourceKeys(ctx context.Context, cp *cpClient, scope accountScope, 
 		if err := prepareStorageDirectory(dir); err != nil {
 			return nil, err
 		}
-		keys.signer, keys.identity, keys.closeSigner, err = userSigner(kind+" "+row.Name, row.OwnerPublicKey, dir)
+		keys.signer, keys.identity, keys.closeSigner, err = userSigner(identityOpts, kind+" "+row.Name, row.OwnerPublicKey, dir)
 		if err != nil {
 			keys.close()
 			return nil, err
@@ -540,7 +540,7 @@ func existingCredentialDir(parent, id string) (string, error) {
 }
 
 // A public identity file selects an ssh-agent key without copying its private key.
-func userSigner(name, owner, dir string) (ssh.Signer, string, func(), error) {
+func userSigner(identityOpts *identityOptions, name, owner, dir string) (ssh.Signer, string, func(), error) {
 	close := func() {}
 	public, err := measuredOwner(owner)
 	if err != nil {
@@ -550,7 +550,7 @@ func userSigner(name, owner, dir string) (ssh.Signer, string, func(), error) {
 	if err != nil {
 		return nil, "", close, err
 	}
-	paths := []string{attestSSHIdentity, filepath.Join(home, ".ssh", "id_ed25519")}
+	paths := []string{identityOpts.attestSSHIdentity, filepath.Join(home, ".ssh", "id_ed25519")}
 	var skipped []string
 	for _, path := range paths {
 		if path == "" {

@@ -26,13 +26,15 @@ func storageTestConflictingV2Policy(t *testing.T) []byte {
 }
 
 func TestStorageNextReleaseReusesOriginalKeyAndRetainsApproval(t *testing.T) {
-	cp := newStorageCPFixture(t)
-	configureStorageCLI(t)
+	commandState := newCommandFixture()
+
+	cp := newStorageCPFixture(commandState, t)
+	configureStorageCLI(commandState, t)
 	v1Flags := storageCLIArtifactFlags(t)
 	setStorageTestFlag(t, v1Flags, "--tag", "v1.0.0")
 	fake := &fakeStorageAWS{}
 	args := append([]string{"volume", "create", "app-data", "--size", "30GiB", "--auto-unlock"}, v1Flags...)
-	_, err := executeStorageCLI(t, fakeStorageFactory(fake, bytes.NewReader(storageTestKey)), args...)
+	_, err := executeStorageCLI(commandState, t, fakeStorageFactory(fake, bytes.NewReader(storageTestKey)), args...)
 	require.NoError(t, err)
 	require.Equal(t, 1, fake.creates)
 	originalValue, originalARN, originalVersion := fake.secret.value, fake.secret.arn, fake.secret.version
@@ -57,7 +59,7 @@ func TestStorageNextReleaseReusesOriginalKeyAndRetainsApproval(t *testing.T) {
 	random := &rejectingRandom{}
 	args = append([]string{"volume", "auto-unlock", "configure", testVolumeID, "--existing-secret", originalARN}, v2Flags...)
 	t.Logf("expected v2 workload: %s", storageTestV2WorkloadName())
-	out, err := executeStorageCLI(t, fakeStorageFactory(fake, random), args...)
+	out, err := executeStorageCLI(commandState, t, fakeStorageFactory(fake, random), args...)
 	require.NoError(t, err)
 	require.Contains(t, out, storageUnobserved)
 	v2ConfigPath := storageTestFlag(t, v2Flags, "--config-out")
@@ -82,7 +84,7 @@ func TestStorageNextReleaseReusesOriginalKeyAndRetainsApproval(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, &policyreference.SecretRef{Path: "volumes/" + testVolumeID + "/key", Field: "value"}, refs[originalReceipt.KeySecret])
 	}
-	_, err = executeStorageCLI(t, fakeStorageFactory(fake, random), args...)
+	_, err = executeStorageCLI(commandState, t, fakeStorageFactory(fake, random), args...)
 	require.NoError(t, err)
 	again, err := os.ReadFile(v2PolicyPath)
 	require.NoError(t, err)
@@ -93,7 +95,7 @@ func TestStorageNextReleaseReusesOriginalKeyAndRetainsApproval(t *testing.T) {
 	setStorageTestFlag(t, reuseFlags, "--config-file", v2ConfigPath)
 	reuseFlags = append(reuseFlags, "--policy-file", v2PolicyPath)
 	args = append([]string{"volume", "auto-unlock", "configure", testVolumeID, "--existing-secret", originalARN}, reuseFlags...)
-	_, err = executeStorageCLI(t, fakeStorageFactory(fake, random), args...)
+	_, err = executeStorageCLI(commandState, t, fakeStorageFactory(fake, random), args...)
 	require.NoError(t, err)
 	reused, err := os.ReadFile(storageTestFlag(t, reuseFlags, "--policy-out"))
 	require.NoError(t, err)
@@ -125,7 +127,7 @@ func TestStorageNextReleaseReusesOriginalKeyAndRetainsApproval(t *testing.T) {
 	setStorageTestFlag(t, conflictFlags, "--config-file", v1ConfigPath)
 	conflictFlags = append(conflictFlags, "--policy-file", conflictPath)
 	args = append([]string{"volume", "auto-unlock", "configure", testVolumeID, "--existing-secret", originalARN}, conflictFlags...)
-	_, err = executeStorageCLI(t, fakeStorageFactory(fake, random), args...)
+	_, err = executeStorageCLI(commandState, t, fakeStorageFactory(fake, random), args...)
 	require.ErrorContains(t, err, "release-specific workload name")
 	require.NoFileExists(t, storageTestFlag(t, conflictFlags, "--config-out"))
 	require.NoFileExists(t, storageTestFlag(t, conflictFlags, "--policy-out"))

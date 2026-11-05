@@ -12,51 +12,51 @@ import (
 	"time"
 )
 
-func configureModelCommandTest(t *testing.T, serverURL string) {
+func configureModelCommandTest(commandState *commandFixture, t *testing.T, serverURL string) {
 	t.Helper()
 	t.Setenv(envCPURL, serverURL)
 	t.Setenv(envAdminKey, "admin_test")
 	t.Setenv(envConfigPath, filepath.Join(t.TempDir(), "missing-config.json"))
 
-	previousOutput := outputFormat
-	previousHost := modelWrapHost
-	previousCommit := modelWrapCommit
-	previousToken := modelWrapHFToken
-	previousTokenFile := modelWrapHFTokenFile
-	previousWait := modelWrapWait
-	previousLimit := modelListLimit
-	previousStatusWait := modelStatusWait
-	previousStatusLogs := modelStatusLogs
-	previousUpdateHost := modelUpdateHost
-	previousUpdateCommit := modelUpdateCommit
-	previousUpdateToken := modelUpdateHFToken
-	previousUpdateTokenFile := modelUpdateHFTokenFile
-	previousUpdateWait := modelUpdateWait
+	previousOutput := commandState.outputOpts.outputFormat
+	previousHost := commandState.modelWrapOpts.modelWrapHost
+	previousCommit := commandState.modelWrapOpts.modelWrapCommit
+	previousToken := commandState.modelWrapOpts.modelWrapHFToken
+	previousTokenFile := commandState.modelWrapOpts.modelWrapHFTokenFile
+	previousWait := commandState.modelWrapOpts.modelWrapWait
+	previousLimit := commandState.modelListOpts.modelListLimit
+	previousStatusWait := commandState.modelStatusOpts.modelStatusWait
+	previousStatusLogs := commandState.modelStatusOpts.modelStatusLogs
+	previousUpdateHost := commandState.modelUpdateOpts.modelUpdateHost
+	previousUpdateCommit := commandState.modelUpdateOpts.modelUpdateCommit
+	previousUpdateToken := commandState.modelUpdateOpts.modelUpdateHFToken
+	previousUpdateTokenFile := commandState.modelUpdateOpts.modelUpdateHFTokenFile
+	previousUpdateWait := commandState.modelUpdateOpts.modelUpdateWait
 	previousInterval := modelWrapPollInterval
-	tokenFlag := modelWrapCmd.Flags().Lookup("hf-token")
-	tokenFileFlag := modelWrapCmd.Flags().Lookup("hf-token-file")
-	updateTokenFlag := modelUpdateCmd.Flags().Lookup("hf-token")
-	updateTokenFileFlag := modelUpdateCmd.Flags().Lookup("hf-token-file")
+	tokenFlag := commandState.modelWrapCmd.Flags().Lookup("hf-token")
+	tokenFileFlag := commandState.modelWrapCmd.Flags().Lookup("hf-token-file")
+	updateTokenFlag := commandState.modelUpdateCmd.Flags().Lookup("hf-token")
+	updateTokenFileFlag := commandState.modelUpdateCmd.Flags().Lookup("hf-token-file")
 	previousTokenChanged := tokenFlag.Changed
 	previousTokenFileChanged := tokenFileFlag.Changed
 	previousUpdateTokenChanged := updateTokenFlag.Changed
 	previousUpdateTokenFileChanged := updateTokenFileFlag.Changed
 
 	t.Cleanup(func() {
-		outputFormat = previousOutput
-		modelWrapHost = previousHost
-		modelWrapCommit = previousCommit
-		modelWrapHFToken = previousToken
-		modelWrapHFTokenFile = previousTokenFile
-		modelWrapWait = previousWait
-		modelListLimit = previousLimit
-		modelStatusWait = previousStatusWait
-		modelStatusLogs = previousStatusLogs
-		modelUpdateHost = previousUpdateHost
-		modelUpdateCommit = previousUpdateCommit
-		modelUpdateHFToken = previousUpdateToken
-		modelUpdateHFTokenFile = previousUpdateTokenFile
-		modelUpdateWait = previousUpdateWait
+		commandState.outputOpts.outputFormat = previousOutput
+		commandState.modelWrapOpts.modelWrapHost = previousHost
+		commandState.modelWrapOpts.modelWrapCommit = previousCommit
+		commandState.modelWrapOpts.modelWrapHFToken = previousToken
+		commandState.modelWrapOpts.modelWrapHFTokenFile = previousTokenFile
+		commandState.modelWrapOpts.modelWrapWait = previousWait
+		commandState.modelListOpts.modelListLimit = previousLimit
+		commandState.modelStatusOpts.modelStatusWait = previousStatusWait
+		commandState.modelStatusOpts.modelStatusLogs = previousStatusLogs
+		commandState.modelUpdateOpts.modelUpdateHost = previousUpdateHost
+		commandState.modelUpdateOpts.modelUpdateCommit = previousUpdateCommit
+		commandState.modelUpdateOpts.modelUpdateHFToken = previousUpdateToken
+		commandState.modelUpdateOpts.modelUpdateHFTokenFile = previousUpdateTokenFile
+		commandState.modelUpdateOpts.modelUpdateWait = previousUpdateWait
 		modelWrapPollInterval = previousInterval
 		tokenFlag.Changed = previousTokenChanged
 		tokenFileFlag.Changed = previousTokenFileChanged
@@ -64,20 +64,20 @@ func configureModelCommandTest(t *testing.T, serverURL string) {
 		updateTokenFileFlag.Changed = previousUpdateTokenFileChanged
 	})
 
-	outputFormat = "table"
-	modelWrapHost = ""
-	modelWrapCommit = ""
-	modelWrapHFToken = ""
-	modelWrapHFTokenFile = ""
-	modelWrapWait = false
-	modelListLimit = 0
-	modelStatusWait = false
-	modelStatusLogs = false
-	modelUpdateHost = ""
-	modelUpdateCommit = ""
-	modelUpdateHFToken = ""
-	modelUpdateHFTokenFile = ""
-	modelUpdateWait = false
+	commandState.outputOpts.outputFormat = "table"
+	commandState.modelWrapOpts.modelWrapHost = ""
+	commandState.modelWrapOpts.modelWrapCommit = ""
+	commandState.modelWrapOpts.modelWrapHFToken = ""
+	commandState.modelWrapOpts.modelWrapHFTokenFile = ""
+	commandState.modelWrapOpts.modelWrapWait = false
+	commandState.modelListOpts.modelListLimit = 0
+	commandState.modelStatusOpts.modelStatusWait = false
+	commandState.modelStatusOpts.modelStatusLogs = false
+	commandState.modelUpdateOpts.modelUpdateHost = ""
+	commandState.modelUpdateOpts.modelUpdateCommit = ""
+	commandState.modelUpdateOpts.modelUpdateHFToken = ""
+	commandState.modelUpdateOpts.modelUpdateHFTokenFile = ""
+	commandState.modelUpdateOpts.modelUpdateWait = false
 	tokenFlag.Changed = false
 	tokenFileFlag.Changed = false
 	updateTokenFlag.Changed = false
@@ -85,6 +85,8 @@ func configureModelCommandTest(t *testing.T, serverURL string) {
 }
 
 func TestModelWrapSendsRequestBody(t *testing.T) {
+	commandState := newCommandFixture()
+
 	var gotBody map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost || r.URL.Path != "/api/models/wrap" {
@@ -98,12 +100,12 @@ func TestModelWrapSendsRequestBody(t *testing.T) {
 	}))
 	defer server.Close()
 
-	configureModelCommandTest(t, server.URL)
-	modelWrapHost = "gpu-1"
-	modelWrapCommit = "419b2efe421994fdfd3394e621983d4cc511cd4f"
+	configureModelCommandTest(commandState, t, server.URL)
+	commandState.modelWrapOpts.modelWrapHost = "gpu-1"
+	commandState.modelWrapOpts.modelWrapCommit = "419b2efe421994fdfd3394e621983d4cc511cd4f"
 
 	output, err := captureTestStdout(func() error {
-		return modelWrapCmd.RunE(modelWrapCmd, []string{"acme/model"})
+		return commandState.modelWrapCmd.RunE(commandState.modelWrapCmd, []string{"acme/model"})
 	})
 	if err != nil {
 		t.Fatalf("run model wrap: %v", err)
@@ -128,6 +130,8 @@ func TestModelWrapSendsRequestBody(t *testing.T) {
 }
 
 func TestModelWrapOmitsEmptyOptionalFields(t *testing.T) {
+	commandState := newCommandFixture()
+
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body map[string]any
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -143,17 +147,19 @@ func TestModelWrapOmitsEmptyOptionalFields(t *testing.T) {
 	}))
 	defer server.Close()
 
-	configureModelCommandTest(t, server.URL)
-	modelWrapHost = "gpu-1"
+	configureModelCommandTest(commandState, t, server.URL)
+	commandState.modelWrapOpts.modelWrapHost = "gpu-1"
 
 	if _, err := captureTestStdout(func() error {
-		return modelWrapCmd.RunE(modelWrapCmd, []string{"acme/model"})
+		return commandState.modelWrapCmd.RunE(commandState.modelWrapCmd, []string{"acme/model"})
 	}); err != nil {
 		t.Fatalf("run model wrap: %v", err)
 	}
 }
 
 func TestModelWrapWaitPollsUntilComplete(t *testing.T) {
+	commandState := newCommandFixture()
+
 	var polls atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
@@ -172,13 +178,13 @@ func TestModelWrapWaitPollsUntilComplete(t *testing.T) {
 	}))
 	defer server.Close()
 
-	configureModelCommandTest(t, server.URL)
-	modelWrapHost = "gpu-1"
-	modelWrapWait = true
+	configureModelCommandTest(commandState, t, server.URL)
+	commandState.modelWrapOpts.modelWrapHost = "gpu-1"
+	commandState.modelWrapOpts.modelWrapWait = true
 	modelWrapPollInterval = time.Millisecond
 
 	output, err := captureTestStdout(func() error {
-		return modelWrapCmd.RunE(modelWrapCmd, []string{"acme/model"})
+		return commandState.modelWrapCmd.RunE(commandState.modelWrapCmd, []string{"acme/model"})
 	})
 	if err != nil {
 		t.Fatalf("run model wrap --wait: %v", err)
@@ -198,6 +204,8 @@ func TestModelWrapWaitPollsUntilComplete(t *testing.T) {
 }
 
 func TestModelWrapWaitFailsOnFailedJob(t *testing.T) {
+	commandState := newCommandFixture()
+
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodPost && r.URL.Path == "/api/models/wrap":
@@ -211,13 +219,13 @@ func TestModelWrapWaitFailsOnFailedJob(t *testing.T) {
 	}))
 	defer server.Close()
 
-	configureModelCommandTest(t, server.URL)
-	modelWrapHost = "gpu-1"
-	modelWrapWait = true
+	configureModelCommandTest(commandState, t, server.URL)
+	commandState.modelWrapOpts.modelWrapHost = "gpu-1"
+	commandState.modelWrapOpts.modelWrapWait = true
 	modelWrapPollInterval = time.Millisecond
 
 	output, err := captureTestStdout(func() error {
-		return modelWrapCmd.RunE(modelWrapCmd, []string{"acme/model"})
+		return commandState.modelWrapCmd.RunE(commandState.modelWrapCmd, []string{"acme/model"})
 	})
 	if err == nil {
 		t.Fatal("model wrap --wait succeeded for a failed job")
@@ -228,6 +236,8 @@ func TestModelWrapWaitFailsOnFailedJob(t *testing.T) {
 }
 
 func TestModelListPassesLimit(t *testing.T) {
+	commandState := newCommandFixture()
+
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet || r.URL.Path != "/api/models/wrap" {
 			t.Fatalf("request = %s %s, want GET /api/models/wrap", r.Method, r.URL.Path)
@@ -239,11 +249,11 @@ func TestModelListPassesLimit(t *testing.T) {
 	}))
 	defer server.Close()
 
-	configureModelCommandTest(t, server.URL)
-	modelListLimit = 5
+	configureModelCommandTest(commandState, t, server.URL)
+	commandState.modelListOpts.modelListLimit = 5
 
 	output, err := captureTestStdout(func() error {
-		return modelListCmd.RunE(modelListCmd, nil)
+		return commandState.modelListCmd.RunE(commandState.modelListCmd, nil)
 	})
 	if err != nil {
 		t.Fatalf("run model list: %v", err)
@@ -256,6 +266,8 @@ func TestModelListPassesLimit(t *testing.T) {
 }
 
 func TestModelStatusWaitFailsOnFailedJob(t *testing.T) {
+	commandState := newCommandFixture()
+
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet || r.URL.Path != "/api/models/wrap/gpu-1/job-1" {
 			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
@@ -264,12 +276,12 @@ func TestModelStatusWaitFailsOnFailedJob(t *testing.T) {
 	}))
 	defer server.Close()
 
-	configureModelCommandTest(t, server.URL)
-	modelStatusWait = true
+	configureModelCommandTest(commandState, t, server.URL)
+	commandState.modelStatusOpts.modelStatusWait = true
 	modelWrapPollInterval = time.Millisecond
 
 	output, err := captureTestStdout(func() error {
-		return modelStatusCmd.RunE(modelStatusCmd, []string{"gpu-1", "job-1"})
+		return commandState.modelStatusCmd.RunE(commandState.modelStatusCmd, []string{"gpu-1", "job-1"})
 	})
 	if err == nil {
 		t.Fatal("model status --wait succeeded for a failed job")
@@ -280,6 +292,8 @@ func TestModelStatusWaitFailsOnFailedJob(t *testing.T) {
 }
 
 func TestModelStatusRendersConfigBlock(t *testing.T) {
+	commandState := newCommandFixture()
+
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet || r.URL.Path != "/api/models/wrap/gpu-1/job-1" {
 			t.Fatalf("request = %s %s, want GET /api/models/wrap/gpu-1/job-1", r.Method, r.URL.Path)
@@ -288,10 +302,10 @@ func TestModelStatusRendersConfigBlock(t *testing.T) {
 	}))
 	defer server.Close()
 
-	configureModelCommandTest(t, server.URL)
+	configureModelCommandTest(commandState, t, server.URL)
 
 	output, err := captureTestStdout(func() error {
-		return modelStatusCmd.RunE(modelStatusCmd, []string{"gpu-1", "job-1"})
+		return commandState.modelStatusCmd.RunE(commandState.modelStatusCmd, []string{"gpu-1", "job-1"})
 	})
 	if err != nil {
 		t.Fatalf("run model status: %v", err)
@@ -308,6 +322,8 @@ func TestModelStatusRendersConfigBlock(t *testing.T) {
 }
 
 func TestModelDeleteSendsRequest(t *testing.T) {
+	commandState := newCommandFixture()
+
 	var requests atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodDelete || r.URL.Path != "/api/models/wrap/gpu-1/job-1" {
@@ -318,10 +334,10 @@ func TestModelDeleteSendsRequest(t *testing.T) {
 	}))
 	defer server.Close()
 
-	configureModelCommandTest(t, server.URL)
+	configureModelCommandTest(commandState, t, server.URL)
 
 	output, err := captureTestStdout(func() error {
-		return modelDeleteCmd.RunE(modelDeleteCmd, []string{"gpu-1", "job-1"})
+		return commandState.modelDeleteCmd.RunE(commandState.modelDeleteCmd, []string{"gpu-1", "job-1"})
 	})
 	if err != nil {
 		t.Fatalf("run model delete: %v", err)
@@ -335,16 +351,18 @@ func TestModelDeleteSendsRequest(t *testing.T) {
 }
 
 func TestModelDeleteSurfacesConflict(t *testing.T) {
+	commandState := newCommandFixture()
+
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusConflict)
 		_, _ = io.WriteString(w, `{"error":"model artifact is referenced by a running deployment"}`)
 	}))
 	defer server.Close()
 
-	configureModelCommandTest(t, server.URL)
+	configureModelCommandTest(commandState, t, server.URL)
 
 	_, err := captureTestStdout(func() error {
-		return modelDeleteCmd.RunE(modelDeleteCmd, []string{"gpu-1", "job-1"})
+		return commandState.modelDeleteCmd.RunE(commandState.modelDeleteCmd, []string{"gpu-1", "job-1"})
 	})
 	if err == nil {
 		t.Fatal("model delete succeeded on a 409 response")
@@ -357,6 +375,8 @@ func TestModelDeleteSurfacesConflict(t *testing.T) {
 const modelUpdateOldJob = `{"job_id":"old-job","host":"gpu-1","repo":"acme/model","commit":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","status":"complete","root_hash":"11aa","offset":100,"verity_uuid":"59fe9787-ed93-577a-9fd9-a7804c932a11"}`
 
 func TestModelUpdateResolvesLatestCommitAndWraps(t *testing.T) {
+	commandState := newCommandFixture()
+
 	var wrapBody map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
@@ -379,13 +399,13 @@ func TestModelUpdateResolvesLatestCommitAndWraps(t *testing.T) {
 	}))
 	defer server.Close()
 
-	configureModelCommandTest(t, server.URL)
-	modelUpdateHost = "gpu-1"
-	modelUpdateHFToken = "hf_secret"
-	modelUpdateCmd.Flags().Lookup("hf-token").Changed = true
+	configureModelCommandTest(commandState, t, server.URL)
+	commandState.modelUpdateOpts.modelUpdateHost = "gpu-1"
+	commandState.modelUpdateOpts.modelUpdateHFToken = "hf_secret"
+	commandState.modelUpdateCmd.Flags().Lookup("hf-token").Changed = true
 
 	output, err := captureTestStdout(func() error {
-		return modelUpdateCmd.RunE(modelUpdateCmd, []string{"acme/model"})
+		return commandState.modelUpdateCmd.RunE(commandState.modelUpdateCmd, []string{"acme/model"})
 	})
 	if err != nil {
 		t.Fatalf("run model update: %v", err)
@@ -407,6 +427,8 @@ func TestModelUpdateResolvesLatestCommitAndWraps(t *testing.T) {
 }
 
 func TestModelUpdateAlreadyUpToDate(t *testing.T) {
+	commandState := newCommandFixture()
+
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/models/wrap":
@@ -419,11 +441,11 @@ func TestModelUpdateAlreadyUpToDate(t *testing.T) {
 	}))
 	defer server.Close()
 
-	configureModelCommandTest(t, server.URL)
-	modelUpdateHost = "gpu-1"
+	configureModelCommandTest(commandState, t, server.URL)
+	commandState.modelUpdateOpts.modelUpdateHost = "gpu-1"
 
 	output, err := captureTestStdout(func() error {
-		return modelUpdateCmd.RunE(modelUpdateCmd, []string{"acme/model"})
+		return commandState.modelUpdateCmd.RunE(commandState.modelUpdateCmd, []string{"acme/model"})
 	})
 	if err != nil {
 		t.Fatalf("run model update: %v", err)
@@ -434,6 +456,8 @@ func TestModelUpdateAlreadyUpToDate(t *testing.T) {
 }
 
 func TestModelUpdateRequiresPriorWrap(t *testing.T) {
+	commandState := newCommandFixture()
+
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet || r.URL.Path != "/api/models/wrap" {
 			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
@@ -442,11 +466,11 @@ func TestModelUpdateRequiresPriorWrap(t *testing.T) {
 	}))
 	defer server.Close()
 
-	configureModelCommandTest(t, server.URL)
-	modelUpdateHost = "gpu-1"
+	configureModelCommandTest(commandState, t, server.URL)
+	commandState.modelUpdateOpts.modelUpdateHost = "gpu-1"
 
 	_, err := captureTestStdout(func() error {
-		return modelUpdateCmd.RunE(modelUpdateCmd, []string{"acme/model"})
+		return commandState.modelUpdateCmd.RunE(commandState.modelUpdateCmd, []string{"acme/model"})
 	})
 	if err == nil || !strings.Contains(err.Error(), "tinfoil model wrap") {
 		t.Fatalf("error = %v, want a hint to run tinfoil model wrap", err)
@@ -454,6 +478,8 @@ func TestModelUpdateRequiresPriorWrap(t *testing.T) {
 }
 
 func TestModelUpdateWaitPrintsReclaimHint(t *testing.T) {
+	commandState := newCommandFixture()
+
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/models/wrap":
@@ -469,14 +495,14 @@ func TestModelUpdateWaitPrintsReclaimHint(t *testing.T) {
 	}))
 	defer server.Close()
 
-	configureModelCommandTest(t, server.URL)
-	modelUpdateHost = "gpu-1"
-	modelUpdateCommit = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-	modelUpdateWait = true
+	configureModelCommandTest(commandState, t, server.URL)
+	commandState.modelUpdateOpts.modelUpdateHost = "gpu-1"
+	commandState.modelUpdateOpts.modelUpdateCommit = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	commandState.modelUpdateOpts.modelUpdateWait = true
 	modelWrapPollInterval = time.Millisecond
 
 	output, err := captureTestStdout(func() error {
-		return modelUpdateCmd.RunE(modelUpdateCmd, []string{"acme/model"})
+		return commandState.modelUpdateCmd.RunE(commandState.modelUpdateCmd, []string{"acme/model"})
 	})
 	if err != nil {
 		t.Fatalf("run model update --wait: %v", err)
@@ -525,11 +551,13 @@ func TestLatestCompleteModelWrapPicksNewestRegardlessOfOrder(t *testing.T) {
 }
 
 func TestReadHFTokenFlagsMutuallyExclusive(t *testing.T) {
-	configureModelCommandTest(t, "https://example.invalid")
-	modelWrapCmd.Flags().Lookup("hf-token").Changed = true
-	modelWrapCmd.Flags().Lookup("hf-token-file").Changed = true
+	commandState := newCommandFixture()
 
-	if _, err := readHFToken(modelWrapCmd); err == nil {
+	configureModelCommandTest(commandState, t, "https://example.invalid")
+	commandState.modelWrapCmd.Flags().Lookup("hf-token").Changed = true
+	commandState.modelWrapCmd.Flags().Lookup("hf-token-file").Changed = true
+
+	if _, err := readHFToken(commandState.modelWrapCmd); err == nil {
 		t.Fatal("readHFToken accepted both --hf-token and --hf-token-file")
 	}
 }

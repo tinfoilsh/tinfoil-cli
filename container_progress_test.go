@@ -90,6 +90,8 @@ func TestUpdateLabelDistinguishesHeldFromAutoSwitch(t *testing.T) {
 }
 
 func TestFollowContainerStopsAtTerminalStateAndFailsOnFailed(t *testing.T) {
+	commandState := newCommandFixture()
+
 	previousInterval := followInterval
 	followInterval = time.Millisecond
 	t.Cleanup(func() { followInterval = previousInterval })
@@ -104,15 +106,15 @@ func TestFollowContainerStopsAtTerminalStateAndFailsOnFailed(t *testing.T) {
 		_, _ = io.WriteString(w, `{"id":"`+testContainerID+`","name":"app","tinfoild_deployment_id":"deploy-1","status":"`+statuses[n]+`","error_message":"health check failed"}`)
 	}))
 	defer server.Close()
-	configureContainerPromotionTest(t, server.URL)
-	noWait, outputFormat = false, "table"
+	configureContainerPromotionTest(commandState, t, server.URL)
+	commandState.waitOpts.noWait, commandState.outputOpts.outputFormat = false, "table"
 
 	client, err := authedClient()
 	if err != nil {
 		t.Fatal(err)
 	}
 	_, err = captureTestStdout(func() error {
-		return followAndRender(client, containerView{ID: testContainerID, Name: "app", Status: statusPending, TinfoildDeploymentID: "deploy-1"}, nil)
+		return followAndRender(commandState.outputOpts, commandState.waitOpts, client, containerView{ID: testContainerID, Name: "app", Status: statusPending, TinfoildDeploymentID: "deploy-1"}, nil)
 	})
 	if err == nil || err.Error() != "health check failed" {
 		t.Fatalf("error = %v, want the container's error message", err)
@@ -123,17 +125,21 @@ func TestFollowContainerStopsAtTerminalStateAndFailsOnFailed(t *testing.T) {
 }
 
 func TestFollowAndRenderExitsNonZeroWhenInitialResponseAlreadyFailed(t *testing.T) {
-	previousNoWait, previousOutput := noWait, outputFormat
-	t.Cleanup(func() { noWait, outputFormat = previousNoWait, previousOutput })
+	commandState := newCommandFixture()
+
+	previousNoWait, previousOutput := commandState.waitOpts.noWait, commandState.outputOpts.outputFormat
+	t.Cleanup(func() {
+		commandState.waitOpts.noWait, commandState.outputOpts.outputFormat = previousNoWait, previousOutput
+	})
 	for _, mode := range []struct {
 		name   string
 		noWait bool
 		format string
 	}{{"json", false, "json"}, {"no-wait", true, "table"}, {"follow", false, "table"}} {
 		t.Run(mode.name, func(t *testing.T) {
-			noWait, outputFormat = mode.noWait, mode.format
+			commandState.waitOpts.noWait, commandState.outputOpts.outputFormat = mode.noWait, mode.format
 			_, err := captureTestStdout(func() error {
-				return followAndRender(nil, containerView{ID: testContainerID, Name: "app", Status: statusFailed, ErrorMessage: "boot failed"}, nil)
+				return followAndRender(commandState.outputOpts, commandState.waitOpts, nil, containerView{ID: testContainerID, Name: "app", Status: statusFailed, ErrorMessage: "boot failed"}, nil)
 			})
 			if err == nil || err.Error() != "boot failed" {
 				t.Fatalf("error = %v, want the container's error message", err)
@@ -164,6 +170,8 @@ func TestIsTerminalHoldsForStagedCandidateAndStopsForRunning(t *testing.T) {
 }
 
 func TestContainerUpdateRefusesHoldOnReplaceStrategyLocally(t *testing.T) {
+	commandState := newCommandFixture()
+
 	var posts atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
@@ -179,12 +187,12 @@ func TestContainerUpdateRefusesHoldOnReplaceStrategyLocally(t *testing.T) {
 		}
 	}))
 	defer server.Close()
-	configureContainerPromotionTest(t, server.URL)
-	updateHold = "true"
-	containerUpdateCmd.Flags().Lookup("hold").Changed = true
+	configureContainerPromotionTest(commandState, t, server.URL)
+	commandState.containerUpdateOpts.updateHold = "true"
+	commandState.containerUpdateCmd.Flags().Lookup("hold").Changed = true
 
 	_, err := captureTestStdout(func() error {
-		return containerUpdateCmd.RunE(containerUpdateCmd, []string{testContainerID})
+		return commandState.containerUpdateCmd.RunE(commandState.containerUpdateCmd, []string{testContainerID})
 	})
 	if err == nil || !strings.Contains(err.Error(), "holding for review is not available for app (strategy: replace") {
 		t.Fatalf("error = %v", err)
@@ -195,6 +203,8 @@ func TestContainerUpdateRefusesHoldOnReplaceStrategyLocally(t *testing.T) {
 }
 
 func TestContainerUpdateSendsDowntimeConfirmationForReplaceStrategy(t *testing.T) {
+	commandState := newCommandFixture()
+
 	var body string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
@@ -211,11 +221,11 @@ func TestContainerUpdateSendsDowntimeConfirmationForReplaceStrategy(t *testing.T
 		}
 	}))
 	defer server.Close()
-	configureContainerPromotionTest(t, server.URL)
-	updateYes = true
+	configureContainerPromotionTest(commandState, t, server.URL)
+	commandState.containerUpdateOpts.updateYes = true
 
 	if _, err := captureTestStdout(func() error {
-		return containerUpdateCmd.RunE(containerUpdateCmd, []string{testContainerID})
+		return commandState.containerUpdateCmd.RunE(commandState.containerUpdateCmd, []string{testContainerID})
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -225,6 +235,8 @@ func TestContainerUpdateSendsDowntimeConfirmationForReplaceStrategy(t *testing.T
 }
 
 func TestResolveContainerListsBothMatchesWhenNameIsAmbiguous(t *testing.T) {
+	commandState := newCommandFixture()
+
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.WriteString(w, `[
 			{"id":"11111111-1111-1111-1111-111111111111","name":"app","debug":false,"domain":"app.containers.tinfoil.dev"},
@@ -232,7 +244,7 @@ func TestResolveContainerListsBothMatchesWhenNameIsAmbiguous(t *testing.T) {
 		]`)
 	}))
 	defer server.Close()
-	configureContainerPromotionTest(t, server.URL)
+	configureContainerPromotionTest(commandState, t, server.URL)
 
 	client, err := authedClient()
 	if err != nil {

@@ -27,7 +27,7 @@ func TestMonitorDeletionPreservesRemoteAndLocalFailureOrdering(t *testing.T) {
 			policy := sandboxNetworkPolicy(monitor.ID)
 			sandbox := containerView{ID: sandboxID, Name: "work", Repo: defaultSandboxRepo, ClerkUserID: "owner", NetworkPolicy: &policy}
 			deleted := false
-			managedTestAPI(t, func(w http.ResponseWriter, r *http.Request) {
+			managedTestAPI(newCommandFixture(), t, func(w http.ResponseWriter, r *http.Request) {
 				switch r.Method + " " + r.URL.Path {
 				case "GET /api/auth/context":
 					json.NewEncoder(w).Encode(authContext{ContextType: "personal", UserID: "owner"})
@@ -85,7 +85,7 @@ func TestMonitorDeletionPreservesRemoteAndLocalFailureOrdering(t *testing.T) {
 func TestMonitorDeletionWithoutConfirmationDoesNotMutate(t *testing.T) {
 	monitor := containerView{ID: testContainerID, Name: "mon", Repo: monitorRepo, ClerkUserID: "owner"}
 	mutations := 0
-	managedTestAPI(t, func(w http.ResponseWriter, r *http.Request) {
+	managedTestAPI(newCommandFixture(), t, func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method + " " + r.URL.Path {
 		case "GET /api/auth/context":
 			json.NewEncoder(w).Encode(authContext{ContextType: "personal", UserID: "owner"})

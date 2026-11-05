@@ -76,42 +76,34 @@ type repoBuildResponse struct {
 	WorkflowRunURL string `json:"workflow_run_url"`
 }
 
-var (
-	repoConfigRaw     bool
-	repoConfigFile    string
-	repoPRBody        string
-	repoVersion       string
-	repoStatusVersion string
-)
-
-func newRepoCommand() *cobra.Command {
+func newRepoCommand(outputOpts *outputOptions) *cobra.Command {
 	repoCmd := &cobra.Command{
 		Use:     "repo",
 		Aliases: []string{"repository", "repositories"},
 		Short:   "Manage container config repositories",
 	}
-	repoCmd.PersistentFlags().StringVarP(&outputFormat, "output", "o", "table", "Output format: table or json")
-	repoCmd.AddCommand(newRepoConfigCommand(), newRepoPRCommand(), newRepoBuildCommand())
-	repoCmd.AddCommand(newRepoSecretCommand())
+	repoCmd.PersistentFlags().StringVarP(&outputOpts.outputFormat, "output", "o", "table", "Output format: table or json")
+	repoCmd.AddCommand(newRepoConfigCommand(outputOpts), newRepoPRCommand(outputOpts), newRepoBuildCommand(outputOpts))
+	repoCmd.AddCommand(newRepoSecretCommand(outputOpts))
 	return repoCmd
 }
 
-func newRepoConfigCommand() *cobra.Command {
+func newRepoConfigCommand(outputOpts *outputOptions) *cobra.Command {
 	repoConfigCmd := &cobra.Command{
 		Use:   "config",
 		Short: "Read or propose changes to tinfoil-config.yml",
 	}
-	repoConfigCmd.AddCommand(newRepoConfigGetCommand(), newRepoConfigPRCommand())
+	repoConfigCmd.AddCommand(newRepoConfigGetCommand(outputOpts, &repoConfigGetOptions{}), newRepoConfigPRCommand(outputOpts, &repoConfigPROptions{}))
 	return repoConfigCmd
 }
 
-func newRepoConfigGetCommand() *cobra.Command {
+func newRepoConfigGetCommand(outputOpts *outputOptions, repoConfigGetOpts *repoConfigGetOptions) *cobra.Command {
 	repoConfigGetCmd := &cobra.Command{
 		Use:   "get [owner/repo]",
 		Short: "Fetch a repo's tinfoil-config.yml",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if repoConfigRaw && outputFormat == "json" {
+			if repoConfigGetOpts.repoConfigRaw && outputOpts.outputFormat == "json" {
 				return fmt.Errorf("--raw and --output json cannot be used together")
 			}
 			repository, client, err := repositoryCommand(args[0])
@@ -122,10 +114,10 @@ func newRepoConfigGetCommand() *cobra.Command {
 			if _, err := client.do("GET", repository.apiPath()+"/config", nil, nil, &response); err != nil {
 				return err
 			}
-			if outputFormat == "json" {
+			if outputOpts.outputFormat == "json" {
 				return printJSON(response)
 			}
-			if repoConfigRaw {
+			if repoConfigGetOpts.repoConfigRaw {
 				fmt.Print(response.Raw)
 				return nil
 			}
@@ -139,11 +131,11 @@ func newRepoConfigGetCommand() *cobra.Command {
 			return nil
 		},
 	}
-	repoConfigGetCmd.Flags().BoolVar(&repoConfigRaw, "raw", false, "Print only the raw tinfoil-config.yml")
+	repoConfigGetCmd.Flags().BoolVar(&repoConfigGetOpts.repoConfigRaw, "raw", false, "Print only the raw tinfoil-config.yml")
 	return repoConfigGetCmd
 }
 
-func newRepoConfigPRCommand() *cobra.Command {
+func newRepoConfigPRCommand(outputOpts *outputOptions, repoConfigPROpts *repoConfigPROptions) *cobra.Command {
 	repoConfigPRCmd := &cobra.Command{
 		Use:   "pr [owner/repo]",
 		Short: "Open a pull request with a local tinfoil-config.yml",
@@ -154,19 +146,19 @@ func newRepoConfigPRCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			raw, err := readConfigInput(repoConfigFile)
+			raw, err := readConfigInput(repoConfigPROpts.repoConfigFile)
 			if err != nil {
 				return err
 			}
 			body := map[string]any{"raw": raw}
-			if repoPRBody != "" {
-				body["pr_body"] = repoPRBody
+			if repoConfigPROpts.repoPRBody != "" {
+				body["pr_body"] = repoConfigPROpts.repoPRBody
 			}
 			var response repoConfigPRResponse
 			if _, err := client.do("POST", repository.apiPath()+"/config/pr", nil, body, &response); err != nil {
 				return err
 			}
-			if outputFormat == "json" {
+			if outputOpts.outputFormat == "json" {
 				return printJSON(response)
 			}
 			fmt.Printf("Opened pull request #%d: %s\n", response.PRNumber, response.PRURL)
@@ -176,22 +168,22 @@ func newRepoConfigPRCommand() *cobra.Command {
 			return nil
 		},
 	}
-	repoConfigPRCmd.Flags().StringVar(&repoConfigFile, "file", "", "Path to tinfoil-config.yml; use - for stdin")
-	repoConfigPRCmd.Flags().StringVar(&repoPRBody, "body", "", "Optional pull request description")
+	repoConfigPRCmd.Flags().StringVar(&repoConfigPROpts.repoConfigFile, "file", "", "Path to tinfoil-config.yml; use - for stdin")
+	repoConfigPRCmd.Flags().StringVar(&repoConfigPROpts.repoPRBody, "body", "", "Optional pull request description")
 	_ = repoConfigPRCmd.MarkFlagRequired("file")
 	return repoConfigPRCmd
 }
 
-func newRepoPRCommand() *cobra.Command {
+func newRepoPRCommand(outputOpts *outputOptions) *cobra.Command {
 	repoPRCmd := &cobra.Command{
 		Use:   "pr",
 		Short: "Inspect config pull requests",
 	}
-	repoPRCmd.AddCommand(newRepoPRStatusCommand())
+	repoPRCmd.AddCommand(newRepoPRStatusCommand(outputOpts))
 	return repoPRCmd
 }
 
-func newRepoPRStatusCommand() *cobra.Command {
+func newRepoPRStatusCommand(outputOpts *outputOptions) *cobra.Command {
 	repoPRStatusCmd := &cobra.Command{
 		Use:   "status [owner/repo] [number]",
 		Short: "Show the status of a config pull request",
@@ -210,7 +202,7 @@ func newRepoPRStatusCommand() *cobra.Command {
 			if _, err := client.do("GET", path, nil, nil, &response); err != nil {
 				return err
 			}
-			if outputFormat == "json" {
+			if outputOpts.outputFormat == "json" {
 				return printJSON(response)
 			}
 			fmt.Printf("Pull request: #%d\n", response.PRNumber)
@@ -224,16 +216,16 @@ func newRepoPRStatusCommand() *cobra.Command {
 	return repoPRStatusCmd
 }
 
-func newRepoBuildCommand() *cobra.Command {
+func newRepoBuildCommand(outputOpts *outputOptions) *cobra.Command {
 	repoBuildCmd := &cobra.Command{
 		Use:   "build",
 		Short: "Inspect or trigger the Tinfoil Release workflow",
 	}
-	repoBuildCmd.AddCommand(newRepoBuildInfoCommand(), newRepoBuildRunCommand(), newRepoBuildStatusCommand())
+	repoBuildCmd.AddCommand(newRepoBuildInfoCommand(outputOpts), newRepoBuildRunCommand(outputOpts, &repoBuildRunOptions{}), newRepoBuildStatusCommand(outputOpts, &repoBuildStatusOptions{}))
 	return repoBuildCmd
 }
 
-func newRepoBuildInfoCommand() *cobra.Command {
+func newRepoBuildInfoCommand(outputOpts *outputOptions) *cobra.Command {
 	repoBuildInfoCmd := &cobra.Command{
 		Use:   "info [owner/repo]",
 		Short: "Show tags, published releases, and the suggested next version",
@@ -247,7 +239,7 @@ func newRepoBuildInfoCommand() *cobra.Command {
 			if _, err := client.do("GET", repository.apiPath()+"/build/info", nil, nil, &response); err != nil {
 				return err
 			}
-			if outputFormat == "json" {
+			if outputOpts.outputFormat == "json" {
 				return printJSON(response)
 			}
 			latest := response.LatestTag
@@ -272,7 +264,7 @@ func newRepoBuildInfoCommand() *cobra.Command {
 	return repoBuildInfoCmd
 }
 
-func newRepoBuildRunCommand() *cobra.Command {
+func newRepoBuildRunCommand(outputOpts *outputOptions, repoBuildRunOpts *repoBuildRunOptions) *cobra.Command {
 	repoBuildRunCmd := &cobra.Command{
 		Use:   "run [owner/repo]",
 		Short: "Trigger the Tinfoil Release workflow",
@@ -283,11 +275,11 @@ func newRepoBuildRunCommand() *cobra.Command {
 				return err
 			}
 			var response repoBuildResponse
-			body := map[string]string{"version": repoVersion}
+			body := map[string]string{"version": repoBuildRunOpts.repoVersion}
 			if _, err := client.do("POST", repository.apiPath()+"/build", nil, body, &response); err != nil {
 				return err
 			}
-			if outputFormat == "json" {
+			if outputOpts.outputFormat == "json" {
 				return printJSON(response)
 			}
 			fmt.Printf("Queued release %s; not yet deployable.\n", response.Version)
@@ -298,12 +290,12 @@ func newRepoBuildRunCommand() *cobra.Command {
 			return nil
 		},
 	}
-	repoBuildRunCmd.Flags().StringVar(&repoVersion, "version", "", "Release version (for example v1.2.3)")
+	repoBuildRunCmd.Flags().StringVar(&repoBuildRunOpts.repoVersion, "version", "", "Release version (for example v1.2.3)")
 	_ = repoBuildRunCmd.MarkFlagRequired("version")
 	return repoBuildRunCmd
 }
 
-func newRepoBuildStatusCommand() *cobra.Command {
+func newRepoBuildStatusCommand(outputOpts *outputOptions, repoBuildStatusOpts *repoBuildStatusOptions) *cobra.Command {
 	repoBuildStatusCmd := &cobra.Command{
 		Use:   "status [owner/repo]",
 		Short: "Check a queued release workflow without starting a build",
@@ -314,10 +306,10 @@ func newRepoBuildStatusCommand() *cobra.Command {
 				return err
 			}
 			var response repoBuildStatusResponse
-			if _, err := client.do("GET", repository.apiPath()+"/build/status", url.Values{"version": {repoStatusVersion}}, nil, &response); err != nil {
+			if _, err := client.do("GET", repository.apiPath()+"/build/status", url.Values{"version": {repoBuildStatusOpts.repoStatusVersion}}, nil, &response); err != nil {
 				return err
 			}
-			if outputFormat == "json" {
+			if outputOpts.outputFormat == "json" {
 				return printJSON(response)
 			}
 			if response.Run == nil {
@@ -330,7 +322,7 @@ func newRepoBuildStatusCommand() *cobra.Command {
 			return nil
 		},
 	}
-	repoBuildStatusCmd.Flags().StringVar(&repoStatusVersion, "version", "", "Dispatched release version [required]")
+	repoBuildStatusCmd.Flags().StringVar(&repoBuildStatusOpts.repoStatusVersion, "version", "", "Dispatched release version [required]")
 	_ = repoBuildStatusCmd.MarkFlagRequired("version")
 	return repoBuildStatusCmd
 }

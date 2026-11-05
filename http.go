@@ -12,10 +12,8 @@ import (
 	"github.com/tinfoilsh/tinfoil-go"
 )
 
-var requestHeaders []string
-
-func secureClient() (*tinfoil.EnclaveHTTPClient, error) {
-	return newVerifiedClient(enclaveHost, repo, "")
+func secureClient(rootOpts *rootOptions) (*tinfoil.EnclaveHTTPClient, error) {
+	return newVerifiedClient(rootOpts, rootOpts.enclaveHost, rootOpts.repo, "")
 }
 
 func requestWithHeaders(sc *tinfoil.EnclaveHTTPClient, method, url string, headers map[string]string, body []byte) (*http.Response, error) {
@@ -37,20 +35,20 @@ func printHTTPResponse(out io.Writer, body io.Reader) error {
 	return err
 }
 
-func newHttpCommand() *cobra.Command {
+func newHttpCommand(headersOpts *headersOptions, rootOpts *rootOptions) *cobra.Command {
 	httpCmd := &cobra.Command{
 		Use:   "http",
 		Short: "Make verified HTTP requests",
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
-			if enclaveHost == "" || repo == "" && localConfigFile == "" {
+			if rootOpts.enclaveHost == "" || rootOpts.repo == "" && rootOpts.localConfigFile == "" {
 				return fmt.Errorf("--enclave and either --repo or --config are required for verified HTTP requests")
 			}
 			return nil
 		},
 	}
-	httpCmd.PersistentFlags().StringArrayVarP(&requestHeaders, "header", "H", nil, `HTTP request header ("Name: Value"); may be repeated`)
-	httpCmd.AddCommand(newHttpGetCommand())
-	httpCmd.AddCommand(newHttpPostCommand())
+	httpCmd.PersistentFlags().StringArrayVarP(&headersOpts.requestHeaders, "header", "H", nil, `HTTP request header ("Name: Value"); may be repeated`)
+	httpCmd.AddCommand(newHttpGetCommand(headersOpts, rootOpts))
+	httpCmd.AddCommand(newHttpPostCommand(headersOpts, &httpPostOptions{}, rootOpts))
 	return httpCmd
 }
 

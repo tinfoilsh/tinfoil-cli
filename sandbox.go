@@ -52,58 +52,56 @@ func workspaceSizeChoices(unit string) string {
 	return strings.Join(sizes[:last], ", ") + ", or " + sizes[last]
 }
 
-var sandboxYes bool
-
-func newSandboxCommand() *cobra.Command {
+func newSandboxCommand(identityOpts *identityOptions, outputOpts *outputOptions, rootOpts *rootOptions) *cobra.Command {
 	sandboxCmd := &cobra.Command{
 		Use: "sandbox", Aliases: []string{"sandboxes"}, Short: "Manage your confidential sandboxes",
 	}
-	sandboxCmd.AddCommand(newSandboxStatusCommand(), newSandboxStartCommand(), newSandboxRestartCommand(), newSandboxStopCommand(), newSandboxDeleteCommand())
+	sandboxCmd.AddCommand(newSandboxStatusCommand(outputOpts), newSandboxStartCommand(identityOpts, outputOpts, rootOpts, &sandboxActionOptions{}, &trustOptions{}), newSandboxRestartCommand(identityOpts, outputOpts, rootOpts, &sandboxActionOptions{}, &trustOptions{}), newSandboxStopCommand(identityOpts, outputOpts, rootOpts, &sandboxActionOptions{}, &trustOptions{}), newSandboxDeleteCommand(identityOpts, outputOpts, rootOpts, &sandboxActionOptions{}, &trustOptions{}))
 	return sandboxCmd
 }
 
-func newSandboxStatusCommand() *cobra.Command {
-	sandboxStatusCmd := newManagedStatusCmd("sandbox")
+func newSandboxStatusCommand(outputOpts *outputOptions) *cobra.Command {
+	sandboxStatusCmd := newManagedStatusCmd(outputOpts, "sandbox")
 
 	return sandboxStatusCmd
 }
 
-func newSandboxStartCommand() *cobra.Command {
+func newSandboxStartCommand(identityOpts *identityOptions, outputOpts *outputOptions, rootOpts *rootOptions, sandboxActionOpts *sandboxActionOptions, trustOpts *trustOptions) *cobra.Command {
 	sandboxStartCmd := &cobra.Command{
 		Use: "start [id|name]", Short: "Start a sandbox and enroll this machine's keys",
-		Args: cobra.ExactArgs(1), RunE: runSandboxAction("start"),
+		Args: cobra.ExactArgs(1), RunE: runSandboxAction(identityOpts, outputOpts, rootOpts, sandboxActionOpts, trustOpts, "start"),
 	}
-	addTrustDangerousFlag(sandboxStartCmd)
+	addTrustDangerousFlag(trustOpts, sandboxStartCmd)
 	sandboxStartCmd.Flags().Bool("no-enroll", false, "Boot without unlocking or enrolling this machine's keys")
 	return sandboxStartCmd
 }
-func newSandboxRestartCommand() *cobra.Command {
+func newSandboxRestartCommand(identityOpts *identityOptions, outputOpts *outputOptions, rootOpts *rootOptions, sandboxActionOpts *sandboxActionOptions, trustOpts *trustOptions) *cobra.Command {
 	sandboxRestartCmd := &cobra.Command{
 		Use: "restart [id|name]", Short: "Restart a sandbox and enroll this machine's keys",
-		Args: cobra.ExactArgs(1), RunE: runSandboxAction("restart"),
+		Args: cobra.ExactArgs(1), RunE: runSandboxAction(identityOpts, outputOpts, rootOpts, sandboxActionOpts, trustOpts, "restart"),
 	}
-	addTrustDangerousFlag(sandboxRestartCmd)
+	addTrustDangerousFlag(trustOpts, sandboxRestartCmd)
 	sandboxRestartCmd.Flags().Bool("no-enroll", false, "Boot without unlocking or enrolling this machine's keys")
 	return sandboxRestartCmd
 }
-func newSandboxStopCommand() *cobra.Command {
+func newSandboxStopCommand(identityOpts *identityOptions, outputOpts *outputOptions, rootOpts *rootOptions, sandboxActionOpts *sandboxActionOptions, trustOpts *trustOptions) *cobra.Command {
 	sandboxStopCmd := &cobra.Command{
 		Use: "stop [id|name]", Short: "Stop a sandbox, keeping its workspace",
-		Args: cobra.ExactArgs(1), RunE: runSandboxAction("stop"),
+		Args: cobra.ExactArgs(1), RunE: runSandboxAction(identityOpts, outputOpts, rootOpts, sandboxActionOpts, trustOpts, "stop"),
 	}
 
 	return sandboxStopCmd
 }
-func newSandboxDeleteCommand() *cobra.Command {
+func newSandboxDeleteCommand(identityOpts *identityOptions, outputOpts *outputOptions, rootOpts *rootOptions, sandboxActionOpts *sandboxActionOptions, trustOpts *trustOptions) *cobra.Command {
 	sandboxDeleteCmd := &cobra.Command{
 		Use: "delete [id|name]", Short: "Delete a sandbox and its workspace volume",
-		Args: cobra.ExactArgs(1), RunE: runSandboxAction("delete"),
+		Args: cobra.ExactArgs(1), RunE: runSandboxAction(identityOpts, outputOpts, rootOpts, sandboxActionOpts, trustOpts, "delete"),
 	}
-	sandboxDeleteCmd.Flags().BoolVar(&sandboxYes, "yes", false, "Skip the confirmation prompt")
+	sandboxDeleteCmd.Flags().BoolVar(&sandboxActionOpts.sandboxYes, "yes", false, "Skip the confirmation prompt")
 	return sandboxDeleteCmd
 }
 
-func runSandboxAction(action string) func(*cobra.Command, []string) error {
+func runSandboxAction(identityOpts *identityOptions, outputOpts *outputOptions, rootOpts *rootOptions, sandboxActionOpts *sandboxActionOptions, trustOpts *trustOptions, action string) func(*cobra.Command, []string) error {
 	return func(cmd *cobra.Command, args []string) error {
 		client, err := authedClient()
 		if err != nil {
@@ -127,7 +125,7 @@ func runSandboxAction(action string) func(*cobra.Command, []string) error {
 				deleted += " and its workspace"
 				fmt.Fprintf(cmd.ErrOrStderr(), "Deleting %s permanently deletes its workspace volume and all of its data. To keep the workspace, stop the sandbox and run `tinfoil volume detach %s` before deleting it.\n", row.Name, workspace)
 			}
-			if err := confirmYes(sandboxYes, "sandbox delete"); err != nil {
+			if err := confirmYes(sandboxActionOpts.sandboxYes, "sandbox delete"); err != nil {
 				return err
 			}
 			if _, err := client.do("DELETE", pathf("/api/containers/%s", row.ID), nil, nil, nil); err != nil && !missingContainer(err) {
@@ -143,7 +141,7 @@ func runSandboxAction(action string) func(*cobra.Command, []string) error {
 			if err != nil {
 				return err
 			}
-			return renderContainer(stopped)
+			return renderContainer(outputOpts, stopped)
 		case "start", "restart":
 			started, err := startSandboxRow(client, *row, action == "restart")
 			if err != nil {
@@ -151,7 +149,7 @@ func runSandboxAction(action string) func(*cobra.Command, []string) error {
 			}
 			row = &started
 			if noEnroll, _ := cmd.Flags().GetBool("no-enroll"); noEnroll {
-				return renderContainer(*row)
+				return renderContainer(outputOpts, *row)
 			}
 			if row.Volumes == nil {
 				row, err = resolveContainerDetail(client, row.ID)
@@ -160,11 +158,11 @@ func runSandboxAction(action string) func(*cobra.Command, []string) error {
 				}
 			}
 		}
-		target, err := resolveWorkload(*row, defaultSandboxRepo, repo)
+		target, err := resolveWorkload(rootOpts, trustOpts, *row, defaultSandboxRepo, rootOpts.repo)
 		if err != nil {
 			return err
 		}
-		s, err := connectSandbox(cmd.Context(), target)
+		s, err := connectSandbox(identityOpts, rootOpts, trustOpts, cmd.Context(), target)
 		if err != nil {
 			return err
 		}
@@ -175,7 +173,7 @@ func runSandboxAction(action string) func(*cobra.Command, []string) error {
 		if err := s.install(); err != nil {
 			return fmt.Errorf("%s was enrolled, but its ssh profile was not installed: %w; retry `tinfoil sandbox start %s`", target.Name, err, target.Name)
 		}
-		return renderContainer(*row)
+		return renderContainer(outputOpts, *row)
 	}
 }
 
@@ -266,7 +264,7 @@ type sandboxSession struct {
 	noMonitor bool
 }
 
-func connectSandbox(ctx context.Context, target *workloadTarget) (_ *sandboxSession, err error) {
+func connectSandbox(identityOpts *identityOptions, rootOpts *rootOptions, trustOpts *trustOptions, ctx context.Context, target *workloadTarget) (_ *sandboxSession, err error) {
 	scope, cp, err := currentScope()
 	if err != nil {
 		return nil, err
@@ -288,14 +286,14 @@ func connectSandbox(ctx context.Context, target *workloadTarget) (_ *sandboxSess
 		if err != nil {
 			return nil, fmt.Errorf("sandbox %s's Monitor: %w", row.Name, err)
 		}
-		selected, err := resolveWorkload(*peer, monitorRepo, "")
+		selected, err := resolveWorkload(rootOpts, trustOpts, *peer, monitorRepo, "")
 		if err != nil {
 			return nil, fmt.Errorf("selected Monitor %s: %w; review its configuration with `tinfoil monitor open %s`", peer.Name, err, peer.Name)
 		}
 		if peer.OwnerKeyMode == "umk" && row.OwnerKeyMode == "tmk" {
 			return nil, fmt.Errorf("a UMK Monitor cannot serve the synced sandbox %s", row.Name)
 		}
-		if monitor, err = connectMonitorOwner(ctx, scope, cp, selected, true); err != nil {
+		if monitor, err = connectMonitorOwner(identityOpts, rootOpts, ctx, scope, cp, selected, true); err != nil {
 			return nil, err
 		}
 	}
@@ -303,11 +301,11 @@ func connectSandbox(ctx context.Context, target *workloadTarget) (_ *sandboxSess
 	if err != nil {
 		return nil, err
 	}
-	keys, err := resolveResourceKeys(ctx, cp, scope, row, "sandbox", binding, dir, true)
+	keys, err := resolveResourceKeys(identityOpts, ctx, cp, scope, row, "sandbox", binding, dir, true)
 	if err != nil {
 		return nil, err
 	}
-	return openSandbox(scope, cp, target, binding, monitor, keys, dir)
+	return openSandbox(rootOpts, scope, cp, target, binding, monitor, keys, dir)
 }
 
 func sandboxBinding(scope accountScope, target *workloadTarget) (mkBinding, error) {
@@ -334,7 +332,7 @@ func sandboxBinding(scope accountScope, target *workloadTarget) (mkBinding, erro
 	return mkBinding{Account: scope.account(), ContainerID: row.ID, InstanceID: &instance, VolumeID: &volumeID}, nil
 }
 
-func openSandbox(scope accountScope, cp *cpClient, target *workloadTarget, binding mkBinding, monitor *monitorSession, keys *resourceKeys, dir string) (_ *sandboxSession, err error) {
+func openSandbox(rootOpts *rootOptions, scope accountScope, cp *cpClient, target *workloadTarget, binding mkBinding, monitor *monitorSession, keys *resourceKeys, dir string) (_ *sandboxSession, err error) {
 	row := target.containerView
 	noMonitor := monitor == nil
 	s := &sandboxSession{box: row, noMonitor: noMonitor, binding: binding, keys: keys, monitor: monitor}
@@ -352,7 +350,7 @@ func openSandbox(scope accountScope, cp *cpClient, target *workloadTarget, bindi
 	resourceID := scope.ControlplaneURL + "/" + scope.OrgID + "/" + scope.UserID + "/" + row.ID
 	if noMonitor {
 		defer startConnectionProgress(os.Stderr, "Verifying sandbox attestation and SSH host key for "+row.Domain)()
-		secure, err := newVerifiedClient(row.Domain, target.source, "")
+		secure, err := newVerifiedClient(rootOpts, row.Domain, target.source, "")
 		if err != nil {
 			return nil, err
 		}
@@ -370,7 +368,7 @@ func openSandbox(scope accountScope, cp *cpClient, target *workloadTarget, bindi
 		fmt.Fprintf(os.Stderr, "Sandbox %s attestation verified.\nWarning: sandbox has NO_MONITOR=1; its network traffic is not being tunneled through Monitor.\n", row.Name)
 		return s, nil
 	}
-	s.owner = &sandboxOwner{request: monitor.request, instance: *binding.InstanceID, dial: s.dial}
+	s.owner = &sandboxOwner{request: monitor.request, instance: *binding.InstanceID, dial: s.dial, verifyEvidence: sandboxVerifier(rootOpts)}
 	stop := startConnectionProgress(os.Stderr, "Requesting sandbox attestation through Monitor's relay")
 	verified, err := s.owner.attest(target.source)
 	stop()
@@ -391,7 +389,7 @@ func openSandbox(scope accountScope, cp *cpClient, target *workloadTarget, bindi
 	return s, nil
 }
 
-func relinkSandboxes(ctx context.Context, scope accountScope, cp *cpClient, m *monitorSession, monitorID string) []error {
+func relinkSandboxes(identityOpts *identityOptions, rootOpts *rootOptions, trustOpts *trustOptions, ctx context.Context, scope accountScope, cp *cpClient, m *monitorSession, monitorID string) []error {
 	var rows []containerView
 	if _, err := cp.doContext(ctx, "GET", "/api/containers", nil, nil, nil, &rows); err != nil {
 		return []error{fmt.Errorf("listing sandboxes to re-link: %w", err)}
@@ -402,14 +400,14 @@ func relinkSandboxes(ctx context.Context, scope accountScope, cp *cpClient, m *m
 			!sandboxNetworkMatches(listed) || listed.NetworkPolicy.Egress[0].ContainerID != monitorID {
 			continue
 		}
-		if err := relinkSandbox(ctx, scope, cp, m, monitorID, listed.ID); err != nil && !errors.As(err, new(noLocalKeys)) {
+		if err := relinkSandbox(identityOpts, rootOpts, trustOpts, ctx, scope, cp, m, monitorID, listed.ID); err != nil && !errors.As(err, new(noLocalKeys)) {
 			failures = append(failures, fmt.Errorf("sandbox %s: %w", listed.Name, err))
 		}
 	}
 	return failures
 }
 
-func relinkSandbox(ctx context.Context, scope accountScope, cp *cpClient, m *monitorSession, monitorID, id string) error {
+func relinkSandbox(identityOpts *identityOptions, rootOpts *rootOptions, trustOpts *trustOptions, ctx context.Context, scope accountScope, cp *cpClient, m *monitorSession, monitorID, id string) error {
 	row, err := resolveContainerDetail(cp, id)
 	if err != nil {
 		return err
@@ -420,7 +418,7 @@ func relinkSandbox(ctx context.Context, scope accountScope, cp *cpClient, m *mon
 	if m.keys.mode == "umk" && row.OwnerKeyMode == "tmk" {
 		return fmt.Errorf("a UMK Monitor cannot serve the synced sandbox %s", row.Name)
 	}
-	target, err := resolveWorkload(*row, defaultSandboxRepo, "")
+	target, err := resolveWorkload(rootOpts, trustOpts, *row, defaultSandboxRepo, "")
 	if err != nil {
 		return err
 	}
@@ -432,7 +430,7 @@ func relinkSandbox(ctx context.Context, scope accountScope, cp *cpClient, m *mon
 	if err != nil {
 		return err
 	}
-	keys, err := resolveResourceKeys(ctx, cp, scope, *row, "sandbox", binding, dir, false)
+	keys, err := resolveResourceKeys(identityOpts, ctx, cp, scope, *row, "sandbox", binding, dir, false)
 	if err != nil {
 		return err
 	}
@@ -440,7 +438,7 @@ func relinkSandbox(ctx context.Context, scope accountScope, cp *cpClient, m *mon
 		keys.close()
 		return nil
 	}
-	s, err := openSandbox(scope, cp, target, binding, m, keys, dir)
+	s, err := openSandbox(rootOpts, scope, cp, target, binding, m, keys, dir)
 	if err != nil {
 		return err
 	}
@@ -574,10 +572,11 @@ func authorizedKeyLine(key ssh.PublicKey) string {
 }
 
 type sandboxOwner struct {
-	request  func(method, path string, input, out any) error
-	instance string
-	dial     func(context.Context) (*ssh.Client, error)
-	expires  time.Time
+	verifyEvidence sandboxEvidenceVerifier
+	request        func(method, path string, input, out any) error
+	instance       string
+	dial           func(context.Context) (*ssh.Client, error)
+	expires        time.Time
 }
 
 type relayReply struct {
@@ -585,12 +584,17 @@ type relayReply struct {
 	Body   string `json:"body"`
 }
 
-var verifySandboxEvidence = func(doc, nonce []byte, source string) (attestedEvidence, error) {
-	options, err := verificationOptions(source, "")
-	if err != nil {
-		return nil, err
+func sandboxVerifier(rootOpts *rootOptions) sandboxEvidenceVerifier {
+	if verify := rootOpts.dependencies.verifySandboxEvidence; verify != nil {
+		return verify
 	}
-	return options.Verifier.VerifyV3(doc, nonce, source)
+	return func(doc, nonce []byte, source string) (attestedEvidence, error) {
+		options, err := verificationOptions(rootOpts, source, "")
+		if err != nil {
+			return nil, err
+		}
+		return options.Verifier.VerifyV3(doc, nonce, source)
+	}
 }
 
 func (o *sandboxOwner) attest(source string) (attestedEvidence, error) {
@@ -613,7 +617,7 @@ func (o *sandboxOwner) attest(source string) (attestedEvidence, error) {
 	if err != nil {
 		return nil, err
 	}
-	verified, err := verifySandboxEvidence(doc, nonce, source)
+	verified, err := o.verifyEvidence(doc, nonce, source)
 	if err != nil {
 		return nil, err
 	}

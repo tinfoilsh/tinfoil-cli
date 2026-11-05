@@ -130,7 +130,7 @@ type monitorView struct {
 	} `json:"config"`
 }
 
-func connectMonitorOwner(ctx context.Context, scope accountScope, cp *cpClient, row *workloadTarget, restoreDevice bool) (_ *monitorSession, err error) {
+func connectMonitorOwner(identityOpts *identityOptions, rootOpts *rootOptions, ctx context.Context, scope accountScope, cp *cpClient, row *workloadTarget, restoreDevice bool) (_ *monitorSession, err error) {
 	if err := requireRunningConnection("Monitor", row.containerView); err != nil {
 		return nil, err
 	}
@@ -156,7 +156,7 @@ func connectMonitorOwner(ctx context.Context, scope accountScope, cp *cpClient, 
 		}
 	}()
 	binding := mkBinding{Account: scope.account(), ContainerID: row.ID, Bucket: &bucket}
-	if m.keys, err = resolveResourceKeys(ctx, cp, scope, row.containerView, "monitor", binding, dir, true); err != nil {
+	if m.keys, err = resolveResourceKeys(identityOpts, ctx, cp, scope, row.containerView, "monitor", binding, dir, true); err != nil {
 		return nil, err
 	}
 	if _, err := updateProfile(dir, func(p *monitorProfile) error {
@@ -174,7 +174,7 @@ func connectMonitorOwner(ctx context.Context, scope accountScope, cp *cpClient, 
 	if err != nil {
 		return nil, err
 	}
-	if m.hostKey, err = attestedHostKey(row.Domain, row.source, ""); err != nil {
+	if m.hostKey, err = attestedHostKey(rootOpts, row.Domain, row.source, ""); err != nil {
 		return nil, err
 	}
 	if _, err := updateProfile(dir, func(p *monitorProfile) error {
@@ -388,7 +388,7 @@ func openOwnerChannel(client *ssh.Client, dir, host, token string) (ssh.Channel,
 	return owner.OpenChannel(client, dir, host, token)
 }
 
-func newMonitorOpenCommand() *cobra.Command {
+func newMonitorOpenCommand(identityOpts *identityOptions, rootOpts *rootOptions, trustOpts *trustOptions) *cobra.Command {
 	command := &cobra.Command{
 		Use: "open [id|name]", Short: "Unlock and forward the Monitor UI over attested SSH", Args: cobra.ExactArgs(1),
 		Long: "Also restores this device's sandbox connectivity.",
@@ -403,22 +403,22 @@ func newMonitorOpenCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			target, err := resolveWorkload(*row, monitorRepo, repo)
+			target, err := resolveWorkload(rootOpts, trustOpts, *row, monitorRepo, rootOpts.repo)
 			if err != nil {
 				return err
 			}
-			m, err := connectMonitorOwner(cmd.Context(), scope, cp, target, true)
+			m, err := connectMonitorOwner(identityOpts, rootOpts, cmd.Context(), scope, cp, target, true)
 			if err != nil {
 				return err
 			}
 			defer m.close()
-			for _, failure := range relinkSandboxes(cmd.Context(), scope, cp, m, row.ID) {
+			for _, failure := range relinkSandboxes(identityOpts, rootOpts, trustOpts, cmd.Context(), scope, cp, m, row.ID) {
 				fmt.Fprintf(cmd.ErrOrStderr(), "Could not re-link %v\n", failure)
 			}
 			return serveMonitorPanel(cmd, m.client, m.dir, "127.0.0.1:0")
 		},
 	}
-	addTrustDangerousFlag(command)
+	addTrustDangerousFlag(trustOpts, command)
 	return command
 }
 

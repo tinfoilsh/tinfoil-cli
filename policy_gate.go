@@ -21,22 +21,21 @@ import (
 // of every config actually connected to.
 // Every connection trust decision goes through this file: the gate for
 // controlplane-resolved configs, --repo assertions, and create-time seeding.
-var trustDangerous bool
 
-func addTrustDangerousFlag(cmd *cobra.Command) {
-	cmd.Flags().BoolVar(&trustDangerous, "dangerous", false, "Trust whatever config the controlplane returns, without recording it")
+func addTrustDangerousFlag(trustOpts *trustOptions, cmd *cobra.Command) {
+	cmd.Flags().BoolVar(&trustOpts.trustDangerous, "dangerous", false, "Trust whatever config the controlplane returns, without recording it")
 }
 
-func enforceConnectionPolicy(source string) error {
+func enforceConnectionPolicy(trustOpts *trustOptions, source string) error {
 	interactive := term.IsTerminal(int(os.Stdin.Fd()))
-	return gateConnectionPolicy(source, os.Stdin, os.Stderr, interactive, trustDangerous)
+	return gateConnectionPolicy(source, os.Stdin, os.Stderr, interactive, trustOpts.trustDangerous)
 }
 
-func trustConnectionSource(source, assertion string) error {
+func trustConnectionSource(trustOpts *trustOptions, source, assertion string) error {
 	if assertion != "" {
 		return assertTrustedSource(assertion, source)
 	}
-	return enforceConnectionPolicy(source)
+	return enforceConnectionPolicy(trustOpts, source)
 }
 
 func gateConnectionPolicy(source string, in io.Reader, out io.Writer, interactive, dangerous bool) error {

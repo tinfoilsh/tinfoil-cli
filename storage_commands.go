@@ -21,7 +21,7 @@ type storageStoreFactory func(context.Context, storageProfile) (*volumeKeyStore,
 
 var volumeStorageFactory storageStoreFactory = autounlock.NewAWSKeyStore
 
-func newProjectStorageCommand() *cobra.Command {
+func newProjectStorageCommand(outputOpts *outputOptions) *cobra.Command {
 	parent := &cobra.Command{Use: "storage", Short: "Configure customer-owned project storage"}
 	cmd := &cobra.Command{Use: "configure [id|owner/repo]", Short: "Save a local AWS keyserver profile without provisioning infrastructure", Args: cobra.MaximumNArgs(1)}
 	cmd.Flags().String("keyserver-url", "", "Customer keyserver HTTPS origin [required]")
@@ -79,7 +79,7 @@ func newProjectStorageCommand() *cobra.Command {
 		if err := service.SaveProfile(p); err != nil {
 			return err
 		}
-		if outputFormat == "json" {
+		if outputOpts.outputFormat == "json" {
 			return json.NewEncoder(cmd.OutOrStdout()).Encode(map[string]any{"profile": p, "configuration": "PROFILE_SAVED", "policy": "not_applied"})
 		}
 		fmt.Fprintf(cmd.OutOrStdout(), "Saved local AWS storage profile for %s (organization %s).\nNo keyserver or policy was deployed.\n", p.Scope.Repo, p.Scope.OrgID)
@@ -125,7 +125,7 @@ func storageOptions(cmd *cobra.Command) storageArtifactOptions {
 	return storageArtifactOptions{Project: get("project"), Mount: get("mount"), Tag: get("tag"), Domain: get("domain"), ConfigFile: get("config-file"), ConfigOut: get("config-out"), PolicyFile: get("policy-file"), PolicyOut: get("policy-out"), ExistingSecret: get("existing-secret")}
 }
 
-func newVolumeAutoUnlockCommand(factory storageStoreFactory) *cobra.Command {
+func newVolumeAutoUnlockCommand(outputOpts *outputOptions, factory storageStoreFactory) *cobra.Command {
 	parent := &cobra.Command{Use: "auto-unlock", Short: "Prepare or inspect private volume unlock configuration"}
 	configure := &cobra.Command{Use: "configure <existing-volume>", Short: "Prepare an existing disk using only its original AWS key", Args: cobra.ExactArgs(1)}
 	addStorageArtifactFlags(configure, true)
@@ -156,7 +156,7 @@ func newVolumeAutoUnlockCommand(factory storageStoreFactory) *cobra.Command {
 		if err != nil {
 			return err
 		}
-		return configureVolumeStorage(cmd, store, *v, p, o, config, policy, false)
+		return configureVolumeStorage(outputOpts, cmd, store, *v, p, o, config, policy, false)
 	}
 	status := &cobra.Command{Use: "status <volume>", Short: "Show local configuration evidence, not guest unlock state", Args: cobra.ExactArgs(1)}
 	status.Flags().String("project", "", "Project ID or owner/repo [required]")
@@ -181,7 +181,7 @@ func newVolumeAutoUnlockCommand(factory storageStoreFactory) *cobra.Command {
 		if err != nil {
 			return err
 		}
-		if outputFormat == "json" {
+		if outputOpts.outputFormat == "json" {
 			return json.NewEncoder(cmd.OutOrStdout()).Encode(map[string]string{"volume_id": v.ID, "configuration": state, "detail": detail, "unlock": "not_observed"})
 		}
 		fmt.Fprintf(cmd.OutOrStdout(), "Volume: %s\nAuto-unlock: %s\n%s\n", v.ID, state, detail)
@@ -207,8 +207,8 @@ func storagePreflight(client *cpClient, o *storageArtifactOptions, existing bool
 	return service.Preflight(scope, o, existing)
 }
 
-func runAutoUnlockVolumeCreate(cmd *cobra.Command, name string, factory storageStoreFactory) error {
-	size, err := parseSize(volumeCreateSize)
+func runAutoUnlockVolumeCreate(outputOpts *outputOptions, volumeCreateOpts *volumeCreateOptions, cmd *cobra.Command, name string, factory storageStoreFactory) error {
+	size, err := parseSize(volumeCreateOpts.volumeCreateSize)
 	if err != nil {
 		return fmt.Errorf("--size: %w", err)
 	}
@@ -225,7 +225,7 @@ func runAutoUnlockVolumeCreate(cmd *cobra.Command, name string, factory storageS
 	if err != nil {
 		return err
 	}
-	host, err := pickVolumeHost(hosts, volumeCreateHost)
+	host, err := pickVolumeHost(hosts, volumeCreateOpts.volumeCreateHost)
 	if err != nil {
 		return err
 	}
@@ -237,10 +237,10 @@ func runAutoUnlockVolumeCreate(cmd *cobra.Command, name string, factory storageS
 	if _, err := client.do("POST", "/api/volumes", nil, map[string]any{"name": name, "host_id": host.ID, "size_bytes": size}, &v); err != nil {
 		return fmt.Errorf("volume allocation outcome is unconfirmed; inspect tinfoil volume list before retrying (no automatic recreate): %w", err)
 	}
-	return configureVolumeStorage(cmd, store, v, p, o, config, policy, true)
+	return configureVolumeStorage(outputOpts, cmd, store, v, p, o, config, policy, true)
 }
 
-func configureVolumeStorage(cmd *cobra.Command, store *volumeKeyStore, v volumeView, p storageProfile, o storageArtifactOptions, config, policy []byte, fresh bool) error {
+func configureVolumeStorage(outputOpts *outputOptions, cmd *cobra.Command, store *volumeKeyStore, v volumeView, p storageProfile, o storageArtifactOptions, config, policy []byte, fresh bool) error {
 	if !fresh {
 		if err := autounlock.ValidateExistingSecretReference(o.ExistingSecret); err != nil {
 			return err
@@ -256,7 +256,7 @@ func configureVolumeStorage(cmd *cobra.Command, store *volumeKeyStore, v volumeV
 			VolumeID: v.ID, OrgID: v.OrgID, Profile: p, Options: o, Config: config, Policy: policy, Fresh: fresh,
 		})
 		if err == nil {
-			if outputErr := printStoragePrepared(cmd.OutOrStdout(), r); outputErr != nil {
+			if outputErr := printStoragePrepared(outputOpts, cmd.OutOrStdout(), r); outputErr != nil {
 				err = &autounlock.RecoveryError{VolumeID: v.ID, Receipt: r, Err: outputErr}
 			}
 		}
@@ -268,8 +268,8 @@ func configureVolumeStorage(cmd *cobra.Command, store *volumeKeyStore, v volumeV
 	return err
 }
 
-func printStoragePrepared(out io.Writer, r storageReceipt) error {
-	if outputFormat == "json" {
+func printStoragePrepared(outputOpts *outputOptions, out io.Writer, r storageReceipt) error {
+	if outputOpts.outputFormat == "json" {
 		return json.NewEncoder(out).Encode(map[string]any{"receipt": r, "configuration": "CONFIGURED_LOCAL", "detail": storageUnobserved, "unlock": "not_observed"})
 	}
 	fmt.Fprintf(out, "Volume: %s\nAuto-unlock: CONFIGURED_LOCAL\n%s\nConfig: %s\nPolicy: %s\n", r.VolumeID, storageUnobserved, r.ConfigPath, r.PolicyPath)

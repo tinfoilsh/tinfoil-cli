@@ -32,17 +32,7 @@ const sshIncludeGlob = "tinfoil/*.conf"
 // sshProfileNamePattern keeps a profile name a literal ssh Host alias and a single path component.
 var sshProfileNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,254}$`)
 
-var (
-	attestSSHName     string
-	attestSSHHost     string
-	attestSSHUser     string
-	attestSSHPort     uint
-	attestSSHIdentity string
-	attestSSHInstall  bool
-	attestSSHYes      bool
-)
-
-func newAttestSSHCommand() *cobra.Command {
+func newAttestSSHCommand(attestSSHOpts *attestSSHOptions, forwardOpts *forwardOptions, identityOpts *identityOptions, rootOpts *rootOptions, trustOpts *trustOptions) *cobra.Command {
 	attestSSHCmd := &cobra.Command{
 		Use:   "attest-ssh [container|hostname]",
 		Short: "Pin an enclave's attested SSH host key for native ssh",
@@ -51,7 +41,7 @@ A reboot rotates the key, so rerun this after one.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			resolved := startConnectionProgress(cmd.ErrOrStderr(), "Looking up "+args[0])
-			target, err := resolveTunnelTarget(args[0])
+			target, err := resolveTunnelTarget(forwardOpts, rootOpts, trustOpts, args[0])
 			resolved()
 			if err != nil {
 				return err
@@ -62,13 +52,13 @@ A reboot rotates the key, so rerun this after one.`,
 				case monitorRepo:
 					return fmt.Errorf("Monitor has no interactive shell; use tinfoil monitor open %s", target.name)
 				case defaultSandboxRepo:
-					if attestSSHHost != "" || attestSSHPort != 0 {
+					if attestSSHOpts.attestSSHHost != "" || attestSSHOpts.attestSSHPort != 0 {
 						return errors.New("managed sandboxes use their configured SSH endpoint")
 					}
-					if attestSSHName != "" && !sshProfileNamePattern.MatchString(attestSSHName) {
+					if attestSSHOpts.attestSSHName != "" && !sshProfileNamePattern.MatchString(attestSSHOpts.attestSSHName) {
 						return errors.New("invalid SSH profile name")
 					}
-					s, err := connectSandbox(cmd.Context(), target.workload)
+					s, err := connectSandbox(identityOpts, rootOpts, trustOpts, cmd.Context(), target.workload)
 					if err != nil {
 						return err
 					}
@@ -76,23 +66,23 @@ A reboot rotates the key, so rerun this after one.`,
 					if err := s.enroll(cmd.Context()); err != nil {
 						return err
 					}
-					if attestSSHName != "" {
-						s.profile.name = attestSSHName
+					if attestSSHOpts.attestSSHName != "" {
+						s.profile.name = attestSSHOpts.attestSSHName
 						if s.profile.jump != nil {
-							s.profile.jump.name = attestSSHName + monitorJumpSuffix
+							s.profile.jump.name = attestSSHOpts.attestSSHName + monitorJumpSuffix
 						}
 					}
 					if cmd.Flags().Changed("user") {
-						s.profile.user = attestSSHUser
+						s.profile.user = attestSSHOpts.attestSSHUser
 					}
-					if attestSSHInstall {
+					if attestSSHOpts.attestSSHInstall {
 						return s.install()
 					}
 					fmt.Printf("%s\n# ~/.ssh/tinfoil/%s.known_hosts\n%s", s.profile.render(), s.profile.name, s.profile.pin())
 					return nil
 				}
 			}
-			profile := sshProfile{name: attestSSHName, hostName: nativeSSHHost(target, attestSSHHost), port: sshTargetPort(target, attestSSHPort), user: attestSSHUser, identityFile: attestSSHIdentity}
+			profile := sshProfile{name: attestSSHOpts.attestSSHName, hostName: nativeSSHHost(target, attestSSHOpts.attestSSHHost), port: sshTargetPort(target, attestSSHOpts.attestSSHPort), user: attestSSHOpts.attestSSHUser, identityFile: identityOpts.attestSSHIdentity}
 			if profile.name == "" {
 				profile.name = target.name
 			}
@@ -102,26 +92,26 @@ A reboot rotates the key, so rerun this after one.`,
 			if profile.port > 65535 {
 				return fmt.Errorf("--ssh-port must be at most 65535 (got %d)", profile.port)
 			}
-			if profile.hostKey, err = attestedHostKey(target.host, target.repo, target.sealedTo); err != nil {
+			if profile.hostKey, err = attestedHostKey(rootOpts, target.host, target.repo, target.sealedTo); err != nil {
 				return err
 			}
 			fmt.Fprintln(os.Stderr, "Attestation successful.")
-			if !attestSSHInstall {
+			if !attestSSHOpts.attestSSHInstall {
 				fmt.Printf("%s\n# ~/.ssh/tinfoil/%s.known_hosts\n%s", profile.render(), profile.name, profile.pin())
 				return nil
 			}
-			return profile.install()
+			return profile.install(attestSSHOpts)
 		},
 	}
 	flags := attestSSHCmd.Flags()
-	flags.StringVar(&attestSSHName, "name", "", "Host alias for the profile (default: HOST)")
-	flags.StringVar(&attestSSHHost, "ssh-host", "", "Hostname ssh dials (default: debug.tinfoil.sh for a container with a published SSH port, else HOST)")
-	flags.StringVar(&attestSSHUser, "user", "root", "Login user written to the profile")
-	flags.UintVar(&attestSSHPort, "ssh-port", 0, "Port ssh dials (default: the container's published SSH port, else 22)")
-	flags.StringVar(&attestSSHIdentity, "identity", "", "IdentityFile written to the profile")
-	flags.BoolVar(&attestSSHInstall, "install", false, "Write the profile under ~/.ssh/tinfoil instead of printing it")
-	flags.BoolVar(&attestSSHYes, "yes", false, "Add Include "+sshIncludeGlob+" to ~/.ssh/config without prompting")
-	addTrustDangerousFlag(attestSSHCmd)
+	flags.StringVar(&attestSSHOpts.attestSSHName, "name", "", "Host alias for the profile (default: HOST)")
+	flags.StringVar(&attestSSHOpts.attestSSHHost, "ssh-host", "", "Hostname ssh dials (default: debug.tinfoil.sh for a container with a published SSH port, else HOST)")
+	flags.StringVar(&attestSSHOpts.attestSSHUser, "user", "root", "Login user written to the profile")
+	flags.UintVar(&attestSSHOpts.attestSSHPort, "ssh-port", 0, "Port ssh dials (default: the container's published SSH port, else 22)")
+	flags.StringVar(&identityOpts.attestSSHIdentity, "identity", "", "IdentityFile written to the profile")
+	flags.BoolVar(&attestSSHOpts.attestSSHInstall, "install", false, "Write the profile under ~/.ssh/tinfoil instead of printing it")
+	flags.BoolVar(&attestSSHOpts.attestSSHYes, "yes", false, "Add Include "+sshIncludeGlob+" to ~/.ssh/config without prompting")
+	addTrustDangerousFlag(trustOpts, attestSSHCmd)
 	return attestSSHCmd
 }
 
@@ -157,9 +147,9 @@ func nativeSSHHost(target *tunnelTarget, override string) string {
 
 // attestedHostKey verifies host against source and returns the endorsed
 // host-ssh key, so a failed verification never falls back to unverified acceptance.
-func attestedHostKey(host, source, sealedTo string) (ssh.PublicKey, error) {
+func attestedHostKey(rootOpts *rootOptions, host, source, sealedTo string) (ssh.PublicKey, error) {
 	defer startConnectionProgress(os.Stderr, "Verifying attestation and SSH host key for "+host)()
-	input, err := verificationInput(source, sealedTo)
+	input, err := verificationInput(rootOpts, source, sealedTo)
 	if err != nil {
 		return nil, err
 	}
@@ -238,12 +228,12 @@ func (p sshProfile) pin() string {
 	return pin
 }
 
-func (p sshProfile) install() error {
+func (p sshProfile) install(attestSSHOpts *attestSSHOptions) error {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return err
 	}
-	return p.installTo(home, os.Stdin, os.Stderr, term.IsTerminal(int(os.Stdin.Fd())), attestSSHYes)
+	return p.installTo(home, os.Stdin, os.Stderr, term.IsTerminal(int(os.Stdin.Fd())), attestSSHOpts.attestSSHYes)
 }
 
 func (p sshProfile) installTo(home string, in io.Reader, out io.Writer, interactive, autoYes bool) error {

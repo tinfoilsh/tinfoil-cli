@@ -28,18 +28,18 @@ type domainView struct {
 	WildcardCNAMEConfigured *bool    `json:"wildcard_cname_configured"`
 }
 
-func newDomainCommand() *cobra.Command {
+func newDomainCommand(outputOpts *outputOptions) *cobra.Command {
 	domainCmd := &cobra.Command{
 		Use:     "domain",
 		Aliases: []string{"domains"},
 		Short:   "Manage custom domains for containers",
 	}
-	domainCmd.PersistentFlags().StringVarP(&outputFormat, "output", "o", "table", "Output format: table or json")
-	domainCmd.AddCommand(newDomainListCommand(), newDomainAddCommand(), newDomainVerifyCommand(), newDomainDeleteCommand())
+	domainCmd.PersistentFlags().StringVarP(&outputOpts.outputFormat, "output", "o", "table", "Output format: table or json")
+	domainCmd.AddCommand(newDomainListCommand(outputOpts), newDomainAddCommand(outputOpts), newDomainVerifyCommand(outputOpts), newDomainDeleteCommand())
 	return domainCmd
 }
 
-func newDomainListCommand() *cobra.Command {
+func newDomainListCommand(outputOpts *outputOptions) *cobra.Command {
 	domainListCmd := &cobra.Command{
 		Use:     "list",
 		Aliases: []string{"ls"},
@@ -53,7 +53,7 @@ func newDomainListCommand() *cobra.Command {
 			if _, err := client.do("GET", "/api/domains", nil, nil, &list); err != nil {
 				return err
 			}
-			if outputFormat == "json" {
+			if outputOpts.outputFormat == "json" {
 				return printJSON(list)
 			}
 			if len(list) == 0 {
@@ -77,7 +77,7 @@ func newDomainListCommand() *cobra.Command {
 	return domainListCmd
 }
 
-func newDomainAddCommand() *cobra.Command {
+func newDomainAddCommand(outputOpts *outputOptions) *cobra.Command {
 	domainAddCmd := &cobra.Command{
 		Use:   "add [domain]",
 		Short: "Register a custom domain and print its DNS records",
@@ -97,14 +97,14 @@ func newDomainAddCommand() *cobra.Command {
 			if _, err := client.do("POST", "/api/domains", nil, body, &d); err != nil {
 				return err
 			}
-			return renderDomain(d, false)
+			return renderDomain(outputOpts, d, false)
 		},
 	}
 
 	return domainAddCmd
 }
 
-func newDomainVerifyCommand() *cobra.Command {
+func newDomainVerifyCommand(outputOpts *outputOptions) *cobra.Command {
 	domainVerifyCmd := &cobra.Command{
 		Use:   "verify [domain]",
 		Short: "Re-check the DNS records and update verification status",
@@ -118,7 +118,7 @@ func newDomainVerifyCommand() *cobra.Command {
 			if _, err := client.do("POST", pathf("/api/domains/%s/verify", args[0]), nil, nil, &d); err != nil {
 				return err
 			}
-			return renderDomain(d, true)
+			return renderDomain(outputOpts, d, true)
 		},
 	}
 
@@ -147,8 +147,8 @@ func newDomainDeleteCommand() *cobra.Command {
 	return domainDeleteCmd
 }
 
-func renderDomain(d domainView, verifyMode bool) error {
-	if outputFormat == "json" {
+func renderDomain(outputOpts *outputOptions, d domainView, verifyMode bool) error {
+	if outputOpts.outputFormat == "json" {
 		return printJSON(d)
 	}
 	fmt.Printf("Domain:     %s\n", d.Domain)

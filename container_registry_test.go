@@ -15,6 +15,8 @@ import (
 const registryConfigDigest = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 
 func TestCreateRegistryRevision(t *testing.T) {
+	commandState := newCommandFixture()
+
 	for _, revision := range []string{"v1.2.3", "sha256:" + registryConfigDigest} {
 		t.Run(revision, func(t *testing.T) {
 			var paths []string
@@ -31,10 +33,10 @@ func TestCreateRegistryRevision(t *testing.T) {
 				io.WriteString(w, `{"id":"`+testContainerID+`","name":"app","config_name":"/acme/app/v1.2.3","status":"deploying"}`)
 			}))
 			defer server.Close()
-			configureContainerPromotionTest(t, server.URL)
-			createTag = ""
+			configureContainerPromotionTest(commandState, t, server.URL)
+			commandState.containerCreateOpts.createTag = ""
 			output, err := captureTestStdout(func() error {
-				return executeLifecycleCLI(t, "container", "create", "app", "--source", "registry", "--repo", "acme/app", "--revision", revision, "--no-wait")
+				return executeLifecycleCLI(commandState, t, "container", "create", "app", "--source", "registry", "--repo", "acme/app", "--revision", revision, "--no-wait")
 			})
 			require.NoError(t, err)
 			require.Equal(t, []string{"POST /api/containers"}, paths)
@@ -44,6 +46,8 @@ func TestCreateRegistryRevision(t *testing.T) {
 }
 
 func TestCreateGitHubRevision(t *testing.T) {
+	commandState := newCommandFixture()
+
 	var paths []string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		paths = append(paths, r.URL.Path)
@@ -62,14 +66,18 @@ func TestCreateGitHubRevision(t *testing.T) {
 		io.WriteString(w, `{"id":"`+testContainerID+`","name":"app","status":"deploying"}`)
 	}))
 	defer server.Close()
-	configureContainerPromotionTest(t, server.URL)
-	createTag, createRevision = "", "v1.2.3"
-	_, err := captureTestStdout(func() error { return containerCreateCmd.RunE(containerCreateCmd, []string{"app"}) })
+	configureContainerPromotionTest(commandState, t, server.URL)
+	commandState.containerCreateOpts.createTag, commandState.containerCreateOpts.createRevision = "", "v1.2.3"
+	_, err := captureTestStdout(func() error {
+		return commandState.containerCreateCmd.RunE(commandState.containerCreateCmd, []string{"app"})
+	})
 	require.NoError(t, err)
 	require.Equal(t, []string{"/api/containers/validate", "/api/containers"}, paths)
 }
 
 func TestCreateRejectsInvalidSourceSelection(t *testing.T) {
+	commandState := newCommandFixture()
+
 	for _, test := range []struct {
 		args    []string
 		message string
@@ -86,23 +94,27 @@ func TestCreateRejectsInvalidSourceSelection(t *testing.T) {
 				w.WriteHeader(http.StatusInternalServerError)
 			}))
 			defer server.Close()
-			configureContainerPromotionTest(t, server.URL)
-			createTag = ""
-			err := executeLifecycleCLI(t, append([]string{"container", "create", "app", "--repo", "acme/app"}, test.args...)...)
+			configureContainerPromotionTest(commandState, t, server.URL)
+			commandState.containerCreateOpts.createTag = ""
+			err := executeLifecycleCLI(commandState, t, append([]string{"container", "create", "app", "--repo", "acme/app"}, test.args...)...)
 			require.ErrorContains(t, err, test.message)
 		})
 	}
 }
 
 func TestCreateRegistryAttachesVolumesBeforeDeploy(t *testing.T) {
+	commandState := newCommandFixture()
+
 	fixture := newCreateFlowFixture()
 	fixture.mounts = []volumeSlot{{Name: "data"}}
 	server := fixture.serve(t)
 	defer server.Close()
-	configureContainerPromotionTest(t, server.URL)
-	createSource, createTag, createRevision = containerSourceRegistry, "", "v1.2.3"
-	createVolumes = []string{"data-vol"}
-	_, err := captureTestStdout(func() error { return containerCreateCmd.RunE(containerCreateCmd, []string{"app"}) })
+	configureContainerPromotionTest(commandState, t, server.URL)
+	commandState.containerCreateOpts.createSource, commandState.containerCreateOpts.createTag, commandState.containerCreateOpts.createRevision = containerSourceRegistry, "", "v1.2.3"
+	commandState.containerCreateOpts.createVolumes = []string{"data-vol"}
+	_, err := captureTestStdout(func() error {
+		return commandState.containerCreateCmd.RunE(commandState.containerCreateCmd, []string{"app"})
+	})
 	require.NoError(t, err)
 	require.Equal(t, []string{
 		"GET /api/volumes",
@@ -114,6 +126,8 @@ func TestCreateRegistryAttachesVolumesBeforeDeploy(t *testing.T) {
 }
 
 func TestRegistryConnectionPinsNameAndDigest(t *testing.T) {
+	commandState := newCommandFixture()
+
 	descriptor := connectionDescriptor{URL: "https://app.example.com", ConfigName: "/acme/app/v1.2.3", ConfigDigest: registryConfigDigest}
 	expected := "acme/app@v1.2.3@sha256:" + registryConfigDigest
 	target, err := parseConnectionDescriptor(descriptor)
@@ -136,29 +150,29 @@ func TestRegistryConnectionPinsNameAndDigest(t *testing.T) {
 		json.NewEncoder(w).Encode(c)
 	}))
 	defer server.Close()
-	configureContainerPromotionTest(t, server.URL)
+	configureContainerPromotionTest(commandState, t, server.URL)
 	gateEnv(t, `{"allow":{"pins":["acme/app@sha256:`+registryConfigDigest+`"]}}`)
-	previousRepo := repo
-	repo = ""
-	t.Cleanup(func() { repo = previousRepo })
-	tunnel, err := resolveTunnelTarget(testContainerID)
+	previousRepo := commandState.rootOpts.repo
+	commandState.rootOpts.repo = ""
+	t.Cleanup(func() { commandState.rootOpts.repo = previousRepo })
+	tunnel, err := resolveTunnelTarget(commandState.forwardOpts, commandState.rootOpts, commandState.trustOpts, testContainerID)
 	require.NoError(t, err)
 	require.Equal(t, expected, tunnel.repo)
 	require.Equal(t, target.host, tunnel.host)
 	require.Contains(t, containerConnectionGuidance(c, false), "--repo "+expected)
 
 	descriptor.ConfigDigest = strings.TrimPrefix(testDigestB, "sha256:")
-	_, err = resolveTunnelTarget(testContainerID)
+	_, err = resolveTunnelTarget(commandState.forwardOpts, commandState.rootOpts, commandState.trustOpts, testContainerID)
 	require.ErrorContains(t, err, "not in your known configs")
 	descriptor.ConfigDigest = registryConfigDigest
 
-	repo = "acme/app@sha256:" + strings.Repeat("a", len(registryConfigDigest))
-	tunnel, err = resolveTunnelTarget(testContainerID)
+	commandState.rootOpts.repo = "acme/app@sha256:" + strings.Repeat("a", len(registryConfigDigest))
+	tunnel, err = resolveTunnelTarget(commandState.forwardOpts, commandState.rootOpts, commandState.trustOpts, testContainerID)
 	require.NoError(t, err)
-	require.Equal(t, repo, tunnel.repo)
+	require.Equal(t, commandState.rootOpts.repo, tunnel.repo)
 	policy, err := loadConnectionPolicy()
 	require.NoError(t, err)
-	require.True(t, policy.HasPin(repo), "explicit hash pin must be recorded")
+	require.True(t, policy.HasPin(commandState.rootOpts.repo), "explicit hash pin must be recorded")
 
 	for _, name := range []string{"", "/acme/other/v1.2.3"} {
 		invalid := descriptor

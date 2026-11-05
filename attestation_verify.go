@@ -10,29 +10,24 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var (
-	jsonOutput bool
-	jsonFile   string
-)
-
-func newAttestationVerifyCommand() *cobra.Command {
+func newAttestationVerifyCommand(attestationVerifyOpts *attestationVerifyOptions, rootOpts *rootOptions) *cobra.Command {
 	attestationVerifyCmd := &cobra.Command{
 		Use:   "verify",
 		Short: "Verify enclave attestation",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			logger := log.New()
-			if jsonFile != "" || jsonOutput {
+			if attestationVerifyOpts.jsonFile != "" || attestationVerifyOpts.jsonOutput {
 				logger.SetOutput(io.Discard)
 			}
 
 			// Override and enable logging if verbose or trace is set
-			if verbose {
+			if rootOpts.verbose {
 				logger.SetLevel(log.DebugLevel)
-			} else if trace {
+			} else if rootOpts.trace {
 				logger.SetLevel(log.TraceLevel)
 			}
 
-			record, err := verifyAttestation(logger)
+			record, err := verifyAttestation(rootOpts, logger)
 			if err != nil {
 				return err
 			}
@@ -42,12 +37,12 @@ func newAttestationVerifyCommand() *cobra.Command {
 				return fmt.Errorf("error marshaling JSON: %v", err)
 			}
 
-			if jsonOutput {
+			if attestationVerifyOpts.jsonOutput {
 				fmt.Println(string(output))
 			}
 
-			if jsonFile != "" {
-				if err := os.WriteFile(jsonFile, output, 0644); err != nil {
+			if attestationVerifyOpts.jsonFile != "" {
+				if err := os.WriteFile(attestationVerifyOpts.jsonFile, output, 0644); err != nil {
 					return fmt.Errorf("error writing JSON to file: %v", err)
 				}
 			}
@@ -55,7 +50,7 @@ func newAttestationVerifyCommand() *cobra.Command {
 			return record.verificationError()
 		},
 	}
-	attestationVerifyCmd.Flags().BoolVarP(&jsonOutput, "json", "j", false, "Output in JSON format")
-	attestationVerifyCmd.Flags().StringVarP(&jsonFile, "log-file", "l", "", "Path to write the JSON log")
+	attestationVerifyCmd.Flags().BoolVarP(&attestationVerifyOpts.jsonOutput, "json", "j", false, "Output in JSON format")
+	attestationVerifyCmd.Flags().StringVarP(&attestationVerifyOpts.jsonFile, "log-file", "l", "", "Path to write the JSON log")
 	return attestationVerifyCmd
 }

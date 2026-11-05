@@ -30,7 +30,7 @@ type storageCPFixture struct {
 	allocationFails bool
 }
 
-func newStorageCPFixture(t *testing.T) *storageCPFixture {
+func newStorageCPFixture(commandState *commandFixture, t *testing.T) *storageCPFixture {
 	t.Helper()
 	f := &storageCPFixture{}
 	f.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -75,11 +75,11 @@ func newStorageCPFixture(t *testing.T) *storageCPFixture {
 		}
 	}))
 	t.Cleanup(f.server.Close)
-	configureVolumeTest(t, f.server.URL)
+	configureVolumeTest(commandState, t, f.server.URL)
 	return f
 }
 
-func executeStorageCLI(t *testing.T, factory storageStoreFactory, args ...string) (string, error) {
+func executeStorageCLI(commandState *commandFixture, t *testing.T, factory storageStoreFactory, args ...string) (string, error) {
 	t.Helper()
 	oldFactory := volumeStorageFactory
 	volumeStorageFactory = factory
@@ -105,7 +105,7 @@ func executeStorageCLI(t *testing.T, factory storageStoreFactory, args ...string
 			save(sub)
 		}
 	}
-	save(rootCmd)
+	save(commandState.rootCmd)
 	defer func() {
 		for _, f := range saved {
 			if f.flag.Value.Type() == "stringArray" || f.flag.Value.Type() == "stringSlice" {
@@ -116,13 +116,18 @@ func executeStorageCLI(t *testing.T, factory storageStoreFactory, args ...string
 		}
 	}()
 	var output bytes.Buffer
-	oldOut, oldErr, oldIn := rootCmd.OutOrStdout(), rootCmd.ErrOrStderr(), rootCmd.InOrStdin()
-	rootCmd.SetOut(&output)
-	rootCmd.SetErr(&output)
-	rootCmd.SetIn(strings.NewReader(""))
-	defer func() { rootCmd.SetOut(oldOut); rootCmd.SetErr(oldErr); rootCmd.SetIn(oldIn); rootCmd.SetArgs(nil) }()
-	rootCmd.SetArgs(args)
-	stdout, err := captureTestStdout(func() error { return rootCmd.Execute() })
+	oldOut, oldErr, oldIn := commandState.rootCmd.OutOrStdout(), commandState.rootCmd.ErrOrStderr(), commandState.rootCmd.InOrStdin()
+	commandState.rootCmd.SetOut(&output)
+	commandState.rootCmd.SetErr(&output)
+	commandState.rootCmd.SetIn(strings.NewReader(""))
+	defer func() {
+		commandState.rootCmd.SetOut(oldOut)
+		commandState.rootCmd.SetErr(oldErr)
+		commandState.rootCmd.SetIn(oldIn)
+		commandState.rootCmd.SetArgs(nil)
+	}()
+	commandState.rootCmd.SetArgs(args)
+	stdout, err := captureTestStdout(func() error { return commandState.rootCmd.Execute() })
 	all := output.String() + string(stdout)
 	require.NotContains(t, all, storageTestEncoded)
 	if err != nil {
@@ -144,9 +149,9 @@ func forbiddenStorageFactory(t *testing.T) storageStoreFactory {
 	}
 }
 
-func configureStorageCLI(t *testing.T) {
+func configureStorageCLI(commandState *commandFixture, t *testing.T) {
 	t.Helper()
-	_, err := executeStorageCLI(t, forbiddenStorageFactory(t), "project", "storage", "configure", "Owner/Repo", "--keyserver-url", "https://keys.example.com", "--aws-region", "us-east-2", "--aws-prefix", "customer", "--domain", "app.example.com")
+	_, err := executeStorageCLI(commandState, t, forbiddenStorageFactory(t), "project", "storage", "configure", "Owner/Repo", "--keyserver-url", "https://keys.example.com", "--aws-region", "us-east-2", "--aws-prefix", "customer", "--domain", "app.example.com")
 	require.NoError(t, err)
 }
 
@@ -159,8 +164,10 @@ func storageCLIArtifactFlags(t *testing.T) []string {
 }
 
 func TestStorageFullCommandFlowAndNoKeyCustody(t *testing.T) {
-	f := newStorageCPFixture(t)
-	configureStorageCLI(t)
+	commandState := newCommandFixture()
+
+	f := newStorageCPFixture(commandState, t)
+	configureStorageCLI(commandState, t)
 	fake := &fakeStorageAWS{}
 	fake.beforeCreate = func(in *secretsmanager.CreateSecretInput) {
 		scope := testStorageProfile().Scope
@@ -171,7 +178,7 @@ func TestStorageFullCommandFlowAndNoKeyCustody(t *testing.T) {
 	}
 	flags := storageCLIArtifactFlags(t)
 	args := append([]string{"volume", "create", "app-data", "--size", "30GiB", "--host", "inf13", "--auto-unlock"}, flags...)
-	out, err := executeStorageCLI(t, fakeStorageFactory(fake, bytes.NewReader(storageTestKey)), args...)
+	out, err := executeStorageCLI(commandState, t, fakeStorageFactory(fake, bytes.NewReader(storageTestKey)), args...)
 	require.NoError(t, err)
 	require.Contains(t, out, "CONFIGURED_LOCAL")
 	require.Contains(t, out, storageUnobserved)
@@ -200,30 +207,32 @@ func TestStorageFullCommandFlowAndNoKeyCustody(t *testing.T) {
 	info, err := os.Stat(dir)
 	require.NoError(t, err)
 	require.EqualValues(t, storageDirMode, info.Mode().Perm())
-	out, err = executeStorageCLI(t, forbiddenStorageFactory(t), "volume", "auto-unlock", "status", testVolumeID, "--project", "owner/repo")
+	out, err = executeStorageCLI(commandState, t, forbiddenStorageFactory(t), "volume", "auto-unlock", "status", testVolumeID, "--project", "owner/repo")
 	require.NoError(t, err)
 	require.Contains(t, out, storageUnobserved)
 	readOnly := &rejectingRandom{}
 	args = append([]string{"volume", "auto-unlock", "configure", testVolumeID, "--existing-secret", fake.secret.arn}, flags...)
-	out, err = executeStorageCLI(t, fakeStorageFactory(fake, readOnly), args...)
+	out, err = executeStorageCLI(commandState, t, fakeStorageFactory(fake, readOnly), args...)
 	require.NoError(t, err)
 	require.Contains(t, out, storageUnobserved)
 	require.Zero(t, readOnly.calls)
 	require.Equal(t, 1, fake.creates)
 	require.NoError(t, os.WriteFile(flags[9], []byte("changed measured configuration\n"), storageFileMode))
-	out, err = executeStorageCLI(t, forbiddenStorageFactory(t), "volume", "auto-unlock", "status", testVolumeID, "--project", "owner/repo", "--output", "json")
+	out, err = executeStorageCLI(commandState, t, forbiddenStorageFactory(t), "volume", "auto-unlock", "status", testVolumeID, "--project", "owner/repo", "--output", "json")
 	require.NoError(t, err)
 	require.Contains(t, out, `"configuration":"STALE"`)
 	require.Contains(t, out, `"unlock":"not_observed"`)
 }
 
 func TestStoragePartialFailureRetainsVolumeAndRecoversReadOnly(t *testing.T) {
-	f := newStorageCPFixture(t)
-	configureStorageCLI(t)
+	commandState := newCommandFixture()
+
+	f := newStorageCPFixture(commandState, t)
+	configureStorageCLI(commandState, t)
 	flags := storageCLIArtifactFlags(t)
 	fake := &fakeStorageAWS{createErr: errors.New(storageTestEncoded), persistOnError: true, getErr: errors.New(storageTestEncoded)}
 	args := append([]string{"volume", "create", "app-data", "--size", "30GiB", "--auto-unlock"}, flags...)
-	_, err := executeStorageCLI(t, fakeStorageFactory(fake, bytes.NewReader(storageTestKey)), args...)
+	_, err := executeStorageCLI(commandState, t, fakeStorageFactory(fake, bytes.NewReader(storageTestKey)), args...)
 	require.ErrorContains(t, err, "volume "+testVolumeID+" retained")
 	require.ErrorContains(t, err, storagePhaseAttempted)
 	require.ErrorContains(t, err, "--existing-secret customer/volumes/"+testVolumeID+"/key")
@@ -231,7 +240,7 @@ func TestStoragePartialFailureRetainsVolumeAndRecoversReadOnly(t *testing.T) {
 	fake.getErr = nil
 	reject := &rejectingRandom{}
 	args = append([]string{"volume", "auto-unlock", "configure", testVolumeID, "--existing-secret", fake.secret.name}, flags...)
-	_, err = executeStorageCLI(t, fakeStorageFactory(fake, reject), args...)
+	_, err = executeStorageCLI(commandState, t, fakeStorageFactory(fake, reject), args...)
 	require.NoError(t, err)
 	require.Zero(t, reject.calls)
 	require.Equal(t, 1, fake.creates)
@@ -245,27 +254,31 @@ func TestStoragePartialFailureRetainsVolumeAndRecoversReadOnly(t *testing.T) {
 }
 
 func TestStorageExistingDiskNeverGeneratesWithoutReceipt(t *testing.T) {
-	newStorageCPFixture(t)
-	configureStorageCLI(t)
+	commandState := newCommandFixture()
+
+	newStorageCPFixture(commandState, t)
+	configureStorageCLI(commandState, t)
 	flags := storageCLIArtifactFlags(t)
 	r := testStorageReceipt()
 	fake := &fakeStorageAWS{secret: testStoredSecret(r)}
 	fake.secret.tags = nil
 	reject := &rejectingRandom{}
 	args := append([]string{"volume", "auto-unlock", "configure", testVolumeID, "--existing-secret", fake.secret.arn}, flags...)
-	_, err := executeStorageCLI(t, fakeStorageFactory(fake, reject), args...)
+	_, err := executeStorageCLI(commandState, t, fakeStorageFactory(fake, reject), args...)
 	require.NoError(t, err)
 	require.Zero(t, fake.creates)
 	require.Zero(t, reject.calls)
 }
 
 func TestStorageProfileIsolationAndAuthPersistence(t *testing.T) {
-	f := newStorageCPFixture(t)
+	commandState := newCommandFixture()
+
+	f := newStorageCPFixture(commandState, t)
 	config, err := configPath()
 	require.NoError(t, err)
 	credentials := []byte(`{"api_key":"admin_saved","controlplane_url":"https://api.example.com","unrelated":{"keep":true}}`)
 	require.NoError(t, os.WriteFile(config, credentials, storageFileMode))
-	configureStorageCLI(t)
+	configureStorageCLI(commandState, t)
 	actual, err := os.ReadFile(config)
 	require.NoError(t, err)
 	require.Equal(t, credentials, actual)
@@ -289,12 +302,12 @@ func TestStorageProfileIsolationAndAuthPersistence(t *testing.T) {
 		require.ErrorIs(t, err, os.ErrNotExist)
 	}
 	t.Setenv(envAdminKey, "admin_other")
-	out, err := executeStorageCLI(t, forbiddenStorageFactory(t), "volume", "auto-unlock", "status", testVolumeID, "--project", "Owner/Repo")
+	out, err := executeStorageCLI(commandState, t, forbiddenStorageFactory(t), "volume", "auto-unlock", "status", testVolumeID, "--project", "Owner/Repo")
 	require.NoError(t, err)
 	require.Contains(t, out, "UNKNOWN")
 	require.Contains(t, out, "not evidence")
 	args := append([]string{"volume", "create", "app-data", "--size", "30GiB", "--auto-unlock"}, storageCLIArtifactFlags(t)...)
-	_, err = executeStorageCLI(t, forbiddenStorageFactory(t), args...)
+	_, err = executeStorageCLI(commandState, t, forbiddenStorageFactory(t), args...)
 	require.ErrorContains(t, err, "no local storage profile")
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -302,27 +315,29 @@ func TestStorageProfileIsolationAndAuthPersistence(t *testing.T) {
 }
 
 func TestStorageCommandPreflightAndNormalCreate(t *testing.T) {
-	f := newStorageCPFixture(t)
-	_, err := executeStorageCLI(t, forbiddenStorageFactory(t), "project", "storage", "configure", "owner/repo")
+	commandState := newCommandFixture()
+
+	f := newStorageCPFixture(commandState, t)
+	_, err := executeStorageCLI(commandState, t, forbiddenStorageFactory(t), "project", "storage", "configure", "owner/repo")
 	require.ErrorContains(t, err, "noninteractive")
-	configureStorageCLI(t)
-	_, err = executeStorageCLI(t, forbiddenStorageFactory(t), "project", "storage", "configure", "project_test", "--keyserver-url", "https://different.example.com", "--aws-region", "us-east-2", "--aws-prefix", "customer")
+	configureStorageCLI(commandState, t)
+	_, err = executeStorageCLI(commandState, t, forbiddenStorageFactory(t), "project", "storage", "configure", "project_test", "--keyserver-url", "https://different.example.com", "--aws-region", "us-east-2", "--aws-prefix", "customer")
 	require.ErrorContains(t, err, "refusing implicit reconfiguration")
-	profileJSON, err := executeStorageCLI(t, forbiddenStorageFactory(t), "project", "storage", "configure", "project_test", "--keyserver-url", "https://keys.example.com", "--aws-region", "us-east-2", "--aws-prefix", "customer", "--domain", "app.example.com", "--output", "json")
+	profileJSON, err := executeStorageCLI(commandState, t, forbiddenStorageFactory(t), "project", "storage", "configure", "project_test", "--keyserver-url", "https://keys.example.com", "--aws-region", "us-east-2", "--aws-prefix", "customer", "--domain", "app.example.com", "--output", "json")
 	require.NoError(t, err)
 	var profileOutput map[string]any
 	require.NoError(t, json.Unmarshal([]byte(profileJSON), &profileOutput))
 	require.Equal(t, "not_applied", profileOutput["policy"])
-	_, err = executeStorageCLI(t, forbiddenStorageFactory(t), "volume", "auto-unlock", "configure", testVolumeID)
+	_, err = executeStorageCLI(commandState, t, forbiddenStorageFactory(t), "volume", "auto-unlock", "configure", testVolumeID)
 	require.ErrorContains(t, err, "--existing-secret")
 	flags := storageCLIArtifactFlags(t)
 	args := append([]string{"volume", "create", "app-data", "--size", "30GiB", "--auto-unlock", "--domain", "*.example.com"}, flags...)
-	_, err = executeStorageCLI(t, forbiddenStorageFactory(t), args...)
+	_, err = executeStorageCLI(commandState, t, forbiddenStorageFactory(t), args...)
 	require.ErrorContains(t, err, "exact lowercase")
 	f.mu.Lock()
 	require.Zero(t, f.allocations)
 	f.mu.Unlock()
-	out, err := executeStorageCLI(t, forbiddenStorageFactory(t), "volume", "create", "ordinary", "--size", "30GiB", "--host", "inf13")
+	out, err := executeStorageCLI(commandState, t, forbiddenStorageFactory(t), "volume", "create", "ordinary", "--size", "30GiB", "--host", "inf13")
 	require.NoError(t, err)
 	require.Contains(t, out, "ID:")
 	require.NotContains(t, out, "CONFIGURED")
@@ -332,13 +347,15 @@ func TestStorageCommandPreflightAndNormalCreate(t *testing.T) {
 }
 
 func TestStorageUncertainAllocationDoesNotRetry(t *testing.T) {
-	f := newStorageCPFixture(t)
+	commandState := newCommandFixture()
+
+	f := newStorageCPFixture(commandState, t)
 	f.allocationFails = true
-	configureStorageCLI(t)
+	configureStorageCLI(commandState, t)
 	args := append([]string{"volume", "create", "app-data", "--size", "30GiB", "--auto-unlock"}, storageCLIArtifactFlags(t)...)
 	fake := &fakeStorageAWS{}
 	random := &rejectingRandom{}
-	_, err := executeStorageCLI(t, fakeStorageFactory(fake, random), args...)
+	_, err := executeStorageCLI(commandState, t, fakeStorageFactory(fake, random), args...)
 	require.ErrorContains(t, err, "inspect tinfoil volume list before retrying")
 	require.Empty(t, fake.secretIDs)
 	require.Zero(t, fake.creates)
@@ -354,7 +371,7 @@ func TestStorageMetadataPathFailureRetainsAllocatedVolume(t *testing.T) {
 	fake := &fakeStorageAWS{}
 	reject := &rejectingRandom{}
 	p := testStorageProfile()
-	err := configureVolumeStorage(&cobra.Command{}, autounlock.NewKeyStore(fake, reject), volumeView{ID: testVolumeID}, p, storageArtifactOptions{Mount: "data"}, nil, nil, true)
+	err := configureVolumeStorage(&outputOptions{}, &cobra.Command{}, autounlock.NewKeyStore(fake, reject), volumeView{ID: testVolumeID}, p, storageArtifactOptions{Mount: "data"}, nil, nil, true)
 	require.ErrorContains(t, err, "volume "+testVolumeID+" retained; auto-unlock phase allocated:")
 	require.ErrorContains(t, err, "locating home directory")
 	require.ErrorContains(t, err, "--existing-secret customer/volumes/"+testVolumeID+"/key")

@@ -6,26 +6,24 @@ import (
 	"github.com/tinfoilsh/tinfoil-cli/internal/connection"
 )
 
-var localConfigBytes []byte
-
-func readLocalConfig() ([]byte, error) {
-	if localConfigFile == "" {
+func readLocalConfig(rootOpts *rootOptions) ([]byte, error) {
+	if rootOpts.localConfigFile == "" {
 		return nil, fmt.Errorf("this container requires --config with its trusted local config file")
 	}
 	// Descriptor checks and verification must use the same exact file bytes.
-	if localConfigBytes != nil {
-		return localConfigBytes, nil
+	if rootOpts.localConfigBytes != nil {
+		return rootOpts.localConfigBytes, nil
 	}
-	config, err := connection.ReadConfig(localConfigFile)
+	config, err := connection.ReadConfig(rootOpts.localConfigFile)
 	if err != nil {
 		return nil, err
 	}
-	localConfigBytes = config.Bytes()
-	return localConfigBytes, nil
+	rootOpts.localConfigBytes = config.Bytes()
+	return rootOpts.localConfigBytes, nil
 }
 
-func checkLocalConfigDigest(expected string) error {
-	data, err := readLocalConfig()
+func checkLocalConfigDigest(rootOpts *rootOptions, expected string) error {
+	data, err := readLocalConfig(rootOpts)
 	if err != nil {
 		return err
 	}

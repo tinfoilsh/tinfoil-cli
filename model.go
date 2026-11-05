@@ -30,39 +30,21 @@ type modelWrapJobView struct {
 }
 
 var (
-	modelWrapHost        string
-	modelWrapCommit      string
-	modelWrapHFToken     string
-	modelWrapHFTokenFile string
-	modelWrapWait        bool
-
-	modelListLimit int
-
-	modelStatusWait bool
-	modelStatusLogs bool
-
-	modelUpdateHost        string
-	modelUpdateCommit      string
-	modelUpdateHFToken     string
-	modelUpdateHFTokenFile string
-	modelUpdateWait        bool
-
-	// modelWrapPollInterval is shortened by tests.
 	modelWrapPollInterval = 10 * time.Second
 )
 
-func newModelCommand() *cobra.Command {
+func newModelCommand(outputOpts *outputOptions) *cobra.Command {
 	modelCmd := &cobra.Command{
 		Use:     "model",
 		Aliases: []string{"models"},
 		Short:   "Prepare verified model weights for containers",
 	}
-	modelCmd.PersistentFlags().StringVarP(&outputFormat, "output", "o", "table", "Output format: table or json")
-	modelCmd.AddCommand(newModelWrapCommand(), newModelUpdateCommand(), newModelListCommand(), newModelStatusCommand(), newModelDeleteCommand())
+	modelCmd.PersistentFlags().StringVarP(&outputOpts.outputFormat, "output", "o", "table", "Output format: table or json")
+	modelCmd.AddCommand(newModelWrapCommand(&modelWrapOptions{}, outputOpts), newModelUpdateCommand(&modelUpdateOptions{}, outputOpts), newModelListCommand(&modelListOptions{}, outputOpts), newModelStatusCommand(&modelStatusOptions{}, outputOpts), newModelDeleteCommand())
 	return modelCmd
 }
 
-func newModelWrapCommand() *cobra.Command {
+func newModelWrapCommand(modelWrapOpts *modelWrapOptions, outputOpts *outputOptions) *cobra.Command {
 	modelWrapCmd := &cobra.Command{
 		Use:   "wrap [owner/model]",
 		Short: "Wrap Hugging Face weights into a verified artifact",
@@ -78,27 +60,27 @@ func newModelWrapCommand() *cobra.Command {
 			}
 			body := map[string]any{
 				"repo": args[0],
-				"host": modelWrapHost,
+				"host": modelWrapOpts.modelWrapHost,
 			}
-			if modelWrapCommit != "" {
-				body["commit"] = modelWrapCommit
+			if modelWrapOpts.modelWrapCommit != "" {
+				body["commit"] = modelWrapOpts.modelWrapCommit
 			}
 			if token != "" {
 				body["hf_token"] = token
 			}
-			return runModelWrapJob(client, body, modelWrapWait, nil)
+			return runModelWrapJob(outputOpts, client, body, modelWrapOpts.modelWrapWait, nil)
 		},
 	}
-	modelWrapCmd.Flags().StringVar(&modelWrapHost, "host", "", "Host to wrap the model on (see 'tinfoil container hosts') [required]")
-	modelWrapCmd.Flags().StringVar(&modelWrapCommit, "commit", "", "Hugging Face commit SHA to pin (defaults to the repo's latest commit)")
-	modelWrapCmd.Flags().StringVar(&modelWrapHFToken, "hf-token", "", "Hugging Face token (visible in ps; prefer --hf-token-file or stdin)")
-	modelWrapCmd.Flags().StringVar(&modelWrapHFTokenFile, "hf-token-file", "", "Read the Hugging Face token from this file (use - for stdin)")
-	modelWrapCmd.Flags().BoolVar(&modelWrapWait, "wait", false, "Poll until the wrap job finishes and print the config block")
+	modelWrapCmd.Flags().StringVar(&modelWrapOpts.modelWrapHost, "host", "", "Host to wrap the model on (see 'tinfoil container hosts') [required]")
+	modelWrapCmd.Flags().StringVar(&modelWrapOpts.modelWrapCommit, "commit", "", "Hugging Face commit SHA to pin (defaults to the repo's latest commit)")
+	modelWrapCmd.Flags().StringVar(&modelWrapOpts.modelWrapHFToken, "hf-token", "", "Hugging Face token (visible in ps; prefer --hf-token-file or stdin)")
+	modelWrapCmd.Flags().StringVar(&modelWrapOpts.modelWrapHFTokenFile, "hf-token-file", "", "Read the Hugging Face token from this file (use - for stdin)")
+	modelWrapCmd.Flags().BoolVar(&modelWrapOpts.modelWrapWait, "wait", false, "Poll until the wrap job finishes and print the config block")
 	_ = modelWrapCmd.MarkFlagRequired("host")
 	return modelWrapCmd
 }
 
-func newModelUpdateCommand() *cobra.Command {
+func newModelUpdateCommand(modelUpdateOpts *modelUpdateOptions, outputOpts *outputOptions) *cobra.Command {
 	modelUpdateCmd := &cobra.Command{
 		Use:   "update [owner/model]",
 		Short: "Wrap a newer revision of a previously wrapped model",
@@ -116,22 +98,22 @@ release, then delete the old wrap job.`,
 			}
 			repo := args[0]
 
-			previous, err := latestCompleteModelWrap(client, repo, modelUpdateHost)
+			previous, err := latestCompleteModelWrap(client, repo, modelUpdateOpts.modelUpdateHost)
 			if err != nil {
 				return err
 			}
 			if previous == nil {
-				return fmt.Errorf("no completed wrap job for %s on %s among the %d most recent jobs — start one with `tinfoil model wrap`", repo, modelUpdateHost, modelWrapSearchWindow)
+				return fmt.Errorf("no completed wrap job for %s on %s among the %d most recent jobs — start one with `tinfoil model wrap`", repo, modelUpdateOpts.modelUpdateHost, modelWrapSearchWindow)
 			}
 
-			target := modelUpdateCommit
+			target := modelUpdateOpts.modelUpdateCommit
 			if target == "" {
 				if target, err = resolveLatestHFCommit(client, repo, token); err != nil {
 					return err
 				}
 			}
 			if target == previous.Commit {
-				if outputFormat == "json" {
+				if outputOpts.outputFormat == "json" {
 					return printJSON(previous)
 				}
 				fmt.Printf("%s on %s is already at commit %s (job %s).\n", repo, previous.Host, target, previous.JobID)
@@ -140,32 +122,32 @@ release, then delete the old wrap job.`,
 
 			body := map[string]any{
 				"repo":   repo,
-				"host":   modelUpdateHost,
+				"host":   modelUpdateOpts.modelUpdateHost,
 				"commit": target,
 			}
 			if token != "" {
 				body["hf_token"] = token
 			}
-			if outputFormat != "json" {
+			if outputOpts.outputFormat != "json" {
 				fmt.Printf("Updating %s on %s: %s -> %s\n\n", repo, previous.Host, shortCommit(previous.Commit), shortCommit(target))
 			}
-			return runModelWrapJob(client, body, modelUpdateWait, func(job modelWrapJobView) {
-				if outputFormat != "json" && job.Status == "complete" {
+			return runModelWrapJob(outputOpts, client, body, modelUpdateOpts.modelUpdateWait, func(job modelWrapJobView) {
+				if outputOpts.outputFormat != "json" && job.Status == "complete" {
 					fmt.Printf("\nOnce the new config is released and deployed, reclaim the previous artifact with:\n  tinfoil model delete %s %s\n", previous.Host, previous.JobID)
 				}
 			})
 		},
 	}
-	modelUpdateCmd.Flags().StringVar(&modelUpdateHost, "host", "", "Host the model was wrapped on (see 'tinfoil container hosts') [required]")
-	modelUpdateCmd.Flags().StringVar(&modelUpdateCommit, "commit", "", "Hugging Face commit SHA to update to (defaults to the repo's latest commit)")
-	modelUpdateCmd.Flags().StringVar(&modelUpdateHFToken, "hf-token", "", "Hugging Face token (visible in ps; prefer --hf-token-file or stdin)")
-	modelUpdateCmd.Flags().StringVar(&modelUpdateHFTokenFile, "hf-token-file", "", "Read the Hugging Face token from this file (use - for stdin)")
-	modelUpdateCmd.Flags().BoolVar(&modelUpdateWait, "wait", false, "Poll until the wrap job finishes and print the config block")
+	modelUpdateCmd.Flags().StringVar(&modelUpdateOpts.modelUpdateHost, "host", "", "Host the model was wrapped on (see 'tinfoil container hosts') [required]")
+	modelUpdateCmd.Flags().StringVar(&modelUpdateOpts.modelUpdateCommit, "commit", "", "Hugging Face commit SHA to update to (defaults to the repo's latest commit)")
+	modelUpdateCmd.Flags().StringVar(&modelUpdateOpts.modelUpdateHFToken, "hf-token", "", "Hugging Face token (visible in ps; prefer --hf-token-file or stdin)")
+	modelUpdateCmd.Flags().StringVar(&modelUpdateOpts.modelUpdateHFTokenFile, "hf-token-file", "", "Read the Hugging Face token from this file (use - for stdin)")
+	modelUpdateCmd.Flags().BoolVar(&modelUpdateOpts.modelUpdateWait, "wait", false, "Poll until the wrap job finishes and print the config block")
 	_ = modelUpdateCmd.MarkFlagRequired("host")
 	return modelUpdateCmd
 }
 
-func newModelListCommand() *cobra.Command {
+func newModelListCommand(modelListOpts *modelListOptions, outputOpts *outputOptions) *cobra.Command {
 	modelListCmd := &cobra.Command{
 		Use:     "list",
 		Aliases: []string{"ls"},
@@ -176,21 +158,21 @@ func newModelListCommand() *cobra.Command {
 				return err
 			}
 			var query url.Values
-			if modelListLimit > 0 {
-				query = url.Values{"limit": []string{strconv.Itoa(modelListLimit)}}
+			if modelListOpts.modelListLimit > 0 {
+				query = url.Values{"limit": []string{strconv.Itoa(modelListOpts.modelListLimit)}}
 			}
 			var list []modelWrapJobView
 			if _, err := client.do("GET", "/api/models/wrap", query, nil, &list); err != nil {
 				return err
 			}
-			return renderModelWrapJobs(list)
+			return renderModelWrapJobs(outputOpts, list)
 		},
 	}
-	modelListCmd.Flags().IntVar(&modelListLimit, "limit", 0, "Maximum number of jobs to list (server default 20, max 200)")
+	modelListCmd.Flags().IntVar(&modelListOpts.modelListLimit, "limit", 0, "Maximum number of jobs to list (server default 20, max 200)")
 	return modelListCmd
 }
 
-func newModelStatusCommand() *cobra.Command {
+func newModelStatusCommand(modelStatusOpts *modelStatusOptions, outputOpts *outputOptions) *cobra.Command {
 	modelStatusCmd := &cobra.Command{
 		Use:     "status [host] [job-id]",
 		Aliases: []string{"get"},
@@ -201,15 +183,15 @@ func newModelStatusCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			job, err := fetchModelWrapJob(client, args[0], args[1], modelStatusWait)
+			job, err := fetchModelWrapJob(client, args[0], args[1], modelStatusOpts.modelStatusWait)
 			if err != nil {
 				return err
 			}
-			return finishModelWrapJob(job, modelStatusLogs, modelStatusWait)
+			return finishModelWrapJob(outputOpts, job, modelStatusOpts.modelStatusLogs, modelStatusOpts.modelStatusWait)
 		},
 	}
-	modelStatusCmd.Flags().BoolVar(&modelStatusWait, "wait", false, "Poll until the wrap job finishes")
-	modelStatusCmd.Flags().BoolVar(&modelStatusLogs, "logs", false, "Include the wrap job logs")
+	modelStatusCmd.Flags().BoolVar(&modelStatusOpts.modelStatusWait, "wait", false, "Poll until the wrap job finishes")
+	modelStatusCmd.Flags().BoolVar(&modelStatusOpts.modelStatusLogs, "logs", false, "Include the wrap job logs")
 	return modelStatusCmd
 }
 
@@ -287,8 +269,8 @@ func fetchModelWrapJob(client *cpClient, host, jobID string, wait bool) (modelWr
 
 // finishModelWrapJob renders the job and reports a waited-on failure as an
 // error so the command exits non-zero.
-func finishModelWrapJob(job modelWrapJobView, showLogs, waited bool) error {
-	if err := renderModelWrapJob(job, showLogs); err != nil {
+func finishModelWrapJob(outputOpts *outputOptions, job modelWrapJobView, showLogs, waited bool) error {
+	if err := renderModelWrapJob(outputOpts, job, showLogs); err != nil {
 		return err
 	}
 	if waited && job.Status == "failed" {
@@ -300,7 +282,7 @@ func finishModelWrapJob(job modelWrapJobView, showLogs, waited bool) error {
 // runModelWrapJob submits a wrap job, optionally polls it to a terminal
 // status, and finishes it, running epilogue on the rendered job. A waited-on
 // failure skips epilogue, which only concerns completed jobs.
-func runModelWrapJob(client *cpClient, body map[string]any, wait bool, epilogue func(modelWrapJobView)) error {
+func runModelWrapJob(outputOpts *outputOptions, client *cpClient, body map[string]any, wait bool, epilogue func(modelWrapJobView)) error {
 	var job modelWrapJobView
 	if _, err := client.do("POST", "/api/models/wrap", nil, body, &job); err != nil {
 		return err
@@ -312,7 +294,7 @@ func runModelWrapJob(client *cpClient, body map[string]any, wait bool, epilogue 
 		}
 		job = *finished
 	}
-	if err := finishModelWrapJob(job, false, wait); err != nil {
+	if err := finishModelWrapJob(outputOpts, job, false, wait); err != nil {
 		return err
 	}
 	if epilogue != nil {
@@ -421,8 +403,8 @@ func modelMPK(job modelWrapJobView) string {
 	return fmt.Sprintf("%s_%d_%s", job.RootHash, job.Offset, job.VerityUUID)
 }
 
-func renderModelWrapJob(job modelWrapJobView, showLogs bool) error {
-	if outputFormat == "json" {
+func renderModelWrapJob(outputOpts *outputOptions, job modelWrapJobView, showLogs bool) error {
+	if outputOpts.outputFormat == "json" {
 		return printJSON(job)
 	}
 	fmt.Printf("Job ID:   %s\n", job.JobID)
@@ -461,8 +443,8 @@ func renderModelWrapJob(job modelWrapJobView, showLogs bool) error {
 	return nil
 }
 
-func renderModelWrapJobs(list []modelWrapJobView) error {
-	if outputFormat == "json" {
+func renderModelWrapJobs(outputOpts *outputOptions, list []modelWrapJobView) error {
+	if outputOpts.outputFormat == "json" {
 		return printJSON(list)
 	}
 	if len(list) == 0 {

@@ -9,6 +9,8 @@ import (
 )
 
 func TestRepoSecretCommandsUseScopedEndpoints(t *testing.T) {
+	commandState := newCommandFixture()
+
 	type requestExpectation struct {
 		method string
 		path   string
@@ -76,26 +78,26 @@ func TestRepoSecretCommandsUseScopedEndpoints(t *testing.T) {
 	}))
 	defer server.Close()
 
-	configureRepoCommandTest(t, server.URL)
-	configureRepoSecretValueTest(t)
+	configureRepoCommandTest(commandState, t, server.URL)
+	configureRepoSecretValueTest(commandState, t)
 
-	if err := repoSecretListCmd.RunE(repoSecretListCmd, []string{"acme/app"}); err != nil {
+	if err := commandState.repoSecretListCmd.RunE(commandState.repoSecretListCmd, []string{"acme/app"}); err != nil {
 		t.Fatalf("list repository secrets: %v", err)
 	}
-	if err := repoSecretGetCmd.RunE(repoSecretGetCmd, []string{"acme/app", "DATABASE_URL"}); err != nil {
+	if err := commandState.repoSecretGetCmd.RunE(commandState.repoSecretGetCmd, []string{"acme/app", "DATABASE_URL"}); err != nil {
 		t.Fatalf("get repository secret: %v", err)
 	}
-	secretValue = "create-value"
-	repoSecretCreateCmd.Flags().Lookup("value").Changed = true
-	if err := repoSecretCreateCmd.RunE(repoSecretCreateCmd, []string{"acme/app", "DATABASE_URL"}); err != nil {
+	commandState.secretValueOpts.secretValue = "create-value"
+	commandState.repoSecretCreateCmd.Flags().Lookup("value").Changed = true
+	if err := commandState.repoSecretCreateCmd.RunE(commandState.repoSecretCreateCmd, []string{"acme/app", "DATABASE_URL"}); err != nil {
 		t.Fatalf("create repository secret: %v", err)
 	}
-	secretValue = "update-value"
-	repoSecretSetCmd.Flags().Lookup("value").Changed = true
-	if err := repoSecretSetCmd.RunE(repoSecretSetCmd, []string{"acme/app", "DATABASE_URL"}); err != nil {
+	commandState.secretValueOpts.secretValue = "update-value"
+	commandState.repoSecretSetCmd.Flags().Lookup("value").Changed = true
+	if err := commandState.repoSecretSetCmd.RunE(commandState.repoSecretSetCmd, []string{"acme/app", "DATABASE_URL"}); err != nil {
 		t.Fatalf("update repository secret: %v", err)
 	}
-	if err := repoSecretDeleteCmd.RunE(repoSecretDeleteCmd, []string{"acme/app", "DATABASE_URL"}); err != nil {
+	if err := commandState.repoSecretDeleteCmd.RunE(commandState.repoSecretDeleteCmd, []string{"acme/app", "DATABASE_URL"}); err != nil {
 		t.Fatalf("delete repository secret: %v", err)
 	}
 	if requestIndex != len(expectations) {
@@ -127,27 +129,29 @@ func TestRepoSecretScopeAndPathEscaping(t *testing.T) {
 }
 
 func TestRepoSecretRejectsInvalidRepository(t *testing.T) {
-	if err := repoSecretListCmd.RunE(repoSecretListCmd, []string{"missing-owner"}); err == nil {
+	commandState := newCommandFixture()
+
+	if err := commandState.repoSecretListCmd.RunE(commandState.repoSecretListCmd, []string{"missing-owner"}); err == nil {
 		t.Fatal("expected repository validation error")
 	}
 }
 
-func configureRepoSecretValueTest(t *testing.T) {
+func configureRepoSecretValueTest(commandState *commandFixture, t *testing.T) {
 	t.Helper()
-	previousValue := secretValue
-	previousFile := secretValueFile
-	createValueChanged := repoSecretCreateCmd.Flags().Lookup("value").Changed
-	createFileChanged := repoSecretCreateCmd.Flags().Lookup("value-file").Changed
-	setValueChanged := repoSecretSetCmd.Flags().Lookup("value").Changed
-	setFileChanged := repoSecretSetCmd.Flags().Lookup("value-file").Changed
-	secretValue = ""
-	secretValueFile = ""
+	previousValue := commandState.secretValueOpts.secretValue
+	previousFile := commandState.secretValueOpts.secretValueFile
+	createValueChanged := commandState.repoSecretCreateCmd.Flags().Lookup("value").Changed
+	createFileChanged := commandState.repoSecretCreateCmd.Flags().Lookup("value-file").Changed
+	setValueChanged := commandState.repoSecretSetCmd.Flags().Lookup("value").Changed
+	setFileChanged := commandState.repoSecretSetCmd.Flags().Lookup("value-file").Changed
+	commandState.secretValueOpts.secretValue = ""
+	commandState.secretValueOpts.secretValueFile = ""
 	t.Cleanup(func() {
-		secretValue = previousValue
-		secretValueFile = previousFile
-		repoSecretCreateCmd.Flags().Lookup("value").Changed = createValueChanged
-		repoSecretCreateCmd.Flags().Lookup("value-file").Changed = createFileChanged
-		repoSecretSetCmd.Flags().Lookup("value").Changed = setValueChanged
-		repoSecretSetCmd.Flags().Lookup("value-file").Changed = setFileChanged
+		commandState.secretValueOpts.secretValue = previousValue
+		commandState.secretValueOpts.secretValueFile = previousFile
+		commandState.repoSecretCreateCmd.Flags().Lookup("value").Changed = createValueChanged
+		commandState.repoSecretCreateCmd.Flags().Lookup("value-file").Changed = createFileChanged
+		commandState.repoSecretSetCmd.Flags().Lookup("value").Changed = setValueChanged
+		commandState.repoSecretSetCmd.Flags().Lookup("value-file").Changed = setFileChanged
 	})
 }

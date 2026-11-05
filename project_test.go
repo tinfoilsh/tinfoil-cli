@@ -13,6 +13,8 @@ import (
 )
 
 func TestProjectOutputLabelsDeployingAndPreservesJSONField(t *testing.T) {
+	commandState := newCommandFixture()
+
 	deployment := projectView{
 		ID:             "deployment-1",
 		Repo:           "acme/app",
@@ -21,18 +23,18 @@ func TestProjectOutputLabelsDeployingAndPreservesJSONField(t *testing.T) {
 		FailedCount:    3,
 	}
 
-	previousOutput := outputFormat
-	t.Cleanup(func() { outputFormat = previousOutput })
+	previousOutput := commandState.outputOpts.outputFormat
+	t.Cleanup(func() { commandState.outputOpts.outputFormat = previousOutput })
 
 	for _, tt := range []struct {
 		name string
 		run  func() error
 	}{
-		{name: "get", run: func() error { return renderProject(deployment) }},
-		{name: "list", run: func() error { return renderProjects([]projectView{deployment}) }},
+		{name: "get", run: func() error { return renderProject(commandState.outputOpts, deployment) }},
+		{name: "list", run: func() error { return renderProjects(commandState.outputOpts, []projectView{deployment}) }},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			outputFormat = "table"
+			commandState.outputOpts.outputFormat = "table"
 			output, err := captureTestStdout(tt.run)
 			if err != nil {
 				t.Fatalf("render human output: %v", err)
@@ -55,7 +57,7 @@ func TestProjectOutputLabelsDeployingAndPreservesJSONField(t *testing.T) {
 				}
 			}
 
-			outputFormat = "json"
+			commandState.outputOpts.outputFormat = "json"
 			output, err = captureTestStdout(tt.run)
 			if err != nil {
 				t.Fatalf("render JSON output: %v", err)
@@ -93,6 +95,8 @@ func TestResolveDeploymentMatchesIDAndRepository(t *testing.T) {
 }
 
 func TestProjectSettingsUpdatesDefaultStaging(t *testing.T) {
+	commandState := newCommandFixture()
+
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/containers/projects":
@@ -114,15 +118,17 @@ func TestProjectSettingsUpdatesDefaultStaging(t *testing.T) {
 	}))
 	defer server.Close()
 
-	configureProjectCommandTest(t, server.URL)
-	projectSettingsHoldByDefault = "true"
+	configureProjectCommandTest(commandState, t, server.URL)
+	commandState.projectSettingsOpts.projectSettingsHoldByDefault = "true"
 
-	if err := projectSettingsCmd.RunE(projectSettingsCmd, []string{"acme/app"}); err != nil {
+	if err := commandState.projectSettingsCmd.RunE(commandState.projectSettingsCmd, []string{"acme/app"}); err != nil {
 		t.Fatalf("run deployment settings: %v", err)
 	}
 }
 
 func TestProjectUpdateMarkLatestReleaseRequestBodies(t *testing.T) {
+	commandState := newCommandFixture()
+
 	tests := []struct {
 		name              string
 		markLatestRelease string
@@ -190,16 +196,16 @@ func TestProjectUpdateMarkLatestReleaseRequestBodies(t *testing.T) {
 			}))
 			defer server.Close()
 
-			configureProjectCommandTest(t, server.URL)
-			projectUpdateTag = "v1.2.3"
-			projectUpdateHold = "true"
-			projectUpdateMarkLatestRelease = tt.markLatestRelease
-			projectUpdateInstanceIDs = []string{"container-1"}
-			projectUpdateCmd.Flags().Lookup("hold").Changed = true
-			projectUpdateCmd.Flags().Lookup("mark-latest").Changed = tt.changed
+			configureProjectCommandTest(commandState, t, server.URL)
+			commandState.projectUpdateOpts.projectUpdateTag = "v1.2.3"
+			commandState.projectUpdateOpts.projectUpdateHold = "true"
+			commandState.projectUpdateOpts.projectUpdateMarkLatestRelease = tt.markLatestRelease
+			commandState.projectUpdateOpts.projectUpdateInstanceIDs = []string{"container-1"}
+			commandState.projectUpdateCmd.Flags().Lookup("hold").Changed = true
+			commandState.projectUpdateCmd.Flags().Lookup("mark-latest").Changed = tt.changed
 
 			_, err := captureTestStdout(func() error {
-				return projectUpdateCmd.RunE(projectUpdateCmd, []string{"acme/app"})
+				return commandState.projectUpdateCmd.RunE(commandState.projectUpdateCmd, []string{"acme/app"})
 			})
 			if tt.wantErr == "" {
 				if err != nil {
@@ -216,14 +222,16 @@ func TestProjectUpdateMarkLatestReleaseRequestBodies(t *testing.T) {
 }
 
 func TestLifecycleCommandSurface(t *testing.T) {
-	if got, want := containerDeployCmd.Short, "Deploy a stopped or failed container"; got != want {
+	commandState := newCommandFixture()
+
+	if got, want := commandState.containerDeployCmd.Short, "Deploy a stopped or failed container"; got != want {
 		t.Fatalf("container deploy help = %q, want %q", got, want)
 	}
-	if got, want := containerUpdateCmd.Short, "Update a running container to a new tag or configuration"; got != want {
+	if got, want := commandState.containerUpdateCmd.Short, "Update a running container to a new tag or configuration"; got != want {
 		t.Fatalf("container update help = %q, want %q", got, want)
 	}
 
-	for _, command := range containerCmd.Commands() {
+	for _, command := range commandState.containerCmd.Commands() {
 		switch command.Name() {
 		case "group", "start", "relaunch", "accept":
 			t.Fatalf("container %s command is registered", command.Name())
@@ -232,12 +240,12 @@ func TestLifecycleCommandSurface(t *testing.T) {
 			t.Fatalf("container %s has --debug-mode", command.Name())
 		}
 	}
-	if len(containerUpdateCmd.Commands()) != 0 {
+	if len(commandState.containerUpdateCmd.Commands()) != 0 {
 		t.Fatal("container update is a namespace instead of an action")
 	}
 	for _, name := range []string{"promote", "cancel"} {
 		found := false
-		for _, command := range containerCmd.Commands() {
+		for _, command := range commandState.containerCmd.Commands() {
 			if command.Name() == name {
 				found = true
 			}
@@ -246,62 +254,64 @@ func TestLifecycleCommandSurface(t *testing.T) {
 			t.Fatalf("container %s is not a top-level command", name)
 		}
 	}
-	if containerUpdateCmd.Flags().Lookup("host") != nil {
+	if commandState.containerUpdateCmd.Flags().Lookup("host") != nil {
 		t.Fatal("container update has --host; hosts change through stop and deploy")
 	}
-	if containerUpdateCmd.Flags().Lookup("yes") == nil || projectUpdateCmd.Flags().Lookup("yes") == nil {
+	if commandState.containerUpdateCmd.Flags().Lookup("yes") == nil || commandState.projectUpdateCmd.Flags().Lookup("yes") == nil {
 		t.Fatal("update commands are missing --yes for downtime confirmation")
 	}
-	if containerDeleteCmd.Flags().Lookup("yes") == nil {
+	if commandState.containerDeleteCmd.Flags().Lookup("yes") == nil {
 		t.Fatal("container delete does not have --yes")
 	}
-	if rootCmd.PersistentFlags().Lookup("host") != nil || rootCmd.PersistentFlags().Lookup("enclave") == nil {
+	if commandState.rootCmd.PersistentFlags().Lookup("host") != nil || commandState.rootCmd.PersistentFlags().Lookup("enclave") == nil {
 		t.Fatal("root enclave flag is not --enclave")
 	}
-	for _, command := range sandboxCmd.Commands() {
+	for _, command := range commandState.sandboxCmd.Commands() {
 		switch command.Name() {
 		case "destroy", "accept":
 			t.Fatalf("sandbox %s command is registered", command.Name())
 		}
 	}
-	for _, command := range volumeCmd.Commands() {
+	for _, command := range commandState.volumeCmd.Commands() {
 		if command.Name() == "update" {
 			t.Fatal("volume update command is registered; renames use volume rename")
 		}
 	}
-	for _, command := range projectCmd.Commands() {
+	for _, command := range commandState.projectCmd.Commands() {
 		if command.Name() == "group" {
 			t.Fatal("deployment group command is registered")
 		}
 	}
 
-	if containerCreateCmd.Flags().Lookup("hold") != nil {
+	if commandState.containerCreateCmd.Flags().Lookup("hold") != nil {
 		t.Fatal("container create has --hold")
 	}
-	if containerDeployCmd.Flags().Lookup("hold") != nil {
+	if commandState.containerDeployCmd.Flags().Lookup("hold") != nil {
 		t.Fatal("container deploy has --hold")
 	}
-	if containerCreateCmd.Flags().Lookup("group-name") != nil || containerCreateCmd.Flags().Lookup("group-order") != nil {
+	if commandState.containerCreateCmd.Flags().Lookup("group-name") != nil || commandState.containerCreateCmd.Flags().Lookup("group-order") != nil {
 		t.Fatal("container create has grouping flags")
 	}
-	if containerCreateCmd.Flags().Lookup("display-order") == nil {
+	if commandState.containerCreateCmd.Flags().Lookup("display-order") == nil {
 		t.Fatal("container create does not have --display-order")
 	}
-	if containerUpdateCmd.Flags().Lookup("hold") == nil {
+	if commandState.containerUpdateCmd.Flags().Lookup("hold") == nil {
 		t.Fatal("container update does not have --hold")
 	}
-	if projectUpdateCmd.Flags().Lookup("hold") == nil || projectUpdateCmd.Flags().Lookup("mark-latest") == nil {
+	if commandState.projectUpdateCmd.Flags().Lookup("hold") == nil || commandState.projectUpdateCmd.Flags().Lookup("mark-latest") == nil {
 		t.Fatal("project update is missing hold or mark-latest flags")
 	}
-	if projectSettingsCmd.Flags().Lookup("hold-by-default") == nil {
+	if commandState.projectSettingsCmd.Flags().Lookup("hold-by-default") == nil {
 		t.Fatal("project settings does not have --hold-by-default")
 	}
 }
 
 func TestProjectUpdateResultsFailForIncompleteUpdates(t *testing.T) {
-	previousOutput := outputFormat
+	commandState := newCommandFixture()
+
+	previousOutput := commandState.outputOpts.outputFormat
 	t.Cleanup(func() {
-		outputFormat = previousOutput
+		commandState.outputOpts.outputFormat = previousOutput
 	})
 
 	results := []projectInstanceResult{
@@ -310,50 +320,50 @@ func TestProjectUpdateResultsFailForIncompleteUpdates(t *testing.T) {
 	}
 	for _, format := range []string{"table", "json"} {
 		t.Run(format, func(t *testing.T) {
-			outputFormat = format
-			if err := renderProjectUpdateResults(results); err == nil {
+			commandState.outputOpts.outputFormat = format
+			if err := renderProjectUpdateResults(commandState.outputOpts, results); err == nil {
 				t.Fatal("expected incomplete deployment update error")
 			}
 		})
 	}
 }
 
-func configureProjectCommandTest(t *testing.T, serverURL string) {
+func configureProjectCommandTest(commandState *commandFixture, t *testing.T, serverURL string) {
 	t.Helper()
 	t.Setenv(envCPURL, serverURL)
 	t.Setenv(envAdminKey, "admin_test")
 	t.Setenv(envConfigPath, filepath.Join(t.TempDir(), "missing-config.json"))
 
-	previousOutput := outputFormat
-	previousSettingsDefaultStaging := projectSettingsHoldByDefault
-	previousUpdateTag := projectUpdateTag
-	previousUpdateHold := projectUpdateHold
-	previousUpdateMarkLatestRelease := projectUpdateMarkLatestRelease
-	previousUpdateInstanceIDs := projectUpdateInstanceIDs
-	previousUpdateYes := projectUpdateYes
-	holdFlag := projectUpdateCmd.Flags().Lookup("hold")
-	markLatestReleaseFlag := projectUpdateCmd.Flags().Lookup("mark-latest")
+	previousOutput := commandState.outputOpts.outputFormat
+	previousSettingsDefaultStaging := commandState.projectSettingsOpts.projectSettingsHoldByDefault
+	previousUpdateTag := commandState.projectUpdateOpts.projectUpdateTag
+	previousUpdateHold := commandState.projectUpdateOpts.projectUpdateHold
+	previousUpdateMarkLatestRelease := commandState.projectUpdateOpts.projectUpdateMarkLatestRelease
+	previousUpdateInstanceIDs := commandState.projectUpdateOpts.projectUpdateInstanceIDs
+	previousUpdateYes := commandState.projectUpdateOpts.projectUpdateYes
+	holdFlag := commandState.projectUpdateCmd.Flags().Lookup("hold")
+	markLatestReleaseFlag := commandState.projectUpdateCmd.Flags().Lookup("mark-latest")
 	previousHoldChanged := holdFlag.Changed
 	previousMarkLatestReleaseChanged := markLatestReleaseFlag.Changed
 
-	outputFormat = "json"
-	projectSettingsHoldByDefault = ""
-	projectUpdateTag = ""
-	projectUpdateHold = ""
-	projectUpdateMarkLatestRelease = ""
-	projectUpdateInstanceIDs = nil
-	projectUpdateYes = false
+	commandState.outputOpts.outputFormat = "json"
+	commandState.projectSettingsOpts.projectSettingsHoldByDefault = ""
+	commandState.projectUpdateOpts.projectUpdateTag = ""
+	commandState.projectUpdateOpts.projectUpdateHold = ""
+	commandState.projectUpdateOpts.projectUpdateMarkLatestRelease = ""
+	commandState.projectUpdateOpts.projectUpdateInstanceIDs = nil
+	commandState.projectUpdateOpts.projectUpdateYes = false
 	holdFlag.Changed = false
 	markLatestReleaseFlag.Changed = false
 
 	t.Cleanup(func() {
-		outputFormat = previousOutput
-		projectSettingsHoldByDefault = previousSettingsDefaultStaging
-		projectUpdateTag = previousUpdateTag
-		projectUpdateHold = previousUpdateHold
-		projectUpdateMarkLatestRelease = previousUpdateMarkLatestRelease
-		projectUpdateInstanceIDs = previousUpdateInstanceIDs
-		projectUpdateYes = previousUpdateYes
+		commandState.outputOpts.outputFormat = previousOutput
+		commandState.projectSettingsOpts.projectSettingsHoldByDefault = previousSettingsDefaultStaging
+		commandState.projectUpdateOpts.projectUpdateTag = previousUpdateTag
+		commandState.projectUpdateOpts.projectUpdateHold = previousUpdateHold
+		commandState.projectUpdateOpts.projectUpdateMarkLatestRelease = previousUpdateMarkLatestRelease
+		commandState.projectUpdateOpts.projectUpdateInstanceIDs = previousUpdateInstanceIDs
+		commandState.projectUpdateOpts.projectUpdateYes = previousUpdateYes
 		holdFlag.Changed = previousHoldChanged
 		markLatestReleaseFlag.Changed = previousMarkLatestReleaseChanged
 	})
@@ -405,6 +415,8 @@ func captureTestStdout(run func() error) ([]byte, error) {
 }
 
 func TestProjectUpdateRefusesHoldForReplaceInstances(t *testing.T) {
+	commandState := newCommandFixture()
+
 	var posts atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
@@ -421,13 +433,13 @@ func TestProjectUpdateRefusesHoldForReplaceInstances(t *testing.T) {
 	}))
 	defer server.Close()
 
-	configureProjectCommandTest(t, server.URL)
-	projectUpdateTag = "v2"
-	projectUpdateHold = "true"
-	projectUpdateCmd.Flags().Lookup("hold").Changed = true
+	configureProjectCommandTest(commandState, t, server.URL)
+	commandState.projectUpdateOpts.projectUpdateTag = "v2"
+	commandState.projectUpdateOpts.projectUpdateHold = "true"
+	commandState.projectUpdateCmd.Flags().Lookup("hold").Changed = true
 
 	_, err := captureTestStdout(func() error {
-		return projectUpdateCmd.RunE(projectUpdateCmd, []string{"acme/app"})
+		return commandState.projectUpdateCmd.RunE(commandState.projectUpdateCmd, []string{"acme/app"})
 	})
 	if err == nil || !strings.Contains(err.Error(), "holding for review is not available for app (strategy: replace") {
 		t.Fatalf("error = %v", err)

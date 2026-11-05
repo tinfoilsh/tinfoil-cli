@@ -9,8 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/spf13/cobra"
-	"github.com/spf13/pflag"
+	"github.com/stretchr/testify/require"
 )
 
 const updatePlanFixture = `{"read_only":true,"instance_id":"61bd4a3e-5b48-4320-9215-0c7a7f974979","name":"app","current":{"tag":"v1","cpus":2,"memory_mb":4096,"gpus":0},"target":{"tag":"v2","cpus":4,"memory_mb":8192,"gpus":0},"update_strategy":"blue_green","downtime_required":false,"hold":false,"hold_source":"project","hold_available":true,"mark_latest_release":true,"configuration_changes":{"variables":{"added":[],"changed":["MODE"],"removed":[]},"secrets":{"added":[],"changed":[],"removed":[]},"ssh_keys":{"added":[],"changed":[],"removed":[]},"settings":[],"secrets_refreshed":["TOKEN"]},"volume_data":"retained","cost_estimate":{"available":false,"reason":"a reliable account-specific update cost estimate is unavailable"}}`
@@ -63,6 +62,8 @@ func TestHumanUpdatePlanShowsChangesWithoutValues(t *testing.T) {
 }
 
 func TestUpdatePlanDoesNotEchoSubmittedVariableValues(t *testing.T) {
+	commandState := newCommandFixture()
+
 	var bodies []map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet {
@@ -81,12 +82,12 @@ func TestUpdatePlanDoesNotEchoSubmittedVariableValues(t *testing.T) {
 		}
 	}))
 	defer server.Close()
-	configureContainerPromotionTest(t, server.URL)
+	configureContainerPromotionTest(commandState, t, server.URL)
 	var stdout []byte
 	stderr, err := captureTestStderr(func() error {
 		var err error
 		stdout, err = captureTestStdout(func() error {
-			return executeLifecycleCLI(t, "container", "update", testContainerID, "--variable", "MODE=private-value-never-print", "--no-wait", "--yes", "-o", "table")
+			return executeLifecycleCLI(commandState, t, "container", "update", testContainerID, "--variable", "MODE=private-value-never-print", "--no-wait", "--yes", "-o", "table")
 		})
 		return err
 	})
@@ -110,6 +111,8 @@ func TestUpdatePlanDoesNotEchoSubmittedVariableValues(t *testing.T) {
 }
 
 func TestProjectSettingsFullCobraBooleanSyntax(t *testing.T) {
+	commandState := newCommandFixture()
+
 	for _, flag := range []string{"--hold-by-default", "--hold-by-default=true", "--hold-by-default=false"} {
 		t.Run(flag, func(t *testing.T) {
 			var body map[string]bool
@@ -127,8 +130,8 @@ func TestProjectSettingsFullCobraBooleanSyntax(t *testing.T) {
 				io.WriteString(w, `{"id":"project-1","repo":"acme/app"}`)
 			}))
 			defer server.Close()
-			configureProjectCommandTest(t, server.URL)
-			_, err := captureTestStdout(func() error { return executeLifecycleCLI(t, "project", "settings", "acme/app", flag) })
+			configureProjectCommandTest(commandState, t, server.URL)
+			_, err := captureTestStdout(func() error { return executeLifecycleCLI(commandState, t, "project", "settings", "acme/app", flag) })
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -140,6 +143,8 @@ func TestProjectSettingsFullCobraBooleanSyntax(t *testing.T) {
 }
 
 func TestProjectPlanReportsSkippedAndFailedInstances(t *testing.T) {
+	commandState := newCommandFixture()
+
 	for _, failed := range []bool{false, true} {
 		t.Run(boolText(failed), func(t *testing.T) {
 			updates := 0
@@ -176,11 +181,13 @@ func TestProjectPlanReportsSkippedAndFailedInstances(t *testing.T) {
 				}
 			}))
 			defer server.Close()
-			configureProjectCommandTest(t, server.URL)
-			projectUpdateTag = "v2"
-			outputFormat = "table"
+			configureProjectCommandTest(commandState, t, server.URL)
+			commandState.projectUpdateOpts.projectUpdateTag = "v2"
+			commandState.outputOpts.outputFormat = "table"
 			out, err := captureTestStderr(func() error {
-				_, err := captureTestStdout(func() error { return projectUpdateCmd.RunE(projectUpdateCmd, []string{"acme/app"}) })
+				_, err := captureTestStdout(func() error {
+					return commandState.projectUpdateCmd.RunE(commandState.projectUpdateCmd, []string{"acme/app"})
+				})
 				return err
 			})
 			wantUpdates := 1
@@ -205,6 +212,8 @@ func TestProjectPlanReportsSkippedAndFailedInstances(t *testing.T) {
 }
 
 func TestHoldSpaceFalseIsRejectedBeforeRequest(t *testing.T) {
+	commandState := newCommandFixture()
+
 	for _, args := range [][]string{
 		{"container", "update", testContainerID, "--hold", "false"},
 		{"project", "update", "acme/app", "--tag", "v2", "--hold", "false"},
@@ -213,42 +222,34 @@ func TestHoldSpaceFalseIsRejectedBeforeRequest(t *testing.T) {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { t.Error("invalid args made request"); w.WriteHeader(500) }))
 			defer server.Close()
-			configureContainerPromotionTest(t, server.URL)
-			configureProjectCommandTest(t, server.URL)
-			if err := executeLifecycleCLI(t, args...); err == nil {
+			configureContainerPromotionTest(commandState, t, server.URL)
+			configureProjectCommandTest(commandState, t, server.URL)
+			if err := executeLifecycleCLI(commandState, t, args...); err == nil {
 				t.Fatal("space-separated false accepted")
 			}
 		})
 	}
 }
 
-func executeLifecycleCLI(t *testing.T, args ...string) error {
+func executeLifecycleCLI(commandState *commandFixture, t *testing.T, args ...string) error {
 	t.Helper()
-	var reset func(*cobra.Command)
-	reset = func(cmd *cobra.Command) {
-		for _, set := range []*pflag.FlagSet{cmd.Flags(), cmd.PersistentFlags()} {
-			set.VisitAll(func(flag *pflag.Flag) {
-				value, changed := flag.Value.String(), flag.Changed
-				if slice, ok := flag.Value.(pflag.SliceValue); ok {
-					values := append([]string(nil), slice.GetSlice()...)
-					t.Cleanup(func() { _ = slice.Replace(values); flag.Changed = changed })
-				} else {
-					t.Cleanup(func() { _ = flag.Value.Set(value); flag.Changed = changed })
-				}
-				flag.Changed = false
-			})
-		}
-		for _, child := range cmd.Commands() {
-			reset(child)
+	root := newRootCommand()
+	root.SetIn(commandState.rootCmd.InOrStdin())
+	root.SetOut(commandState.rootCmd.OutOrStdout())
+	root.SetErr(commandState.rootCmd.ErrOrStderr())
+	if command, _, err := root.Find(args); err == nil {
+		command.InheritedFlags()
+		if flag := command.Flags().Lookup("output"); flag != nil {
+			require.NoError(t, flag.Value.Set(commandState.outputOpts.outputFormat))
 		}
 	}
-	reset(rootCmd)
-	rootCmd.SetArgs(args)
-	t.Cleanup(func() { rootCmd.SetArgs(nil) })
-	return rootCmd.Execute()
+	root.SetArgs(args)
+	return root.Execute()
 }
 
 func TestUpdatePlanPrecedesMutationThroughCobra(t *testing.T) {
+	commandState := newCommandFixture()
+
 	for _, project := range []bool{false, true} {
 		for _, holdFlag := range []string{"", "--hold", "--hold=true", "--hold=false"} {
 			t.Run(boolText(project)+holdFlag, func(t *testing.T) {
@@ -296,8 +297,8 @@ func TestUpdatePlanPrecedesMutationThroughCobra(t *testing.T) {
 					}
 				}))
 				defer server.Close()
-				configureContainerPromotionTest(t, server.URL)
-				configureProjectCommandTest(t, server.URL)
+				configureContainerPromotionTest(commandState, t, server.URL)
+				configureProjectCommandTest(commandState, t, server.URL)
 				args := []string{"container", "update", testContainerID, "--tag", "v2", "--no-wait", "--yes", "-o", "json"}
 				if project {
 					args = []string{"project", "update", "acme/app", "--tag", "v2", "--yes", "-o", "json"}
@@ -308,7 +309,7 @@ func TestUpdatePlanPrecedesMutationThroughCobra(t *testing.T) {
 				var stdout []byte
 				stderr, err := captureTestStderr(func() error {
 					var err error
-					stdout, err = captureTestStdout(func() error { return executeLifecycleCLI(t, args...) })
+					stdout, err = captureTestStdout(func() error { return executeLifecycleCLI(commandState, t, args...) })
 					return err
 				})
 				if err != nil {
@@ -338,6 +339,8 @@ func TestUpdatePlanPrecedesMutationThroughCobra(t *testing.T) {
 }
 
 func TestUpdatePlanFailurePreventsMutation(t *testing.T) {
+	commandState := newCommandFixture()
+
 	for _, status := range []int{http.StatusForbidden, http.StatusNotFound, http.StatusInternalServerError, http.StatusOK} {
 		t.Run(http.StatusText(status), func(t *testing.T) {
 			posts := 0
@@ -354,8 +357,8 @@ func TestUpdatePlanFailurePreventsMutation(t *testing.T) {
 				io.WriteString(w, `{}`)
 			}))
 			defer server.Close()
-			configureContainerPromotionTest(t, server.URL)
-			if err := containerUpdateCmd.RunE(containerUpdateCmd, []string{testContainerID}); err == nil {
+			configureContainerPromotionTest(commandState, t, server.URL)
+			if err := commandState.containerUpdateCmd.RunE(commandState.containerUpdateCmd, []string{testContainerID}); err == nil {
 				t.Fatal("accepted failed plan")
 			}
 			if posts != 1 {

@@ -15,6 +15,8 @@ type lifecycleTransport func(*http.Request) (*http.Response, error)
 func (f lifecycleTransport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
 func TestFollowDeploymentGeneration(t *testing.T) {
+	commandState := newCommandFixture()
+
 	const pendingCandidate = `"status":"running","current_tag":"same-tag","tinfoild_deployment_id":"old","update_tag":"same-tag","update_deployment_id":"new","update_status":"pending","update_type":"blue_green"`
 	const readyCandidate = `"status":"running","current_tag":"same-tag","tinfoild_deployment_id":"old","update_tag":"same-tag","update_deployment_id":"new","update_status":"ready","update_type":"blue_green"`
 	const promoted = `"status":"running","current_tag":"same-tag","tinfoild_deployment_id":"new","update_deployment_id":null,"update_tag":null`
@@ -61,9 +63,11 @@ func TestFollowDeploymentGeneration(t *testing.T) {
 	} {
 		for _, render := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/render=%t", tt.name, render), func(t *testing.T) {
-				previousInterval, previousOutput, previousNoWait := followInterval, outputFormat, noWait
-				followInterval, outputFormat, noWait = 0, "table", false
-				t.Cleanup(func() { followInterval, outputFormat, noWait = previousInterval, previousOutput, previousNoWait })
+				previousInterval, previousOutput, previousNoWait := followInterval, commandState.outputOpts.outputFormat, commandState.waitOpts.noWait
+				followInterval, commandState.outputOpts.outputFormat, commandState.waitOpts.noWait = 0, "table", false
+				t.Cleanup(func() {
+					followInterval, commandState.outputOpts.outputFormat, commandState.waitOpts.noWait = previousInterval, previousOutput, previousNoWait
+				})
 				fixture := func(fields string) string { return `{"id":"` + testContainerID + `","name":"app",` + fields + `}` }
 				polls := 0
 				client := &cpClient{baseURL: "https://controlplane.example", http: &http.Client{Transport: lifecycleTransport(func(r *http.Request) (*http.Response, error) {
@@ -84,7 +88,9 @@ func TestFollowDeploymentGeneration(t *testing.T) {
 				var final containerView
 				progress, err := captureTestStderr(func() error {
 					if render {
-						_, err := captureTestStdout(func() error { return followAndRender(client, initial, nil) })
+						_, err := captureTestStdout(func() error {
+							return followAndRender(commandState.outputOpts, commandState.waitOpts, client, initial, nil)
+						})
 						return err
 					}
 					var err error

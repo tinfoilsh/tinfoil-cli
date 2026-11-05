@@ -11,6 +11,8 @@ import (
 )
 
 func TestBuildReadinessOutput(t *testing.T) {
+	commandState := newCommandFixture()
+
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/github/repos/acme/app/build":
@@ -34,19 +36,25 @@ func TestBuildReadinessOutput(t *testing.T) {
 		}
 	}))
 	defer server.Close()
-	configureRepoCommandTest(t, server.URL)
-	repoVersion = "v1.2.3"
-	oldStatus := repoStatusVersion
-	repoStatusVersion = "v1.2.3"
-	t.Cleanup(func() { repoStatusVersion = oldStatus })
+	configureRepoCommandTest(commandState, t, server.URL)
+	commandState.repoBuildRunOpts.repoVersion = "v1.2.3"
+	oldStatus := commandState.repoBuildStatusOpts.repoStatusVersion
+	commandState.repoBuildStatusOpts.repoStatusVersion = "v1.2.3"
+	t.Cleanup(func() { commandState.repoBuildStatusOpts.repoStatusVersion = oldStatus })
 	for _, tc := range []struct {
 		name string
 		run  func() error
 		want []string
 	}{
-		{"queued", func() error { return repoBuildRunCmd.RunE(repoBuildRunCmd, []string{"acme/app"}) }, []string{"Queued release v1.2.3; not yet deployable", "tinfoil repo build status acme/app --version v1.2.3", "Build & Publish"}},
-		{"info", func() error { return repoBuildInfoCmd.RunE(repoBuildInfoCmd, []string{"acme/app"}) }, []string{"Latest tag:             v2.0.0", "Latest GitHub release:  v1.2.3", "Published release:     v1.2.3 at 2026-09-24", "A tag alone is not deployable"}},
-		{"status", func() error { return repoBuildStatusCmd.RunE(repoBuildStatusCmd, []string{"acme/app"}) }, []string{"waiting for workflow visibility", "not yet deployable", "tinfoil repo build info acme/app"}},
+		{"queued", func() error {
+			return commandState.repoBuildRunCmd.RunE(commandState.repoBuildRunCmd, []string{"acme/app"})
+		}, []string{"Queued release v1.2.3; not yet deployable", "tinfoil repo build status acme/app --version v1.2.3", "Build & Publish"}},
+		{"info", func() error {
+			return commandState.repoBuildInfoCmd.RunE(commandState.repoBuildInfoCmd, []string{"acme/app"})
+		}, []string{"Latest tag:             v2.0.0", "Latest GitHub release:  v1.2.3", "Published release:     v1.2.3 at 2026-09-24", "A tag alone is not deployable"}},
+		{"status", func() error {
+			return commandState.repoBuildStatusCmd.RunE(commandState.repoBuildStatusCmd, []string{"acme/app"})
+		}, []string{"waiting for workflow visibility", "not yet deployable", "tinfoil repo build info acme/app"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			out, err := captureTestStdout(tc.run)

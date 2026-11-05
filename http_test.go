@@ -71,6 +71,8 @@ func TestParseRequestHeadersRejectsMalformedHeaders(t *testing.T) {
 }
 
 func TestHTTPRequiresHostAndRepo(t *testing.T) {
+	commandState := newCommandFixture()
+
 	tests := []struct {
 		name    string
 		host    string
@@ -85,10 +87,10 @@ func TestHTTPRequiresHostAndRepo(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			enclaveHost, repo = test.host, test.repo
-			t.Cleanup(func() { enclaveHost, repo = "", "" })
+			commandState.rootOpts.enclaveHost, commandState.rootOpts.repo = test.host, test.repo
+			t.Cleanup(func() { commandState.rootOpts.enclaveHost, commandState.rootOpts.repo = "", "" })
 
-			err := httpCmd.PersistentPreRunE(httpGetCmd, nil)
+			err := commandState.httpCmd.PersistentPreRunE(commandState.httpGetCmd, nil)
 			if test.wantErr {
 				assert.Error(t, err)
 			} else {

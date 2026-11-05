@@ -14,8 +14,10 @@ import (
 )
 
 func TestContainerDetailIncludesMarkLatestRelease(t *testing.T) {
-	previousOutput := outputFormat
-	t.Cleanup(func() { outputFormat = previousOutput })
+	commandState := newCommandFixture()
+
+	previousOutput := commandState.outputOpts.outputFormat
+	t.Cleanup(func() { commandState.outputOpts.outputFormat = previousOutput })
 
 	for _, tt := range []struct {
 		name     string
@@ -32,8 +34,8 @@ func TestContainerDetailIncludesMarkLatestRelease(t *testing.T) {
 				t.Fatalf("decode container response: %v", err)
 			}
 
-			outputFormat = "table"
-			output, err := captureTestStdout(func() error { return renderContainer(container) })
+			commandState.outputOpts.outputFormat = "table"
+			output, err := captureTestStdout(func() error { return renderContainer(commandState.outputOpts, container) })
 			if err != nil {
 				t.Fatalf("render human output: %v", err)
 			}
@@ -45,8 +47,8 @@ func TestContainerDetailIncludesMarkLatestRelease(t *testing.T) {
 				t.Fatalf("human output includes promotion value for omitted field:\n%s", output)
 			}
 
-			outputFormat = "json"
-			output, err = captureTestStdout(func() error { return renderContainer(container) })
+			commandState.outputOpts.outputFormat = "json"
+			output, err = captureTestStdout(func() error { return renderContainer(commandState.outputOpts, container) })
 			if err != nil {
 				t.Fatalf("render JSON output: %v", err)
 			}
@@ -69,6 +71,8 @@ func TestContainerDetailIncludesMarkLatestRelease(t *testing.T) {
 }
 
 func TestContainerCommandsMarkLatestReleaseRequestBodies(t *testing.T) {
+	commandState := newCommandFixture()
+
 	const containerID = "61bd4a3e-5b48-4320-9215-0c7a7f974979"
 
 	commands := []struct {
@@ -82,36 +86,42 @@ func TestContainerCommandsMarkLatestReleaseRequestBodies(t *testing.T) {
 	}{
 		{
 			name:         "create",
-			command:      containerCreateCmd,
+			command:      commandState.containerCreateCmd,
 			path:         "/api/containers",
 			wantRequests: 2,
 			wantBody: func(promote string) string {
 				return `{` + promote + `"name":"app","repo":"acme/app","tag":"v1.2.3"}`
 			},
-			setValue: func(value string) { createMarkLatestRelease = value },
-			run:      func() error { return containerCreateCmd.RunE(containerCreateCmd, []string{"app"}) },
+			setValue: func(value string) { commandState.containerCreateOpts.createMarkLatestRelease = value },
+			run: func() error {
+				return commandState.containerCreateCmd.RunE(commandState.containerCreateCmd, []string{"app"})
+			},
 		},
 		{
 			name:         "deploy",
-			command:      containerDeployCmd,
+			command:      commandState.containerDeployCmd,
 			path:         "/api/containers/" + containerID + "/deploy",
 			wantRequests: 2,
 			wantBody: func(promote string) string {
 				return `{` + strings.TrimSuffix(promote, ",") + `}`
 			},
-			setValue: func(value string) { deployMarkLatestRelease = value },
-			run:      func() error { return containerDeployCmd.RunE(containerDeployCmd, []string{containerID}) },
+			setValue: func(value string) { commandState.containerDeployOpts.deployMarkLatestRelease = value },
+			run: func() error {
+				return commandState.containerDeployCmd.RunE(commandState.containerDeployCmd, []string{containerID})
+			},
 		},
 		{
 			name:         "update",
-			command:      containerUpdateCmd,
+			command:      commandState.containerUpdateCmd,
 			path:         "/api/containers/" + containerID + "/update",
 			wantRequests: 4,
 			wantBody: func(promote string) string {
 				return `{` + strings.TrimSuffix(promote, ",") + `}`
 			},
-			setValue: func(value string) { updateMarkLatestRelease = value },
-			run:      func() error { return containerUpdateCmd.RunE(containerUpdateCmd, []string{containerID}) },
+			setValue: func(value string) { commandState.containerUpdateOpts.updateMarkLatestRelease = value },
+			run: func() error {
+				return commandState.containerUpdateCmd.RunE(commandState.containerUpdateCmd, []string{containerID})
+			},
 		},
 	}
 	// wantMarkLatest is the JSON fragment expected in the body, including its
@@ -166,7 +176,7 @@ func TestContainerCommandsMarkLatestReleaseRequestBodies(t *testing.T) {
 				}))
 				defer server.Close()
 
-				configureContainerPromotionTest(t, server.URL)
+				configureContainerPromotionTest(commandState, t, server.URL)
 				command.setValue(value.value)
 				command.command.Flags().Lookup("mark-latest").Changed = value.changed
 
@@ -192,11 +202,13 @@ func TestContainerCommandsMarkLatestReleaseRequestBodies(t *testing.T) {
 }
 
 func TestPromoteReleaseFlagsRequireValues(t *testing.T) {
+	commandState := newCommandFixture()
+
 	for _, command := range []*cobra.Command{
-		containerCreateCmd,
-		containerDeployCmd,
-		containerUpdateCmd,
-		projectUpdateCmd,
+		commandState.containerCreateCmd,
+		commandState.containerDeployCmd,
+		commandState.containerUpdateCmd,
+		commandState.projectUpdateCmd,
 	} {
 		t.Run(command.CommandPath(), func(t *testing.T) {
 			if got := command.Flags().Lookup("mark-latest").NoOptDefVal; got != "" {
@@ -206,15 +218,15 @@ func TestPromoteReleaseFlagsRequireValues(t *testing.T) {
 	}
 }
 
-func configureContainerPromotionTest(t *testing.T, serverURL string) {
+func configureContainerPromotionTest(commandState *commandFixture, t *testing.T, serverURL string) {
 	t.Helper()
 	t.Setenv(envCPURL, serverURL)
 	t.Setenv(envAdminKey, "admin_test")
 	t.Setenv(envConfigPath, filepath.Join(t.TempDir(), "missing-config.json"))
 	for command, names := range map[*cobra.Command][]string{
-		containerCreateCmd: {"display-order", "mark-latest", "volume"},
-		containerDeployCmd: {"tag", "variable", "secret", "ssh-key", "debug", "mark-latest", "custom-domain", "host", "volume", "no-wait"},
-		containerUpdateCmd: {"tag", "variable", "secret", "ssh-key", "debug", "hold", "mark-latest", "custom-domain", "yes", "no-wait"},
+		commandState.containerCreateCmd: {"display-order", "mark-latest", "volume"},
+		commandState.containerDeployCmd: {"tag", "variable", "secret", "ssh-key", "debug", "mark-latest", "custom-domain", "host", "volume", "no-wait"},
+		commandState.containerUpdateCmd: {"tag", "variable", "secret", "ssh-key", "debug", "hold", "mark-latest", "custom-domain", "yes", "no-wait"},
 	} {
 		for _, name := range names {
 			flag := command.Flags().Lookup(name)
@@ -226,55 +238,55 @@ func configureContainerPromotionTest(t *testing.T, serverURL string) {
 		}
 	}
 
-	previousOutput, previousNoWait := outputFormat, noWait
-	previousCreateRepo, previousCreateTag := createRepo, createTag
-	previousCreateSource, previousCreateRevision := createSource, createRevision
-	previousLocalConfigFile, previousLocalConfigBytes := localConfigFile, localConfigBytes
-	previousCreateMarkLatestRelease := createMarkLatestRelease
-	previousCreateDebug, previousCreateDisableCC := createDebug, createDisableCC
-	previousCreateVariables, previousCreateSecrets, previousCreateSSHKeys := createVariables, createSecrets, createSSHKeys
-	previousCreateCustomDomain, previousCreateHost, previousCreateReplaceID := createCustomDomain, createHost, createReplaceID
-	previousCreateDisplayOrder, previousCreateVolumes := createDisplayOrder, createVolumes
-	previousDeployTag, previousDeployDebug := deployTag, deployDebug
-	previousDeployMarkLatestRelease := deployMarkLatestRelease
-	previousDeployVariables, previousDeploySecrets, previousDeploySSHKeys := deployVariables, deploySecrets, deploySSHKeys
-	previousDeployCustomDomain, previousDeployHost, previousDeployVolumes := deployCustomDomain, deployHost, deployVolumes
-	previousUpdateTag, previousUpdateDebug := updateTag, updateDebug
-	previousUpdateHold, previousUpdateMarkLatestRelease := updateHold, updateMarkLatestRelease
-	previousUpdateVariables, previousUpdateSecrets, previousUpdateSSHKeys := updateVariables, updateSecrets, updateSSHKeys
-	previousUpdateCustomDomain, previousUpdateYes := updateCustomDomain, updateYes
+	previousOutput, previousNoWait := commandState.outputOpts.outputFormat, commandState.waitOpts.noWait
+	previousCreateRepo, previousCreateTag := commandState.containerCreateOpts.createRepo, commandState.containerCreateOpts.createTag
+	previousCreateSource, previousCreateRevision := commandState.containerCreateOpts.createSource, commandState.containerCreateOpts.createRevision
+	previousLocalConfigFile, previousLocalConfigBytes := commandState.rootOpts.localConfigFile, commandState.rootOpts.localConfigBytes
+	previousCreateMarkLatestRelease := commandState.containerCreateOpts.createMarkLatestRelease
+	previousCreateDebug, previousCreateDisableCC := commandState.containerCreateOpts.createDebug, commandState.containerCreateOpts.createDisableCC
+	previousCreateVariables, previousCreateSecrets, previousCreateSSHKeys := commandState.containerCreateOpts.createVariables, commandState.containerCreateOpts.createSecrets, commandState.containerCreateOpts.createSSHKeys
+	previousCreateCustomDomain, previousCreateHost, previousCreateReplaceID := commandState.containerCreateOpts.createCustomDomain, commandState.containerCreateOpts.createHost, commandState.containerCreateOpts.createReplaceID
+	previousCreateDisplayOrder, previousCreateVolumes := commandState.containerCreateOpts.createDisplayOrder, commandState.containerCreateOpts.createVolumes
+	previousDeployTag, previousDeployDebug := commandState.containerDeployOpts.deployTag, commandState.containerDeployOpts.deployDebug
+	previousDeployMarkLatestRelease := commandState.containerDeployOpts.deployMarkLatestRelease
+	previousDeployVariables, previousDeploySecrets, previousDeploySSHKeys := commandState.containerDeployOpts.deployVariables, commandState.containerDeployOpts.deploySecrets, commandState.containerDeployOpts.deploySSHKeys
+	previousDeployCustomDomain, previousDeployHost, previousDeployVolumes := commandState.containerDeployOpts.deployCustomDomain, commandState.containerDeployOpts.deployHost, commandState.containerDeployOpts.deployVolumes
+	previousUpdateTag, previousUpdateDebug := commandState.containerUpdateOpts.updateTag, commandState.containerUpdateOpts.updateDebug
+	previousUpdateHold, previousUpdateMarkLatestRelease := commandState.containerUpdateOpts.updateHold, commandState.containerUpdateOpts.updateMarkLatestRelease
+	previousUpdateVariables, previousUpdateSecrets, previousUpdateSSHKeys := commandState.containerUpdateOpts.updateVariables, commandState.containerUpdateOpts.updateSecrets, commandState.containerUpdateOpts.updateSSHKeys
+	previousUpdateCustomDomain, previousUpdateYes := commandState.containerUpdateOpts.updateCustomDomain, commandState.containerUpdateOpts.updateYes
 
-	outputFormat, noWait = "json", true
-	createRepo, createTag, createMarkLatestRelease = "acme/app", "v1.2.3", ""
-	createSource, createRevision = containerSourceGitHub, ""
-	localConfigFile, localConfigBytes = "", nil
-	createDebug, createDisableCC = false, false
-	createVariables, createSecrets, createSSHKeys = nil, nil, nil
-	createCustomDomain, createHost, createReplaceID = "", "", ""
-	createDisplayOrder, createVolumes = 0, nil
-	deployTag, deployDebug, deployMarkLatestRelease = "", "", ""
-	deployVariables, deploySecrets, deploySSHKeys = nil, nil, nil
-	deployCustomDomain, deployHost, deployVolumes = "", "", nil
-	updateTag, updateDebug, updateHold, updateMarkLatestRelease = "", "", "", ""
-	updateVariables, updateSecrets, updateSSHKeys = nil, nil, nil
-	updateCustomDomain, updateYes = "", false
+	commandState.outputOpts.outputFormat, commandState.waitOpts.noWait = "json", true
+	commandState.containerCreateOpts.createRepo, commandState.containerCreateOpts.createTag, commandState.containerCreateOpts.createMarkLatestRelease = "acme/app", "v1.2.3", ""
+	commandState.containerCreateOpts.createSource, commandState.containerCreateOpts.createRevision = containerSourceGitHub, ""
+	commandState.rootOpts.localConfigFile, commandState.rootOpts.localConfigBytes = "", nil
+	commandState.containerCreateOpts.createDebug, commandState.containerCreateOpts.createDisableCC = false, false
+	commandState.containerCreateOpts.createVariables, commandState.containerCreateOpts.createSecrets, commandState.containerCreateOpts.createSSHKeys = nil, nil, nil
+	commandState.containerCreateOpts.createCustomDomain, commandState.containerCreateOpts.createHost, commandState.containerCreateOpts.createReplaceID = "", "", ""
+	commandState.containerCreateOpts.createDisplayOrder, commandState.containerCreateOpts.createVolumes = 0, nil
+	commandState.containerDeployOpts.deployTag, commandState.containerDeployOpts.deployDebug, commandState.containerDeployOpts.deployMarkLatestRelease = "", "", ""
+	commandState.containerDeployOpts.deployVariables, commandState.containerDeployOpts.deploySecrets, commandState.containerDeployOpts.deploySSHKeys = nil, nil, nil
+	commandState.containerDeployOpts.deployCustomDomain, commandState.containerDeployOpts.deployHost, commandState.containerDeployOpts.deployVolumes = "", "", nil
+	commandState.containerUpdateOpts.updateTag, commandState.containerUpdateOpts.updateDebug, commandState.containerUpdateOpts.updateHold, commandState.containerUpdateOpts.updateMarkLatestRelease = "", "", "", ""
+	commandState.containerUpdateOpts.updateVariables, commandState.containerUpdateOpts.updateSecrets, commandState.containerUpdateOpts.updateSSHKeys = nil, nil, nil
+	commandState.containerUpdateOpts.updateCustomDomain, commandState.containerUpdateOpts.updateYes = "", false
 
 	t.Cleanup(func() {
-		outputFormat, noWait = previousOutput, previousNoWait
-		createRepo, createTag = previousCreateRepo, previousCreateTag
-		createSource, createRevision = previousCreateSource, previousCreateRevision
-		localConfigFile, localConfigBytes = previousLocalConfigFile, previousLocalConfigBytes
-		createMarkLatestRelease = previousCreateMarkLatestRelease
-		createDebug, createDisableCC = previousCreateDebug, previousCreateDisableCC
-		createVariables, createSecrets, createSSHKeys = previousCreateVariables, previousCreateSecrets, previousCreateSSHKeys
-		createCustomDomain, createHost, createReplaceID = previousCreateCustomDomain, previousCreateHost, previousCreateReplaceID
-		createDisplayOrder, createVolumes = previousCreateDisplayOrder, previousCreateVolumes
-		deployTag, deployDebug, deployMarkLatestRelease = previousDeployTag, previousDeployDebug, previousDeployMarkLatestRelease
-		deployVariables, deploySecrets, deploySSHKeys = previousDeployVariables, previousDeploySecrets, previousDeploySSHKeys
-		deployCustomDomain, deployHost, deployVolumes = previousDeployCustomDomain, previousDeployHost, previousDeployVolumes
-		updateTag, updateDebug = previousUpdateTag, previousUpdateDebug
-		updateHold, updateMarkLatestRelease = previousUpdateHold, previousUpdateMarkLatestRelease
-		updateVariables, updateSecrets, updateSSHKeys = previousUpdateVariables, previousUpdateSecrets, previousUpdateSSHKeys
-		updateCustomDomain, updateYes = previousUpdateCustomDomain, previousUpdateYes
+		commandState.outputOpts.outputFormat, commandState.waitOpts.noWait = previousOutput, previousNoWait
+		commandState.containerCreateOpts.createRepo, commandState.containerCreateOpts.createTag = previousCreateRepo, previousCreateTag
+		commandState.containerCreateOpts.createSource, commandState.containerCreateOpts.createRevision = previousCreateSource, previousCreateRevision
+		commandState.rootOpts.localConfigFile, commandState.rootOpts.localConfigBytes = previousLocalConfigFile, previousLocalConfigBytes
+		commandState.containerCreateOpts.createMarkLatestRelease = previousCreateMarkLatestRelease
+		commandState.containerCreateOpts.createDebug, commandState.containerCreateOpts.createDisableCC = previousCreateDebug, previousCreateDisableCC
+		commandState.containerCreateOpts.createVariables, commandState.containerCreateOpts.createSecrets, commandState.containerCreateOpts.createSSHKeys = previousCreateVariables, previousCreateSecrets, previousCreateSSHKeys
+		commandState.containerCreateOpts.createCustomDomain, commandState.containerCreateOpts.createHost, commandState.containerCreateOpts.createReplaceID = previousCreateCustomDomain, previousCreateHost, previousCreateReplaceID
+		commandState.containerCreateOpts.createDisplayOrder, commandState.containerCreateOpts.createVolumes = previousCreateDisplayOrder, previousCreateVolumes
+		commandState.containerDeployOpts.deployTag, commandState.containerDeployOpts.deployDebug, commandState.containerDeployOpts.deployMarkLatestRelease = previousDeployTag, previousDeployDebug, previousDeployMarkLatestRelease
+		commandState.containerDeployOpts.deployVariables, commandState.containerDeployOpts.deploySecrets, commandState.containerDeployOpts.deploySSHKeys = previousDeployVariables, previousDeploySecrets, previousDeploySSHKeys
+		commandState.containerDeployOpts.deployCustomDomain, commandState.containerDeployOpts.deployHost, commandState.containerDeployOpts.deployVolumes = previousDeployCustomDomain, previousDeployHost, previousDeployVolumes
+		commandState.containerUpdateOpts.updateTag, commandState.containerUpdateOpts.updateDebug = previousUpdateTag, previousUpdateDebug
+		commandState.containerUpdateOpts.updateHold, commandState.containerUpdateOpts.updateMarkLatestRelease = previousUpdateHold, previousUpdateMarkLatestRelease
+		commandState.containerUpdateOpts.updateVariables, commandState.containerUpdateOpts.updateSecrets, commandState.containerUpdateOpts.updateSSHKeys = previousUpdateVariables, previousUpdateSecrets, previousUpdateSSHKeys
+		commandState.containerUpdateOpts.updateCustomDomain, commandState.containerUpdateOpts.updateYes = previousUpdateCustomDomain, previousUpdateYes
 	})
 }

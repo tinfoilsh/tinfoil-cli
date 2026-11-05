@@ -38,32 +38,22 @@ type projectUpdateResponse struct {
 	Results []projectInstanceResult `json:"results"`
 }
 
-var (
-	projectSettingsHoldByDefault string
-
-	projectUpdateTag               string
-	projectUpdateHold              string
-	projectUpdateMarkLatestRelease string
-	projectUpdateInstanceIDs       []string
-	projectUpdateYes               bool
-)
-
-func newProjectCommand() *cobra.Command {
+func newProjectCommand(outputOpts *outputOptions) *cobra.Command {
 	projectCmd := &cobra.Command{
 		Use:     "project",
 		Aliases: []string{"projects"},
 		Short:   "Manage groups of containers that share a config repo",
 	}
-	projectCmd.PersistentFlags().StringVarP(&outputFormat, "output", "o", "table", "Output format: table or json")
-	projectCmd.AddCommand(newProjectListCommand())
-	projectCmd.AddCommand(newProjectGetCommand())
-	projectCmd.AddCommand(newProjectSettingsCommand())
-	projectCmd.AddCommand(newProjectUpdateCommand())
-	projectCmd.AddCommand(newProjectStorageCommand())
+	projectCmd.PersistentFlags().StringVarP(&outputOpts.outputFormat, "output", "o", "table", "Output format: table or json")
+	projectCmd.AddCommand(newProjectListCommand(outputOpts))
+	projectCmd.AddCommand(newProjectGetCommand(outputOpts))
+	projectCmd.AddCommand(newProjectSettingsCommand(outputOpts, &projectSettingsOptions{}))
+	projectCmd.AddCommand(newProjectUpdateCommand(outputOpts, &projectUpdateOptions{}))
+	projectCmd.AddCommand(newProjectStorageCommand(outputOpts))
 	return projectCmd
 }
 
-func newProjectListCommand() *cobra.Command {
+func newProjectListCommand(outputOpts *outputOptions) *cobra.Command {
 	projectListCmd := &cobra.Command{
 		Use:     "list",
 		Aliases: []string{"ls"},
@@ -77,14 +67,14 @@ func newProjectListCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return renderProjects(projects)
+			return renderProjects(outputOpts, projects)
 		},
 	}
 
 	return projectListCmd
 }
 
-func newProjectGetCommand() *cobra.Command {
+func newProjectGetCommand(outputOpts *outputOptions) *cobra.Command {
 	projectGetCmd := &cobra.Command{
 		Use:   "get [id|owner/repo]",
 		Short: "Show a project",
@@ -98,14 +88,14 @@ func newProjectGetCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return renderProject(*project)
+			return renderProject(outputOpts, *project)
 		},
 	}
 
 	return projectGetCmd
 }
 
-func newProjectSettingsCommand() *cobra.Command {
+func newProjectSettingsCommand(outputOpts *outputOptions, projectSettingsOpts *projectSettingsOptions) *cobra.Command {
 	projectSettingsCmd := &cobra.Command{
 		Use:     "settings [id|owner/repo]",
 		Aliases: []string{"set"},
@@ -113,8 +103,8 @@ func newProjectSettingsCommand() *cobra.Command {
 		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			body := map[string]any{}
-			if projectSettingsHoldByDefault != "" {
-				hold, err := parseTriBool(projectSettingsHoldByDefault)
+			if projectSettingsOpts.projectSettingsHoldByDefault != "" {
+				hold, err := parseTriBool(projectSettingsOpts.projectSettingsHoldByDefault)
 				if err != nil {
 					return fmt.Errorf("--hold-by-default: %w", err)
 				}
@@ -137,11 +127,11 @@ func newProjectSettingsCommand() *cobra.Command {
 				return err
 			}
 			updated = preserveProjectCounts(updated, *project)
-			return renderProject(updated)
+			return renderProject(outputOpts, updated)
 		},
 	}
 	projectSettingsCmd.Flags().StringVar(
-		&projectSettingsHoldByDefault,
+		&projectSettingsOpts.projectSettingsHoldByDefault,
 		"hold-by-default",
 		"",
 		"Hold new versions for review by default (true/false)",
@@ -150,7 +140,7 @@ func newProjectSettingsCommand() *cobra.Command {
 	return projectSettingsCmd
 }
 
-func newProjectUpdateCommand() *cobra.Command {
+func newProjectUpdateCommand(outputOpts *outputOptions, projectUpdateOpts *projectUpdateOptions) *cobra.Command {
 	projectUpdateCmd := &cobra.Command{
 		Use:   "update [id|owner/repo]",
 		Short: "Update every running instance of a project to a tag",
@@ -158,20 +148,20 @@ func newProjectUpdateCommand() *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			body := map[string]any{
-				"tag": projectUpdateTag,
+				"tag": projectUpdateOpts.projectUpdateTag,
 			}
-			if err := setMarkLatestRelease(cmd, body, projectUpdateMarkLatestRelease); err != nil {
+			if err := setMarkLatestRelease(cmd, body, projectUpdateOpts.projectUpdateMarkLatestRelease); err != nil {
 				return err
 			}
 			if cmd.Flags().Changed("hold") {
-				hold, err := parseTriBool(projectUpdateHold)
+				hold, err := parseTriBool(projectUpdateOpts.projectUpdateHold)
 				if err != nil {
 					return fmt.Errorf("--hold: %w", err)
 				}
 				body["hold"] = hold
 			}
-			if len(projectUpdateInstanceIDs) > 0 {
-				body["instance_ids"] = projectUpdateInstanceIDs
+			if len(projectUpdateOpts.projectUpdateInstanceIDs) > 0 {
+				body["instance_ids"] = projectUpdateOpts.projectUpdateInstanceIDs
 			}
 
 			client, err := authedClient()
@@ -183,27 +173,27 @@ func newProjectUpdateCommand() *cobra.Command {
 				return err
 			}
 
-			response, err := updateProjectInstances(client, project.ID, body)
+			response, err := updateProjectInstances(outputOpts, projectUpdateOpts, client, project.ID, body)
 			if err != nil {
 				if len(response.Results) > 0 {
-					return errors.Join(err, renderProjectUpdateResults(response.Results))
+					return errors.Join(err, renderProjectUpdateResults(outputOpts, response.Results))
 				}
 				return err
 			}
-			return renderProjectUpdateResults(response.Results)
+			return renderProjectUpdateResults(outputOpts, response.Results)
 		},
 	}
-	projectUpdateCmd.Flags().StringVar(&projectUpdateTag, "tag", "", "Release tag to update to")
-	projectUpdateCmd.Flags().StringVar(&projectUpdateHold, "hold", "", "Hold the new version for review (default: the project's setting)")
+	projectUpdateCmd.Flags().StringVar(&projectUpdateOpts.projectUpdateTag, "tag", "", "Release tag to update to")
+	projectUpdateCmd.Flags().StringVar(&projectUpdateOpts.projectUpdateHold, "hold", "", "Hold the new version for review (default: the project's setting)")
 	projectUpdateCmd.Flags().Lookup("hold").NoOptDefVal = "true"
-	projectUpdateCmd.Flags().StringVar(&projectUpdateMarkLatestRelease, "mark-latest", "", "Mark the tag as the repo's latest GitHub release once running (default true)")
+	projectUpdateCmd.Flags().StringVar(&projectUpdateOpts.projectUpdateMarkLatestRelease, "mark-latest", "", "Mark the tag as the repo's latest GitHub release once running (default true)")
 	projectUpdateCmd.Flags().StringArrayVar(
-		&projectUpdateInstanceIDs,
+		&projectUpdateOpts.projectUpdateInstanceIDs,
 		"instance",
 		nil,
 		"Instance ID to update; may be repeated (default: all running)",
 	)
-	projectUpdateCmd.Flags().BoolVar(&projectUpdateYes, "yes", false, "Approve the update plan, including any downtime")
+	projectUpdateCmd.Flags().BoolVar(&projectUpdateOpts.projectUpdateYes, "yes", false, "Approve the update plan, including any downtime")
 	_ = projectUpdateCmd.MarkFlagRequired("tag")
 	return projectUpdateCmd
 }
@@ -242,7 +232,7 @@ func patchProject(client *cpClient, projectID string, body map[string]any) (proj
 	return updated, nil
 }
 
-func updateProjectInstances(client *cpClient, projectID string, body map[string]any) (projectUpdateResponse, error) {
+func updateProjectInstances(outputOpts *outputOptions, projectUpdateOpts *projectUpdateOptions, client *cpClient, projectID string, body map[string]any) (projectUpdateResponse, error) {
 	var response projectUpdateResponse
 	var excluded []projectInstanceResult
 	seen := make(map[string]bool)
@@ -264,7 +254,7 @@ func updateProjectInstances(client *cpClient, projectID string, body map[string]
 		}
 		return review, nil
 	}
-	err := postLifecycleUpdate(client, pathf("/api/containers/projects/%s/update", projectID), body, &response, projectUpdateYes, "project update", replan)
+	err := postLifecycleUpdate(outputOpts, client, pathf("/api/containers/projects/%s/update", projectID), body, &response, projectUpdateOpts.projectUpdateYes, "project update", replan)
 	response.Results = append(response.Results, excluded...)
 	return response, err
 }
@@ -278,8 +268,8 @@ func preserveProjectCounts(updated, current projectView) projectView {
 	return updated
 }
 
-func renderProject(project projectView) error {
-	if outputFormat == "json" {
+func renderProject(outputOpts *outputOptions, project projectView) error {
+	if outputOpts.outputFormat == "json" {
 		return printJSON(project)
 	}
 	fmt.Printf("ID:              %s\n", project.ID)
@@ -293,8 +283,8 @@ func renderProject(project projectView) error {
 	return nil
 }
 
-func renderProjects(projects []projectView) error {
-	if outputFormat == "json" {
+func renderProjects(outputOpts *outputOptions, projects []projectView) error {
+	if outputOpts.outputFormat == "json" {
 		return printJSON(projects)
 	}
 	if len(projects) == 0 {
@@ -316,24 +306,24 @@ func renderProjects(projects []projectView) error {
 	return nil
 }
 
-func renderProjectUpdateResults(results []projectInstanceResult) error {
-	if outputFormat == "json" {
+func renderProjectUpdateResults(outputOpts *outputOptions, results []projectInstanceResult) error {
+	if outputOpts.outputFormat == "json" {
 		if err := printJSON(projectUpdateResponse{Results: results}); err != nil {
 			return err
 		}
 	}
 	if len(results) == 0 {
-		if outputFormat != "json" {
+		if outputOpts.outputFormat != "json" {
 			fmt.Println("No project instances were selected.")
 		}
 		return nil
 	}
-	if outputFormat != "json" {
+	if outputOpts.outputFormat != "json" {
 		fmt.Printf("%-24s  %-10s  %s\n", "NAME", "STATUS", "DETAIL")
 	}
 	failed, skipped := 0, 0
 	for _, result := range results {
-		if outputFormat != "json" {
+		if outputOpts.outputFormat != "json" {
 			detail := humanVolumeMessage(secretDeliveryMessage(result.Error))
 			if detail == "" {
 				detail = result.ContainerID

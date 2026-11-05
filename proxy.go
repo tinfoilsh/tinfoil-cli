@@ -13,69 +13,65 @@ import (
 	"github.com/tinfoilsh/tinfoil-go"
 )
 
-var (
-	listenPort uint
-	listenAddr string
-	logFormat  string
-)
-
-func setupLogger(verbose, trace bool) {
+func setupLogger(proxyOpts *proxyOptions, verbose, trace bool) {
 	if trace {
 		log.SetLevel(log.TraceLevel)
 	} else if verbose {
 		log.SetLevel(log.InfoLevel)
 	}
 
-	if logFormat == "json" {
+	if proxyOpts.logFormat == "json" {
 		log.SetFormatter(&log.JSONFormatter{})
 	} else {
 		log.SetFormatter(&log.TextFormatter{})
 	}
 }
 
-func newProxyCommand() *cobra.Command {
+func newProxyCommand(proxyOpts *proxyOptions, rootOpts *rootOptions) *cobra.Command {
 	proxyCmd := &cobra.Command{
 		Use:        "proxy",
 		Short:      "Run a local HTTP proxy",
 		Deprecated: "the proxy has moved to github.com/tinfoilsh/tinfoil-proxy. Install the Tinfoil Tray app for a menu-bar UI, or run `go install github.com/tinfoilsh/tinfoil-proxy@latest` for the standalone `tinfoil-proxy` binary.",
-		RunE:       runProxy,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runProxy(proxyOpts, rootOpts, cmd, args)
+		},
 	}
-	proxyCmd.Flags().UintVarP(&listenPort, "port", "p", 8080, "Port to listen on")
-	proxyCmd.Flags().StringVarP(&listenAddr, "bind", "b", "127.0.0.1", "Address to bind to")
-	proxyCmd.Flags().StringVar(&logFormat, "log-format", "text", "Log format: text or json")
+	proxyCmd.Flags().UintVarP(&proxyOpts.listenPort, "port", "p", 8080, "Port to listen on")
+	proxyCmd.Flags().StringVarP(&proxyOpts.listenAddr, "bind", "b", "127.0.0.1", "Address to bind to")
+	proxyCmd.Flags().StringVar(&proxyOpts.logFormat, "log-format", "text", "Log format: text or json")
 	return proxyCmd
 }
 
-func runProxy(cmd *cobra.Command, args []string) error {
-	if (enclaveHost == "") != (repo == "" && localConfigFile == "") {
+func runProxy(proxyOpts *proxyOptions, rootOpts *rootOptions, cmd *cobra.Command, args []string) error {
+	if (rootOpts.enclaveHost == "") != (rootOpts.repo == "" && rootOpts.localConfigFile == "") {
 		return fmt.Errorf("--enclave and either --repo or --config must be supplied together for a custom proxy target")
 	}
 	verbose, _ := cmd.Flags().GetBool("verbose")
 	trace, _ := cmd.Flags().GetBool("trace")
-	setupLogger(verbose, trace)
+	setupLogger(proxyOpts, verbose, trace)
 
 	log.WithFields(log.Fields{
-		"enclave_host": enclaveHost,
-		"repo":         repo,
+		"enclave_host": rootOpts.enclaveHost,
+		"repo":         rootOpts.repo,
 	}).Info("initializing secure client")
 
 	var httpClient *http.Client
 	var err error
-	if enclaveHost == "" && repo == "" {
+	if rootOpts.enclaveHost == "" && rootOpts.repo == "" {
 		var router *tinfoil.RouterHTTPClient
 		router, err = tinfoil.NewRouterHTTPClient(cmd.Context(), nil)
 		if err == nil {
-			enclaveHost = router.Enclave()
-			repo = router.Repo()
+			rootOpts.enclaveHost = router.Enclave()
+			rootOpts.repo = router.Repo()
 			httpClient = router.Client
 		}
 	} else {
-		opts, parseErr := verificationOptions(repo, "")
+		opts, parseErr := verificationOptions(rootOpts, rootOpts.repo, "")
 		if parseErr != nil {
 			return parseErr
 		}
 		var enclave *tinfoil.EnclaveHTTPClient
-		enclave, err = tinfoil.NewEnclaveHTTPClient(cmd.Context(), enclaveHost, repo, opts)
+		enclave, err = tinfoil.NewEnclaveHTTPClient(cmd.Context(), rootOpts.enclaveHost, rootOpts.repo, opts)
 		if err == nil {
 			httpClient = enclave.Client
 		}
@@ -85,7 +81,7 @@ func runProxy(cmd *cobra.Command, args []string) error {
 	}
 	log.Debug("secure HTTP client created successfully")
 
-	targetUrl, err := url.Parse("https://" + enclaveHost)
+	targetUrl, err := url.Parse("https://" + rootOpts.enclaveHost)
 	if err != nil {
 		return err
 	}
@@ -97,10 +93,10 @@ func runProxy(cmd *cobra.Command, args []string) error {
 		proxy.ServeHTTP(w, r)
 	})
 
-	addr := net.JoinHostPort(listenAddr, strconv.FormatUint(uint64(listenPort), 10))
+	addr := net.JoinHostPort(proxyOpts.listenAddr, strconv.FormatUint(uint64(proxyOpts.listenPort), 10))
 	log.WithFields(log.Fields{
 		"address":      addr,
-		"enclave_host": enclaveHost,
+		"enclave_host": rootOpts.enclaveHost,
 	}).Info("starting HTTP proxy server")
 	return http.ListenAndServe(addr, nil)
 }

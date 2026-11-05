@@ -35,7 +35,7 @@ func TestSplitSSHArgs(t *testing.T) {
 }
 
 func TestProxyCommandNamesResolvedHost(t *testing.T) {
-	withRepo, err := proxyCommand(&tunnelTarget{name: "box", host: "box.example.com", repo: "org/repo"}, 22)
+	withRepo, err := proxyCommand(&rootOptions{}, &tunnelOptions{}, &tunnelTarget{name: "box", host: "box.example.com", repo: "org/repo"}, 22)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -44,7 +44,7 @@ func TestProxyCommandNamesResolvedHost(t *testing.T) {
 	}
 
 	host := "otter-4s7ut6c3.box2.tinfoil.sh"
-	bare, err := proxyCommand(&tunnelTarget{name: host, host: host}, 2022)
+	bare, err := proxyCommand(&rootOptions{}, &tunnelOptions{}, &tunnelTarget{name: host, host: host}, 2022)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,12 +57,13 @@ func TestProxyCommandNamesResolvedHost(t *testing.T) {
 }
 
 func TestResolveTunnelTargetTakesHostnamesWithoutControlplane(t *testing.T) {
-	previousHost, previousRepo := enclaveHost, repo
-	t.Cleanup(func() { enclaveHost, repo = previousHost, previousRepo })
-	enclaveHost, repo = "", ""
+	rootOpts := &rootOptions{}
+	resolve := func(identifier string) (*tunnelTarget, error) {
+		return resolveTunnelTarget(&forwardOptions{}, rootOpts, &trustOptions{}, identifier)
+	}
 
 	host := "courageous-otter-cinders-4s7ut6c3.box2.tinfoil.sh"
-	target, err := resolveTunnelTarget(host)
+	target, err := resolve(host)
 	if err != nil {
 		t.Fatalf("resolveTunnelTarget(%q): %v", host, err)
 	}
@@ -70,19 +71,19 @@ func TestResolveTunnelTargetTakesHostnamesWithoutControlplane(t *testing.T) {
 		t.Errorf("target = %+v", target)
 	}
 
-	repo = "org/repo"
-	if target, err = resolveTunnelTarget(host); err != nil || target.repo != "org/repo" {
+	rootOpts.repo = "org/repo"
+	if target, err = resolve(host); err != nil || target.repo != "org/repo" {
 		t.Errorf("--repo not carried onto a hostname target: %+v, %v", target, err)
 	}
 
-	repo = ""
-	enclaveHost = host
-	if target, err = resolveTunnelTarget(""); err != nil || target.host != host {
+	rootOpts.repo = ""
+	rootOpts.enclaveHost = host
+	if target, err = resolve(""); err != nil || target.host != host {
 		t.Errorf("--host not used when no target is named: %+v, %v", target, err)
 	}
 
-	enclaveHost = ""
-	if _, err = resolveTunnelTarget(""); err == nil {
+	rootOpts.enclaveHost = ""
+	if _, err = resolve(""); err == nil {
 		t.Error("resolveTunnelTarget with no target and no --host succeeded")
 	}
 }
@@ -132,23 +133,21 @@ func TestNativeSSHProfilePinsDialHost(t *testing.T) {
 }
 
 func TestEnclaveAPIKeyIgnoresAdminLoginEnv(t *testing.T) {
-	previous := tunnelAPIKey
-	t.Cleanup(func() { tunnelAPIKey = previous })
-	tunnelAPIKey = ""
+	opts := &tunnelOptions{}
 	t.Setenv(envAPIKey, "admin_should_not_be_used")
 	t.Setenv(envTunnelAPIKey, "")
 
-	if got := enclaveAPIKey(); got != "" {
+	if got := enclaveAPIKey(opts); got != "" {
 		t.Fatalf("enclaveAPIKey() = %q, want empty when only the admin key env is set", got)
 	}
 
 	t.Setenv(envTunnelAPIKey, "tk_from_env")
-	if got := enclaveAPIKey(); got != "tk_from_env" {
+	if got := enclaveAPIKey(opts); got != "tk_from_env" {
 		t.Fatalf("enclaveAPIKey() = %q, want tunnel env value", got)
 	}
 
-	tunnelAPIKey = "tk_from_flag"
-	if got := enclaveAPIKey(); got != "tk_from_flag" {
+	opts.tunnelAPIKey = "tk_from_flag"
+	if got := enclaveAPIKey(opts); got != "tk_from_flag" {
 		t.Fatalf("enclaveAPIKey() = %q, want flag to win over env", got)
 	}
 }

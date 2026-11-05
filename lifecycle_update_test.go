@@ -13,9 +13,11 @@ import (
 )
 
 func TestCandidateHoldOverridesCurrentVersion(t *testing.T) {
-	previous := outputFormat
-	outputFormat = "table"
-	t.Cleanup(func() { outputFormat = previous })
+	commandState := newCommandFixture()
+
+	previous := commandState.outputOpts.outputFormat
+	commandState.outputOpts.outputFormat = "table"
+	t.Cleanup(func() { commandState.outputOpts.outputFormat = previous })
 	for _, tt := range []struct {
 		name, config string
 		held, want   bool
@@ -35,7 +37,7 @@ func TestCandidateHoldOverridesCurrentVersion(t *testing.T) {
 			if c.candidateHeld() != tt.want || isTerminal(c) != tt.want {
 				t.Fatalf("candidate hold/terminal = %v/%v, want %v", c.candidateHeld(), isTerminal(c), tt.want)
 			}
-			out, err := captureTestStdout(func() error { return renderContainer(c) })
+			out, err := captureTestStdout(func() error { return renderContainer(commandState.outputOpts, c) })
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -52,7 +54,9 @@ func TestCandidateHoldOverridesCurrentVersion(t *testing.T) {
 }
 
 func TestHoldFlagsSendOmittedTrueAndFalse(t *testing.T) {
-	for _, command := range []*cobra.Command{containerUpdateCmd, projectUpdateCmd, projectSettingsCmd} {
+	commandState := newCommandFixture()
+
+	for _, command := range []*cobra.Command{commandState.containerUpdateCmd, commandState.projectUpdateCmd, commandState.projectSettingsCmd} {
 		for _, value := range []string{"omitted", "bare", "true", "false"} {
 			t.Run(command.CommandPath()+"/"+value, func(t *testing.T) {
 				var body map[string]any
@@ -66,7 +70,7 @@ func TestHoldFlagsSendOmittedTrueAndFalse(t *testing.T) {
 						io.WriteString(w, `{"id":"`+testContainerID+`","status":"running"}`)
 					case strings.HasSuffix(r.URL.Path, "/update/plan"):
 						projectID := ""
-						if command == projectUpdateCmd {
+						if command == commandState.projectUpdateCmd {
 							projectID = "project-1"
 						}
 						writeTestUpdatePlan(t, w, r, testContainerID, projectID, updateStrategyBlueGreen)
@@ -78,15 +82,15 @@ func TestHoldFlagsSendOmittedTrueAndFalse(t *testing.T) {
 					}
 				}))
 				defer server.Close()
-				configureContainerPromotionTest(t, server.URL)
-				configureProjectCommandTest(t, server.URL)
-				projectUpdateTag = "v2"
+				configureContainerPromotionTest(commandState, t, server.URL)
+				configureProjectCommandTest(commandState, t, server.URL)
+				commandState.projectUpdateOpts.projectUpdateTag = "v2"
 				flagName, wireName := "hold", "hold"
 				identifier := testContainerID
-				if command != containerUpdateCmd {
+				if command != commandState.containerUpdateCmd {
 					identifier = "acme/app"
 				}
-				if command == projectSettingsCmd {
+				if command == commandState.projectSettingsCmd {
 					flagName, wireName = "hold-by-default", "hold_by_default"
 				}
 				flag := command.Flags().Lookup(flagName)
@@ -106,7 +110,7 @@ func TestHoldFlagsSendOmittedTrueAndFalse(t *testing.T) {
 					t.Fatalf("flag consumed container argument: %v", err)
 				}
 				_, err := captureTestStdout(func() error { return command.RunE(command, command.Flags().Args()) })
-				if command == projectSettingsCmd && value == "omitted" {
+				if command == commandState.projectSettingsCmd && value == "omitted" {
 					if err == nil || body != nil {
 						t.Fatalf("omitted settings: body=%v err=%v", body, err)
 					}
@@ -125,6 +129,8 @@ func TestHoldFlagsSendOmittedTrueAndFalse(t *testing.T) {
 }
 
 func TestUpdateTargetDowntimeConfirmation(t *testing.T) {
+	commandState := newCommandFixture()
+
 	for _, project := range []bool{false, true} {
 		for _, tt := range []struct {
 			name                string
@@ -198,17 +204,17 @@ func TestUpdateTargetDowntimeConfirmation(t *testing.T) {
 					}
 				}))
 				defer server.Close()
-				configureContainerPromotionTest(t, server.URL)
-				configureProjectCommandTest(t, server.URL)
-				updateYes, projectUpdateYes = tt.yes, tt.yes
-				updateTag, projectUpdateTag = "v2-8gpu", "v2-8gpu"
-				containerUpdateCmd.Flags().Lookup("tag").Changed = true
+				configureContainerPromotionTest(commandState, t, server.URL)
+				configureProjectCommandTest(commandState, t, server.URL)
+				commandState.containerUpdateOpts.updateYes, commandState.projectUpdateOpts.projectUpdateYes = tt.yes, tt.yes
+				commandState.containerUpdateOpts.updateTag, commandState.projectUpdateOpts.projectUpdateTag = "v2-8gpu", "v2-8gpu"
+				commandState.containerUpdateCmd.Flags().Lookup("tag").Changed = true
 				out, err := captureTestStderr(func() error {
 					_, err := captureTestStdout(func() error {
 						if project {
-							return projectUpdateCmd.RunE(projectUpdateCmd, []string{"acme/app"})
+							return commandState.projectUpdateCmd.RunE(commandState.projectUpdateCmd, []string{"acme/app"})
 						}
-						return containerUpdateCmd.RunE(containerUpdateCmd, []string{testContainerID})
+						return commandState.containerUpdateCmd.RunE(commandState.containerUpdateCmd, []string{testContainerID})
 					})
 					return err
 				})
@@ -264,6 +270,8 @@ func captureTestStderr(run func() error) ([]byte, error) {
 }
 
 func TestChangedTagCanAllowHeldBlueGreenUpdate(t *testing.T) {
+	commandState := newCommandFixture()
+
 	for _, project := range []bool{false, true} {
 		name := "container"
 		if project {
@@ -301,18 +309,18 @@ func TestChangedTagCanAllowHeldBlueGreenUpdate(t *testing.T) {
 				}
 			}))
 			defer server.Close()
-			configureContainerPromotionTest(t, server.URL)
-			configureProjectCommandTest(t, server.URL)
-			updateTag, projectUpdateTag = "v2-no-mounts", "v2-no-mounts"
-			updateHold, projectUpdateHold = "true", "true"
-			containerUpdateCmd.Flags().Lookup("tag").Changed = true
-			containerUpdateCmd.Flags().Lookup("hold").Changed = true
-			projectUpdateCmd.Flags().Lookup("hold").Changed = true
+			configureContainerPromotionTest(commandState, t, server.URL)
+			configureProjectCommandTest(commandState, t, server.URL)
+			commandState.containerUpdateOpts.updateTag, commandState.projectUpdateOpts.projectUpdateTag = "v2-no-mounts", "v2-no-mounts"
+			commandState.containerUpdateOpts.updateHold, commandState.projectUpdateOpts.projectUpdateHold = "true", "true"
+			commandState.containerUpdateCmd.Flags().Lookup("tag").Changed = true
+			commandState.containerUpdateCmd.Flags().Lookup("hold").Changed = true
+			commandState.projectUpdateCmd.Flags().Lookup("hold").Changed = true
 			_, err := captureTestStdout(func() error {
 				if project {
-					return projectUpdateCmd.RunE(projectUpdateCmd, []string{"acme/app"})
+					return commandState.projectUpdateCmd.RunE(commandState.projectUpdateCmd, []string{"acme/app"})
 				}
-				return containerUpdateCmd.RunE(containerUpdateCmd, []string{testContainerID})
+				return commandState.containerUpdateCmd.RunE(commandState.containerUpdateCmd, []string{testContainerID})
 			})
 			if err != nil || posts != 1 {
 				t.Fatalf("must defer target strategy to server: posts=%d err=%v", posts, err)
@@ -322,6 +330,8 @@ func TestChangedTagCanAllowHeldBlueGreenUpdate(t *testing.T) {
 }
 
 func TestKnownReplaceConfirmationDoesNotRetryAgain(t *testing.T) {
+	commandState := newCommandFixture()
+
 	for _, yes := range []bool{false, true} {
 		name := "without confirmation"
 		if yes {
@@ -350,9 +360,11 @@ func TestKnownReplaceConfirmationDoesNotRetryAgain(t *testing.T) {
 				io.WriteString(w, `{"code":"DOWNTIME_CONFIRMATION_REQUIRED","error":"still needs confirmation"}`)
 			}))
 			defer server.Close()
-			configureContainerPromotionTest(t, server.URL)
-			updateYes = yes
-			_, err := captureTestStdout(func() error { return containerUpdateCmd.RunE(containerUpdateCmd, []string{testContainerID}) })
+			configureContainerPromotionTest(commandState, t, server.URL)
+			commandState.containerUpdateOpts.updateYes = yes
+			_, err := captureTestStdout(func() error {
+				return commandState.containerUpdateCmd.RunE(commandState.containerUpdateCmd, []string{testContainerID})
+			})
 			wantPosts := 0
 			wantErr := "requires interactive confirmation"
 			if yes {

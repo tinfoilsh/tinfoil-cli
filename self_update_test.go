@@ -79,6 +79,8 @@ func TestSelfUpdateCheckIsFreshReadOnlyAndUnauthenticated(t *testing.T) {
 }
 
 func TestSelfUpdateCommandResolution(t *testing.T) {
+	commandState := newCommandFixture()
+
 	for _, tt := range []struct {
 		args []string
 		want bool
@@ -95,7 +97,7 @@ func TestSelfUpdateCommandResolution(t *testing.T) {
 		{nil, false},
 	} {
 		t.Run(strings.Join(tt.args, " "), func(t *testing.T) {
-			require.Equal(t, tt.want, isSelfUpdateCommand(rootCmd, tt.args))
+			require.Equal(t, tt.want, isSelfUpdateCommand(commandState.rootCmd, tt.args))
 		})
 	}
 	for _, args := range [][]string{{"update", "extra"}, {"update", "--output", "xml"}, {"update", "--url", "https://example.com"}} {

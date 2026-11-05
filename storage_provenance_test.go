@@ -33,10 +33,12 @@ func (m *mappedStorageAWS) GetSecretValue(ctx context.Context, in *secretsmanage
 }
 
 func TestStorageFirstImportRejectsForeignProvenanceWithoutBinding(t *testing.T) {
+	commandState := newCommandFixture()
+
 	for _, variant := range []string{"volume", "scope", "volume-only", "scope-only", "empty-volume"} {
 		t.Run(variant, func(t *testing.T) {
-			cp := newStorageCPFixture(t)
-			configureStorageCLI(t)
+			cp := newStorageCPFixture(commandState, t)
+			configureStorageCLI(commandState, t)
 			a := testStorageReceipt()
 			a.Profile.Scope.ControlplaneURL = cp.server.URL
 			b := a
@@ -69,7 +71,7 @@ func TestStorageFirstImportRejectsForeignProvenanceWithoutBinding(t *testing.T) 
 				require.NoError(t, os.WriteFile(path, []byte(originalArtifact), storageFileMode))
 			}
 			args := append([]string{"volume", "auto-unlock", "configure", a.VolumeID, "--existing-secret", foreign.secret.arn}, flags...)
-			_, err := executeStorageCLI(t, factory, args...)
+			_, err := executeStorageCLI(commandState, t, factory, args...)
 			assert.ErrorContains(t, err, "provenance")
 			assert.Zero(t, foreign.gets, "foreign key must not be read")
 			path, pathErr := storageMetadataPath(a.Profile.Scope, a.VolumeID)
@@ -81,7 +83,7 @@ func TestStorageFirstImportRejectsForeignProvenanceWithoutBinding(t *testing.T) 
 				assert.Equal(t, originalArtifact, string(data))
 			}
 			args = append([]string{"volume", "auto-unlock", "configure", a.VolumeID, "--existing-secret", original.secret.name}, storageCLIArtifactFlags(t)...)
-			out, err := executeStorageCLI(t, factory, args...)
+			out, err := executeStorageCLI(commandState, t, factory, args...)
 			require.NoError(t, err)
 			assert.Contains(t, out, "CONFIGURED_LOCAL")
 			receipt, err := loadStorageReceipt(a.Profile.Scope, a.VolumeID)

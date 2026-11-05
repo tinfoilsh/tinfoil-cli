@@ -138,81 +138,29 @@ const (
 	containerSourceLocal    = "local"
 )
 
-var (
-	outputFormat string
-
-	createRepo              string
-	createTag               string
-	createSource            string
-	createRevision          string
-	createDebug             bool
-	createMarkLatestRelease string
-	createDisableCC         bool
-	createYes               bool
-	createCustomDomain      string
-	createHost              string
-	createReplaceID         string
-	createVariables         []string
-	createSecrets           []string
-	createSSHKeys           []string
-	createVolumes           []string
-	createDisplayOrder      int32
-
-	updateTag               string
-	updateVariables         []string
-	updateSecrets           []string
-	updateSSHKeys           []string
-	updateDebug             string
-	updateHold              string
-	updateMarkLatestRelease string
-	updateCustomDomain      string
-	updateYes               bool
-
-	deployTag               string
-	deployVariables         []string
-	deploySecrets           []string
-	deploySSHKeys           []string
-	deployDebug             string
-	deployMarkLatestRelease string
-	deployCustomDomain      string
-	deployHost              string
-	deployVolumes           []string
-
-	deleteYes bool
-	noWait    bool
-
-	metricsTime string
-
-	cancelRollbackLatest bool
-
-	connectPort     uint
-	connectBindAddr string
-	connectReview   bool
-)
-
-func newContainerCommand() *cobra.Command {
+func newContainerCommand(outputOpts *outputOptions, rootOpts *rootOptions) *cobra.Command {
 	containerCmd := &cobra.Command{
 		Use:     "container",
 		Aliases: []string{"containers", "ct"},
 		Short:   "Manage Tinfoil containers",
 	}
-	containerCmd.PersistentFlags().StringVarP(&outputFormat, "output", "o", "table", "Output format: table or json")
-	containerCmd.AddCommand(newContainerListCommand())
-	containerCmd.AddCommand(newContainerGetCommand())
-	containerCmd.AddCommand(newContainerCreateCommand())
-	containerCmd.AddCommand(newContainerDeleteCommand())
-	containerCmd.AddCommand(newContainerDeployCommand())
-	containerCmd.AddCommand(newContainerStopCommand())
-	containerCmd.AddCommand(newContainerUpdateCommand())
-	containerCmd.AddCommand(newContainerPromoteCommand())
-	containerCmd.AddCommand(newContainerCancelCommand())
-	containerCmd.AddCommand(newContainerMetricsCommand())
-	containerCmd.AddCommand(newContainerHostsCommand())
-	containerCmd.AddCommand(newContainerConnectCommand())
+	containerCmd.PersistentFlags().StringVarP(&outputOpts.outputFormat, "output", "o", "table", "Output format: table or json")
+	containerCmd.AddCommand(newContainerListCommand(outputOpts))
+	containerCmd.AddCommand(newContainerGetCommand(outputOpts))
+	containerCmd.AddCommand(newContainerCreateCommand(&containerCreateOptions{}, outputOpts, rootOpts, &waitOptions{}))
+	containerCmd.AddCommand(newContainerDeleteCommand(&containerDeleteOptions{}))
+	containerCmd.AddCommand(newContainerDeployCommand(&containerDeployOptions{}, outputOpts, &waitOptions{}))
+	containerCmd.AddCommand(newContainerStopCommand(outputOpts))
+	containerCmd.AddCommand(newContainerUpdateCommand(&containerUpdateOptions{}, outputOpts, &waitOptions{}))
+	containerCmd.AddCommand(newContainerPromoteCommand(outputOpts, &waitOptions{}))
+	containerCmd.AddCommand(newContainerCancelCommand(&containerCancelOptions{}))
+	containerCmd.AddCommand(newContainerMetricsCommand(&containerMetricsOptions{}))
+	containerCmd.AddCommand(newContainerHostsCommand(outputOpts))
+	containerCmd.AddCommand(newContainerConnectCommand(&containerConnectOptions{}, &proxyOptions{}, rootOpts, &trustOptions{}))
 	return containerCmd
 }
 
-func newContainerListCommand() *cobra.Command {
+func newContainerListCommand(outputOpts *outputOptions) *cobra.Command {
 	containerListCmd := &cobra.Command{
 		Use:     "list",
 		Aliases: []string{"ls"},
@@ -222,14 +170,14 @@ func newContainerListCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return listContainers(client, "")
+			return listContainers(outputOpts, client, "")
 		},
 	}
 
 	return containerListCmd
 }
 
-func listContainers(client *cpClient, kind string) error {
+func listContainers(outputOpts *outputOptions, client *cpClient, kind string) error {
 	var rows []containerView
 	if _, err := client.do("GET", "/api/containers", nil, nil, &rows); err != nil {
 		return err
@@ -240,10 +188,10 @@ func listContainers(client *cpClient, kind string) error {
 			list = append(list, row)
 		}
 	}
-	return renderContainers(list)
+	return renderContainers(outputOpts, list)
 }
 
-func newContainerGetCommand() *cobra.Command {
+func newContainerGetCommand(outputOpts *outputOptions) *cobra.Command {
 	containerGetCmd := &cobra.Command{
 		Use:   "get [id|name]",
 		Short: "Show a single container",
@@ -261,14 +209,14 @@ func newContainerGetCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return renderContainerDetail(*c, attached)
+			return renderContainerDetail(outputOpts, *c, attached)
 		},
 	}
 
 	return containerGetCmd
 }
 
-func newContainerCreateCommand() *cobra.Command {
+func newContainerCreateCommand(containerCreateOpts *containerCreateOptions, outputOpts *outputOptions, rootOpts *rootOptions, waitOpts *waitOptions) *cobra.Command {
 	containerCreateCmd := &cobra.Command{
 		Use:   "create [name]",
 		Short: "Create a new container",
@@ -283,53 +231,53 @@ func newContainerCreateCommand() *cobra.Command {
   tinfoil container create app --config tinfoil-config.yml`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if localConfigFile != "" {
-				if cmd.Flags().Changed("source") && createSource != containerSourceLocal {
+			if rootOpts.localConfigFile != "" {
+				if cmd.Flags().Changed("source") && containerCreateOpts.createSource != containerSourceLocal {
 					return fmt.Errorf("--config requires --source local")
 				}
-				createSource = containerSourceLocal
+				containerCreateOpts.createSource = containerSourceLocal
 			}
-			if createSource != containerSourceGitHub && createSource != containerSourceRegistry && createSource != containerSourceLocal {
+			if containerCreateOpts.createSource != containerSourceGitHub && containerCreateOpts.createSource != containerSourceRegistry && containerCreateOpts.createSource != containerSourceLocal {
 				return fmt.Errorf("--source must be github, registry, or local")
 			}
-			if createSource == containerSourceRegistry && createTag != "" {
+			if containerCreateOpts.createSource == containerSourceRegistry && containerCreateOpts.createTag != "" {
 				return fmt.Errorf("use --revision instead of --tag for registry configs")
 			}
-			if createSource != containerSourceGitHub && createReplaceID != "" {
-				return fmt.Errorf("%s configs do not support --replace; create a new container before removing the old one", createSource)
+			if containerCreateOpts.createSource != containerSourceGitHub && containerCreateOpts.createReplaceID != "" {
+				return fmt.Errorf("%s configs do not support --replace; create a new container before removing the old one", containerCreateOpts.createSource)
 			}
-			revision := createRevision
+			revision := containerCreateOpts.createRevision
 			if revision == "" {
-				revision = createTag
+				revision = containerCreateOpts.createTag
 			}
 			body := map[string]any{"name": args[0]}
-			if createSource == containerSourceLocal {
-				if createRepo != "" || revision != "" {
+			if containerCreateOpts.createSource == containerSourceLocal {
+				if containerCreateOpts.createRepo != "" || revision != "" {
 					return fmt.Errorf("local configs cannot use --repo, --tag, or --revision")
 				}
-				data, err := readLocalConfig()
+				data, err := readLocalConfig(rootOpts)
 				if err != nil {
 					return err
 				}
 				body["source"], body["config"] = containerSourceLocal, data
 			} else {
-				if createRepo == "" {
-					return fmt.Errorf("--repo is required for %s configs", createSource)
+				if containerCreateOpts.createRepo == "" {
+					return fmt.Errorf("--repo is required for %s configs", containerCreateOpts.createSource)
 				}
-				body["repo"] = createRepo
-				if createSource == containerSourceRegistry {
-					body["source"] = createSource
+				body["repo"] = containerCreateOpts.createRepo
+				if containerCreateOpts.createSource == containerSourceRegistry {
+					body["source"] = containerCreateOpts.createSource
 				}
-				if createRevision != "" {
+				if containerCreateOpts.createRevision != "" {
 					body["revision"] = revision
 				} else {
 					body["tag"] = revision
 				}
 			}
-			if err := setMarkLatestRelease(cmd, body, createMarkLatestRelease); err != nil {
+			if err := setMarkLatestRelease(cmd, body, containerCreateOpts.createMarkLatestRelease); err != nil {
 				return err
 			}
-			secrets, err := parseSecretSelection(createSecrets)
+			secrets, err := parseSecretSelection(containerCreateOpts.createSecrets)
 			if err != nil {
 				return err
 			}
@@ -339,13 +287,13 @@ func newContainerCreateCommand() *cobra.Command {
 				return err
 			}
 
-			vars, err := parseKeyValues(createVariables)
+			vars, err := parseKeyValues(containerCreateOpts.createVariables)
 			if err != nil {
 				return err
 			}
 
-			if createSource == containerSourceGitHub && createRepo == defaultSandboxRepo {
-				if createDebug || createDisableCC {
+			if containerCreateOpts.createSource == containerSourceGitHub && containerCreateOpts.createRepo == defaultSandboxRepo {
+				if containerCreateOpts.createDebug || containerCreateOpts.createDisableCC {
 					return fmt.Errorf("sandbox aliases require a production deployment")
 				}
 				if vars["NO_MONITOR"] != "1" {
@@ -353,18 +301,18 @@ func newContainerCreateCommand() *cobra.Command {
 				}
 			}
 
-			if createDisableCC {
-				if err := confirmNonCCMode(); err != nil {
+			if containerCreateOpts.createDisableCC {
+				if err := confirmNonCCMode(containerCreateOpts); err != nil {
 					return err
 				}
 			}
 
-			requests, err := parseVolumeRequests(createVolumes)
+			requests, err := parseVolumeRequests(containerCreateOpts.createVolumes)
 			if err != nil {
 				return err
 			}
 			var replacement *containerView
-			replaceID := strings.TrimSpace(createReplaceID)
+			replaceID := strings.TrimSpace(containerCreateOpts.createReplaceID)
 			if replaceID != "" {
 				if !looksLikeUUID(replaceID) {
 					return fmt.Errorf("--replace requires a container ID")
@@ -382,8 +330,8 @@ func newContainerCreateCommand() *cobra.Command {
 			// with the commands to run rather than creating a container that sits
 			// stopped. Slots without one are optional and the container deploys
 			// with them empty.
-			if createSource == containerSourceGitHub {
-				slots, err := declaredVolumeSlots(client, createRepo, revision, args[0], replaceID)
+			if containerCreateOpts.createSource == containerSourceGitHub {
+				slots, err := declaredVolumeSlots(client, containerCreateOpts.createRepo, revision, args[0], replaceID)
 				if err != nil {
 					return err
 				}
@@ -403,7 +351,7 @@ func newContainerCreateCommand() *cobra.Command {
 					}
 				}
 				if len(missing) > 0 {
-					return errVolumesRequired(args[0], missing, createHost)
+					return errVolumesRequired(args[0], missing, containerCreateOpts.createHost)
 				}
 			}
 			var volumes []volumeView
@@ -415,7 +363,7 @@ func newContainerCreateCommand() *cobra.Command {
 				if volumes, err = resolveVolumeRequests(list.Volumes, requests, replacement); err != nil {
 					return err
 				}
-				host, err := volumesHost(volumes, createHost)
+				host, err := volumesHost(volumes, containerCreateOpts.createHost)
 				if err != nil {
 					return err
 				}
@@ -423,28 +371,28 @@ func newContainerCreateCommand() *cobra.Command {
 			}
 
 			if cmd.Flags().Changed("display-order") {
-				body["display_order"] = createDisplayOrder
+				body["display_order"] = containerCreateOpts.createDisplayOrder
 			}
 			if len(vars) > 0 {
 				body["variables"] = vars
 			}
-			if len(createSecrets) > 0 {
+			if len(containerCreateOpts.createSecrets) > 0 {
 				body["secrets"] = secrets
 			}
-			if len(createSSHKeys) > 0 {
-				body["ssh_keys"] = createSSHKeys
+			if len(containerCreateOpts.createSSHKeys) > 0 {
+				body["ssh_keys"] = containerCreateOpts.createSSHKeys
 			}
-			if createDebug {
+			if containerCreateOpts.createDebug {
 				body["debug"] = true
 			}
-			if createDisableCC {
+			if containerCreateOpts.createDisableCC {
 				body["disable_cc_mode"] = true
 			}
-			if createCustomDomain != "" {
-				body["custom_domain"] = createCustomDomain
+			if containerCreateOpts.createCustomDomain != "" {
+				body["custom_domain"] = containerCreateOpts.createCustomDomain
 			}
-			if createHost != "" && len(requests) == 0 {
-				body["host_name"] = createHost
+			if containerCreateOpts.createHost != "" && len(requests) == 0 {
+				body["host_name"] = containerCreateOpts.createHost
 			}
 			if replaceID != "" {
 				body["replace_container_id"] = replaceID
@@ -456,7 +404,7 @@ func newContainerCreateCommand() *cobra.Command {
 			}
 			// The caller just told us exactly what they intend to run: seed the
 			// trust store now so the first connect needs no prompt.
-			seedTrustFromCreate(createRepo, revision)
+			seedTrustFromCreate(containerCreateOpts.createRepo, revision)
 			deployBody := map[string]any{}
 			if value, ok := body["mark_latest_release"].(bool); ok {
 				deployBody["mark_latest_release"] = value
@@ -466,7 +414,7 @@ func newContainerCreateCommand() *cobra.Command {
 				if len(requests) > 0 {
 					return createFollowupError(created, replaceID, fmt.Errorf("the returned configuration declares no mounts; --volume was not applied"))
 				}
-				return createFollowupError(created, replaceID, followAndRender(client, created, nil))
+				return createFollowupError(created, replaceID, followAndRender(outputOpts, waitOpts, client, created, nil))
 			}
 			if len(requests) > 0 {
 				if err := attachVolumes(client, &created, requests, volumes); err != nil {
@@ -483,26 +431,26 @@ func newContainerCreateCommand() *cobra.Command {
 			if err != nil {
 				return createFollowupError(created, replaceID, fmt.Errorf("deploy was accepted (status %s), but could not load attached volumes: %w", deployed.Status, err))
 			}
-			return createFollowupError(created, replaceID, followAndRender(client, deployed, attached))
+			return createFollowupError(created, replaceID, followAndRender(outputOpts, waitOpts, client, deployed, attached))
 		},
 	}
-	containerCreateCmd.Flags().BoolVar(&noWait, "no-wait", false, "Return once the request is accepted")
-	containerCreateCmd.Flags().StringVar(&createRepo, "repo", "", "GitHub repository or registry project (org/project)")
-	containerCreateCmd.Flags().StringVar(&createTag, "tag", "", "GitHub release tag (alias for --revision with --source github)")
-	containerCreateCmd.Flags().StringVar(&createSource, "source", containerSourceGitHub, "Config source: github, registry, or local (implied by --config)")
-	containerCreateCmd.Flags().StringVar(&createRevision, "revision", "", "GitHub release tag, or registry version or sha256:<config digest>")
-	containerCreateCmd.Flags().BoolVar(&createDebug, "debug", false, "Enable debug mode (allows SSH into the enclave)")
-	containerCreateCmd.Flags().StringVar(&createMarkLatestRelease, "mark-latest", "", "Mark the tag as the repo's latest GitHub release once running (default true)")
-	containerCreateCmd.Flags().BoolVar(&createDisableCC, "disable-cc-mode", false, "EXPERIMENTAL: disable confidential computing (benchmarks only; requires org entitlement)")
-	containerCreateCmd.Flags().BoolVar(&createYes, "yes", false, "Skip interactive confirmation for --disable-cc-mode")
-	containerCreateCmd.Flags().StringVar(&createCustomDomain, "custom-domain", "", "Verified custom domain to expose the container on")
-	containerCreateCmd.Flags().StringVar(&createHost, "host", "", "Target host name (see 'tinfoil container hosts')")
-	containerCreateCmd.Flags().StringVar(&createReplaceID, "replace", "", "ID of the existing container to replace; its disks may be reused with --volume")
-	containerCreateCmd.Flags().StringArrayVar(&createVariables, "variable", nil, "Environment variable in KEY=VALUE form; may be repeated")
-	containerCreateCmd.Flags().StringArrayVar(&createSecrets, "secret", nil, "Tinfoil-managed secret name; may be repeated (use --secret=\"\" for none)")
-	containerCreateCmd.Flags().StringArrayVar(&createSSHKeys, "ssh-key", nil, "Org SSH key name (debug only); may be repeated")
-	containerCreateCmd.Flags().StringArrayVar(&createVolumes, "volume", nil, "Volume to attach before the first deploy, as <id|name>[:<mount name>]; may be repeated")
-	containerCreateCmd.Flags().Int32Var(&createDisplayOrder, "display-order", 0, "Sort order of this instance within its project")
+	containerCreateCmd.Flags().BoolVar(&waitOpts.noWait, "no-wait", false, "Return once the request is accepted")
+	containerCreateCmd.Flags().StringVar(&containerCreateOpts.createRepo, "repo", "", "GitHub repository or registry project (org/project)")
+	containerCreateCmd.Flags().StringVar(&containerCreateOpts.createTag, "tag", "", "GitHub release tag (alias for --revision with --source github)")
+	containerCreateCmd.Flags().StringVar(&containerCreateOpts.createSource, "source", containerSourceGitHub, "Config source: github, registry, or local (implied by --config)")
+	containerCreateCmd.Flags().StringVar(&containerCreateOpts.createRevision, "revision", "", "GitHub release tag, or registry version or sha256:<config digest>")
+	containerCreateCmd.Flags().BoolVar(&containerCreateOpts.createDebug, "debug", false, "Enable debug mode (allows SSH into the enclave)")
+	containerCreateCmd.Flags().StringVar(&containerCreateOpts.createMarkLatestRelease, "mark-latest", "", "Mark the tag as the repo's latest GitHub release once running (default true)")
+	containerCreateCmd.Flags().BoolVar(&containerCreateOpts.createDisableCC, "disable-cc-mode", false, "EXPERIMENTAL: disable confidential computing (benchmarks only; requires org entitlement)")
+	containerCreateCmd.Flags().BoolVar(&containerCreateOpts.createYes, "yes", false, "Skip interactive confirmation for --disable-cc-mode")
+	containerCreateCmd.Flags().StringVar(&containerCreateOpts.createCustomDomain, "custom-domain", "", "Verified custom domain to expose the container on")
+	containerCreateCmd.Flags().StringVar(&containerCreateOpts.createHost, "host", "", "Target host name (see 'tinfoil container hosts')")
+	containerCreateCmd.Flags().StringVar(&containerCreateOpts.createReplaceID, "replace", "", "ID of the existing container to replace; its disks may be reused with --volume")
+	containerCreateCmd.Flags().StringArrayVar(&containerCreateOpts.createVariables, "variable", nil, "Environment variable in KEY=VALUE form; may be repeated")
+	containerCreateCmd.Flags().StringArrayVar(&containerCreateOpts.createSecrets, "secret", nil, "Tinfoil-managed secret name; may be repeated (use --secret=\"\" for none)")
+	containerCreateCmd.Flags().StringArrayVar(&containerCreateOpts.createSSHKeys, "ssh-key", nil, "Org SSH key name (debug only); may be repeated")
+	containerCreateCmd.Flags().StringArrayVar(&containerCreateOpts.createVolumes, "volume", nil, "Volume to attach before the first deploy, as <id|name>[:<mount name>]; may be repeated")
+	containerCreateCmd.Flags().Int32Var(&containerCreateOpts.createDisplayOrder, "display-order", 0, "Sort order of this instance within its project")
 	return containerCreateCmd
 }
 
@@ -517,7 +465,7 @@ func createFollowupError(created containerView, replaceID string, err error) err
 	return fmt.Errorf("created %s (%s)%s, but follow-up failed: %w. The new container and any successful disk attachments were retained; inspect with: tinfoil container get %s", created.Name, created.ID, replaced, err, created.ID)
 }
 
-func newContainerDeleteCommand() *cobra.Command {
+func newContainerDeleteCommand(containerDeleteOpts *containerDeleteOptions) *cobra.Command {
 	containerDeleteCmd := &cobra.Command{
 		Use:     "delete [id|name]",
 		Aliases: []string{"rm", "remove"},
@@ -544,7 +492,7 @@ func newContainerDeleteCommand() *cobra.Command {
 				}
 			}
 			fmt.Fprintln(os.Stderr, "This removes the container, its saved configuration, and its DNS records. "+volumes)
-			if err := confirmYes(deleteYes, cmd.CommandPath()); err != nil {
+			if err := confirmYes(containerDeleteOpts.deleteYes, cmd.CommandPath()); err != nil {
 				return err
 			}
 			if _, err := client.do("DELETE", pathf("/api/containers/%s", c.ID), nil, nil, nil); err != nil {
@@ -554,11 +502,11 @@ func newContainerDeleteCommand() *cobra.Command {
 			return nil
 		},
 	}
-	containerDeleteCmd.Flags().BoolVar(&deleteYes, "yes", false, "Skip interactive confirmation")
+	containerDeleteCmd.Flags().BoolVar(&containerDeleteOpts.deleteYes, "yes", false, "Skip interactive confirmation")
 	return containerDeleteCmd
 }
 
-func newContainerDeployCommand() *cobra.Command {
+func newContainerDeployCommand(containerDeployOpts *containerDeployOptions, outputOpts *outputOptions, waitOpts *waitOptions) *cobra.Command {
 	containerDeployCmd := &cobra.Command{
 		Use:   "deploy [id|name]",
 		Short: "Deploy a stopped or failed container",
@@ -566,84 +514,23 @@ func newContainerDeployCommand() *cobra.Command {
 To change a running container, use "tinfoil container update".`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			body, err := buildLifecycleBody(cmd,
-				deployTag, deployVariables, deploySecrets, deploySSHKeys,
-				deployDebug, deployMarkLatestRelease, deployCustomDomain, deployHost,
-			)
-			if err != nil {
-				return err
-			}
-
-			requests, err := parseVolumeRequests(deployVolumes)
-			if err != nil {
-				return err
-			}
-
-			client, err := authedClient()
-			if err != nil {
-				return err
-			}
-			c, err := resolveContainerDetail(client, args[0])
-			if err != nil {
-				return err
-			}
-			if err := checkManagedKind(cmd.Annotations[managedKindAnnotation], *c); err != nil {
-				return err
-			}
-			if c.Status == statusFailed && c.ErrorMessage != "" && outputFormat != "json" {
-				fmt.Fprintf(os.Stderr, "Last attempt failed: %s\n", humanVolumeMessage(c.ErrorMessage))
-				fmt.Fprintln(os.Stderr, "Deploying again with the same settings; pass flags to change them.")
-			}
-			if len(requests) > 0 {
-				list, err := listVolumes(client)
-				if err != nil {
-					return err
-				}
-				volumes, err := resolveVolumeRequests(list.Volumes, requests, nil)
-				if err != nil {
-					return err
-				}
-				host, err := volumesHost(volumes, deployHost)
-				if err != nil {
-					return err
-				}
-				if deployHost == "" && c.HostName != host {
-					return fmt.Errorf("container %s is on host %s but volume %s is on %s; volumes must be on the container's host", c.Name, c.HostName, volumes[0].Name, host)
-				}
-				attachTarget := *c
-				attachTarget.MarkLatestRelease = nil
-				if value, ok := body["mark_latest_release"].(bool); ok {
-					attachTarget.MarkLatestRelease = &value
-				}
-				if err := attachVolumes(client, &attachTarget, requests, volumes); err != nil {
-					return err
-				}
-			}
-			deployed, err := postContainerAction(client, c.ID, "deploy", body)
-			if err != nil {
-				return withAttachHint(err, c)
-			}
-			attached, err := loadContainerVolumes(client, deployed)
-			if err != nil {
-				return err
-			}
-			return followAndRender(client, deployed, attached)
+			return runContainerDeploy(containerDeployOpts, outputOpts, waitOpts, cmd, args)
 		},
 	}
-	containerDeployCmd.Flags().BoolVar(&noWait, "no-wait", false, "Return once the request is accepted")
-	containerDeployCmd.Flags().StringVar(&deployTag, "tag", "", "Deploy a different release tag than the saved one")
-	containerDeployCmd.Flags().StringArrayVar(&deployVariables, "variable", nil, "Replace the saved environment variables with KEY=VALUE pairs; may be repeated")
-	containerDeployCmd.Flags().StringArrayVar(&deploySecrets, "secret", nil, "Replace the saved Tinfoil-managed secrets list (specify all; --secret=\"\" clears it)")
-	containerDeployCmd.Flags().StringArrayVar(&deploySSHKeys, "ssh-key", nil, "Replace the saved SSH keys list")
-	containerDeployCmd.Flags().StringVar(&deployDebug, "debug", "", "Deploy in debug mode (true/false)")
-	containerDeployCmd.Flags().StringVar(&deployMarkLatestRelease, "mark-latest", "", "Mark the tag as the repo's latest GitHub release once running (default true)")
-	containerDeployCmd.Flags().StringVar(&deployCustomDomain, "custom-domain", "", "Replace the custom domain (empty string clears it)")
-	containerDeployCmd.Flags().StringVar(&deployHost, "host", "", "Deploy on a different host (see 'tinfoil container hosts')")
-	containerDeployCmd.Flags().StringArrayVar(&deployVolumes, "volume", nil, "Volume to attach before deploying, as <id|name>[:<mount name>]; may be repeated")
+	containerDeployCmd.Flags().BoolVar(&waitOpts.noWait, "no-wait", false, "Return once the request is accepted")
+	containerDeployCmd.Flags().StringVar(&containerDeployOpts.deployTag, "tag", "", "Deploy a different release tag than the saved one")
+	containerDeployCmd.Flags().StringArrayVar(&containerDeployOpts.deployVariables, "variable", nil, "Replace the saved environment variables with KEY=VALUE pairs; may be repeated")
+	containerDeployCmd.Flags().StringArrayVar(&containerDeployOpts.deploySecrets, "secret", nil, "Replace the saved Tinfoil-managed secrets list (specify all; --secret=\"\" clears it)")
+	containerDeployCmd.Flags().StringArrayVar(&containerDeployOpts.deploySSHKeys, "ssh-key", nil, "Replace the saved SSH keys list")
+	containerDeployCmd.Flags().StringVar(&containerDeployOpts.deployDebug, "debug", "", "Deploy in debug mode (true/false)")
+	containerDeployCmd.Flags().StringVar(&containerDeployOpts.deployMarkLatestRelease, "mark-latest", "", "Mark the tag as the repo's latest GitHub release once running (default true)")
+	containerDeployCmd.Flags().StringVar(&containerDeployOpts.deployCustomDomain, "custom-domain", "", "Replace the custom domain (empty string clears it)")
+	containerDeployCmd.Flags().StringVar(&containerDeployOpts.deployHost, "host", "", "Deploy on a different host (see 'tinfoil container hosts')")
+	containerDeployCmd.Flags().StringArrayVar(&containerDeployOpts.deployVolumes, "volume", nil, "Volume to attach before deploying, as <id|name>[:<mount name>]; may be repeated")
 	return containerDeployCmd
 }
 
-func newContainerStopCommand() *cobra.Command {
+func newContainerStopCommand(outputOpts *outputOptions) *cobra.Command {
 	containerStopCmd := &cobra.Command{
 		Use:   "stop [id|name]",
 		Short: "Stop a running container",
@@ -664,17 +551,17 @@ func newContainerStopCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if outputFormat != "json" {
+			if outputOpts.outputFormat != "json" {
 				fmt.Printf("Stopping %s. Its configuration and volumes are kept; run \"tinfoil container deploy %s\" to bring it back.\n", c.Name, c.Name)
 			}
-			return renderContainer(stopped)
+			return renderContainer(outputOpts, stopped)
 		},
 	}
 
 	return containerStopCmd
 }
 
-func newContainerUpdateCommand() *cobra.Command {
+func newContainerUpdateCommand(containerUpdateOpts *containerUpdateOptions, outputOpts *outputOptions, waitOpts *waitOptions) *cobra.Command {
 	containerUpdateCmd := &cobra.Command{
 		Use:   "update [id|name]",
 		Short: "Update a running container to a new tag or configuration",
@@ -682,91 +569,37 @@ func newContainerUpdateCommand() *cobra.Command {
 update has downtime.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			body, err := buildLifecycleBody(cmd,
-				updateTag, updateVariables, updateSecrets, updateSSHKeys,
-				updateDebug, updateMarkLatestRelease, updateCustomDomain, "",
-			)
-			if err != nil {
-				return err
-			}
-			if cmd.Flags().Changed("hold") {
-				hold, err := parseTriBool(updateHold)
-				if err != nil {
-					return fmt.Errorf("--hold: %w", err)
-				}
-				body["hold"] = hold
-			} else if cmd.Annotations[managedKindAnnotation] != "" {
-				body["hold"] = false
-			}
-
-			client, err := authedClient()
-			if err != nil {
-				return err
-			}
-			c, err := resolveContainerDetail(client, args[0])
-			if err != nil {
-				return err
-			}
-			if err := checkManagedKind(cmd.Annotations[managedKindAnnotation], *c); err != nil {
-				return err
-			}
-			var updated containerView
-			if err := postLifecycleUpdate(client, pathf("/api/containers/%s/update", c.ID), body, &updated, updateYes, cmd.CommandPath(), func() (updateReview, error) {
-				return planContainerUpdate(client, c.ID, body)
-			}); err != nil {
-				return err
-			}
-			return followAndRender(client, updated, nil)
+			return runContainerUpdate(containerUpdateOpts, outputOpts, waitOpts, cmd, args)
 		},
 	}
-	containerUpdateCmd.Flags().BoolVar(&noWait, "no-wait", false, "Return once the request is accepted")
-	containerUpdateCmd.Flags().StringVar(&updateTag, "tag", "", "Release tag to update to")
-	containerUpdateCmd.Flags().StringArrayVar(&updateVariables, "variable", nil, "Replace the saved environment variables with KEY=VALUE pairs; may be repeated")
-	containerUpdateCmd.Flags().StringArrayVar(&updateSecrets, "secret", nil, "Replace the saved Tinfoil-managed secrets list (specify all; --secret=\"\" clears it)")
-	containerUpdateCmd.Flags().StringArrayVar(&updateSSHKeys, "ssh-key", nil, "Replace the saved SSH keys list")
-	containerUpdateCmd.Flags().StringVar(&updateDebug, "debug", "", "Switch debug mode on or off (true/false)")
-	containerUpdateCmd.Flags().StringVar(&updateHold, "hold", "", "Hold the new version for review (default: the project's setting)")
+	containerUpdateCmd.Flags().BoolVar(&waitOpts.noWait, "no-wait", false, "Return once the request is accepted")
+	containerUpdateCmd.Flags().StringVar(&containerUpdateOpts.updateTag, "tag", "", "Release tag to update to")
+	containerUpdateCmd.Flags().StringArrayVar(&containerUpdateOpts.updateVariables, "variable", nil, "Replace the saved environment variables with KEY=VALUE pairs; may be repeated")
+	containerUpdateCmd.Flags().StringArrayVar(&containerUpdateOpts.updateSecrets, "secret", nil, "Replace the saved Tinfoil-managed secrets list (specify all; --secret=\"\" clears it)")
+	containerUpdateCmd.Flags().StringArrayVar(&containerUpdateOpts.updateSSHKeys, "ssh-key", nil, "Replace the saved SSH keys list")
+	containerUpdateCmd.Flags().StringVar(&containerUpdateOpts.updateDebug, "debug", "", "Switch debug mode on or off (true/false)")
+	containerUpdateCmd.Flags().StringVar(&containerUpdateOpts.updateHold, "hold", "", "Hold the new version for review (default: the project's setting)")
 	containerUpdateCmd.Flags().Lookup("hold").NoOptDefVal = "true"
-	containerUpdateCmd.Flags().StringVar(&updateMarkLatestRelease, "mark-latest", "", "Mark the tag as the repo's latest GitHub release once running (default true)")
-	containerUpdateCmd.Flags().StringVar(&updateCustomDomain, "custom-domain", "", "Replace the custom domain (empty string clears it)")
-	containerUpdateCmd.Flags().BoolVar(&updateYes, "yes", false, "Approve the update plan, including any downtime")
+	containerUpdateCmd.Flags().StringVar(&containerUpdateOpts.updateMarkLatestRelease, "mark-latest", "", "Mark the tag as the repo's latest GitHub release once running (default true)")
+	containerUpdateCmd.Flags().StringVar(&containerUpdateOpts.updateCustomDomain, "custom-domain", "", "Replace the custom domain (empty string clears it)")
+	containerUpdateCmd.Flags().BoolVar(&containerUpdateOpts.updateYes, "yes", false, "Approve the update plan, including any downtime")
 	return containerUpdateCmd
 }
 
-func newContainerMetricsCommand() *cobra.Command {
+func newContainerMetricsCommand(containerMetricsOpts *containerMetricsOptions) *cobra.Command {
 	containerMetricsCmd := &cobra.Command{
 		Use:   "metrics [id|name]",
 		Short: "Show container resource metrics",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			client, err := authedClient()
-			if err != nil {
-				return err
-			}
-			c, err := resolveContainer(client, args[0])
-			if err != nil {
-				return err
-			}
-			if err := checkManagedKind(cmd.Annotations[managedKindAnnotation], *c); err != nil {
-				return err
-			}
-			q := url.Values{"time": []string{metricsTime}}
-			var raw json.RawMessage
-			if _, err := client.do("GET", pathf("/api/containers/%s/metrics", c.ID), q, nil, &raw); err != nil {
-				return err
-			}
-			// Metrics are time-series data; printing JSON is the most useful
-			// default. Users who want a chart can pipe into jq.
-			os.Stdout.Write(prettyJSON(raw))
-			fmt.Println()
-			return nil
+			return runContainerMetrics(containerMetricsOpts, cmd, args)
 		},
 	}
-	containerMetricsCmd.Flags().StringVar(&metricsTime, "time", "24h", "Time window (e.g. 1h, 24h, 7d)")
+	containerMetricsCmd.Flags().StringVar(&containerMetricsOpts.metricsTime, "time", "24h", "Time window (e.g. 1h, 24h, 7d)")
 	return containerMetricsCmd
 }
 
-func newContainerHostsCommand() *cobra.Command {
+func newContainerHostsCommand(outputOpts *outputOptions) *cobra.Command {
 	containerHostsCmd := &cobra.Command{
 		Use:   "hosts",
 		Short: "List container hosts available to your organization",
@@ -779,7 +612,7 @@ func newContainerHostsCommand() *cobra.Command {
 			if _, err := client.do("GET", "/api/containers/hosts", nil, nil, &hosts); err != nil {
 				return err
 			}
-			if outputFormat == "json" {
+			if outputOpts.outputFormat == "json" {
 				return printJSON(hosts)
 			}
 			if len(hosts) == 0 {
@@ -797,7 +630,7 @@ func newContainerHostsCommand() *cobra.Command {
 	return containerHostsCmd
 }
 
-func newContainerPromoteCommand() *cobra.Command {
+func newContainerPromoteCommand(outputOpts *outputOptions, waitOpts *waitOptions) *cobra.Command {
 	containerPromoteCmd := &cobra.Command{
 		Use:   "promote [id|name]",
 		Short: "Switch traffic to an update that was held for review",
@@ -815,17 +648,17 @@ func newContainerPromoteCommand() *cobra.Command {
 			if _, err := client.do("POST", pathf("/api/containers/%s/update/promote", c.ID), nil, nil, &promoted); err != nil {
 				return err
 			}
-			if outputFormat != "json" {
+			if outputOpts.outputFormat != "json" {
 				fmt.Printf("Promoted update on %s; traffic is switching to %s.\n", c.Name, promoted.CurrentTag)
 			}
-			return followAndRender(client, promoted, nil)
+			return followAndRender(outputOpts, waitOpts, client, promoted, nil)
 		},
 	}
-	containerPromoteCmd.Flags().BoolVar(&noWait, "no-wait", false, "Return once the request is accepted")
+	containerPromoteCmd.Flags().BoolVar(&waitOpts.noWait, "no-wait", false, "Return once the request is accepted")
 	return containerPromoteCmd
 }
 
-func newContainerCancelCommand() *cobra.Command {
+func newContainerCancelCommand(containerCancelOpts *containerCancelOptions) *cobra.Command {
 	containerCancelCmd := &cobra.Command{
 		Use:   "cancel [id|name]",
 		Short: "Cancel an update and keep the current version",
@@ -845,18 +678,18 @@ func newContainerCancelCommand() *cobra.Command {
 				RollbackLatest bool   `json:"rollback_latest"`
 				Tag            string `json:"tag"`
 			}
-			if cancelRollbackLatest {
+			if containerCancelOpts.cancelRollbackLatest {
 				body = map[string]bool{"rollback_latest": true}
 				response = &acknowledgment
 			}
 			status, err := client.do("POST", pathf("/api/containers/%s/update/cancel", c.ID), nil, body, response)
 			if err != nil {
-				if cancelRollbackLatest && status == http.StatusOK {
+				if containerCancelOpts.cancelRollbackLatest && status == http.StatusOK {
 					return fmt.Errorf("update cancellation may have completed, but the controlplane did not confirm latest release restoration: %w", err)
 				}
 				return err
 			}
-			if cancelRollbackLatest {
+			if containerCancelOpts.cancelRollbackLatest {
 				if status != http.StatusOK || !acknowledgment.RollbackLatest || strings.TrimSpace(acknowledgment.Tag) == "" {
 					return fmt.Errorf("update cancellation may have completed, but the controlplane did not confirm latest release restoration (HTTP %d)", status)
 				}
@@ -867,11 +700,11 @@ func newContainerCancelCommand() *cobra.Command {
 			return nil
 		},
 	}
-	containerCancelCmd.Flags().BoolVar(&cancelRollbackLatest, "rollback-latest", false, "Request restoring the repository's latest release to the current production tag")
+	containerCancelCmd.Flags().BoolVar(&containerCancelOpts.cancelRollbackLatest, "rollback-latest", false, "Request restoring the repository's latest release to the current production tag")
 	return containerCancelCmd
 }
 
-func newContainerConnectCommand() *cobra.Command {
+func newContainerConnectCommand(containerConnectOpts *containerConnectOptions, proxyOpts *proxyOptions, rootOpts *rootOptions, trustOpts *trustOptions) *cobra.Command {
 	containerConnectCmd := &cobra.Command{
 		Use:   "connect [id|name]",
 		Short: "Run a verified proxy to a deployed container",
@@ -893,8 +726,8 @@ func newContainerConnectCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			sourceOverride := repo
-			if repo != "" && !strings.Contains(repo, "/") {
+			sourceOverride := rootOpts.repo
+			if rootOpts.repo != "" && !strings.Contains(rootOpts.repo, "/") {
 				// A bare org is a valid assertion here but not a verifier pin:
 				// tinfoil-go's reference grammar requires owner/name — it has no
 				// org-prefix match, even though the endorsed name it compares
@@ -905,7 +738,7 @@ func newContainerConnectCommand() *cobra.Command {
 				// pins the resolved reference.
 				sourceOverride = ""
 			}
-			target, err := containerConnection(*c, connectReview, sourceOverride)
+			target, err := containerConnection(*c, containerConnectOpts.connectReview, sourceOverride)
 			if err != nil {
 				return err
 			}
@@ -913,32 +746,32 @@ func newContainerConnectCommand() *cobra.Command {
 			if c.Source == containerSourceLocal {
 				// A local config is a caller-held expectation: the file's digest is
 				// the trust decision, so the connection policy does not apply.
-				if err := checkLocalConfigDigest(target.ConfigDigest); err != nil {
+				if err := checkLocalConfigDigest(rootOpts, target.ConfigDigest); err != nil {
 					return err
 				}
 				expected = "sha256:" + target.ConfigDigest
-			} else if repo == "" {
+			} else if rootOpts.repo == "" {
 				// The expectation came from the controlplane response, not the
 				// caller: check it against the connection policy before trusting it.
-				if err := enforceConnectionPolicy(target.source); err != nil {
+				if err := enforceConnectionPolicy(trustOpts, target.source); err != nil {
 					return err
 				}
-			} else if err := assertTrustedSource(repo, target.source); err != nil {
+			} else if err := assertTrustedSource(rootOpts.repo, target.source); err != nil {
 				return err
 			}
 			fmt.Printf("Connecting verified proxy to %s: %s (expected %s)\n", c.Name, target.URL, expected)
 
-			enclaveHost = target.host
-			repo = target.source
-			listenAddr = connectBindAddr
-			listenPort = connectPort
-			return runProxy(cmd, nil)
+			rootOpts.enclaveHost = target.host
+			rootOpts.repo = target.source
+			proxyOpts.listenAddr = containerConnectOpts.connectBindAddr
+			proxyOpts.listenPort = containerConnectOpts.connectPort
+			return runProxy(proxyOpts, rootOpts, cmd, nil)
 		},
 	}
-	containerConnectCmd.Flags().UintVarP(&connectPort, "port", "p", 8080, "Local port for the verified proxy")
-	containerConnectCmd.Flags().StringVarP(&connectBindAddr, "bind", "b", "127.0.0.1", "Address to bind to")
-	containerConnectCmd.Flags().BoolVar(&connectReview, "review", false, "Connect to the update held for review instead of production")
-	addTrustDangerousFlag(containerConnectCmd)
+	containerConnectCmd.Flags().UintVarP(&containerConnectOpts.connectPort, "port", "p", 8080, "Local port for the verified proxy")
+	containerConnectCmd.Flags().StringVarP(&containerConnectOpts.connectBindAddr, "bind", "b", "127.0.0.1", "Address to bind to")
+	containerConnectCmd.Flags().BoolVar(&containerConnectOpts.connectReview, "review", false, "Connect to the update held for review instead of production")
+	addTrustDangerousFlag(trustOpts, containerConnectCmd)
 	return containerConnectCmd
 }
 
@@ -1124,7 +957,7 @@ func setMarkLatestRelease(cmd *cobra.Command, body map[string]any, value string)
 // user toggles "Disable Confidential Compute", then requires the user to type
 // "yes" before proceeding. --yes bypasses the prompt for scripted use. When
 // stdin is not a TTY and --yes was not passed, abort rather than block.
-func confirmNonCCMode() error {
+func confirmNonCCMode(containerCreateOpts *containerCreateOptions) error {
 	fmt.Fprintln(os.Stderr, "EXPERIMENTAL: Disable Confidential Compute")
 	fmt.Fprintln(os.Stderr)
 	fmt.Fprintln(os.Stderr, "Disables memory encryption and hardware attestation for this container.")
@@ -1134,7 +967,7 @@ func confirmNonCCMode() error {
 	fmt.Fprintln(os.Stderr, "WARNING: This container will deploy without confidential computing")
 	fmt.Fprintln(os.Stderr, "protections. The host operator can read memory and observe execution.")
 	fmt.Fprintln(os.Stderr)
-	return confirmYes(createYes, "--disable-cc-mode")
+	return confirmYes(containerCreateOpts.createYes, "--disable-cc-mode")
 }
 
 func confirmYes(skip bool, what string) error {
@@ -1178,14 +1011,14 @@ func formatInts(in []int) string {
 	return strings.Join(out, ",")
 }
 
-func renderContainer(c containerView) error {
-	return renderContainerDetail(c, nil)
+func renderContainer(outputOpts *outputOptions, c containerView) error {
+	return renderContainerDetail(outputOpts, c, nil)
 }
 
 // renderContainerDetail prints c with its declared volumes; attached maps a
 // slot to its volume when known, otherwise the view's volume ID is shown.
-func renderContainerDetail(c containerView, attached map[string]volumeView) error {
-	if outputFormat == "json" {
+func renderContainerDetail(outputOpts *outputOptions, c containerView, attached map[string]volumeView) error {
+	if outputOpts.outputFormat == "json" {
 		return printJSON(c)
 	}
 	fmt.Printf("ID:           %s\n", c.ID)
@@ -1268,8 +1101,8 @@ func renderContainerDetail(c containerView, attached map[string]volumeView) erro
 	return nil
 }
 
-func renderContainers(list []containerView) error {
-	if outputFormat == "json" {
+func renderContainers(outputOpts *outputOptions, list []containerView) error {
+	if outputOpts.outputFormat == "json" {
 		return printJSON(list)
 	}
 	if len(list) == 0 {
@@ -1350,4 +1183,131 @@ func prettyJSON(raw json.RawMessage) []byte {
 		return raw
 	}
 	return out
+}
+
+func runContainerDeploy(containerDeployOpts *containerDeployOptions, outputOpts *outputOptions, waitOpts *waitOptions, cmd *cobra.Command, args []string) error {
+	body, err := buildLifecycleBody(cmd,
+		containerDeployOpts.deployTag, containerDeployOpts.deployVariables, containerDeployOpts.deploySecrets, containerDeployOpts.deploySSHKeys,
+		containerDeployOpts.deployDebug, containerDeployOpts.deployMarkLatestRelease, containerDeployOpts.deployCustomDomain, containerDeployOpts.deployHost,
+	)
+	if err != nil {
+		return err
+	}
+
+	requests, err := parseVolumeRequests(containerDeployOpts.deployVolumes)
+	if err != nil {
+		return err
+	}
+
+	client, err := authedClient()
+	if err != nil {
+		return err
+	}
+	c, err := resolveContainerDetail(client, args[0])
+	if err != nil {
+		return err
+	}
+	if err := checkManagedKind(cmd.Annotations[managedKindAnnotation], *c); err != nil {
+		return err
+	}
+	if c.Status == statusFailed && c.ErrorMessage != "" && outputOpts.outputFormat != "json" {
+		fmt.Fprintf(os.Stderr, "Last attempt failed: %s\n", humanVolumeMessage(c.ErrorMessage))
+		fmt.Fprintln(os.Stderr, "Deploying again with the same settings; pass flags to change them.")
+	}
+	if len(requests) > 0 {
+		list, err := listVolumes(client)
+		if err != nil {
+			return err
+		}
+		volumes, err := resolveVolumeRequests(list.Volumes, requests, nil)
+		if err != nil {
+			return err
+		}
+		host, err := volumesHost(volumes, containerDeployOpts.deployHost)
+		if err != nil {
+			return err
+		}
+		if containerDeployOpts.deployHost == "" && c.HostName != host {
+			return fmt.Errorf("container %s is on host %s but volume %s is on %s; volumes must be on the container's host", c.Name, c.HostName, volumes[0].Name, host)
+		}
+		attachTarget := *c
+		attachTarget.MarkLatestRelease = nil
+		if value, ok := body["mark_latest_release"].(bool); ok {
+			attachTarget.MarkLatestRelease = &value
+		}
+		if err := attachVolumes(client, &attachTarget, requests, volumes); err != nil {
+			return err
+		}
+	}
+	deployed, err := postContainerAction(client, c.ID, "deploy", body)
+	if err != nil {
+		return withAttachHint(err, c)
+	}
+	attached, err := loadContainerVolumes(client, deployed)
+	if err != nil {
+		return err
+	}
+	return followAndRender(outputOpts, waitOpts, client, deployed, attached)
+}
+
+func runContainerUpdate(containerUpdateOpts *containerUpdateOptions, outputOpts *outputOptions, waitOpts *waitOptions, cmd *cobra.Command, args []string) error {
+	body, err := buildLifecycleBody(cmd,
+		containerUpdateOpts.updateTag, containerUpdateOpts.updateVariables, containerUpdateOpts.updateSecrets, containerUpdateOpts.updateSSHKeys,
+		containerUpdateOpts.updateDebug, containerUpdateOpts.updateMarkLatestRelease, containerUpdateOpts.updateCustomDomain, "",
+	)
+	if err != nil {
+		return err
+	}
+	if cmd.Flags().Changed("hold") {
+		hold, err := parseTriBool(containerUpdateOpts.updateHold)
+		if err != nil {
+			return fmt.Errorf("--hold: %w", err)
+		}
+		body["hold"] = hold
+	} else if cmd.Annotations[managedKindAnnotation] != "" {
+		body["hold"] = false
+	}
+
+	client, err := authedClient()
+	if err != nil {
+		return err
+	}
+	c, err := resolveContainerDetail(client, args[0])
+	if err != nil {
+		return err
+	}
+	if err := checkManagedKind(cmd.Annotations[managedKindAnnotation], *c); err != nil {
+		return err
+	}
+	var updated containerView
+	if err := postLifecycleUpdate(outputOpts, client, pathf("/api/containers/%s/update", c.ID), body, &updated, containerUpdateOpts.updateYes, cmd.CommandPath(), func() (updateReview, error) {
+		return planContainerUpdate(client, c.ID, body)
+	}); err != nil {
+		return err
+	}
+	return followAndRender(outputOpts, waitOpts, client, updated, nil)
+}
+
+func runContainerMetrics(containerMetricsOpts *containerMetricsOptions, cmd *cobra.Command, args []string) error {
+	client, err := authedClient()
+	if err != nil {
+		return err
+	}
+	c, err := resolveContainer(client, args[0])
+	if err != nil {
+		return err
+	}
+	if err := checkManagedKind(cmd.Annotations[managedKindAnnotation], *c); err != nil {
+		return err
+	}
+	q := url.Values{"time": []string{containerMetricsOpts.metricsTime}}
+	var raw json.RawMessage
+	if _, err := client.do("GET", pathf("/api/containers/%s/metrics", c.ID), q, nil, &raw); err != nil {
+		return err
+	}
+	// Metrics are time-series data; printing JSON is the most useful
+	// default. Users who want a chart can pipe into jq.
+	os.Stdout.Write(prettyJSON(raw))
+	fmt.Println()
+	return nil
 }

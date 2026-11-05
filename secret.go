@@ -18,23 +18,18 @@ type secretView struct {
 	UsedBy    []string `json:"used_by"`
 }
 
-var (
-	secretValue     string
-	secretValueFile string
-)
-
-func newSecretCommand() *cobra.Command {
+func newSecretCommand(outputOpts *outputOptions) *cobra.Command {
 	secretCmd := &cobra.Command{
 		Use:     "secret",
 		Aliases: []string{"secrets"},
 		Short:   "Manage organization-level secrets",
 	}
-	secretCmd.PersistentFlags().StringVarP(&outputFormat, "output", "o", "table", "Output format: table or json")
-	secretCmd.AddCommand(newSecretListCommand(), newSecretGetCommand(), newSecretCreateCommand(), newSecretSetCommand(), newSecretDeleteCommand())
+	secretCmd.PersistentFlags().StringVarP(&outputOpts.outputFormat, "output", "o", "table", "Output format: table or json")
+	secretCmd.AddCommand(newSecretListCommand(outputOpts), newSecretGetCommand(outputOpts), newSecretCreateCommand(&secretValueOptions{}), newSecretSetCommand(&secretValueOptions{}), newSecretDeleteCommand())
 	return secretCmd
 }
 
-func newSecretListCommand() *cobra.Command {
+func newSecretListCommand(outputOpts *outputOptions) *cobra.Command {
 	secretListCmd := &cobra.Command{
 		Use:     "list",
 		Aliases: []string{"ls"},
@@ -48,14 +43,14 @@ func newSecretListCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return printSecretList(list)
+			return printSecretList(outputOpts, list)
 		},
 	}
 
 	return secretListCmd
 }
 
-func newSecretGetCommand() *cobra.Command {
+func newSecretGetCommand(outputOpts *outputOptions) *cobra.Command {
 	secretGetCmd := &cobra.Command{
 		Use:   "get [name]",
 		Short: "Show secret metadata",
@@ -69,14 +64,14 @@ func newSecretGetCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return printSecret(s)
+			return printSecret(outputOpts, s)
 		},
 	}
 
 	return secretGetCmd
 }
 
-func newSecretCreateCommand() *cobra.Command {
+func newSecretCreateCommand(secretValueOpts *secretValueOptions) *cobra.Command {
 	secretCreateCmd := &cobra.Command{
 		Use:   "create [name]",
 		Short: "Create a new organization secret",
@@ -86,7 +81,7 @@ func newSecretCreateCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			value, err := readSecretValue(cmd)
+			value, err := readSecretValue(secretValueOpts, cmd)
 			if err != nil {
 				return err
 			}
@@ -98,12 +93,12 @@ func newSecretCreateCommand() *cobra.Command {
 			return nil
 		},
 	}
-	secretCreateCmd.Flags().StringVar(&secretValue, "value", "", "Secret value (visible in ps; prefer --value-file or stdin)")
-	secretCreateCmd.Flags().StringVar(&secretValueFile, "value-file", "", "Read the secret value from this file (use - for stdin)")
+	secretCreateCmd.Flags().StringVar(&secretValueOpts.secretValue, "value", "", "Secret value (visible in ps; prefer --value-file or stdin)")
+	secretCreateCmd.Flags().StringVar(&secretValueOpts.secretValueFile, "value-file", "", "Read the secret value from this file (use - for stdin)")
 	return secretCreateCmd
 }
 
-func newSecretSetCommand() *cobra.Command {
+func newSecretSetCommand(secretValueOpts *secretValueOptions) *cobra.Command {
 	secretSetCmd := &cobra.Command{
 		Use:   "set [name]",
 		Short: "Update the value of an existing secret",
@@ -113,7 +108,7 @@ func newSecretSetCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			value, err := readSecretValue(cmd)
+			value, err := readSecretValue(secretValueOpts, cmd)
 			if err != nil {
 				return err
 			}
@@ -125,8 +120,8 @@ func newSecretSetCommand() *cobra.Command {
 			return nil
 		},
 	}
-	secretSetCmd.Flags().StringVar(&secretValue, "value", "", "Secret value (visible in ps; prefer --value-file or stdin)")
-	secretSetCmd.Flags().StringVar(&secretValueFile, "value-file", "", "Read the secret value from this file (use - for stdin)")
+	secretSetCmd.Flags().StringVar(&secretValueOpts.secretValue, "value", "", "Secret value (visible in ps; prefer --value-file or stdin)")
+	secretSetCmd.Flags().StringVar(&secretValueOpts.secretValueFile, "value-file", "", "Read the secret value from this file (use - for stdin)")
 	return secretSetCmd
 }
 
@@ -191,8 +186,8 @@ func deleteSecret(client *cpClient, path string) error {
 	return err
 }
 
-func printSecretList(list []secretView) error {
-	if outputFormat == "json" {
+func printSecretList(outputOpts *outputOptions, list []secretView) error {
+	if outputOpts.outputFormat == "json" {
 		return printJSON(list)
 	}
 	if len(list) == 0 {
@@ -210,8 +205,8 @@ func printSecretList(list []secretView) error {
 	return nil
 }
 
-func printSecret(secret secretView) error {
-	if outputFormat == "json" {
+func printSecret(outputOpts *outputOptions, secret secretView) error {
+	if outputOpts.outputFormat == "json" {
 		return printJSON(secret)
 	}
 	fmt.Printf("Name:      %s\n", secret.Name)
@@ -228,7 +223,7 @@ func printSecret(secret secretView) error {
 
 // readSecretValue resolves the secret value from --value, --value-file, or
 // stdin (when no flags are given but data is piped in).
-func readSecretValue(cmd *cobra.Command) (string, error) {
+func readSecretValue(secretValueOpts *secretValueOptions, cmd *cobra.Command) (string, error) {
 	hasInline := cmd.Flags().Changed("value")
 	hasFile := cmd.Flags().Changed("value-file")
 
@@ -237,22 +232,22 @@ func readSecretValue(cmd *cobra.Command) (string, error) {
 	}
 
 	if hasFile {
-		if secretValueFile == "-" {
+		if secretValueOpts.secretValueFile == "-" {
 			data, err := io.ReadAll(os.Stdin)
 			if err != nil {
 				return "", fmt.Errorf("reading stdin: %w", err)
 			}
 			return strings.TrimRight(string(data), "\r\n"), nil
 		}
-		data, err := os.ReadFile(secretValueFile)
+		data, err := os.ReadFile(secretValueOpts.secretValueFile)
 		if err != nil {
-			return "", fmt.Errorf("reading %s: %w", secretValueFile, err)
+			return "", fmt.Errorf("reading %s: %w", secretValueOpts.secretValueFile, err)
 		}
 		return strings.TrimRight(string(data), "\r\n"), nil
 	}
 
 	if hasInline {
-		return secretValue, nil
+		return secretValueOpts.secretValue, nil
 	}
 
 	// Fall back to stdin if it's a pipe.

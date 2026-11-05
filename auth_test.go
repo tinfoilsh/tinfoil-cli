@@ -47,6 +47,8 @@ func writeCredential(name string, value any) error {
 }
 
 func TestWhoamiIdentityAndCredentialSource(t *testing.T) {
+	commandState := newCommandFixture()
+
 	for _, source := range []string{"file", envAdminKey, envAPIKey} {
 		for _, personal := range []bool{false, true} {
 			t.Run(source+"/personal="+boolText(personal), func(t *testing.T) {
@@ -74,7 +76,7 @@ func TestWhoamiIdentityAndCredentialSource(t *testing.T) {
 				} else {
 					t.Setenv(source, "admin_identity_secret")
 				}
-				out, err := captureTestStdout(func() error { return whoamiCmd.RunE(whoamiCmd, nil) })
+				out, err := captureTestStdout(func() error { return commandState.whoamiCmd.RunE(commandState.whoamiCmd, nil) })
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -102,6 +104,8 @@ func boolText(value bool) string {
 }
 
 func TestLoginReportsSavedAndEffectiveIdentity(t *testing.T) {
+	commandState := newCommandFixture()
+
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/auth/context" {
 			t.Errorf("unexpected path %s", r.URL.Path)
@@ -119,16 +123,16 @@ func TestLoginReportsSavedAndEffectiveIdentity(t *testing.T) {
 	t.Setenv(envCPURL, server.URL)
 	t.Setenv(envAdminKey, "admin_environment_secret")
 	t.Setenv(envAPIKey, "")
-	keyFlag := loginCmd.Flags().Lookup("api-key")
+	keyFlag := commandState.loginCmd.Flags().Lookup("api-key")
 	oldValue, oldChanged := keyFlag.Value.String(), keyFlag.Changed
 	t.Cleanup(func() { _ = keyFlag.Value.Set(oldValue); keyFlag.Changed = oldChanged })
-	if err := loginCmd.Flags().Set("api-key", "admin_saved_secret"); err != nil {
+	if err := commandState.loginCmd.Flags().Set("api-key", "admin_saved_secret"); err != nil {
 		t.Fatal(err)
 	}
 	var stdout []byte
 	warning, err := captureTestStderr(func() error {
 		var err error
-		stdout, err = captureTestStdout(func() error { return loginCmd.RunE(loginCmd, nil) })
+		stdout, err = captureTestStdout(func() error { return commandState.loginCmd.RunE(commandState.loginCmd, nil) })
 		return err
 	})
 	if err != nil {
@@ -142,7 +146,7 @@ func TestLoginReportsSavedAndEffectiveIdentity(t *testing.T) {
 		t.Fatalf("missing warning: %s", warning)
 	}
 	warning, err = captureTestStderr(func() error {
-		_, err := captureTestStdout(func() error { return logoutCmd.RunE(logoutCmd, nil) })
+		_, err := captureTestStdout(func() error { return commandState.logoutCmd.RunE(commandState.logoutCmd, nil) })
 		return err
 	})
 	if err != nil || !strings.Contains(string(warning), envAdminKey+" is still active") {
@@ -168,6 +172,8 @@ func TestIdentityRejectsInvalidAndUnauthorizedResponses(t *testing.T) {
 }
 
 func TestLoginInvalidEnvironmentDoesNotClaimEffectiveIdentity(t *testing.T) {
+	commandState := newCommandFixture()
+
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/auth/context" {
 			t.Errorf("unexpected path %s", r.URL.Path)
@@ -185,13 +191,13 @@ func TestLoginInvalidEnvironmentDoesNotClaimEffectiveIdentity(t *testing.T) {
 	t.Setenv(envCPURL, server.URL)
 	t.Setenv(envAdminKey, "admin_invalid_environment")
 	t.Setenv(envAPIKey, "")
-	flag := loginCmd.Flags().Lookup("api-key")
+	flag := commandState.loginCmd.Flags().Lookup("api-key")
 	oldValue, oldChanged := flag.Value.String(), flag.Changed
 	t.Cleanup(func() { _ = flag.Value.Set(oldValue); flag.Changed = oldChanged })
-	if err := loginCmd.Flags().Set("api-key", "admin_saved_secret"); err != nil {
+	if err := commandState.loginCmd.Flags().Set("api-key", "admin_saved_secret"); err != nil {
 		t.Fatal(err)
 	}
-	out, err := captureTestStdout(func() error { return loginCmd.RunE(loginCmd, nil) })
+	out, err := captureTestStdout(func() error { return commandState.loginCmd.RunE(commandState.loginCmd, nil) })
 	if err == nil || !strings.Contains(err.Error(), "credentials saved, but effective environment login could not be verified") {
 		t.Fatalf("err %v", err)
 	}
@@ -415,9 +421,11 @@ func TestClerkCredentialsUseOnlyTheFixedAPIOrigin(t *testing.T) {
 }
 
 func TestUnauthenticatedListDoesNotClaimAnEmptyAccount(t *testing.T) {
+	commandState := newCommandFixture()
+
 	useTestClerk(t, "https://api.example")
 	for _, kind := range []string{"sandbox", "monitor"} {
-		cmd := newManagedStatusCmd(kind)
+		cmd := newManagedStatusCmd(commandState.outputOpts, kind)
 		out, err := captureTestStdout(func() error { return cmd.RunE(cmd, nil) })
 		require.NoError(t, err)
 		require.Contains(t, string(out), "stored on this machine")
@@ -428,6 +436,8 @@ func TestUnauthenticatedListDoesNotClaimAnEmptyAccount(t *testing.T) {
 }
 
 func TestLogoutRemovesSavedAdminKeyDespiteCredentialServiceOutage(t *testing.T) {
+	commandState := newCommandFixture()
+
 	useTestClerk(t, "https://api.example")
 	service := useFlakyCredentials(t)
 	path, err := saveConfig(cliConfig{ControlplaneURL: "https://api.example", APIKey: "admin_saved_secret"})
@@ -444,7 +454,7 @@ func TestLogoutRemovesSavedAdminKeyDespiteCredentialServiceOutage(t *testing.T) 
 	service.down = true
 	var logoutErr error
 	warning, err := captureTestStderr(func() error {
-		_, logoutErr = captureTestStdout(func() error { return logoutCmd.RunE(logoutCmd, nil) })
+		_, logoutErr = captureTestStdout(func() error { return commandState.logoutCmd.RunE(commandState.logoutCmd, nil) })
 		return nil
 	})
 	require.NoError(t, err)
@@ -458,7 +468,7 @@ func TestLogoutRemovesSavedAdminKeyDespiteCredentialServiceOutage(t *testing.T) 
 	require.NoError(t, err)
 	require.Nil(t, grant, "the login stays removed after the service recovers")
 	require.Contains(t, service.store, loginRecordName)
-	_, err = captureTestStdout(func() error { return logoutCmd.RunE(logoutCmd, nil) })
+	_, err = captureTestStdout(func() error { return commandState.logoutCmd.RunE(commandState.logoutCmd, nil) })
 	require.NoError(t, err, "a later logout finishes the cleanup")
 	require.Empty(t, service.store)
 }

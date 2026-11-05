@@ -19,8 +19,8 @@ type workloadTarget struct {
 
 // The controlplane supplies the config; tinfoil-go verifies its endorsement and
 // measured digest before a connection can carry owner credentials.
-func resolveWorkload(row containerView, repository, assertion string) (*workloadTarget, error) {
-	if localConfigFile != "" {
+func resolveWorkload(rootOpts *rootOptions, trustOpts *trustOptions, row containerView, repository, assertion string) (*workloadTarget, error) {
+	if rootOpts.localConfigFile != "" {
 		return nil, errors.New("managed workloads use their published configuration; pin it with --repo instead of --config")
 	}
 	if row.Repo != repository || row.Debug || row.Config == "" {
@@ -38,7 +38,7 @@ func resolveWorkload(row containerView, repository, assertion string) (*workload
 	if err != nil {
 		return nil, err
 	}
-	if err := trustConnectionSource(target.source, assertion); err != nil {
+	if err := trustConnectionSource(trustOpts, target.source, assertion); err != nil {
 		return nil, err
 	}
 	return &workloadTarget{containerView: row, source: target.source, env: env}, nil

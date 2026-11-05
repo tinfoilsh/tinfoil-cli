@@ -30,24 +30,18 @@ type registryListResponse struct {
 	DockerHub registryStatus `json:"dockerhub"`
 }
 
-var (
-	registryUsername string
-	registryToken    string
-	registryKeyFile  string
-)
-
-func newRegistryCommand() *cobra.Command {
+func newRegistryCommand(outputOpts *outputOptions) *cobra.Command {
 	registryCmd := &cobra.Command{
 		Use:     "registry",
 		Aliases: []string{"registries"},
 		Short:   "Manage container registry credentials",
 	}
-	registryCmd.PersistentFlags().StringVarP(&outputFormat, "output", "o", "table", "Output format: table or json")
-	registryCmd.AddCommand(newRegistryListCommand(), newRegistrySetCommand(), newRegistryDeleteCommand())
+	registryCmd.PersistentFlags().StringVarP(&outputOpts.outputFormat, "output", "o", "table", "Output format: table or json")
+	registryCmd.AddCommand(newRegistryListCommand(outputOpts), newRegistrySetCommand(&registrySetOptions{}), newRegistryDeleteCommand())
 	return registryCmd
 }
 
-func newRegistryListCommand() *cobra.Command {
+func newRegistryListCommand(outputOpts *outputOptions) *cobra.Command {
 	registryListCmd := &cobra.Command{
 		Use:     "list",
 		Aliases: []string{"ls"},
@@ -61,7 +55,7 @@ func newRegistryListCommand() *cobra.Command {
 			if _, err := client.do("GET", "/api/registry-credentials", nil, nil, &resp); err != nil {
 				return err
 			}
-			if outputFormat == "json" {
+			if outputOpts.outputFormat == "json" {
 				return printJSON(resp)
 			}
 			fmt.Printf("%-12s  %-10s  %-30s  %s\n", "REGISTRY", "STATUS", "USERNAME", "UPDATED")
@@ -93,7 +87,7 @@ func newRegistryListCommand() *cobra.Command {
 	return registryListCmd
 }
 
-func newRegistrySetCommand() *cobra.Command {
+func newRegistrySetCommand(registrySetOpts *registrySetOptions) *cobra.Command {
 	registrySetCmd := &cobra.Command{
 		Use:   "set [ghcr|gcr|dockerhub]",
 		Short: "Set credentials for a registry",
@@ -104,7 +98,7 @@ func newRegistrySetCommand() *cobra.Command {
 				return err
 			}
 			registry := strings.ToLower(args[0])
-			body, err := buildRegistryBody(registry, cmd)
+			body, err := buildRegistryBody(registrySetOpts, registry, cmd)
 			if err != nil {
 				return err
 			}
@@ -120,9 +114,9 @@ func newRegistrySetCommand() *cobra.Command {
 			return nil
 		},
 	}
-	registrySetCmd.Flags().StringVar(&registryUsername, "username", "", "Registry username (ghcr, dockerhub)")
-	registrySetCmd.Flags().StringVar(&registryToken, "token", "", "Registry token / password (ghcr, dockerhub)")
-	registrySetCmd.Flags().StringVar(&registryKeyFile, "key-file", "", "Path to GCP service account JSON (gcr); use - for stdin")
+	registrySetCmd.Flags().StringVar(&registrySetOpts.registryUsername, "username", "", "Registry username (ghcr, dockerhub)")
+	registrySetCmd.Flags().StringVar(&registrySetOpts.registryToken, "token", "", "Registry token / password (ghcr, dockerhub)")
+	registrySetCmd.Flags().StringVar(&registrySetOpts.registryKeyFile, "key-file", "", "Path to GCP service account JSON (gcr); use - for stdin")
 	return registrySetCmd
 }
 
@@ -156,25 +150,25 @@ func validRegistry(name string) bool {
 	return name == registryGHCR || name == registryGCR || name == registryDockerHub
 }
 
-func buildRegistryBody(registry string, cmd *cobra.Command) (map[string]any, error) {
+func buildRegistryBody(registrySetOpts *registrySetOptions, registry string, cmd *cobra.Command) (map[string]any, error) {
 	switch registry {
 	case registryGHCR, registryDockerHub:
-		if registryUsername == "" || registryToken == "" {
+		if registrySetOpts.registryUsername == "" || registrySetOpts.registryToken == "" {
 			return nil, fmt.Errorf("--username and --token are required for %s", registry)
 		}
-		return map[string]any{"username": registryUsername, "token": registryToken}, nil
+		return map[string]any{"username": registrySetOpts.registryUsername, "token": registrySetOpts.registryToken}, nil
 	case registryGCR:
-		if registryKeyFile == "" {
+		if registrySetOpts.registryKeyFile == "" {
 			return nil, fmt.Errorf("--key-file is required for gcr")
 		}
 		var (
 			data []byte
 			err  error
 		)
-		if registryKeyFile == "-" {
+		if registrySetOpts.registryKeyFile == "-" {
 			data, err = io.ReadAll(os.Stdin)
 		} else {
-			data, err = os.ReadFile(registryKeyFile)
+			data, err = os.ReadFile(registrySetOpts.registryKeyFile)
 		}
 		if err != nil {
 			return nil, fmt.Errorf("reading key file: %w", err)

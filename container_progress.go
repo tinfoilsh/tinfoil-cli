@@ -75,7 +75,7 @@ func replaceReason(c containerView) string {
 	return "it has persistent volumes"
 }
 
-func postLifecycleUpdate(client *cpClient, path string, body map[string]any, out any, yes bool, action string, replan func() (updateReview, error)) error {
+func postLifecycleUpdate(outputOpts *outputOptions, client *cpClient, path string, body map[string]any, out any, yes bool, action string, replan func() (updateReview, error)) error {
 	delete(body, "confirm_downtime")
 	review, err := replan()
 	if err != nil {
@@ -83,7 +83,7 @@ func postLifecycleUpdate(client *cpClient, path string, body map[string]any, out
 	}
 	changed, retried := false, false
 	for range maxUpdatePlanReviews {
-		if err := review.render(); err != nil {
+		if err := review.render(outputOpts); err != nil {
 			return err
 		}
 		if err := review.freezeSelection(body); err != nil {
@@ -113,7 +113,7 @@ func postLifecycleUpdate(client *cpClient, path string, body map[string]any, out
 			return planErr
 		}
 		if !refreshed.requiresDowntime() {
-			if printErr := refreshed.render(); printErr != nil {
+			if printErr := refreshed.render(outputOpts); printErr != nil {
 				return printErr
 			}
 			return fmt.Errorf("execution requires downtime but the refreshed plan does not; no retry was sent: %w", err)
@@ -122,7 +122,7 @@ func postLifecycleUpdate(client *cpClient, path string, body map[string]any, out
 		review = refreshed
 		changed, retried = true, true
 	}
-	if err := review.render(); err != nil {
+	if err := review.render(outputOpts); err != nil {
 		return err
 	}
 	return fmt.Errorf("update plan did not stabilize after %d reviews; no further update was sent; rerun to review current settings", maxUpdatePlanReviews)
@@ -150,11 +150,11 @@ func activeBootStage(stages []bootStage) string {
 // reaches a terminal state, printing each change the way the dashboard shows
 // it. JSON output and --no-wait print the initial response only. Exits
 // non-zero when the container or its update candidate fails.
-func followAndRender(client *cpClient, c containerView, attached map[string]volumeView) error {
-	if err := renderContainerDetail(c, attached); err != nil {
+func followAndRender(outputOpts *outputOptions, waitOpts *waitOptions, client *cpClient, c containerView, attached map[string]volumeView) error {
+	if err := renderContainerDetail(outputOpts, c, attached); err != nil {
 		return err
 	}
-	if outputFormat != "json" && !noWait && !isTerminal(c) {
+	if outputOpts.outputFormat != "json" && !waitOpts.noWait && !isTerminal(c) {
 		final, err := followContainer(client, c.ID, c)
 		if err == nil {
 			printChangedContainerConnections(os.Stdout, c, final)

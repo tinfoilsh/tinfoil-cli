@@ -6,23 +6,23 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func newRepoSecretCommand() *cobra.Command {
+func newRepoSecretCommand(outputOpts *outputOptions) *cobra.Command {
 	repoSecretCmd := &cobra.Command{
 		Use:     "secret",
 		Aliases: []string{"secrets"},
 		Short:   "Manage repository-level secrets",
 	}
 	repoSecretCmd.AddCommand(
-		newRepoSecretListCommand(),
-		newRepoSecretGetCommand(),
-		newRepoSecretCreateCommand(),
-		newRepoSecretSetCommand(),
+		newRepoSecretListCommand(outputOpts),
+		newRepoSecretGetCommand(outputOpts),
+		newRepoSecretCreateCommand(&secretValueOptions{}),
+		newRepoSecretSetCommand(&secretValueOptions{}),
 		newRepoSecretDeleteCommand(),
 	)
 	return repoSecretCmd
 }
 
-func newRepoSecretListCommand() *cobra.Command {
+func newRepoSecretListCommand(outputOpts *outputOptions) *cobra.Command {
 	repoSecretListCmd := &cobra.Command{
 		Use:     "list [owner/repo]",
 		Aliases: []string{"ls"},
@@ -37,14 +37,14 @@ func newRepoSecretListCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return printSecretList(list)
+			return printSecretList(outputOpts, list)
 		},
 	}
 
 	return repoSecretListCmd
 }
 
-func newRepoSecretGetCommand() *cobra.Command {
+func newRepoSecretGetCommand(outputOpts *outputOptions) *cobra.Command {
 	repoSecretGetCmd := &cobra.Command{
 		Use:   "get [owner/repo] [name]",
 		Short: "Show repository secret metadata",
@@ -58,14 +58,14 @@ func newRepoSecretGetCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return printSecret(secret)
+			return printSecret(outputOpts, secret)
 		},
 	}
 
 	return repoSecretGetCmd
 }
 
-func newRepoSecretCreateCommand() *cobra.Command {
+func newRepoSecretCreateCommand(secretValueOpts *secretValueOptions) *cobra.Command {
 	repoSecretCreateCmd := &cobra.Command{
 		Use:   "create [owner/repo] [name]",
 		Short: "Create a repository secret",
@@ -75,7 +75,7 @@ func newRepoSecretCreateCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			value, err := readSecretValue(cmd)
+			value, err := readSecretValue(secretValueOpts, cmd)
 			if err != nil {
 				return err
 			}
@@ -87,12 +87,12 @@ func newRepoSecretCreateCommand() *cobra.Command {
 			return nil
 		},
 	}
-	repoSecretCreateCmd.Flags().StringVar(&secretValue, "value", "", "Secret value (visible in ps; prefer --value-file or stdin)")
-	repoSecretCreateCmd.Flags().StringVar(&secretValueFile, "value-file", "", "Read the secret value from this file (use - for stdin)")
+	repoSecretCreateCmd.Flags().StringVar(&secretValueOpts.secretValue, "value", "", "Secret value (visible in ps; prefer --value-file or stdin)")
+	repoSecretCreateCmd.Flags().StringVar(&secretValueOpts.secretValueFile, "value-file", "", "Read the secret value from this file (use - for stdin)")
 	return repoSecretCreateCmd
 }
 
-func newRepoSecretSetCommand() *cobra.Command {
+func newRepoSecretSetCommand(secretValueOpts *secretValueOptions) *cobra.Command {
 	repoSecretSetCmd := &cobra.Command{
 		Use:   "set [owner/repo] [name]",
 		Short: "Update a repository secret",
@@ -102,7 +102,7 @@ func newRepoSecretSetCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			value, err := readSecretValue(cmd)
+			value, err := readSecretValue(secretValueOpts, cmd)
 			if err != nil {
 				return err
 			}
@@ -114,8 +114,8 @@ func newRepoSecretSetCommand() *cobra.Command {
 			return nil
 		},
 	}
-	repoSecretSetCmd.Flags().StringVar(&secretValue, "value", "", "Secret value (visible in ps; prefer --value-file or stdin)")
-	repoSecretSetCmd.Flags().StringVar(&secretValueFile, "value-file", "", "Read the secret value from this file (use - for stdin)")
+	repoSecretSetCmd.Flags().StringVar(&secretValueOpts.secretValue, "value", "", "Secret value (visible in ps; prefer --value-file or stdin)")
+	repoSecretSetCmd.Flags().StringVar(&secretValueOpts.secretValueFile, "value-file", "", "Read the secret value from this file (use - for stdin)")
 	return repoSecretSetCmd
 }
 

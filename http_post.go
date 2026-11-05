@@ -9,31 +9,26 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var (
-	body   string
-	stream bool
-)
-
-func newHttpPostCommand() *cobra.Command {
+func newHttpPostCommand(headersOpts *headersOptions, httpPostOpts *httpPostOptions, rootOpts *rootOptions) *cobra.Command {
 	httpPostCmd := &cobra.Command{
 		Use:   "post [url]",
 		Short: "HTTP POST request",
 		Args:  cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			url := args[0]
-			sc, err := secureClient()
+			sc, err := secureClient(rootOpts)
 			if err != nil {
 				return err
 			}
 
-			headers, err := parseRequestHeaders(requestHeaders)
+			headers, err := parseRequestHeaders(headersOpts.requestHeaders)
 			if err != nil {
 				return err
 			}
 
-			if stream {
+			if httpPostOpts.stream {
 				// Build a raw HTTP POST request with the provided body.
-				req, err := http.NewRequest("POST", url, bytes.NewBuffer([]byte(body)))
+				req, err := http.NewRequest("POST", url, bytes.NewBuffer([]byte(httpPostOpts.body)))
 				if err != nil {
 					return fmt.Errorf("error creating request: %w", err)
 				}
@@ -60,7 +55,7 @@ func newHttpPostCommand() *cobra.Command {
 					return fmt.Errorf("error reading stream: %w", err)
 				}
 			} else { // Not streaming
-				resp, err := requestWithHeaders(sc, "POST", url, headers, []byte(body))
+				resp, err := requestWithHeaders(sc, "POST", url, headers, []byte(httpPostOpts.body))
 				if err != nil {
 					return err
 				}
@@ -73,7 +68,7 @@ func newHttpPostCommand() *cobra.Command {
 			return nil
 		},
 	}
-	httpPostCmd.Flags().StringVarP(&body, "body", "b", "", "HTTP POST body")
-	httpPostCmd.Flags().BoolVarP(&stream, "stream", "s", false, "Stream response output")
+	httpPostCmd.Flags().StringVarP(&httpPostOpts.body, "body", "b", "", "HTTP POST body")
+	httpPostCmd.Flags().BoolVarP(&httpPostOpts.stream, "stream", "s", false, "Stream response output")
 	return httpPostCmd
 }

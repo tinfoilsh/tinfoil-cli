@@ -14,6 +14,8 @@ import (
 var legacyMountWording = regexp.MustCompile(`(?i)\b(?:volume|config|required|declared|to a)\s+slots?\b`)
 
 func TestMountTerminologyPreservesVolumeWireFields(t *testing.T) {
+	commandState := newCommandFixture()
+
 	var c containerView
 	if err := json.Unmarshal([]byte(`{"id":"`+testContainerID+`","name":"app","volume_slots":[{"name":"data","key_secret":"KEY"}],"volumes":{"data":"`+testVolumeID+`"}}`), &c); err != nil {
 		t.Fatal(err)
@@ -29,24 +31,24 @@ func TestMountTerminologyPreservesVolumeWireFields(t *testing.T) {
 	if attached["data"].ID != testVolumeID {
 		t.Fatalf("assignment lost: %v", attached)
 	}
-	previous := outputFormat
-	t.Cleanup(func() { outputFormat = previous })
-	outputFormat = "json"
-	out, err := captureTestStdout(func() error { return renderContainer(c) })
+	previous := commandState.outputOpts.outputFormat
+	t.Cleanup(func() { commandState.outputOpts.outputFormat = previous })
+	commandState.outputOpts.outputFormat = "json"
+	out, err := captureTestStdout(func() error { return renderContainer(commandState.outputOpts, c) })
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(string(out), `"volume_slots"`) || strings.Contains(string(out), `"mounts"`) {
 		t.Fatalf("container wire contract changed: %s", out)
 	}
-	out, err = captureTestStdout(func() error { return renderVolume(v) })
+	out, err = captureTestStdout(func() error { return renderVolume(commandState.outputOpts, v) })
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(string(out), `"slot": "data"`) {
 		t.Fatalf("volume wire contract changed: %s", out)
 	}
-	outputFormat = "table"
+	commandState.outputOpts.outputFormat = "table"
 	for _, message := range []string{
 		`select a volume for required slot "data" before starting`,
 		"detach the volume before removing its config slot",
@@ -59,7 +61,7 @@ func TestMountTerminologyPreservesVolumeWireFields(t *testing.T) {
 			t.Fatalf("human API error = %v", cp)
 		}
 		c.ErrorMessage = message
-		out, err = captureTestStdout(func() error { return renderContainer(c) })
+		out, err = captureTestStdout(func() error { return renderContainer(commandState.outputOpts, c) })
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -72,7 +74,7 @@ func TestMountTerminologyPreservesVolumeWireFields(t *testing.T) {
 	if strings.Contains(hint.Error(), "slot") || !strings.Contains(hint.Error(), "--as cache") {
 		t.Fatalf("mount recovery hint = %v", hint)
 	}
-	for _, command := range []*cobra.Command{containerCreateCmd, containerDeployCmd, volumeAttachCmd} {
+	for _, command := range []*cobra.Command{commandState.containerCreateCmd, commandState.containerDeployCmd, commandState.volumeAttachCmd} {
 		for _, alias := range command.Aliases {
 			if strings.Contains(alias, "mount") || strings.Contains(alias, "slot") {
 				t.Fatalf("unexpected alias %q", alias)

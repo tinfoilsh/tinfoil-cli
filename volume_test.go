@@ -138,6 +138,8 @@ func testVolumeList(attached bool) string {
 }
 
 func TestVolumeAttachSlotSelection(t *testing.T) {
+	commandState := newCommandFixture()
+
 	for _, tt := range []struct {
 		name      string
 		as        string
@@ -182,10 +184,10 @@ func TestVolumeAttachSlotSelection(t *testing.T) {
 			}))
 			defer server.Close()
 
-			configureVolumeTest(t, server.URL)
-			volumeAttachAs = tt.as
+			configureVolumeTest(commandState, t, server.URL)
+			commandState.volumeAttachOpts.volumeAttachAs = tt.as
 			out, err := captureTestStdout(func() error {
-				return volumeAttachCmd.RunE(volumeAttachCmd, []string{"data-vol", "app"})
+				return commandState.volumeAttachCmd.RunE(commandState.volumeAttachCmd, []string{"data-vol", "app"})
 			})
 			if tt.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
@@ -205,6 +207,8 @@ func TestVolumeAttachSlotSelection(t *testing.T) {
 }
 
 func TestContainerCreateWithVolume(t *testing.T) {
+	commandState := newCommandFixture()
+
 	for _, tt := range []struct {
 		name         string
 		volumes      []string
@@ -322,11 +326,11 @@ func TestContainerCreateWithVolume(t *testing.T) {
 			}))
 			defer server.Close()
 
-			configureContainerPromotionTest(t, server.URL)
-			outputFormat = "table"
-			createVolumes, createHost = tt.volumes, tt.host
+			configureContainerPromotionTest(commandState, t, server.URL)
+			commandState.outputOpts.outputFormat = "table"
+			commandState.containerCreateOpts.createVolumes, commandState.containerCreateOpts.createHost = tt.volumes, tt.host
 			out, err := captureTestStdout(func() error {
-				return containerCreateCmd.RunE(containerCreateCmd, []string{"app"})
+				return commandState.containerCreateCmd.RunE(commandState.containerCreateCmd, []string{"app"})
 			})
 			if tt.wantErr != "" {
 				if err == nil || err.Error() != tt.wantErr {
@@ -351,6 +355,8 @@ func TestContainerCreateWithVolume(t *testing.T) {
 }
 
 func TestContainerStartWithVolume(t *testing.T) {
+	commandState := newCommandFixture()
+
 	const slots = `[{"name":"data","key_secret":"DATA_KEY"}]`
 	for _, tt := range []struct {
 		name      string
@@ -410,14 +416,14 @@ func TestContainerStartWithVolume(t *testing.T) {
 			}))
 			defer server.Close()
 
-			configureContainerPromotionTest(t, server.URL)
-			outputFormat = "table"
-			deployVolumes, deployHost = []string{"data-vol"}, tt.host
+			configureContainerPromotionTest(commandState, t, server.URL)
+			commandState.outputOpts.outputFormat = "table"
+			commandState.containerDeployOpts.deployVolumes, commandState.containerDeployOpts.deployHost = []string{"data-vol"}, tt.host
 			if tt.host != "" {
-				containerDeployCmd.Flags().Lookup("host").Changed = true
+				commandState.containerDeployCmd.Flags().Lookup("host").Changed = true
 			}
 			_, err := captureTestStdout(func() error {
-				return containerDeployCmd.RunE(containerDeployCmd, []string{"app"})
+				return commandState.containerDeployCmd.RunE(commandState.containerDeployCmd, []string{"app"})
 			})
 			if tt.wantErr != "" {
 				if err == nil || err.Error() != tt.wantErr {
@@ -437,6 +443,8 @@ func TestContainerStartWithVolume(t *testing.T) {
 }
 
 func TestVolumeDeleteConfirmation(t *testing.T) {
+	commandState := newCommandFixture()
+
 	for _, tt := range []struct {
 		name       string
 		attached   bool
@@ -464,10 +472,10 @@ func TestVolumeDeleteConfirmation(t *testing.T) {
 			}))
 			defer server.Close()
 
-			configureVolumeTest(t, server.URL)
-			volumeYes = tt.yes
+			configureVolumeTest(commandState, t, server.URL)
+			commandState.volumeDeleteOpts.volumeYes = tt.yes
 			out, err := captureTestStdout(func() error {
-				return volumeDeleteCmd.RunE(volumeDeleteCmd, []string{"data-vol"})
+				return commandState.volumeDeleteCmd.RunE(commandState.volumeDeleteCmd, []string{"data-vol"})
 			})
 			if tt.wantErr != "" {
 				if err == nil || err.Error() != tt.wantErr {
@@ -487,6 +495,8 @@ func TestVolumeDeleteConfirmation(t *testing.T) {
 }
 
 func TestVolumeCreateSandbox(t *testing.T) {
+	commandState := newCommandFixture()
+
 	for _, tt := range []struct {
 		name      string
 		args      []string
@@ -536,9 +546,9 @@ func TestVolumeCreateSandbox(t *testing.T) {
 			}))
 			defer server.Close()
 
-			configureVolumeTest(t, server.URL)
+			configureVolumeTest(commandState, t, server.URL)
 			out, err := captureTestStdout(func() error {
-				return executeLifecycleCLI(t, append([]string{"volume", "create", "ws"}, tt.args...)...)
+				return executeLifecycleCLI(commandState, t, append([]string{"volume", "create", "ws"}, tt.args...)...)
 			})
 			if tt.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
@@ -560,18 +570,18 @@ func TestVolumeCreateSandbox(t *testing.T) {
 	}
 }
 
-func configureVolumeTest(t *testing.T, serverURL string) {
+func configureVolumeTest(commandState *commandFixture, t *testing.T, serverURL string) {
 	t.Helper()
 	t.Setenv(envCPURL, serverURL)
 	t.Setenv(envAdminKey, "admin_test")
 	t.Setenv(envConfigPath, filepath.Join(t.TempDir(), "missing-config.json"))
-	previousOutput := outputFormat
-	previousAs, previousYes := volumeAttachAs, volumeYes
-	outputFormat = "table"
-	volumeAttachAs, volumeYes = "", false
+	previousOutput := commandState.outputOpts.outputFormat
+	previousAs, previousYes := commandState.volumeAttachOpts.volumeAttachAs, commandState.volumeDeleteOpts.volumeYes
+	commandState.outputOpts.outputFormat = "table"
+	commandState.volumeAttachOpts.volumeAttachAs, commandState.volumeDeleteOpts.volumeYes = "", false
 	t.Cleanup(func() {
-		outputFormat = previousOutput
-		volumeAttachAs, volumeYes = previousAs, previousYes
+		commandState.outputOpts.outputFormat = previousOutput
+		commandState.volumeAttachOpts.volumeAttachAs, commandState.volumeDeleteOpts.volumeYes = previousAs, previousYes
 	})
 }
 

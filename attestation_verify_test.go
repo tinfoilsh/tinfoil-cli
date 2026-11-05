@@ -30,6 +30,8 @@ func TestMeasurementJSONPreservesRegisterSchema(t *testing.T) {
 }
 
 func TestAttestationVerifySEV(t *testing.T) {
+	commandState := newCommandFixture()
+
 	if os.Getenv("RUN_TINFOIL_INTEGRATION") != "true" {
 		t.Skip("set RUN_TINFOIL_INTEGRATION=true for live attestation")
 	}
@@ -39,8 +41,8 @@ func TestAttestationVerifySEV(t *testing.T) {
 		"-e", "inference.tinfoil.sh",
 		"-r", "tinfoilsh/confidential-model-router",
 	}
-	rootCmd.SetArgs(args)
-	assert.Nil(t, rootCmd.Execute())
+	commandState.rootCmd.SetArgs(args)
+	assert.Nil(t, commandState.rootCmd.Execute())
 }
 
 func TestVerificationError(t *testing.T) {

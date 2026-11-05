@@ -22,11 +22,13 @@ import (
 const consentProcessEnv = "TINFOIL_TEST_CONSENT_PROCESS"
 
 func TestUpdateConsentCLIProcess(t *testing.T) {
+	commandState := newCommandFixture()
+
 	if os.Getenv(consentProcessEnv) != "1" {
 		return
 	}
-	rootCmd.SetArgs(os.Args[3:])
-	if err := rootCmd.Execute(); err != nil {
+	commandState.rootCmd.SetArgs(os.Args[3:])
+	if err := commandState.rootCmd.Execute(); err != nil {
 		os.Exit(1)
 	}
 	os.Exit(0)

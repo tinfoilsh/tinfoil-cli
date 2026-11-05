@@ -109,6 +109,8 @@ func TestSandboxRequiresRestrictedAliasBeforeStoppingOrDeploying(t *testing.T) {
 }
 
 func TestSandboxDeleteKeepsCredentialsAndRemovesOwnedProfile(t *testing.T) {
+	commandState := newCommandFixture()
+
 	owner := ed25519PublicKeyString(testSeed(t))
 	const workspaceID = "22222222-2222-4222-8222-222222222222"
 	row := containerView{ID: "11111111-1111-4111-8111-111111111111", Name: "work", Repo: defaultSandboxRepo, Status: statusRunning,
@@ -139,13 +141,13 @@ func TestSandboxDeleteKeepsCredentialsAndRemovesOwnedProfile(t *testing.T) {
 		}
 	}))
 	defer server.Close()
-	configureContainerPromotionTest(t, server.URL)
+	configureContainerPromotionTest(commandState, t, server.URL)
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
-	oldYes := sandboxYes
-	sandboxYes = true
-	t.Cleanup(func() { sandboxYes = oldYes })
+	oldYes := commandState.sandboxActionOpts.sandboxYes
+	commandState.sandboxActionOpts.sandboxYes = true
+	t.Cleanup(func() { commandState.sandboxActionOpts.sandboxYes = oldYes })
 	profile := filepath.Join(home, ".ssh", "tinfoil", "work.conf")
 	require.NoError(t, os.MkdirAll(filepath.Dir(profile), 0700))
 	require.NoError(t, os.WriteFile(profile, []byte("# tinfoil-resource: "+server.URL+"//owner/"+row.ID+"\n"), 0600))
@@ -156,10 +158,10 @@ func TestSandboxDeleteKeepsCredentialsAndRemovesOwnedProfile(t *testing.T) {
 	before, err := os.ReadFile(credential)
 	require.NoError(t, err)
 	var warning strings.Builder
-	sandboxDeleteCmd.SetErr(&warning)
-	t.Cleanup(func() { sandboxDeleteCmd.SetErr(nil) })
+	commandState.sandboxDeleteCmd.SetErr(&warning)
+	t.Cleanup(func() { commandState.sandboxDeleteCmd.SetErr(nil) })
 	for _, identifier := range []string{row.Name, row.ID} {
-		require.NoError(t, sandboxDeleteCmd.RunE(sandboxDeleteCmd, []string{identifier}))
+		require.NoError(t, commandState.sandboxDeleteCmd.RunE(commandState.sandboxDeleteCmd, []string{identifier}))
 	}
 	require.Contains(t, warning.String(), "permanently deletes its workspace volume")
 	require.Contains(t, warning.String(), "`tinfoil volume detach "+workspaceID+"`")
@@ -199,10 +201,8 @@ func TestSandboxAttestationRelayUsesCurrentSchema(t *testing.T) {
 		_, err := client.do(method, path, nil, input, out)
 		return err
 	}}
-	previous := verifySandboxEvidence
-	t.Cleanup(func() { verifySandboxEvidence = previous })
 	verificationError := errors.New("verification stopped")
-	verifySandboxEvidence = func(raw, nonce []byte, reference string) (attestedEvidence, error) {
+	owner.verifyEvidence = func(raw, nonce []byte, reference string) (attestedEvidence, error) {
 		require.Equal(t, doc, raw)
 		require.Equal(t, <-challenges, nonce)
 		require.Equal(t, source, reference)
@@ -488,6 +488,8 @@ func TestUnlockRequiresUnexpiredAttestationBeforeDial(t *testing.T) {
 }
 
 func TestMonitorRestartRelinksOnlyAuthorizedSandboxes(t *testing.T) {
+	commandState := newCommandFixture()
+
 	keys := &keyStateServer{}
 	const monitorID = "99999999-9999-4999-8999-999999999999"
 	type fixture struct {
@@ -594,8 +596,7 @@ func TestMonitorRestartRelinksOnlyAuthorizedSandboxes(t *testing.T) {
 	require.NoError(t, err)
 	t.Setenv(envKnownConfigs, filepath.Join(t.TempDir(), "known-configs.json"))
 	require.NoError(t, os.WriteFile(os.Getenv(envKnownConfigs), policy, 0o600))
-	previous := verifySandboxEvidence
-	verifySandboxEvidence = func(doc, _ []byte, source string) (attestedEvidence, error) {
+	commandState.rootOpts.dependencies.verifySandboxEvidence = func(doc, _ []byte, source string) (attestedEvidence, error) {
 		for _, f := range fixtures {
 			if strings.Contains(string(doc), f.instance) && strings.Contains(source, storageHash(doc)) {
 				host, err := x509.MarshalPKIXPublicKey(f.host.PublicKey().(ssh.CryptoPublicKey).CryptoPublicKey())
@@ -607,7 +608,6 @@ func TestMonitorRestartRelinksOnlyAuthorizedSandboxes(t *testing.T) {
 		}
 		return nil, errors.New("unknown evidence")
 	}
-	t.Cleanup(func() { verifySandboxEvidence = previous })
 
 	relayed := map[string]int{}
 	var monitorCalls []string
@@ -651,7 +651,7 @@ func TestMonitorRestartRelinksOnlyAuthorizedSandboxes(t *testing.T) {
 	resourceID := scope.ControlplaneURL + "/" + scope.OrgID + "/" + scope.UserID + "/" + fixtures["a"].id
 	require.NoError(t, os.WriteFile(filepath.Join(profiles, "a-alias.conf"), []byte("# tinfoil-resource: "+resourceID+"\nHost a-alias\n"), 0o600))
 
-	failures := relinkSandboxes(t.Context(), scope, cp, m, monitorID)
+	failures := relinkSandboxes(commandState.identityOpts, commandState.rootOpts, commandState.trustOpts, t.Context(), scope, cp, m, monitorID)
 	var reported []string
 	for _, failure := range failures {
 		reported = append(reported, failure.Error())
@@ -695,7 +695,7 @@ func TestMonitorRestartRelinksOnlyAuthorizedSandboxes(t *testing.T) {
 	for _, name := range []string{"a", "b"} {
 		fixtures[name].owner.reset()
 	}
-	require.Len(t, relinkSandboxes(t.Context(), scope, cp, m, monitorID), 3)
+	require.Len(t, relinkSandboxes(commandState.identityOpts, commandState.rootOpts, commandState.trustOpts, t.Context(), scope, cp, m, monitorID), 3)
 	for _, name := range []string{"a", "b"} {
 		require.Len(t, fixtures[name].owner.calls(), 1, "%s: status only", name)
 	}
@@ -711,7 +711,7 @@ func TestMonitorRestartRelinksOnlyAuthorizedSandboxes(t *testing.T) {
 			changedCreator.Store(tc.changedCreator)
 			m.keys.mode = tc.mode
 			before := relayed["a"]
-			err := relinkSandbox(t.Context(), scope, cp, m, monitorID, fixtures["a"].id)
+			err := relinkSandbox(commandState.identityOpts, commandState.rootOpts, commandState.trustOpts, t.Context(), scope, cp, m, monitorID, fixtures["a"].id)
 			require.ErrorContains(t, err, tc.want)
 			require.Equal(t, before, relayed["a"], "invalid ownership or custody must not contact the sandbox")
 			require.Equal(t, revision, keys.revision, "re-linking does not change key state")

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"regexp"
@@ -10,7 +11,6 @@ import (
 	"text/tabwriter"
 
 	"github.com/fatih/color"
-	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 )
@@ -71,34 +71,37 @@ var (
 )
 
 var (
-	enclaveHost, repo string
-	localConfigFile   string
-	publicRegistry    bool
-	verbose, trace    bool
-	version           = defaultVersion
-	// exitCode is the status a command wants the process to end with, for the
-	// ones that stand in for another program.
-	exitCode int
+	version = defaultVersion
 )
 
 func newRootCommand() *cobra.Command {
+	return newRootCommandWithDependencies(commandDependencies{})
+}
+
+func newRootCommandWithDependencies(dependencies commandDependencies) *cobra.Command {
+	rootOpts := &rootOptions{dependencies: dependencies}
+
 	cmd := &cobra.Command{
 		Use:          "tinfoil",
 		Short:        "Verify, connect to, and manage Tinfoil enclaves",
 		Version:      version,
 		SilenceUsage: true,
 	}
-	cmd.PersistentFlags().StringVar(&localConfigFile, "config", "", "Local config file to launch or trust for verification")
-	cmd.PersistentFlags().BoolVar(&publicRegistry, "public-registry", false, "Require public configs, even when a private registry is trusted")
+	cmd.PersistentFlags().StringVar(&rootOpts.localConfigFile, "config", "", "Local config file to launch or trust for verification")
+	cmd.PersistentFlags().BoolVar(&rootOpts.publicRegistry, "public-registry", false, "Require public configs, even when a private registry is trusted")
 	cmd.MarkFlagsMutuallyExclusive("config", "public-registry")
-	configureRootCommand(cmd)
-	cmd.AddCommand(newAttestSSHCommand(), newAttestationCommand(), newLoginCommand(), newLogoutCommand(), newWhoamiCommand(),
-		newContainerCommand(), newDomainCommand(), newHttpCommand(), newModelCommand(), newProjectCommand(), newProxyCommand(),
-		newRegistryCommand(), newRepoCommand(), newSCPCommand(), newSecretCommand(), newSshCommand(), newSshKeyCommand(),
-		newTrustCommand(), newForwardCommand(), newVolumeCommand(), newSelfUpdateCommand(newDefaultSelfUpdater))
-	monitor, sandbox := newMonitorCommand(), newSandboxCommand()
-	monitor.AddCommand(newMonitorOpenCommand())
-	addManagedCommands(monitor, sandbox)
+	configureRootCommand(rootOpts, cmd)
+	cmd.AddCommand(newAttestSSHCommand(&attestSSHOptions{}, &forwardOptions{}, &identityOptions{}, rootOpts, &trustOptions{}), newAttestationCommand(rootOpts), newLoginCommand(), newLogoutCommand(), newWhoamiCommand(),
+		newContainerCommand(&outputOptions{}, rootOpts), newDomainCommand(&outputOptions{}), newHttpCommand(&headersOptions{}, rootOpts), newModelCommand(&outputOptions{}), newProjectCommand(&outputOptions{}), newProxyCommand(&proxyOptions{}, rootOpts),
+		newRegistryCommand(&outputOptions{}), newRepoCommand(&outputOptions{}), newSCPCommand(&forwardOptions{}, rootOpts, &trustOptions{}, &tunnelOptions{}), newSecretCommand(&outputOptions{}), newSshCommand(&forwardOptions{}, rootOpts, &sshOptions{}, &trustOptions{}, &tunnelOptions{}), newSshKeyCommand(&outputOptions{}, &sshKeyOptions{}),
+		newTrustCommand(&trustOptions{}), newForwardCommand(&forwardOptions{}, rootOpts, &trustOptions{}, &tunnelOptions{}), newVolumeCommand(&outputOptions{}), newSelfUpdateCommand(newDefaultSelfUpdater))
+	monitorIdentity, sandboxIdentity := &identityOptions{}, &identityOptions{}
+	monitorOutput, sandboxOutput := &outputOptions{}, &outputOptions{}
+	monitor, sandbox := newMonitorCommand(), newSandboxCommand(sandboxIdentity, sandboxOutput, rootOpts)
+	monitor.AddCommand(newMonitorOpenCommand(monitorIdentity, rootOpts, &trustOptions{}))
+	monitor.AddCommand(newManagedStatusCmd(monitorOutput, "monitor"))
+	addManagedCommands(monitorIdentity, monitorOutput, monitor)
+	addManagedCommands(sandboxIdentity, sandboxOutput, sandbox)
 	cmd.AddCommand(monitor, sandbox)
 	create, _, _ := cmd.Find([]string{"container", "create"})
 	create.MarkFlagsMutuallyExclusive("config", "repo")
@@ -119,11 +122,11 @@ func newRootCommand() *cobra.Command {
 
 var helpTemplatesOnce sync.Once
 
-func configureRootCommand(rootCmd *cobra.Command) {
-	rootCmd.PersistentFlags().StringVarP(&enclaveHost, "enclave", "e", "", "Enclave hostname (for example inference.tinfoil.sh)")
-	rootCmd.PersistentFlags().StringVarP(&repo, "repo", "r", "", "Expected config source: owner/name[@tag][@sha256:digest]")
-	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "Verbose output")
-	rootCmd.PersistentFlags().BoolVarP(&trace, "trace", "t", false, "Trace output")
+func configureRootCommand(rootOpts *rootOptions, rootCmd *cobra.Command) {
+	rootCmd.PersistentFlags().StringVarP(&rootOpts.enclaveHost, "enclave", "e", "", "Enclave hostname (for example inference.tinfoil.sh)")
+	rootCmd.PersistentFlags().StringVarP(&rootOpts.repo, "repo", "r", "", "Expected config source: owner/name[@tag][@sha256:digest]")
+	rootCmd.PersistentFlags().BoolVarP(&rootOpts.verbose, "verbose", "v", false, "Verbose output")
+	rootCmd.PersistentFlags().BoolVarP(&rootOpts.trace, "trace", "t", false, "Trace output")
 	rootCmd.PersistentFlags().BoolP("help", "h", false, "Show help")
 	_ = rootCmd.PersistentFlags().MarkHidden("help")
 
@@ -201,21 +204,29 @@ func configureHelpTemplates(rootCmd *cobra.Command) {
 }
 
 func main() {
-	rootCmd := newRootCommand()
-	if trace {
-		log.SetLevel(log.TraceLevel)
-	} else if verbose {
-		log.SetLevel(log.InfoLevel)
-	}
+	os.Exit(run(os.Args[1:], commandDependencies{}))
+}
 
+func run(args []string, dependencies commandDependencies) int {
+	rootCmd := newRootCommandWithDependencies(dependencies)
+	return runCommand(rootCmd, args)
+}
+
+func runCommand(rootCmd *cobra.Command, args []string) int {
+	rootCmd.SilenceErrors = true
+	rootCmd.SetArgs(args)
 	waitForUpdateCheck := func() (string, bool) { return "", false }
-	if !isSelfUpdateCommand(rootCmd, os.Args[1:]) {
+	if !isSelfUpdateCommand(rootCmd, args) {
 		waitForUpdateCheck = startUpdateCheck()
 	}
 
 	err := rootCmd.Execute()
+	var exited *processExit
+	if err != nil && !errors.As(err, &exited) {
+		fmt.Fprintln(rootCmd.ErrOrStderr(), "Error:", err)
+	}
 	if hint := errorHint(err); hint != "" {
-		fmt.Fprintln(os.Stderr, hint)
+		fmt.Fprintln(rootCmd.ErrOrStderr(), hint)
 	}
 
 	if latest, ok := waitForUpdateCheck(); ok {
@@ -223,7 +234,10 @@ func main() {
 	}
 
 	if err != nil {
-		exitCode = 1
+		if exited != nil {
+			return exited.code
+		}
+		return 1
 	}
-	os.Exit(exitCode)
+	return 0
 }

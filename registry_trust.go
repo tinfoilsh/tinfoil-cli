@@ -23,9 +23,7 @@ type registryAccount struct {
 	RegistryID string   `json:"scope"`
 }
 
-var enrollmentRegistryID string
-
-func newTrustEnrollCommand() *cobra.Command {
+func newTrustEnrollCommand(trustEnrollOpts *trustEnrollOptions) *cobra.Command {
 	trustEnrollCmd := &cobra.Command{
 		Use:   "add",
 		Short: "Trust the current account's private registry",
@@ -39,10 +37,10 @@ func newTrustEnrollCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return enrollRegistry(cmd, cfg, identity, enrollmentRegistryID, term.IsTerminal(int(os.Stdin.Fd())))
+			return enrollRegistry(cmd, cfg, identity, trustEnrollOpts.enrollmentRegistryID, term.IsTerminal(int(os.Stdin.Fd())))
 		},
 	}
-	trustEnrollCmd.Flags().StringVar(&enrollmentRegistryID, "registry-id", "", "Expected private registry ID; approves it without a prompt")
+	trustEnrollCmd.Flags().StringVar(&trustEnrollOpts.enrollmentRegistryID, "registry-id", "", "Expected private registry ID; approves it without a prompt")
 	return trustEnrollCmd
 }
 
@@ -180,17 +178,17 @@ func registryControlplaneURL() (string, error) {
 	return cfg.ControlplaneURL, nil
 }
 
-func registryIDs(source string) ([]string, error) {
+func registryIDs(rootOpts *rootOptions, source string) ([]string, error) {
 	policy, err := loadConnectionPolicy()
 	if err != nil {
 		return nil, err
 	}
-	if publicRegistry {
+	if rootOpts.publicRegistry {
 		return nil, nil
 	}
 	controlplaneURL, err := registryControlplaneURL()
 	if err != nil {
 		return nil, err
 	}
-	return policy.RegistryIDs(source, controlplaneURL, publicRegistry)
+	return policy.RegistryIDs(source, controlplaneURL, rootOpts.publicRegistry)
 }

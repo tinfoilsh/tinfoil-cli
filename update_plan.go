@@ -151,8 +151,8 @@ func planProjectUpdate(client *cpClient, id string, body map[string]any) (update
 	return updateReview{plans: plans, project: &response}, nil
 }
 
-func (review updateReview) render() error {
-	if outputFormat == "json" {
+func (review updateReview) render(outputOpts *outputOptions) error {
+	if outputOpts.outputFormat == "json" {
 		if review.project != nil {
 			return json.NewEncoder(os.Stderr).Encode(review.project)
 		}

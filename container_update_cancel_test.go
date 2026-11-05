@@ -14,6 +14,8 @@ import (
 )
 
 func TestContainerUpdateCancelRollbackLatest(t *testing.T) {
+	commandState := newCommandFixture()
+
 	const (
 		containerID   = "61bd4a3e-5b48-4320-9215-0c7a7f974979"
 		containerName = "app"
@@ -24,14 +26,14 @@ func TestContainerUpdateCancelRollbackLatest(t *testing.T) {
 	)
 	t.Setenv(envAdminKey, "admin_test")
 	t.Setenv(envConfigPath, filepath.Join(t.TempDir(), "missing-config.json"))
-	flag := containerCancelCmd.Flags().Lookup("rollback-latest")
-	previousValue, previousChanged := cancelRollbackLatest, flag.Changed
-	previousStderr := rootCmd.ErrOrStderr()
-	rootCmd.SetErr(io.Discard)
+	flag := commandState.containerCancelCmd.Flags().Lookup("rollback-latest")
+	previousValue, previousChanged := commandState.containerCancelOpts.cancelRollbackLatest, flag.Changed
+	previousStderr := commandState.rootCmd.ErrOrStderr()
+	commandState.rootCmd.SetErr(io.Discard)
 	t.Cleanup(func() {
-		cancelRollbackLatest, flag.Changed = previousValue, previousChanged
-		rootCmd.SetArgs(nil)
-		rootCmd.SetErr(previousStderr)
+		commandState.containerCancelOpts.cancelRollbackLatest, flag.Changed = previousValue, previousChanged
+		commandState.rootCmd.SetArgs(nil)
+		commandState.rootCmd.SetErr(previousStderr)
 	})
 
 	tests := []struct {
@@ -114,7 +116,7 @@ func TestContainerUpdateCancelRollbackLatest(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cancelRollbackLatest, flag.Changed = false, false
+			commandState.containerCancelOpts.cancelRollbackLatest, flag.Changed = false, false
 			var lookups, cancellations atomic.Int32
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				container := containerView{ID: containerID, Name: containerName, CurrentTag: "v1.2.3", UpdateTag: "v1.2.4"}
@@ -145,8 +147,8 @@ func TestContainerUpdateCancelRollbackLatest(t *testing.T) {
 			defer server.Close()
 			t.Setenv(envCPURL, server.URL)
 
-			rootCmd.SetArgs(append([]string{"container", "cancel"}, tt.args...))
-			output, err := captureTestStdout(rootCmd.Execute)
+			commandState.rootCmd.SetArgs(append([]string{"container", "cancel"}, tt.args...))
+			output, err := captureTestStdout(commandState.rootCmd.Execute)
 			if tt.wantErr != "" {
 				require.ErrorContains(t, err, tt.wantErr)
 			} else {

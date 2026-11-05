@@ -49,6 +49,8 @@ func TestParseRepository(t *testing.T) {
 }
 
 func TestRepoConfigPRUsesAdminKeyAndRawConfig(t *testing.T) {
+	commandState := newCommandFixture()
+
 	raw := "cpus: 2\nmemory: 8192\ncontainers: []\n"
 	path := filepath.Join(t.TempDir(), "tinfoil-config.yml")
 	if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
@@ -83,16 +85,18 @@ func TestRepoConfigPRUsesAdminKeyAndRawConfig(t *testing.T) {
 	}))
 	defer server.Close()
 
-	configureRepoCommandTest(t, server.URL)
-	repoConfigFile = path
-	repoPRBody = "Update resources"
+	configureRepoCommandTest(commandState, t, server.URL)
+	commandState.repoConfigPROpts.repoConfigFile = path
+	commandState.repoConfigPROpts.repoPRBody = "Update resources"
 
-	if err := repoConfigPRCmd.RunE(repoConfigPRCmd, []string{"acme/app"}); err != nil {
+	if err := commandState.repoConfigPRCmd.RunE(commandState.repoConfigPRCmd, []string{"acme/app"}); err != nil {
 		t.Fatalf("run config pr: %v", err)
 	}
 }
 
 func TestRepoBuildRunDispatchesVersion(t *testing.T) {
+	commandState := newCommandFixture()
+
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			t.Errorf("method = %s, want POST", r.Method)
@@ -112,10 +116,10 @@ func TestRepoBuildRunDispatchesVersion(t *testing.T) {
 	}))
 	defer server.Close()
 
-	configureRepoCommandTest(t, server.URL)
-	repoVersion = "v1.2.3"
+	configureRepoCommandTest(commandState, t, server.URL)
+	commandState.repoBuildRunOpts.repoVersion = "v1.2.3"
 
-	if err := repoBuildRunCmd.RunE(repoBuildRunCmd, []string{"acme/app"}); err != nil {
+	if err := commandState.repoBuildRunCmd.RunE(commandState.repoBuildRunCmd, []string{"acme/app"}); err != nil {
 		t.Fatalf("run build: %v", err)
 	}
 }
@@ -132,24 +136,24 @@ func TestReadConfigInputRejectsOversizedFile(t *testing.T) {
 	}
 }
 
-func configureRepoCommandTest(t *testing.T, serverURL string) {
+func configureRepoCommandTest(commandState *commandFixture, t *testing.T, serverURL string) {
 	t.Helper()
 	t.Setenv(envCPURL, serverURL)
 	t.Setenv(envAdminKey, "admin_test")
 	t.Setenv(envConfigPath, filepath.Join(t.TempDir(), "missing-config.json"))
 
-	previousOutput := outputFormat
-	previousFile := repoConfigFile
-	previousBody := repoPRBody
-	previousVersion := repoVersion
-	outputFormat = "table"
-	repoConfigFile = ""
-	repoPRBody = ""
-	repoVersion = ""
+	previousOutput := commandState.outputOpts.outputFormat
+	previousFile := commandState.repoConfigPROpts.repoConfigFile
+	previousBody := commandState.repoConfigPROpts.repoPRBody
+	previousVersion := commandState.repoBuildRunOpts.repoVersion
+	commandState.outputOpts.outputFormat = "table"
+	commandState.repoConfigPROpts.repoConfigFile = ""
+	commandState.repoConfigPROpts.repoPRBody = ""
+	commandState.repoBuildRunOpts.repoVersion = ""
 	t.Cleanup(func() {
-		outputFormat = previousOutput
-		repoConfigFile = previousFile
-		repoPRBody = previousBody
-		repoVersion = previousVersion
+		commandState.outputOpts.outputFormat = previousOutput
+		commandState.repoConfigPROpts.repoConfigFile = previousFile
+		commandState.repoConfigPROpts.repoPRBody = previousBody
+		commandState.repoBuildRunOpts.repoVersion = previousVersion
 	})
 }

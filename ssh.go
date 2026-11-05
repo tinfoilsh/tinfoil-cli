@@ -22,12 +22,7 @@ const defaultSSHPort = 22
 // Well inside the shim's tunnel idle timeout, and how a dead path gets noticed.
 const sshServerAliveInterval = 60 * time.Second
 
-var (
-	sshUser string
-	sshPort uint
-)
-
-func newSshCommand() *cobra.Command {
+func newSshCommand(forwardOpts *forwardOptions, rootOpts *rootOptions, sshOpts *sshOptions, trustOpts *trustOptions, tunnelOpts *tunnelOptions) *cobra.Command {
 	sshCmd := &cobra.Command{
 		Use:   "ssh [container|hostname] [-- ssh arguments...]",
 		Short: "SSH into a container over its attested connection",
@@ -56,18 +51,19 @@ func newSshCommand() *cobra.Command {
 			if len(args) == 1 {
 				identifier = args[0]
 			}
-			target, err := resolveTunnelTarget(identifier)
+			target, err := resolveTunnelTarget(forwardOpts, rootOpts, trustOpts, identifier)
 			if err != nil {
 				return err
 			}
 
 			options, command := splitSSHArgs(sshArgs)
-			return sshExit(runSSH(target, sshTargetPort(target, sshPort), sshUser, options, command))
+			code, err := runSSH(rootOpts, tunnelOpts, target, sshTargetPort(target, sshOpts.sshPort), sshOpts.sshUser, options, command)
+			return sshExit(code, err)
 		},
 	}
-	sshCmd.Flags().StringVarP(&sshUser, "user", "l", "root", "Remote user to log in as")
-	sshCmd.Flags().UintVarP(&sshPort, "port", "p", 0, "Enclave SSH port (default: the published SSH port, else 22)")
-	addTunnelFlags(sshCmd)
+	sshCmd.Flags().StringVarP(&sshOpts.sshUser, "user", "l", "root", "Remote user to log in as")
+	sshCmd.Flags().UintVarP(&sshOpts.sshPort, "port", "p", 0, "Enclave SSH port (default: the published SSH port, else 22)")
+	addTunnelFlags(trustOpts, tunnelOpts, sshCmd)
 	return sshCmd
 }
 
@@ -86,8 +82,8 @@ func sshTargetPort(target *tunnelTarget, override uint) int {
 
 // runSSH returns ssh's exit status rather than exiting on it, so a caller can
 // finish what the session was for before the process ends.
-func runSSH(target *tunnelTarget, port int, user string, options, command []string) (int, error) {
-	argv, err := sshProxyOptions(target, port)
+func runSSH(rootOpts *rootOptions, tunnelOpts *tunnelOptions, target *tunnelTarget, port int, user string, options, command []string) (int, error) {
+	argv, err := sshProxyOptions(rootOpts, tunnelOpts, target, port)
 	if err != nil {
 		return 0, err
 	}
@@ -95,12 +91,12 @@ func runSSH(target *tunnelTarget, port int, user string, options, command []stri
 	argv = append(argv, options...)
 	argv = append(argv, "-o", "ServerAliveInterval="+strconv.Itoa(int(sshServerAliveInterval/time.Second)), target.host)
 	argv = append(argv, command...)
-	return runSSHClient("ssh", argv)
+	return runSSHClient(tunnelOpts, "ssh", argv)
 }
 
 // sshProxyOptions supplies the same attested connection to ssh and scp.
-func sshProxyOptions(target *tunnelTarget, port int) ([]string, error) {
-	proxy, err := proxyCommand(target, port)
+func sshProxyOptions(rootOpts *rootOptions, tunnelOpts *tunnelOptions, target *tunnelTarget, port int) ([]string, error) {
+	proxy, err := proxyCommand(rootOpts, tunnelOpts, target, port)
 	if err != nil {
 		return nil, err
 	}
@@ -113,12 +109,12 @@ func sshProxyOptions(target *tunnelTarget, port int) ([]string, error) {
 	}, nil
 }
 
-func runSSHClient(program string, argv []string) (int, error) {
+func runSSHClient(tunnelOpts *tunnelOptions, program string, argv []string) (int, error) {
 	client := exec.Command(program, argv...)
 	client.Stdin, client.Stdout, client.Stderr = os.Stdin, os.Stdout, os.Stderr
 	// Keep the API key out of the ProxyCommand shown in the process table.
 	client.Env = os.Environ()
-	if key := enclaveAPIKey(); key != "" {
+	if key := enclaveAPIKey(tunnelOpts); key != "" {
 		client.Env = append(client.Env, envTunnelAPIKey+"="+key)
 	}
 	// Ctrl-C reaches this process too, and what follows the session needs it
@@ -139,14 +135,20 @@ func runSSHClient(program string, argv []string) (int, error) {
 // sshExit hands the client's own status, which it has already explained, to main to
 // exit with once it has finished the work every command ends with.
 func sshExit(code int, err error) error {
-	exitCode = code
-	return err
+	if err != nil || code == 0 {
+		return err
+	}
+	return &processExit{code: code}
 }
+
+type processExit struct{ code int }
+
+func (e *processExit) Error() string { return fmt.Sprintf("process exited with status %d", e.code) }
 
 // proxyCommand builds the "tinfoil forward --stdio" invocation ssh runs through
 // /bin/sh. It names the resolved host rather than the container, so each
 // connection re-verifies the enclave without a second controlplane round trip.
-func proxyCommand(target *tunnelTarget, port int) (string, error) {
+func proxyCommand(rootOpts *rootOptions, tunnelOpts *tunnelOptions, target *tunnelTarget, port int) (string, error) {
 	self, err := os.Executable()
 	if err != nil {
 		return "", fmt.Errorf("locating the tinfoil binary: %w", err)
@@ -156,11 +158,11 @@ func proxyCommand(target *tunnelTarget, port int) (string, error) {
 	if target.repo != "" {
 		argv = append(argv, "--repo", target.repo)
 	}
-	if publicRegistry {
+	if rootOpts.publicRegistry {
 		argv = append(argv, "--public-registry")
 	}
-	if localConfigFile != "" {
-		path, err := filepath.Abs(localConfigFile)
+	if rootOpts.localConfigFile != "" {
+		path, err := filepath.Abs(rootOpts.localConfigFile)
 		if err != nil {
 			return "", fmt.Errorf("locating local config: %w", err)
 		}
@@ -170,7 +172,7 @@ func proxyCommand(target *tunnelTarget, port int) (string, error) {
 		argv = append(argv, "--sealed-to", target.sealedTo)
 	}
 	// Each connection re-runs the debug check, so the opt-in travels too.
-	if allowDebug {
+	if tunnelOpts.allowDebug {
 		argv = append(argv, "--allow-debug")
 	}
 

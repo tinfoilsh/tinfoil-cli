@@ -16,13 +16,13 @@ import (
 	"github.com/tinfoilsh/tinfoil-go/verify/measurement"
 )
 
-func newAttestationCommand() *cobra.Command {
+func newAttestationCommand(rootOpts *rootOptions) *cobra.Command {
 	attestationCmd := &cobra.Command{
 		Use:     "attestation",
 		Aliases: []string{"att"},
 		Short:   "Verify enclave attestations",
 	}
-	attestationCmd.AddCommand(newAttestationVerifyCommand())
+	attestationCmd.AddCommand(newAttestationVerifyCommand(&attestationVerifyOptions{}, rootOpts))
 	return attestationCmd
 }
 
@@ -35,24 +35,24 @@ func tlsConnection(enclaveHost string) (*tls.ConnectionState, error) {
 	return &cs, nil
 }
 
-func verificationOptions(source, sealedTo string) (*tinfoil.EnclaveOptions, error) {
-	input, err := verificationInput(source, sealedTo)
+func verificationOptions(rootOpts *rootOptions, source, sealedTo string) (*tinfoil.EnclaveOptions, error) {
+	input, err := verificationInput(rootOpts, source, sealedTo)
 	if err != nil {
 		return nil, err
 	}
 	return input.Options()
 }
 
-func verificationInput(source, sealedTo string) (connection.Verification, error) {
-	input := connection.Verification{Reference: source, RTMR3: sealedTo, PublicRegistry: publicRegistry}
-	if localConfigFile != "" {
-		if publicRegistry {
+func verificationInput(rootOpts *rootOptions, source, sealedTo string) (connection.Verification, error) {
+	input := connection.Verification{Reference: source, RTMR3: sealedTo, PublicRegistry: rootOpts.publicRegistry}
+	if rootOpts.localConfigFile != "" {
+		if rootOpts.publicRegistry {
 			return input, fmt.Errorf("--public-registry and --config cannot be used together")
 		}
 		if source != "" {
 			return input, fmt.Errorf("--config and --repo cannot be used together")
 		}
-		data, err := readLocalConfig()
+		data, err := readLocalConfig(rootOpts)
 		if err != nil {
 			return input, err
 		}
@@ -64,7 +64,7 @@ func verificationInput(source, sealedTo string) (connection.Verification, error)
 		return input, fmt.Errorf("v3 verification requires an expected workload; pass --repo owner/name[@tag][@sha256:digest] or --config FILE")
 	} else {
 		var err error
-		input.RegistryIDs, err = registryIDs(source)
+		input.RegistryIDs, err = registryIDs(rootOpts, source)
 		if err != nil {
 			return input, err
 		}
@@ -72,11 +72,11 @@ func verificationInput(source, sealedTo string) (connection.Verification, error)
 	return input, nil
 }
 
-func newVerifiedClient(host, source, sealedTo string) (*tinfoil.EnclaveHTTPClient, error) {
+func newVerifiedClient(rootOpts *rootOptions, host, source, sealedTo string) (*tinfoil.EnclaveHTTPClient, error) {
 	if host == "" {
 		return nil, fmt.Errorf("--enclave is required")
 	}
-	input, err := verificationInput(source, sealedTo)
+	input, err := verificationInput(rootOpts, source, sealedTo)
 	if err != nil {
 		return nil, err
 	}
@@ -144,9 +144,9 @@ func (r *auditRecord) verificationError() error {
 	return fmt.Errorf("verification failed: %s", r.Error)
 }
 
-func verifyAttestation(l *log.Logger) (*auditRecord, error) {
-	host, source := enclaveHost, repo
-	if host == "" && localConfigFile != "" {
+func verifyAttestation(rootOpts *rootOptions, l *log.Logger) (*auditRecord, error) {
+	host, source := rootOpts.enclaveHost, rootOpts.repo
+	if host == "" && rootOpts.localConfigFile != "" {
 		return nil, fmt.Errorf("--enclave is required with --config")
 	}
 	if host == "" {
@@ -160,7 +160,7 @@ func verifyAttestation(l *log.Logger) (*auditRecord, error) {
 		}
 		l.Printf("Using auto selected router: %s", host)
 	}
-	secure, err := newVerifiedClient(host, source, "")
+	secure, err := newVerifiedClient(rootOpts, host, source, "")
 	if err != nil {
 		return nil, err
 	}

@@ -13,6 +13,8 @@ import (
 const testReplacedContainerID = "22222222-2222-4222-8222-222222222222"
 
 func TestCreateRejectsInvalidConfigBeforeDiskAdvice(t *testing.T) {
+	commandState := newCommandFixture()
+
 	for _, tt := range []struct {
 		name, response, want string
 		status               int
@@ -37,11 +39,13 @@ func TestCreateRejectsInvalidConfigBeforeDiskAdvice(t *testing.T) {
 					io.WriteString(w, tt.response)
 				}))
 				defer server.Close()
-				configureContainerPromotionTest(t, server.URL)
+				configureContainerPromotionTest(commandState, t, server.URL)
 				if withVolume {
-					createVolumes = []string{"data-vol"}
+					commandState.containerCreateOpts.createVolumes = []string{"data-vol"}
 				}
-				_, err := captureTestStdout(func() error { return containerCreateCmd.RunE(containerCreateCmd, []string{"app"}) })
+				_, err := captureTestStdout(func() error {
+					return commandState.containerCreateCmd.RunE(commandState.containerCreateCmd, []string{"app"})
+				})
 				if err == nil || !strings.Contains(err.Error(), tt.want) {
 					t.Fatalf("err = %v, want %q", err, tt.want)
 				}
@@ -180,6 +184,8 @@ func (f *createFlowFixture) serve(t *testing.T) *httptest.Server {
 }
 
 func TestCreateForwardsReleaseChoiceThroughVolumeDeploy(t *testing.T) {
+	commandState := newCommandFixture()
+
 	for _, mode := range []string{"optional", "attached", "replacement"} {
 		for _, mark := range []string{"", "true", "false"} {
 			t.Run(mode+"/mark="+mark, func(t *testing.T) {
@@ -192,16 +198,18 @@ func TestCreateForwardsReleaseChoiceThroughVolumeDeploy(t *testing.T) {
 				}
 				server := f.serve(t)
 				defer server.Close()
-				configureContainerPromotionTest(t, server.URL)
+				configureContainerPromotionTest(commandState, t, server.URL)
 				if mode != "optional" {
-					createVolumes = []string{"data-vol"}
+					commandState.containerCreateOpts.createVolumes = []string{"data-vol"}
 				}
 				if mode == "replacement" {
-					createReplaceID = testReplacedContainerID
+					commandState.containerCreateOpts.createReplaceID = testReplacedContainerID
 				}
-				createMarkLatestRelease = mark
-				containerCreateCmd.Flags().Lookup("mark-latest").Changed = mark != ""
-				_, err := captureTestStdout(func() error { return containerCreateCmd.RunE(containerCreateCmd, []string{"app"}) })
+				commandState.containerCreateOpts.createMarkLatestRelease = mark
+				commandState.containerCreateCmd.Flags().Lookup("mark-latest").Changed = mark != ""
+				_, err := captureTestStdout(func() error {
+					return commandState.containerCreateCmd.RunE(commandState.containerCreateCmd, []string{"app"})
+				})
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -238,6 +246,8 @@ func TestCreateForwardsReleaseChoiceThroughVolumeDeploy(t *testing.T) {
 }
 
 func TestCreateRejectsUnsafeDiskAssignmentsBeforeReplacement(t *testing.T) {
+	commandState := newCommandFixture()
+
 	for _, tt := range []struct {
 		name       string
 		requests   []string
@@ -270,9 +280,11 @@ func TestCreateRejectsUnsafeDiskAssignmentsBeforeReplacement(t *testing.T) {
 			}
 			server := f.serve(t)
 			defer server.Close()
-			configureContainerPromotionTest(t, server.URL)
-			createReplaceID, createVolumes, createHost = testReplacedContainerID, tt.requests, tt.host
-			_, err := captureTestStdout(func() error { return containerCreateCmd.RunE(containerCreateCmd, []string{"app"}) })
+			configureContainerPromotionTest(commandState, t, server.URL)
+			commandState.containerCreateOpts.createReplaceID, commandState.containerCreateOpts.createVolumes, commandState.containerCreateOpts.createHost = testReplacedContainerID, tt.requests, tt.host
+			_, err := captureTestStdout(func() error {
+				return commandState.containerCreateCmd.RunE(commandState.containerCreateCmd, []string{"app"})
+			})
 			if err == nil || !strings.Contains(err.Error(), tt.want) {
 				t.Fatalf("err = %v, want %q", err, tt.want)
 			}
@@ -284,19 +296,25 @@ func TestCreateRejectsUnsafeDiskAssignmentsBeforeReplacement(t *testing.T) {
 }
 
 func TestCreateWithoutReplacementCannotReuseAttachedDisk(t *testing.T) {
+	commandState := newCommandFixture()
+
 	f := newCreateFlowFixture()
 	f.volumes[0].ContainerID = testReplacedContainerID
 	server := f.serve(t)
 	defer server.Close()
-	configureContainerPromotionTest(t, server.URL)
-	createVolumes = []string{"data-vol"}
-	_, err := captureTestStdout(func() error { return containerCreateCmd.RunE(containerCreateCmd, []string{"app"}) })
+	configureContainerPromotionTest(commandState, t, server.URL)
+	commandState.containerCreateOpts.createVolumes = []string{"data-vol"}
+	_, err := captureTestStdout(func() error {
+		return commandState.containerCreateCmd.RunE(commandState.containerCreateCmd, []string{"app"})
+	})
 	if err == nil || !strings.Contains(err.Error(), "already attached") || f.created {
 		t.Fatalf("attached disk accepted without --replace: %v", err)
 	}
 }
 
 func TestCreateValidationUsesInstanceNamePolicy(t *testing.T) {
+	commandState := newCommandFixture()
+
 	for _, tt := range []struct {
 		name, instanceName, wantErr string
 		replace, targetDenied       bool
@@ -314,15 +332,15 @@ func TestCreateValidationUsesInstanceNamePolicy(t *testing.T) {
 			f.validationTargetDenied = tt.targetDenied
 			server := f.serve(t)
 			defer server.Close()
-			configureContainerPromotionTest(t, server.URL)
+			configureContainerPromotionTest(commandState, t, server.URL)
 			if tt.replace {
-				createReplaceID = testReplacedContainerID
+				commandState.containerCreateOpts.createReplaceID = testReplacedContainerID
 			}
 			client, err := authedClient()
 			if err != nil {
 				t.Fatal(err)
 			}
-			baseline := map[string]any{"repo": createRepo, "tag": createTag}
+			baseline := map[string]any{"repo": commandState.containerCreateOpts.createRepo, "tag": commandState.containerCreateOpts.createTag}
 			if tt.replace {
 				baseline["replace_container_id"] = testReplacedContainerID
 			}
@@ -335,7 +353,7 @@ func TestCreateValidationUsesInstanceNamePolicy(t *testing.T) {
 				t.Fatalf("validation must reject a missing create name or unauthorized target: status=%d err=%v", status, err)
 			}
 			_, err = captureTestStdout(func() error {
-				return containerCreateCmd.RunE(containerCreateCmd, []string{tt.instanceName})
+				return commandState.containerCreateCmd.RunE(commandState.containerCreateCmd, []string{tt.instanceName})
 			})
 			body := f.bodies["POST /api/containers/validate"]
 			if body["instance_name"] != tt.instanceName {
@@ -368,6 +386,8 @@ func TestCreateValidationUsesInstanceNamePolicy(t *testing.T) {
 }
 
 func TestCreatePartialFailuresDescribeRetainedState(t *testing.T) {
+	commandState := newCommandFixture()
+
 	for _, stage := range []string{"attach", "deploy", "load volumes", "changed config"} {
 		t.Run(stage, func(t *testing.T) {
 			f := newCreateFlowFixture()
@@ -386,11 +406,13 @@ func TestCreatePartialFailuresDescribeRetainedState(t *testing.T) {
 			}
 			server := f.serve(t)
 			defer server.Close()
-			configureContainerPromotionTest(t, server.URL)
-			createReplaceID, createVolumes = testReplacedContainerID, []string{"data-vol:data", "cache-vol:cache"}
-			createMarkLatestRelease = "false"
-			containerCreateCmd.Flags().Lookup("mark-latest").Changed = true
-			_, err := captureTestStdout(func() error { return containerCreateCmd.RunE(containerCreateCmd, []string{"app"}) })
+			configureContainerPromotionTest(commandState, t, server.URL)
+			commandState.containerCreateOpts.createReplaceID, commandState.containerCreateOpts.createVolumes = testReplacedContainerID, []string{"data-vol:data", "cache-vol:cache"}
+			commandState.containerCreateOpts.createMarkLatestRelease = "false"
+			commandState.containerCreateCmd.Flags().Lookup("mark-latest").Changed = true
+			_, err := captureTestStdout(func() error {
+				return commandState.containerCreateCmd.RunE(commandState.containerCreateCmd, []string{"app"})
+			})
 			if err == nil {
 				t.Fatal("expected follow-up failure")
 			}

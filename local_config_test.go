@@ -29,6 +29,8 @@ func localConfigFixture(t *testing.T) (string, []byte, string) {
 }
 
 func TestCreateLocalConfig(t *testing.T) {
+	commandState := newCommandFixture()
+
 	for _, explicitSource := range []bool{false, true} {
 		t.Run(boolText(explicitSource), func(t *testing.T) {
 			path, data, _ := localConfigFixture(t)
@@ -47,13 +49,13 @@ func TestCreateLocalConfig(t *testing.T) {
 				io.WriteString(w, `{"id":"`+testContainerID+`","name":"app","source":"local","status":"deploying"}`)
 			}))
 			defer server.Close()
-			configureContainerPromotionTest(t, server.URL)
-			createRepo, createTag = "", ""
+			configureContainerPromotionTest(commandState, t, server.URL)
+			commandState.containerCreateOpts.createRepo, commandState.containerCreateOpts.createTag = "", ""
 			args := []string{"container", "create", "app", "--config", path, "--no-wait"}
 			if explicitSource {
 				args = append(args, "--source", containerSourceLocal)
 			}
-			output, err := captureTestStdout(func() error { return executeLifecycleCLI(t, args...) })
+			output, err := captureTestStdout(func() error { return executeLifecycleCLI(commandState, t, args...) })
 			require.NoError(t, err)
 			require.Equal(t, []string{"POST /api/containers"}, paths)
 			require.Contains(t, string(output), `"source": "local"`)
@@ -62,6 +64,8 @@ func TestCreateLocalConfig(t *testing.T) {
 }
 
 func TestCreateLocalConfigRejectsUnsupportedSelections(t *testing.T) {
+	commandState := newCommandFixture()
+
 	for _, test := range []struct {
 		args    []string
 		message string
@@ -80,16 +84,18 @@ func TestCreateLocalConfigRejectsUnsupportedSelections(t *testing.T) {
 				w.WriteHeader(http.StatusInternalServerError)
 			}))
 			defer server.Close()
-			configureContainerPromotionTest(t, server.URL)
-			createRepo, createTag = "", ""
+			configureContainerPromotionTest(commandState, t, server.URL)
+			commandState.containerCreateOpts.createRepo, commandState.containerCreateOpts.createTag = "", ""
 			path, _, _ := localConfigFixture(t)
 			args := append([]string{"container", "create", "app", "--config", path}, test.args...)
-			require.ErrorContains(t, executeLifecycleCLI(t, args...), test.message)
+			require.ErrorContains(t, executeLifecycleCLI(commandState, t, args...), test.message)
 		})
 	}
 }
 
 func TestLocalConnectionRequiresTrustedFile(t *testing.T) {
+	commandState := newCommandFixture()
+
 	path, data, digest := localConfigFixture(t)
 	descriptor := connectionDescriptor{URL: "https://app.example.com", ConfigDigest: digest}
 	c := containerView{ID: testContainerID, Name: "app", Source: containerSourceLocal, Domain: "app.example.com", Connections: &containerConnections{Production: &descriptor}}
@@ -98,31 +104,34 @@ func TestLocalConnectionRequiresTrustedFile(t *testing.T) {
 		json.NewEncoder(w).Encode(c)
 	}))
 	defer server.Close()
-	configureContainerPromotionTest(t, server.URL)
-	previousRepo := repo
-	repo = ""
-	t.Cleanup(func() { repo = previousRepo })
+	configureContainerPromotionTest(commandState, t, server.URL)
+	previousRepo := commandState.rootOpts.repo
+	commandState.rootOpts.repo = ""
+	t.Cleanup(func() { commandState.rootOpts.repo = previousRepo })
 
-	_, err := resolveTunnelTarget(testContainerID)
+	_, err := resolveTunnelTarget(commandState.forwardOpts, commandState.rootOpts, commandState.trustOpts, testContainerID)
 	require.ErrorContains(t, err, "requires --config")
-	require.ErrorContains(t, containerConnectCmd.RunE(containerConnectCmd, []string{testContainerID}), "requires --config")
-	localConfigFile = path
-	require.ErrorContains(t, checkLocalConfigDigest(registryConfigDigest), "does not match")
-	target, err := resolveTunnelTarget(testContainerID)
+	require.ErrorContains(t, commandState.containerConnectCmd.RunE(commandState.containerConnectCmd, []string{testContainerID}), "requires --config")
+	commandState.rootOpts.localConfigFile = path
+	require.ErrorContains(t, checkLocalConfigDigest(commandState.rootOpts, registryConfigDigest), "does not match")
+	target, err := resolveTunnelTarget(commandState.forwardOpts, commandState.rootOpts, commandState.trustOpts, testContainerID)
 	require.NoError(t, err)
 	require.Empty(t, target.repo)
 	require.Equal(t, "app.example.com", target.host)
-	require.NoError(t, checkLocalConfigDigest(digest))
+	require.NoError(t, checkLocalConfigDigest(commandState.rootOpts, digest))
 
 	// Replacing the file after checking the descriptor cannot change trust bytes.
 	require.NoError(t, os.WriteFile(path, []byte("different config"), 0600))
-	opts, err := verificationOptions(target.repo, "")
+	opts, err := verificationOptions(commandState.rootOpts, target.repo, "")
 	require.NoError(t, err)
 	require.True(t, opts.Verifier.CallerAuthorizesConfig())
-	cached, err := readLocalConfig()
+	cached, err := readLocalConfig(commandState.rootOpts)
 	require.NoError(t, err)
 	require.Equal(t, data, cached)
-	require.ErrorContains(t, func() error { _, err := newVerifiedClient(target.host, "acme/app", ""); return err }(), "cannot be used together")
+	require.ErrorContains(t, func() error {
+		_, err := newVerifiedClient(commandState.rootOpts, target.host, "acme/app", "")
+		return err
+	}(), "cannot be used together")
 
 	guidance := containerConnectionGuidance(c, false)
 	require.Contains(t, guidance, "--config <FILE>")
@@ -149,23 +158,27 @@ func TestLocalConnectionRejectsMalformedDescriptors(t *testing.T) {
 }
 
 func TestLocalConfigFileValidation(t *testing.T) {
-	configureContainerPromotionTest(t, "https://unused.example")
-	createSource, createRepo, createTag = containerSourceLocal, "", ""
-	require.ErrorContains(t, containerCreateCmd.RunE(containerCreateCmd, []string{"app"}), "requires --config")
-	localConfigFile = filepath.Join(t.TempDir(), "missing.yml")
-	_, err := readLocalConfig()
+	commandState := newCommandFixture()
+
+	configureContainerPromotionTest(commandState, t, "https://unused.example")
+	commandState.containerCreateOpts.createSource, commandState.containerCreateOpts.createRepo, commandState.containerCreateOpts.createTag = containerSourceLocal, "", ""
+	require.ErrorContains(t, commandState.containerCreateCmd.RunE(commandState.containerCreateCmd, []string{"app"}), "requires --config")
+	commandState.rootOpts.localConfigFile = filepath.Join(t.TempDir(), "missing.yml")
+	_, err := readLocalConfig(commandState.rootOpts)
 	require.ErrorContains(t, err, "reading config")
-	require.NoError(t, os.WriteFile(localConfigFile, nil, 0600))
-	_, err = readLocalConfig()
+	require.NoError(t, os.WriteFile(commandState.rootOpts.localConfigFile, nil, 0600))
+	_, err = readLocalConfig(commandState.rootOpts)
 	require.ErrorContains(t, err, "config must contain")
 }
 
 func TestSSHProxyPreservesLocalConfigPath(t *testing.T) {
-	configureContainerPromotionTest(t, "https://unused.example")
+	commandState := newCommandFixture()
+
+	configureContainerPromotionTest(commandState, t, "https://unused.example")
 	path, data, _ := localConfigFixture(t)
-	localConfigFile = filepath.Join(filepath.Dir(path), "local config 'quoted'.yaml")
-	require.NoError(t, os.Rename(path, localConfigFile))
-	proxy, err := proxyCommand(&tunnelTarget{host: "app.example.com"}, defaultSSHPort)
+	commandState.rootOpts.localConfigFile = filepath.Join(filepath.Dir(path), "local config 'quoted'.yaml")
+	require.NoError(t, os.Rename(path, commandState.rootOpts.localConfigFile))
+	proxy, err := proxyCommand(commandState.rootOpts, commandState.tunnelOpts, &tunnelTarget{host: "app.example.com"}, defaultSSHPort)
 	require.NoError(t, err)
 	command := exec.Command("sh", "-c", "set -- "+proxy+"; printf '%s\\n' \"$@\"")
 	command.Dir = t.TempDir()
@@ -175,7 +188,7 @@ func TestSSHProxyPreservesLocalConfigPath(t *testing.T) {
 	flag := slices.Index(args, "--config")
 	require.GreaterOrEqual(t, flag, 0)
 	require.Less(t, flag+1, len(args))
-	require.Equal(t, localConfigFile, args[flag+1])
+	require.Equal(t, commandState.rootOpts.localConfigFile, args[flag+1])
 	forwarded, err := os.ReadFile(args[flag+1])
 	require.NoError(t, err)
 	require.Equal(t, data, forwarded)

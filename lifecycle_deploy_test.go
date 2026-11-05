@@ -11,6 +11,8 @@ import (
 )
 
 func TestDeployAttachRecoveryPreservesRequestedReleaseChoice(t *testing.T) {
+	commandState := newCommandFixture()
+
 	for _, saved := range []string{"absent", "true", "false"} {
 		for _, requested := range []struct {
 			value, suffix string
@@ -47,12 +49,12 @@ func TestDeployAttachRecoveryPreservesRequestedReleaseChoice(t *testing.T) {
 					}
 				}))
 				defer server.Close()
-				configureContainerPromotionTest(t, server.URL)
-				deployVolumes = []string{"data-vol"}
-				deployMarkLatestRelease = requested.value
-				containerDeployCmd.Flags().Lookup("mark-latest").Changed = requested.value != ""
+				configureContainerPromotionTest(commandState, t, server.URL)
+				commandState.containerDeployOpts.deployVolumes = []string{"data-vol"}
+				commandState.containerDeployOpts.deployMarkLatestRelease = requested.value
+				commandState.containerDeployCmd.Flags().Lookup("mark-latest").Changed = requested.value != ""
 				_, err := captureTestStdout(func() error {
-					return containerDeployCmd.RunE(containerDeployCmd, []string{testContainerID})
+					return commandState.containerDeployCmd.RunE(commandState.containerDeployCmd, []string{testContainerID})
 				})
 				if err == nil || !strings.Contains(err.Error(), "could not attach data-vol") {
 					t.Fatalf("expected attachment failure, got %v", err)
@@ -71,6 +73,8 @@ func TestDeployAttachRecoveryPreservesRequestedReleaseChoice(t *testing.T) {
 }
 
 func TestDeployAttachRecoveryPreservesVolumeArgument(t *testing.T) {
+	commandState := newCommandFixture()
+
 	for _, name := range []string{"customer data", "équipe's data", "data$(printf injected)", "data;printf injected", "--help"} {
 		t.Run(name, func(t *testing.T) {
 			attachments := 0
@@ -90,9 +94,9 @@ func TestDeployAttachRecoveryPreservesVolumeArgument(t *testing.T) {
 				}
 			}))
 			defer server.Close()
-			configureContainerPromotionTest(t, server.URL)
+			configureContainerPromotionTest(commandState, t, server.URL)
 			_, err := captureTestStdout(func() error {
-				return executeLifecycleCLI(t, "container", "deploy", testContainerID, "--volume", name+":data", "--mark-latest=false")
+				return executeLifecycleCLI(commandState, t, "container", "deploy", testContainerID, "--volume", name+":data", "--mark-latest=false")
 			})
 			if err == nil || attachments != 1 {
 				t.Fatalf("expected one failed attachment, got %d: %v", attachments, err)
@@ -120,7 +124,7 @@ func TestDeployAttachRecoveryPreservesVolumeArgument(t *testing.T) {
 					continue
 				}
 				args := strings.Split(strings.TrimSuffix(string(out), "\n"), "\n")[1:]
-				_, err = captureTestStdout(func() error { return executeLifecycleCLI(t, args...) })
+				_, err = captureTestStdout(func() error { return executeLifecycleCLI(commandState, t, args...) })
 				if err == nil || !strings.Contains(err.Error(), "volume is already in use") {
 					t.Errorf("%s recovery did not reach the original volume attachment: %v", shell, err)
 				}

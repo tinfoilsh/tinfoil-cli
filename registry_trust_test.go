@@ -72,18 +72,18 @@ func TestRegistryCommandsKeepPersonalAndOrganizationApprovalsSeparate(t *testing
 	personal := entry
 	personal.AccountID, personal.Namespaces, personal.RegistryID = "user_owner", []string{"/user-personal"}, configendorsement.RegistryIDPrefix+strings.Repeat("f", 32)
 	require.NoError(t, acceptRegistry(strings.NewReader(""), &bytes.Buffer{}, personal, true))
-	require.NoError(t, executeLifecycleCLI(t, "trust", "add", "--registry-id", entry.RegistryID))
+	require.NoError(t, executeLifecycleCLI(newCommandFixture(), t, "trust", "add", "--registry-id", entry.RegistryID))
 	policy, err := loadConnectionPolicy()
 	require.NoError(t, err)
 	require.Len(t, policy.Registries, 2)
-	output, err := captureTestStdout(func() error { return executeLifecycleCLI(t, "trust") })
+	output, err := captureTestStdout(func() error { return executeLifecycleCLI(newCommandFixture(), t, "trust") })
 	require.NoError(t, err)
 	require.Contains(t, string(output), "Private registry: Acme")
 	require.NotContains(t, string(output), entry.RegistryID)
-	output, err = captureTestStdout(func() error { return executeLifecycleCLI(t, "trust", "--json") })
+	output, err = captureTestStdout(func() error { return executeLifecycleCLI(newCommandFixture(), t, "trust", "--json") })
 	require.NoError(t, err)
 	require.Contains(t, string(output), `"registry_id":"`+entry.RegistryID+`"`)
-	require.NoError(t, executeLifecycleCLI(t, "trust", "remove", entry.Label))
+	require.NoError(t, executeLifecycleCLI(newCommandFixture(), t, "trust", "remove", entry.Label))
 	policy, err = loadConnectionPolicy()
 	require.NoError(t, err)
 	require.Equal(t, []registryEnrollment{personal}, policy.Registries)
@@ -95,23 +95,20 @@ func TestRegistryRemovalRejectsAmbiguousNames(t *testing.T) {
 	other := entry
 	other.AccountID, other.Namespaces, other.RegistryID = "org_other", []string{"/other"}, configendorsement.RegistryIDPrefix+strings.Repeat("e", 32)
 	require.NoError(t, acceptRegistry(strings.NewReader(""), &bytes.Buffer{}, other, true))
-	require.ErrorContains(t, executeLifecycleCLI(t, "trust", "remove", entry.Label), "multiple private registries")
+	require.ErrorContains(t, executeLifecycleCLI(newCommandFixture(), t, "trust", "remove", entry.Label), "multiple private registries")
 	policy, err := loadConnectionPolicy()
 	require.NoError(t, err)
 	require.Len(t, policy.Registries, 2)
 	other.Label = entry.AccountID
 	require.NoError(t, policy.AcceptRegistry(other))
-	require.NoError(t, executeLifecycleCLI(t, "trust", "remove", entry.AccountID))
+	require.NoError(t, executeLifecycleCLI(newCommandFixture(), t, "trust", "remove", entry.AccountID))
 	policy, err = loadConnectionPolicy()
 	require.NoError(t, err)
 	require.Equal(t, []registryEnrollment{other}, policy.Registries)
 }
 
 func TestPublicRegistryPolicySurvivesSSHProxyCommand(t *testing.T) {
-	previous := publicRegistry
-	publicRegistry = true
-	t.Cleanup(func() { publicRegistry = previous })
-	command, err := proxyCommand(&tunnelTarget{host: "app.example.com", repo: "acme/app"}, defaultSSHPort)
+	command, err := proxyCommand(&rootOptions{publicRegistry: true}, &tunnelOptions{}, &tunnelTarget{host: "app.example.com", repo: "acme/app"}, defaultSSHPort)
 	require.NoError(t, err)
 	require.Contains(t, command, "'--public-registry'")
 }
@@ -131,9 +128,10 @@ func TestRegistryEnrollmentRefusesRedirects(t *testing.T) {
 }
 
 func TestRegistryEnrollmentSelectsOnlyItsNamespacesAndControlPlane(t *testing.T) {
+	rootOpts := &rootOptions{}
 	entry := enrollmentFixture(t)
 	require.NoError(t, acceptRegistry(strings.NewReader(""), &bytes.Buffer{}, entry, true))
-	options, err := registryIDs("acme/app@v1")
+	options, err := registryIDs(rootOpts, "acme/app@v1")
 	require.NoError(t, err)
 	v, err := verify.NewVerifier(verify.WithConfigRegistryIDs(options...))
 	require.NoError(t, err)
@@ -142,21 +140,20 @@ func TestRegistryEnrollmentSelectsOnlyItsNamespacesAndControlPlane(t *testing.T)
 	require.NoError(t, err)
 	_, err = v.VerifyV3(doc, nonce, "acme/app")
 	require.ErrorContains(t, err, "configured trust requires")
-	options, err = registryIDs("other/app")
+	options, err = registryIDs(rootOpts, "other/app")
 	require.NoError(t, err)
 	require.Empty(t, options)
 	t.Setenv(envCPURL, "https://another-controlplane.example")
-	options, err = registryIDs("acme/app")
+	options, err = registryIDs(rootOpts, "acme/app")
 	require.NoError(t, err)
 	require.Empty(t, options)
 	t.Setenv(envCPURL, defaultControlplaneURL)
-	publicRegistry = true
-	t.Cleanup(func() { publicRegistry = false })
-	options, err = registryIDs("acme/app")
+	rootOpts.publicRegistry = true
+	options, err = registryIDs(rootOpts, "acme/app")
 	require.NoError(t, err)
 	require.Empty(t, options)
 	require.NoError(t, os.WriteFile(os.Getenv(envKnownConfigs), []byte("invalid"), 0600))
-	_, err = registryIDs("acme/app")
+	_, err = registryIDs(rootOpts, "acme/app")
 	require.ErrorContains(t, err, "malformed")
 }
 
@@ -169,11 +166,11 @@ func TestClerkRegistryEnrollmentUsesTheAuthenticatedAPIOrigin(t *testing.T) {
 		UserID: "user_owner", Account: entry.AccountID, AccessToken: "fixture-access",
 	}))
 	t.Setenv(envCPURL, "https://another-controlplane.example")
-	options, err := registryIDs("acme/app")
+	options, err := registryIDs(&rootOptions{}, "acme/app")
 	require.NoError(t, err)
 	require.Len(t, options, 1, "a URL override cannot bypass the Clerk account's enrolled registry")
 	t.Setenv(envAdminKey, "admin_explicit")
-	options, err = registryIDs("acme/app")
+	options, err = registryIDs(&rootOptions{}, "acme/app")
 	require.NoError(t, err)
 	require.Empty(t, options, "an admin token uses its separately configured control plane")
 }

@@ -9,7 +9,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func newSCPCommand() *cobra.Command {
+func newSCPCommand(forwardOpts *forwardOptions, rootOpts *rootOptions, trustOpts *trustOptions, tunnelOpts *tunnelOptions) *cobra.Command {
 	var user string
 	var port uint
 	cmd := &cobra.Command{
@@ -43,16 +43,17 @@ Put native scp options after --; -p before -- is the enclave SSH port.`,
 			if port > 65535 {
 				return fmt.Errorf("invalid --port %d: must be 1..65535", port)
 			}
-			target, paths, err := resolveSCPPaths(args, user)
+			target, paths, err := resolveSCPPaths(forwardOpts, rootOpts, trustOpts, args, user)
 			if err != nil {
 				return err
 			}
-			return sshExit(runSCP(target, sshTargetPort(target, port), options, paths))
+			code, err := runSCP(rootOpts, tunnelOpts, target, sshTargetPort(target, port), options, paths)
+			return sshExit(code, err)
 		},
 	}
 	cmd.Flags().StringVarP(&user, "user", "l", "root", "Remote user to log in as")
 	cmd.Flags().UintVarP(&port, "port", "p", 0, "Enclave SSH port (default: the published SSH port, else 22)")
-	addTunnelFlags(cmd)
+	addTunnelFlags(trustOpts, tunnelOpts, cmd)
 	return cmd
 }
 
@@ -82,7 +83,7 @@ func parseSCPPath(raw string) (scpPath, error) {
 	return scpPath{remote: true, identifier: host, user: user, path: path}, nil
 }
 
-func resolveSCPPaths(args []string, user string) (*tunnelTarget, []string, error) {
+func resolveSCPPaths(forwardOpts *forwardOptions, rootOpts *rootOptions, trustOpts *trustOptions, args []string, user string) (*tunnelTarget, []string, error) {
 	paths := make([]scpPath, len(args))
 	var identifier string
 	hasRemote := false
@@ -96,7 +97,7 @@ func resolveSCPPaths(args []string, user string) (*tunnelTarget, []string, error
 			continue
 		}
 		if path.identifier == "" {
-			path.identifier = enclaveHost
+			path.identifier = rootOpts.enclaveHost
 		}
 		if path.identifier == "" {
 			return nil, nil, fmt.Errorf("name a container or hostname before ':', or pass --enclave")
@@ -116,7 +117,7 @@ func resolveSCPPaths(args []string, user string) (*tunnelTarget, []string, error
 			}
 		}
 	}
-	target, err := resolveTunnelTarget(identifier)
+	target, err := resolveTunnelTarget(forwardOpts, rootOpts, trustOpts, identifier)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -133,13 +134,13 @@ func resolveSCPPaths(args []string, user string) (*tunnelTarget, []string, error
 	return target, resolved, nil
 }
 
-func runSCP(target *tunnelTarget, port int, options, paths []string) (int, error) {
-	argv, err := sshProxyOptions(target, port)
+func runSCP(rootOpts *rootOptions, tunnelOpts *tunnelOptions, target *tunnelTarget, port int, options, paths []string) (int, error) {
+	argv, err := sshProxyOptions(rootOpts, tunnelOpts, target, port)
 	if err != nil {
 		return 0, err
 	}
 	argv = append(argv, options...)
 	argv = append(argv, "-o", "ServerAliveInterval="+strconv.Itoa(int(sshServerAliveInterval/time.Second)), "--")
 	argv = append(argv, paths...)
-	return runSSHClient("scp", argv)
+	return runSSHClient(tunnelOpts, "scp", argv)
 }

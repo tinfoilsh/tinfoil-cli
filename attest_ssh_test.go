@@ -5,14 +5,15 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"fmt"
-	"github.com/tinfoilsh/tinfoil-go/verify"
-	"github.com/tinfoilsh/tinfoil-go/verify/document"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"testing/synctest"
 	"time"
+
+	"github.com/tinfoilsh/tinfoil-go/verify"
+	"github.com/tinfoilsh/tinfoil-go/verify/document"
 
 	"golang.org/x/crypto/ssh"
 )

@@ -7,6 +7,8 @@ import (
 )
 
 func TestRenderDomainListsBothCNAMERecords(t *testing.T) {
+	commandState := newCommandFixture()
+
 	var d domainView
 	if err := json.Unmarshal([]byte(`{
 		"domain": "api.example.com",
@@ -21,11 +23,11 @@ func TestRenderDomainListsBothCNAMERecords(t *testing.T) {
 	}`), &d); err != nil {
 		t.Fatal(err)
 	}
-	saved := outputFormat
-	outputFormat = "table"
-	t.Cleanup(func() { outputFormat = saved })
+	saved := commandState.outputOpts.outputFormat
+	commandState.outputOpts.outputFormat = "table"
+	t.Cleanup(func() { commandState.outputOpts.outputFormat = saved })
 	captured, err := captureTestStdout(func() error {
-		return renderDomain(d, true)
+		return renderDomain(commandState.outputOpts, d, true)
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -51,6 +53,8 @@ func TestRenderDomainListsBothCNAMERecords(t *testing.T) {
 }
 
 func TestRenderDomainListsWildcardRecordForWildcardDomains(t *testing.T) {
+	commandState := newCommandFixture()
+
 	var d domainView
 	if err := json.Unmarshal([]byte(`{
 		"domain": "tenants.example.com",
@@ -64,11 +68,11 @@ func TestRenderDomainListsWildcardRecordForWildcardDomains(t *testing.T) {
 	}`), &d); err != nil {
 		t.Fatal(err)
 	}
-	saved := outputFormat
-	outputFormat = "table"
-	t.Cleanup(func() { outputFormat = saved })
+	saved := commandState.outputOpts.outputFormat
+	commandState.outputOpts.outputFormat = "table"
+	t.Cleanup(func() { commandState.outputOpts.outputFormat = saved })
 	captured, err := captureTestStdout(func() error {
-		return renderDomain(d, true)
+		return renderDomain(commandState.outputOpts, d, true)
 	})
 	if err != nil {
 		t.Fatal(err)

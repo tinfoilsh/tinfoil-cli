@@ -190,6 +190,8 @@ func TestKeyBundleUpdatesMergeConflictsAndSurviveLostReplies(t *testing.T) {
 }
 
 func TestResourceKeysBindOnceAndNeverRegenerate(t *testing.T) {
+	commandState := newCommandFixture()
+
 	keys := &keyStateServer{}
 	server := httptest.NewServer(keys)
 	defer server.Close()
@@ -204,7 +206,7 @@ func TestResourceKeysBindOnceAndNeverRegenerate(t *testing.T) {
 	binding := mkBinding{Account: "personal", ContainerID: row.ID, InstanceID: &instance, VolumeID: &volume}
 	dir := t.TempDir()
 
-	resolved, err := resolveResourceKeys(t.Context(), cp, scope, row, "sandbox", binding, dir, true)
+	resolved, err := resolveResourceKeys(commandState.identityOpts, t.Context(), cp, scope, row, "sandbox", binding, dir, true)
 	require.NoError(t, err)
 	require.Equal(t, []byte(saved.StorageKey), resolved.storageKey)
 	require.Equal(t, []byte(saved.MonitorIdentitySeed), resolved.monitorIdentitySeed)
@@ -224,20 +226,22 @@ func TestResourceKeysBindOnceAndNeverRegenerate(t *testing.T) {
 	} {
 		changed := binding
 		change(&changed)
-		_, err := resolveResourceKeys(t.Context(), cp, scope, row, "sandbox", changed, dir, true)
+		_, err := resolveResourceKeys(commandState.identityOpts, t.Context(), cp, scope, row, "sandbox", changed, dir, true)
 		require.ErrorContains(t, err, "no longer matches", name)
 	}
 	revision := keys.revision
 	row.OwnerPublicKey = ed25519PublicKeyString(testSeed(t))
-	_, err = resolveResourceKeys(t.Context(), cp, scope, row, "sandbox", binding, dir, true)
+	_, err = resolveResourceKeys(commandState.identityOpts, t.Context(), cp, scope, row, "sandbox", binding, dir, true)
 	require.ErrorContains(t, err, "no key for sandbox work")
 	row.OwnerPublicKey = saved.OwnerPublicKey
-	_, err = resolveResourceKeys(t.Context(), cp, scope, row, "monitor", binding, dir, true)
+	_, err = resolveResourceKeys(commandState.identityOpts, t.Context(), cp, scope, row, "monitor", binding, dir, true)
 	require.ErrorContains(t, err, "no key for monitor work")
 	require.Equal(t, revision, keys.revision, "missing keys are never manufactured")
 }
 
 func TestUMKKeysStayLocalAndAreGeneratedOnlyOnce(t *testing.T) {
+	commandState := newCommandFixture()
+
 	keys := &keyStateServer{}
 	server := httptest.NewServer(keys)
 	defer server.Close()
@@ -246,10 +250,10 @@ func TestUMKKeysStayLocalAndAreGeneratedOnlyOnce(t *testing.T) {
 	owner := ed25519PublicKeyString(seed)
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	previousIdentity := attestSSHIdentity
-	attestSSHIdentity = filepath.Join(home, "owner")
-	t.Cleanup(func() { attestSSHIdentity = previousIdentity })
-	require.NoError(t, ensureOwnerSSHKey(attestSSHIdentity, seed))
+	previousIdentity := commandState.identityOpts.attestSSHIdentity
+	commandState.identityOpts.attestSSHIdentity = filepath.Join(home, "owner")
+	t.Cleanup(func() { commandState.identityOpts.attestSSHIdentity = previousIdentity })
+	require.NoError(t, ensureOwnerSSHKey(commandState.identityOpts.attestSSHIdentity, seed))
 
 	row := containerView{ID: "11111111-1111-4111-8111-111111111111", Name: "work", OwnerKeyMode: "umk", OwnerPublicKey: owner}
 	path, err := umkRecordPath(scope, row.ID)
@@ -272,20 +276,20 @@ func TestUMKKeysStayLocalAndAreGeneratedOnlyOnce(t *testing.T) {
 
 	instance, volume := "22222222-2222-4222-8222-222222222222", "33333333-3333-4333-8333-333333333333"
 	binding := mkBinding{Account: "personal", ContainerID: row.ID, InstanceID: &instance, VolumeID: &volume}
-	resolved, err := resolveResourceKeys(t.Context(), cp, scope, row, "sandbox", binding, t.TempDir(), true)
+	resolved, err := resolveResourceKeys(commandState.identityOpts, t.Context(), cp, scope, row, "sandbox", binding, t.TempDir(), true)
 	require.NoError(t, err)
 	require.Equal(t, []byte(winner.StorageKey), resolved.storageKey)
-	require.Equal(t, attestSSHIdentity, resolved.identity)
+	require.Equal(t, commandState.identityOpts.attestSSHIdentity, resolved.identity)
 	resolved.close()
 	other := "44444444-4444-4444-8444-444444444444"
 	changed := binding
 	changed.VolumeID = &other
-	_, err = resolveResourceKeys(t.Context(), cp, scope, row, "sandbox", changed, t.TempDir(), true)
+	_, err = resolveResourceKeys(commandState.identityOpts, t.Context(), cp, scope, row, "sandbox", changed, t.TempDir(), true)
 	require.ErrorContains(t, err, "no longer matches")
 
 	// Without a local record, a UMK resource gets no secrets until non-use is proven.
 	require.NoError(t, os.Remove(path))
-	resolved, err = resolveResourceKeys(t.Context(), cp, scope, row, "sandbox", binding, t.TempDir(), true)
+	resolved, err = resolveResourceKeys(commandState.identityOpts, t.Context(), cp, scope, row, "sandbox", binding, t.TempDir(), true)
 	require.NoError(t, err)
 	require.Nil(t, resolved.storageKey)
 	require.Nil(t, resolved.monitorIdentitySeed)
@@ -296,20 +300,25 @@ func TestUMKKeysStayLocalAndAreGeneratedOnlyOnce(t *testing.T) {
 }
 
 func TestEncryptedOwnerIdentityFallsBackToAgent(t *testing.T) {
+	commandState := newCommandFixture()
+
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
 	stdin, err := os.Open(os.DevNull)
 	require.NoError(t, err)
-	previousStdin, previousIdentity := os.Stdin, attestSSHIdentity
+	previousStdin, previousIdentity := os.Stdin, commandState.identityOpts.attestSSHIdentity
 	os.Stdin = stdin
-	t.Cleanup(func() { os.Stdin, attestSSHIdentity = previousStdin, previousIdentity; stdin.Close() })
+	t.Cleanup(func() {
+		os.Stdin, commandState.identityOpts.attestSSHIdentity = previousStdin, previousIdentity
+		stdin.Close()
+	})
 	seed := testSeed(t)
 	private := ed25519.NewKeyFromSeed(seed)
 	block, err := ssh.MarshalPrivateKeyWithPassphrase(private, "", []byte("test password"))
 	require.NoError(t, err)
-	attestSSHIdentity = filepath.Join(home, "encrypted-owner")
-	require.NoError(t, os.WriteFile(attestSSHIdentity, pem.EncodeToMemory(block), 0600))
+	commandState.identityOpts.attestSSHIdentity = filepath.Join(home, "encrypted-owner")
+	require.NoError(t, os.WriteFile(commandState.identityOpts.attestSSHIdentity, pem.EncodeToMemory(block), 0600))
 	socket := filepath.Join(home, "agent.sock")
 	listener, err := net.Listen("unix", socket)
 	require.NoError(t, err)
@@ -327,7 +336,7 @@ func TestEncryptedOwnerIdentityFallsBackToAgent(t *testing.T) {
 		defer conn.Close()
 		done <- agent.ServeAgent(keyring, conn)
 	}()
-	signer, path, closeSigner, err := userSigner("sandbox test", ed25519PublicKeyString(seed), home)
+	signer, path, closeSigner, err := userSigner(commandState.identityOpts, "sandbox test", ed25519PublicKeyString(seed), home)
 	require.NoError(t, err)
 	defer closeSigner()
 	require.Equal(t, filepath.Join(home, "owner.pub"), path)

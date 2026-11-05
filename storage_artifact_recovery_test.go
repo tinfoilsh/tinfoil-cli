@@ -24,17 +24,17 @@ type storageArtifactRecoveryFixture struct {
 	receiptPath string
 }
 
-func prepareStorageArtifactRecovery(t *testing.T) storageArtifactRecoveryFixture {
+func prepareStorageArtifactRecovery(commandState *commandFixture, t *testing.T) storageArtifactRecoveryFixture {
 	t.Helper()
-	cp := newStorageCPFixture(t)
-	configureStorageCLI(t)
+	cp := newStorageCPFixture(commandState, t)
+	configureStorageCLI(commandState, t)
 	r := testStorageReceipt()
 	r.Profile.Scope.ControlplaneURL = cp.server.URL
 	fake := &fakeStorageAWS{secret: testStoredSecret(r)}
 	random := &rejectingRandom{}
 	flags := storageCLIArtifactFlags(t)
 	args := append([]string{"volume", "auto-unlock", "configure", testVolumeID, "--existing-secret", fake.secret.arn}, flags...)
-	_, err := executeStorageCLI(t, fakeStorageFactory(fake, random), args...)
+	_, err := executeStorageCLI(commandState, t, fakeStorageFactory(fake, random), args...)
 	require.NoError(t, err)
 	path, err := storageMetadataPath(r.Profile.Scope, r.VolumeID)
 	require.NoError(t, err)
@@ -91,14 +91,16 @@ func assertStorageArtifactsUntouched(t *testing.T, dir string, snapshots map[str
 }
 
 func TestStorageReadOnlyMatchingArtifactRecovery(t *testing.T) {
+	commandState := newCommandFixture()
+
 	for _, withoutReceipt := range []bool{false, true} {
-		f := prepareStorageArtifactRecovery(t)
+		f := prepareStorageArtifactRecovery(commandState, t)
 		if withoutReceipt {
 			require.NoError(t, os.Remove(f.receiptPath))
 		}
 		dir, snapshots := makeStorageArtifactsReadOnly(t, f.flags)
 		gets := f.aws.gets
-		out, err := executeStorageCLI(t, fakeStorageFactory(f.aws, f.random), f.args...)
+		out, err := executeStorageCLI(commandState, t, fakeStorageFactory(f.aws, f.random), f.args...)
 		require.NoError(t, err)
 		require.Contains(t, out, "CONFIGURED_LOCAL")
 		require.Equal(t, gets+1, f.aws.gets)
@@ -110,12 +112,14 @@ func TestStorageReadOnlyMatchingArtifactRecovery(t *testing.T) {
 }
 
 func TestStorageReadOnlyConflictingOrMissingArtifactsDoNotMutateReceipt(t *testing.T) {
+	commandState := newCommandFixture()
+
 	for _, variant := range []string{"different-config", "different-policy", "missing-config-different-policy", "missing-config", "missing-policy"} {
 		t.Run(variant, func(t *testing.T) {
 			if os.Geteuid() == 0 && (variant == "missing-config" || variant == "missing-policy") {
 				t.Skip("root bypasses directory write permissions")
 			}
-			f := prepareStorageArtifactRecovery(t)
+			f := prepareStorageArtifactRecovery(commandState, t)
 			before, err := os.ReadFile(f.receiptPath)
 			require.NoError(t, err)
 			configOut := storageTestFlag(t, f.flags, "--config-out")
@@ -134,7 +138,7 @@ func TestStorageReadOnlyConflictingOrMissingArtifactsDoNotMutateReceipt(t *testi
 				require.NoError(t, os.Remove(policyOut))
 			}
 			dir, snapshots := makeStorageArtifactsReadOnly(t, f.flags)
-			_, err = executeStorageCLI(t, fakeStorageFactory(f.aws, f.random), f.args...)
+			_, err = executeStorageCLI(commandState, t, fakeStorageFactory(f.aws, f.random), f.args...)
 			if strings.Contains(variant, "different") {
 				require.ErrorContains(t, err, "different contents")
 			} else {
@@ -156,14 +160,16 @@ func TestStorageReadOnlyConflictingOrMissingArtifactsDoNotMutateReceipt(t *testi
 }
 
 func TestStorageMatchingArtifactsStillRequireReceiptLock(t *testing.T) {
-	f := prepareStorageArtifactRecovery(t)
+	commandState := newCommandFixture()
+
+	f := prepareStorageArtifactRecovery(commandState, t)
 	dir, snapshots := makeStorageArtifactsReadOnly(t, f.flags)
 	unlock, err := acquireStorageLock(f.receiptPath)
 	require.NoError(t, err)
 	defer unlock()
 	before, err := os.ReadFile(f.receiptPath)
 	require.NoError(t, err)
-	_, err = executeStorageCLI(t, fakeStorageFactory(f.aws, f.random), f.args...)
+	_, err = executeStorageCLI(commandState, t, fakeStorageFactory(f.aws, f.random), f.args...)
 	require.ErrorContains(t, err, "locked")
 	after, err := os.ReadFile(f.receiptPath)
 	require.NoError(t, err)
@@ -172,12 +178,14 @@ func TestStorageMatchingArtifactsStillRequireReceiptLock(t *testing.T) {
 }
 
 func TestStorageMatchingReadOnlyOutputAllowsOtherWritableOutput(t *testing.T) {
-	f := prepareStorageArtifactRecovery(t)
+	commandState := newCommandFixture()
+
+	f := prepareStorageArtifactRecovery(commandState, t)
 	policyOut := filepath.Join(t.TempDir(), "new-policy.yml")
 	setStorageTestFlag(t, f.flags, "--policy-out", policyOut)
 	f.args = append([]string{"volume", "auto-unlock", "configure", testVolumeID, "--existing-secret", f.aws.secret.arn}, f.flags...)
 	dir, snapshots := makeStorageArtifactsReadOnly(t, f.flags)
-	_, err := executeStorageCLI(t, fakeStorageFactory(f.aws, f.random), f.args...)
+	_, err := executeStorageCLI(commandState, t, fakeStorageFactory(f.aws, f.random), f.args...)
 	require.NoError(t, err)
 	require.FileExists(t, policyOut)
 	delete(snapshots, policyOut)

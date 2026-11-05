@@ -27,6 +27,8 @@ import (
 )
 
 func TestManagedTrustPrecedesCredentials(t *testing.T) {
+	commandState := newCommandFixture()
+
 	t.Setenv(envKnownConfigs, filepath.Join(t.TempDir(), "known-configs.json"))
 	for _, test := range []struct{ kind, prefix string }{
 		{"sandbox", "/tinfoil/containers"},
@@ -38,15 +40,15 @@ func TestManagedTrustPrecedesCredentials(t *testing.T) {
 
 		row := containerView{Repo: managedRepo(test.kind), Domain: "work.example", Config: "containers: [{env: [{OWNER: owner}]}]"}
 		row.ConfigName = test.prefix + "/" + storageHash([]byte(row.Config))
-		_, err := resolveWorkload(row, row.Repo, "")
+		_, err := resolveWorkload(commandState.rootOpts, commandState.trustOpts, row, row.Repo, "")
 		require.ErrorContains(t, err, "mode: frozen")
-		target, err := resolveWorkload(row, row.Repo, strings.TrimPrefix(test.prefix, "/"))
+		target, err := resolveWorkload(commandState.rootOpts, commandState.trustOpts, row, row.Repo, strings.TrimPrefix(test.prefix, "/"))
 		require.NoError(t, err)
 		row.Config += "\n# changed"
-		_, err = resolveWorkload(row, row.Repo, target.source)
+		_, err = resolveWorkload(commandState.rootOpts, commandState.trustOpts, row, row.Repo, target.source)
 		require.ErrorContains(t, err, "digest")
 		row.ConfigName = test.prefix + "/" + storageHash([]byte(row.Config))
-		_, err = resolveWorkload(row, row.Repo, target.source)
+		_, err = resolveWorkload(commandState.rootOpts, commandState.trustOpts, row, row.Repo, target.source)
 		require.ErrorContains(t, err, "does not match --repo")
 	}
 	for _, env := range []string{"[OWNER]", "[{OWNER: null}]", "[{}]", "[{OWNER: a}, {OWNER: b}]"} {

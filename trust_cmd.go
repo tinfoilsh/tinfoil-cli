@@ -15,14 +15,8 @@ import (
 // tinfoil trust — inspect and configure the known-configs trust store from
 // the CLI, so changing mode/record or finding the file to edit does not
 // require remembering its path.
-var (
-	trustSetMode   string
-	trustSetRecord string
-	trustSetPrune  bool
-	trustJSON      bool
-)
 
-func newTrustCommand() *cobra.Command {
+func newTrustCommand(trustOpts *trustOptions) *cobra.Command {
 	trustCmd := &cobra.Command{
 		Use:   "trust",
 		Short: "Show the known-configs trust store",
@@ -40,7 +34,7 @@ func newTrustCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if trustJSON {
+			if trustOpts.trustJSON {
 				data, err := json.Marshal(policy)
 				if err != nil {
 					return err
@@ -52,19 +46,19 @@ func newTrustCommand() *cobra.Command {
 			return nil
 		},
 	}
-	trustCmd.AddCommand(newTrustEnrollCommand(), newTrustRemoveCommand())
-	trustCmd.AddCommand(newTrustSetCommand())
-	trustCmd.Flags().BoolVar(&trustJSON, "json", false, "Show the complete trust policy, including registry IDs")
+	trustCmd.AddCommand(newTrustEnrollCommand(&trustEnrollOptions{}), newTrustRemoveCommand())
+	trustCmd.AddCommand(newTrustSetCommand(&trustSetOptions{}))
+	trustCmd.Flags().BoolVar(&trustOpts.trustJSON, "json", false, "Show the complete trust policy, including registry IDs")
 	return trustCmd
 }
 
-func newTrustSetCommand() *cobra.Command {
+func newTrustSetCommand(trustSetOpts *trustSetOptions) *cobra.Command {
 	trustSetCmd := &cobra.Command{
 		Use:   "set",
 		Short: "Set the trust store's mode and/or record granularity",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if trustSetMode == "" && trustSetRecord == "" {
+			if trustSetOpts.trustSetMode == "" && trustSetOpts.trustSetRecord == "" {
 				return fmt.Errorf("nothing to set: pass --mode and/or --record")
 			}
 			policy, err := loadConnectionPolicy()
@@ -72,19 +66,19 @@ func newTrustSetCommand() *cobra.Command {
 				// A malformed store must be fixed by hand, not overwritten.
 				return err
 			}
-			if err := policy.SetDefaults(trustSetMode, trustSetRecord); err != nil {
+			if err := policy.SetDefaults(trustSetOpts.trustSetMode, trustSetOpts.trustSetRecord); err != nil {
 				return err
 			}
-			if err := offerPrune(cmd, &policy); err != nil {
+			if err := offerPrune(trustSetOpts, cmd, &policy); err != nil {
 				return err
 			}
 			printTrustStore(cmd.OutOrStdout(), policy)
 			return nil
 		},
 	}
-	trustSetCmd.Flags().StringVar(&trustSetMode, "mode", "", "prompt (unknown configs ask) or frozen (unknown configs fail)")
-	trustSetCmd.Flags().StringVar(&trustSetRecord, "record", "", "what a yes records: org, project, or pin")
-	trustSetCmd.Flags().BoolVar(&trustSetPrune, "prune", false, "also remove broader allow entries when tightening --record")
+	trustSetCmd.Flags().StringVar(&trustSetOpts.trustSetMode, "mode", "", "prompt (unknown configs ask) or frozen (unknown configs fail)")
+	trustSetCmd.Flags().StringVar(&trustSetOpts.trustSetRecord, "record", "", "what a yes records: org, project, or pin")
+	trustSetCmd.Flags().BoolVar(&trustSetOpts.trustSetPrune, "prune", false, "also remove broader allow entries when tightening --record")
 	return trustSetCmd
 }
 
@@ -92,13 +86,13 @@ func newTrustSetCommand() *cobra.Command {
 // broader allow entries in force, remove them with --prune, or offer to on a
 // TTY. Declining (or no TTY) keeps them; the store printout's note says what
 // that means.
-func offerPrune(cmd *cobra.Command, policy *connectionPolicy) error {
+func offerPrune(trustSetOpts *trustSetOptions, cmd *cobra.Command, policy *connectionPolicy) error {
 	broader := policy.BroaderThan(policy.Record)
-	if trustSetRecord == "" || len(broader) == 0 {
+	if trustSetOpts.trustSetRecord == "" || len(broader) == 0 {
 		return nil
 	}
 	out := cmd.OutOrStdout()
-	prune := trustSetPrune
+	prune := trustSetOpts.trustSetPrune
 	if !prune && term.IsTerminal(int(os.Stdin.Fd())) {
 		fmt.Fprintf(out, "Record is now set to: %s. %d broader entr%s still grant%s more:\n", policy.Record, len(broader), plural(len(broader), "y", "ies"), plural(len(broader), "s", ""))
 		for _, entry := range broader {

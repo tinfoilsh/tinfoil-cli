@@ -18,14 +18,16 @@ import (
 )
 
 func TestStorageKnownPreflightFailuresDoNotAllocate(t *testing.T) {
+	commandState := newCommandFixture()
+
 	for _, variant := range []string{"missing-profile", "symlink-metadata"} {
 		t.Run(variant, func(t *testing.T) {
-			cp := newStorageCPFixture(t)
+			cp := newStorageCPFixture(commandState, t)
 			profileArgs := []string{"project", "storage", "configure", "owner/repo", "--keyserver-url", "https://keys.example.com", "--aws-region", "us-east-2", "--aws-prefix", "customer", "--domain", "app.example.com"}
 			if variant == "missing-profile" {
 				profileArgs = append(profileArgs, "--aws-profile", "missing-test-profile")
 			}
-			_, err := executeStorageCLI(t, forbiddenStorageFactory(t), profileArgs...)
+			_, err := executeStorageCLI(commandState, t, forbiddenStorageFactory(t), profileArgs...)
 			require.NoError(t, err)
 			fake := &fakeStorageAWS{}
 			random := &rejectingRandom{}
@@ -57,7 +59,7 @@ func TestStorageKnownPreflightFailuresDoNotAllocate(t *testing.T) {
 				require.NoError(t, os.Symlink(target, dir))
 			}
 			args := append([]string{"volume", "create", "app-data", "--size", "30GiB", "--auto-unlock"}, storageCLIArtifactFlags(t)...)
-			out, err := executeStorageCLI(t, factory, args...)
+			out, err := executeStorageCLI(commandState, t, factory, args...)
 			require.Error(t, err)
 			assert.NotContains(t, out, "retained")
 			assert.Zero(t, fake.creates)
@@ -70,10 +72,12 @@ func TestStorageKnownPreflightFailuresDoNotAllocate(t *testing.T) {
 }
 
 func TestStorageCredentialFailuresPrecedeAllocationAndStayRedacted(t *testing.T) {
+	commandState := newCommandFixture()
+
 	for _, variant := range []string{"provider-error", "empty-credentials", "no-provider"} {
 		t.Run(variant, func(t *testing.T) {
-			cp := newStorageCPFixture(t)
-			configureStorageCLI(t)
+			cp := newStorageCPFixture(commandState, t)
+			configureStorageCLI(commandState, t)
 			retrievals := 0
 			factory := func(ctx context.Context, p storageProfile) (*volumeKeyStore, error) {
 				cfg := aws.Config{Region: p.AWSRegion, HTTPClient: storageWireHTTP(func(*http.Request) (*http.Response, error) {
@@ -92,7 +96,7 @@ func TestStorageCredentialFailuresPrecedeAllocationAndStayRedacted(t *testing.T)
 				return autounlock.NewAWSKeyStoreFromConfig(ctx, cfg)
 			}
 			args := append([]string{"volume", "create", "app-data", "--size", "30GiB", "--auto-unlock"}, storageCLIArtifactFlags(t)...)
-			_, err := executeStorageCLI(t, factory, args...)
+			_, err := executeStorageCLI(commandState, t, factory, args...)
 			require.ErrorContains(t, err, "credentials")
 			if variant != "no-provider" {
 				require.Equal(t, 1, retrievals)
@@ -105,17 +109,19 @@ func TestStorageCredentialFailuresPrecedeAllocationAndStayRedacted(t *testing.T)
 }
 
 func TestStorageUnwritableOutputsFailBeforeAllocation(t *testing.T) {
+	commandState := newCommandFixture()
+
 	if os.Geteuid() == 0 {
 		t.Skip("root can bypass directory write permissions")
 	}
-	cp := newStorageCPFixture(t)
-	configureStorageCLI(t)
+	cp := newStorageCPFixture(commandState, t)
+	configureStorageCLI(commandState, t)
 	flags := storageCLIArtifactFlags(t)
 	dir := filepath.Dir(flags[9])
 	require.NoError(t, os.Chmod(dir, 0o500))
 	defer os.Chmod(dir, storageDirMode)
 	args := append([]string{"volume", "create", "app-data", "--size", "30GiB", "--auto-unlock"}, flags...)
-	_, err := executeStorageCLI(t, forbiddenStorageFactory(t), args...)
+	_, err := executeStorageCLI(commandState, t, forbiddenStorageFactory(t), args...)
 	require.ErrorContains(t, err, "not writable")
 	cp.mu.Lock()
 	defer cp.mu.Unlock()

@@ -16,16 +16,18 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
-func managedTestAPI(t *testing.T, handler http.HandlerFunc) {
+func managedTestAPI(commandState *commandFixture, t *testing.T, handler http.HandlerFunc) {
 	t.Helper()
 	server := httptest.NewServer(handler)
 	t.Cleanup(server.Close)
-	configureContainerPromotionTest(t, server.URL)
+	configureContainerPromotionTest(commandState, t, server.URL)
 }
 
 func TestManagedAliasesRejectWrongKindBeforeMutation(t *testing.T) {
+	commandState := newCommandFixture()
+
 	row := containerView{ID: testContainerID, Name: "work"}
-	managedTestAPI(t, func(w http.ResponseWriter, r *http.Request) {
+	managedTestAPI(commandState, t, func(w http.ResponseWriter, r *http.Request) {
 		require.Equal(t, "GET", r.Method)
 		json.NewEncoder(w).Encode(row)
 	})
@@ -36,16 +38,18 @@ func TestManagedAliasesRejectWrongKindBeforeMutation(t *testing.T) {
 				if debug {
 					row.Repo = managedRepo(kind)
 				}
-				require.Error(t, executeLifecycleCLI(t, kind, verb, row.ID))
+				require.Error(t, executeLifecycleCLI(commandState, t, kind, verb, row.ID))
 			}
 		}
 	}
 }
 
 func TestManagedMetricsUseTheChosenWindow(t *testing.T) {
+	commandState := newCommandFixture()
+
 	row := containerView{ID: testContainerID, Name: "work", Repo: defaultSandboxRepo}
 	window := ""
-	managedTestAPI(t, func(w http.ResponseWriter, r *http.Request) {
+	managedTestAPI(commandState, t, func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method + " " + r.URL.Path {
 		case "GET /api/containers/" + row.ID:
 			json.NewEncoder(w).Encode(row)
@@ -57,13 +61,17 @@ func TestManagedMetricsUseTheChosenWindow(t *testing.T) {
 			http.NotFound(w, r)
 		}
 	})
-	out, err := captureTestStdout(func() error { return executeLifecycleCLI(t, "sandbox", "metrics", row.ID, "--time", "1h") })
+	out, err := captureTestStdout(func() error {
+		return executeLifecycleCLI(commandState, t, "sandbox", "metrics", row.ID, "--time", "1h")
+	})
 	require.NoError(t, err)
 	require.Equal(t, "1h", window)
 	require.Contains(t, string(out), `"data_points"`)
 }
 
 func TestMonitorStopAndDeleteIncludeItsSandboxes(t *testing.T) {
+	commandState := newCommandFixture()
+
 	const otherMonitorID = "33333333-3333-4333-8333-333333333333"
 	monitor := containerView{ID: testContainerID, Name: "mon", Repo: monitorRepo, ClerkUserID: "owner", Status: statusRunning}
 	routed := func(id, name, repo, user, monitorID string) containerView {
@@ -73,7 +81,7 @@ func TestMonitorStopAndDeleteIncludeItsSandboxes(t *testing.T) {
 	work := routed("11111111-1111-4111-8111-111111111111", "work", defaultSandboxRepo, "owner", monitor.ID)
 	other := routed("22222222-2222-4222-8222-222222222222", "other", defaultSandboxRepo, "owner", otherMonitorID)
 	var mutations []string
-	managedTestAPI(t, func(w http.ResponseWriter, r *http.Request) {
+	managedTestAPI(commandState, t, func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method + " " + r.URL.Path {
 		case "GET /api/auth/context":
 			json.NewEncoder(w).Encode(authContext{ContextType: "personal", UserID: "owner"})
@@ -98,12 +106,12 @@ func TestMonitorStopAndDeleteIncludeItsSandboxes(t *testing.T) {
 		require.NoError(t, os.WriteFile(filepath.Join(profiles, sandbox.Name+".conf"), []byte(owned), 0600))
 	}
 	var stderr strings.Builder
-	previousStderr := rootCmd.ErrOrStderr()
-	rootCmd.SetErr(&stderr)
-	t.Cleanup(func() { rootCmd.SetErr(previousStderr) })
+	previousStderr := commandState.rootCmd.ErrOrStderr()
+	commandState.rootCmd.SetErr(&stderr)
+	t.Cleanup(func() { commandState.rootCmd.SetErr(previousStderr) })
 	run := func(args ...string) error {
 		stderr.Reset()
-		_, err := captureTestStdout(func() error { return executeLifecycleCLI(t, args...) })
+		_, err := captureTestStdout(func() error { return executeLifecycleCLI(commandState, t, args...) })
 		return err
 	}
 
@@ -126,9 +134,11 @@ func TestMonitorStopAndDeleteIncludeItsSandboxes(t *testing.T) {
 }
 
 func TestManagedUpdatesUseContainerPlan(t *testing.T) {
+	commandState := newCommandFixture()
+
 	for _, kind := range []string{"sandbox", "monitor"} {
 		calls := []string{}
-		managedTestAPI(t, func(w http.ResponseWriter, r *http.Request) {
+		managedTestAPI(commandState, t, func(w http.ResponseWriter, r *http.Request) {
 			if r.Method == "POST" {
 				calls = append(calls, r.URL.Path)
 				var body map[string]any
@@ -143,7 +153,7 @@ func TestManagedUpdatesUseContainerPlan(t *testing.T) {
 			json.NewEncoder(w).Encode(containerView{ID: testContainerID, Repo: managedRepo(kind), Status: statusRunning})
 		})
 		_, err := captureTestStdout(func() error {
-			return executeLifecycleCLI(t, kind, "update", testContainerID, "--tag", "v2", "--yes", "--no-wait")
+			return executeLifecycleCLI(commandState, t, kind, "update", testContainerID, "--tag", "v2", "--yes", "--no-wait")
 		})
 		require.NoError(t, err)
 		path := "/api/containers/" + testContainerID + "/update"
@@ -152,11 +162,13 @@ func TestManagedUpdatesUseContainerPlan(t *testing.T) {
 }
 
 func TestManagedStatusFiltersAndWatches(t *testing.T) {
+	commandState := newCommandFixture()
+
 	row := containerView{ID: testContainerID, Repo: monitorRepo, Name: "personal"}
 	reads := 0
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
-	managedTestAPI(t, func(w http.ResponseWriter, r *http.Request) {
+	managedTestAPI(commandState, t, func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/containers" {
 			json.NewEncoder(w).Encode([]containerView{row, {Repo: monitorRepo, Debug: true}, {Repo: defaultSandboxRepo}})
 		} else {
@@ -169,7 +181,7 @@ func TestManagedStatusFiltersAndWatches(t *testing.T) {
 		}
 	})
 	for _, verb := range []string{"status", "get", "list", "ls"} {
-		out, err := captureTestStdout(func() error { return executeLifecycleCLI(t, "monitor", verb) })
+		out, err := captureTestStdout(func() error { return executeLifecycleCLI(commandState, t, "monitor", verb) })
 		require.NoError(t, err)
 		var rows []containerView
 		require.NoError(t, json.Unmarshal(out, &rows))
@@ -178,8 +190,8 @@ func TestManagedStatusFiltersAndWatches(t *testing.T) {
 	previous := followInterval
 	followInterval = time.Millisecond
 	t.Cleanup(func() { followInterval = previous })
-	outputFormat = "table"
-	cmd := newManagedStatusCmd("monitor")
+	commandState.outputOpts.outputFormat = "table"
+	cmd := newManagedStatusCmd(commandState.outputOpts, "monitor")
 	cmd.SetContext(ctx)
 	require.NoError(t, cmd.Flags().Set("watch", "true"))
 	out, err := captureTestStdout(func() error { return cmd.RunE(cmd, []string{row.ID}) })
@@ -190,10 +202,12 @@ func TestManagedStatusFiltersAndWatches(t *testing.T) {
 }
 
 func TestSandboxStatusShowsWorkspaceSize(t *testing.T) {
+	commandState := newCommandFixture()
+
 	const volumeID = "22222222-2222-4222-8222-222222222222"
 	row := containerView{ID: testContainerID, Name: "work", Repo: defaultSandboxRepo, Status: statusRunning,
 		VolumeSlots: []volumeSlot{{Name: "workspace"}}, Volumes: map[string]string{"workspace": volumeID}}
-	managedTestAPI(t, func(w http.ResponseWriter, r *http.Request) {
+	managedTestAPI(commandState, t, func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method + " " + r.URL.Path {
 		case "GET /api/containers/" + testContainerID:
 			json.NewEncoder(w).Encode(row)
@@ -204,18 +218,20 @@ func TestSandboxStatusShowsWorkspaceSize(t *testing.T) {
 			http.NotFound(w, r)
 		}
 	})
-	outputFormat = "table"
-	cmd := newManagedStatusCmd("sandbox")
+	commandState.outputOpts.outputFormat = "table"
+	cmd := newManagedStatusCmd(commandState.outputOpts, "sandbox")
 	out, err := captureTestStdout(func() error { return cmd.RunE(cmd, []string{testContainerID}) })
 	require.NoError(t, err)
 	require.Contains(t, string(out), "Volumes:      workspace ← work-ws (32 GB)\n")
 }
 
 func TestSandboxCreationOnlySelectsOwnMonitors(t *testing.T) {
+	commandState := newCommandFixture()
+
 	own := containerView{ID: "11111111-1111-4111-8111-111111111111", Name: "mine", Repo: monitorRepo, ClerkUserID: "user_test"}
 	other := containerView{ID: "33333333-3333-4333-8333-333333333333", Name: "shared", Repo: monitorRepo, ClerkUserID: "user_other", Status: statusRunning}
 	second := containerView{ID: "44444444-4444-4444-8444-444444444444", Name: "spare", Repo: monitorRepo, ClerkUserID: "user_second"}
-	managedTestAPI(t, func(w http.ResponseWriter, r *http.Request) {
+	managedTestAPI(commandState, t, func(w http.ResponseWriter, r *http.Request) {
 		require.Equal(t, "GET", r.Method)
 		switch r.URL.Path {
 		case "/api/containers":
@@ -254,9 +270,13 @@ func testUserKey(t *testing.T) (string, string) {
 }
 
 func TestManagedCreateUsesContainerRecovery(t *testing.T) {
-	previousIdentity, previousInterval := attestSSHIdentity, followInterval
-	attestSSHIdentity, followInterval = "", 0
-	t.Cleanup(func() { attestSSHIdentity, followInterval = previousIdentity, previousInterval })
+	commandState := newCommandFixture()
+
+	previousIdentity, previousInterval := commandState.identityOpts.attestSSHIdentity, followInterval
+	commandState.identityOpts.attestSSHIdentity, followInterval = "", 0
+	t.Cleanup(func() {
+		commandState.identityOpts.attestSSHIdentity, followInterval = previousIdentity, previousInterval
+	})
 	for _, kind := range []string{"monitor", "sandbox"} {
 		for _, state := range []string{"follow", "no-wait", "json", "uncertain", "attached"} {
 			if kind == "monitor" && state == "attached" {
@@ -270,7 +290,7 @@ func TestManagedCreateUsesContainerRecovery(t *testing.T) {
 				if state == "attached" {
 					volume.ContainerID = "another-sandbox"
 				}
-				managedTestAPI(t, func(w http.ResponseWriter, r *http.Request) {
+				managedTestAPI(commandState, t, func(w http.ResponseWriter, r *http.Request) {
 					switch r.Method + " " + r.URL.Path {
 					case "GET /api/auth/context":
 						w.Write([]byte(`{"context_type":"personal","organization":null,"user_id":"user_test"}`))
@@ -312,11 +332,11 @@ func TestManagedCreateUsesContainerRecovery(t *testing.T) {
 						http.NotFound(w, r)
 					}
 				})
-				outputFormat = "table"
+				commandState.outputOpts.outputFormat = "table"
 				if state == "json" {
-					outputFormat = "json"
+					commandState.outputOpts.outputFormat = "json"
 				}
-				cmd := newManagedCreateCmd(kind)
+				cmd := newManagedCreateCmd(commandState.identityOpts, commandState.outputOpts, commandState.waitOpts, kind)
 				cmd.SetContext(t.Context())
 				args := []string{"--tag", "v1", "work", "--owner-public-key", publicFile}
 				if state == "no-wait" {
@@ -354,6 +374,8 @@ func TestManagedCreateUsesContainerRecovery(t *testing.T) {
 }
 
 func TestSyncedCreateSavesKeysBeforeAllocation(t *testing.T) {
+	commandState := newCommandFixture()
+
 	keys := &keyStateServer{}
 	var dek []byte
 	monitor := containerView{ID: "11111111-1111-4111-8111-111111111111", Repo: monitorRepo, ClerkUserID: "user_owner", OwnerKeyMode: "umk"}
@@ -386,15 +408,15 @@ func TestSyncedCreateSavesKeysBeforeAllocation(t *testing.T) {
 	}))
 	defer server.Close()
 	_, _, dek = testLogin(t, server, keys)
-	outputFormat = "table"
-	cmd := newManagedCreateCmd("monitor")
+	commandState.outputOpts.outputFormat = "table"
+	cmd := newManagedCreateCmd(commandState.identityOpts, commandState.outputOpts, commandState.waitOpts, "monitor")
 	cmd.SetContext(t.Context())
 	require.NoError(t, cmd.ParseFlags([]string{"--tag", "v1", "--no-wait", "work"}))
 	_, err := captureTestStdout(func() error { return cmd.RunE(cmd, cmd.Flags().Args()) })
 	require.NoError(t, err)
 	require.Equal(t, []string{"monitor"}, created)
 
-	cmd = newManagedCreateCmd("sandbox")
+	cmd = newManagedCreateCmd(commandState.identityOpts, commandState.outputOpts, commandState.waitOpts, "sandbox")
 	cmd.SetContext(t.Context())
 	require.NoError(t, cmd.ParseFlags([]string{"--tag", "v1", "--no-wait", "--monitor", monitor.ID, "work"}))
 	_, err = captureTestStdout(func() error { return cmd.RunE(cmd, cmd.Flags().Args()) })
@@ -406,10 +428,12 @@ func TestSyncedCreateSavesKeysBeforeAllocation(t *testing.T) {
 }
 
 func TestSandboxCreateWorkspaceSize(t *testing.T) {
+	commandState := newCommandFixture()
+
 	const monitorID = "11111111-1111-4111-8111-111111111111"
-	previousIdentity := attestSSHIdentity
-	attestSSHIdentity = ""
-	t.Cleanup(func() { attestSSHIdentity = previousIdentity })
+	previousIdentity := commandState.identityOpts.attestSSHIdentity
+	commandState.identityOpts.attestSSHIdentity = ""
+	t.Cleanup(func() { commandState.identityOpts.attestSSHIdentity = previousIdentity })
 	for _, tt := range []struct {
 		name     string
 		args     []string
@@ -427,7 +451,7 @@ func TestSandboxCreateWorkspaceSize(t *testing.T) {
 			var sent map[string]json.RawMessage
 			keys := &keyStateServer{}
 			_, publicFile := testUserKey(t)
-			managedTestAPI(t, func(w http.ResponseWriter, r *http.Request) {
+			managedTestAPI(commandState, t, func(w http.ResponseWriter, r *http.Request) {
 				switch r.Method + " " + r.URL.Path {
 				case "GET /api/auth/context":
 					w.Write([]byte(`{"context_type":"personal","organization":null,"user_id":"user_test"}`))
@@ -448,8 +472,8 @@ func TestSandboxCreateWorkspaceSize(t *testing.T) {
 					http.NotFound(w, r)
 				}
 			})
-			outputFormat = "table"
-			cmd := newManagedCreateCmd("sandbox")
+			commandState.outputOpts.outputFormat = "table"
+			cmd := newManagedCreateCmd(commandState.identityOpts, commandState.outputOpts, commandState.waitOpts, "sandbox")
 			cmd.SetContext(t.Context())
 			require.NoError(t, cmd.ParseFlags(append([]string{"--tag", "v1", "--monitor", monitorID, "--no-wait", "--owner-public-key", publicFile, "work"}, tt.args...)))
 			_, err := captureTestStdout(func() error { return cmd.RunE(cmd, cmd.Flags().Args()) })
@@ -471,8 +495,10 @@ func TestSandboxCreateWorkspaceSize(t *testing.T) {
 }
 
 func TestSandboxWorkspaceIgnoresContainerVolumes(t *testing.T) {
+	commandState := newCommandFixture()
+
 	workspace := volumeView{ID: "22222222-2222-4222-8222-222222222222", Name: "data", Sandbox: true}
-	managedTestAPI(t, func(w http.ResponseWriter, r *http.Request) {
+	managedTestAPI(commandState, t, func(w http.ResponseWriter, r *http.Request) {
 		require.Equal(t, "GET /api/volumes", r.Method+" "+r.URL.Path)
 		json.NewEncoder(w).Encode(volumeList{Volumes: []volumeView{
 			workspace,
@@ -494,6 +520,8 @@ func TestSandboxWorkspaceIgnoresContainerVolumes(t *testing.T) {
 }
 
 func TestContainerVolumesIgnoreSandboxWorkspaces(t *testing.T) {
+	commandState := newCommandFixture()
+
 	volumes := []volumeView{
 		{ID: "11111111-1111-4111-8111-111111111111", Name: "data", Sandbox: true},
 		{ID: "22222222-2222-4222-8222-222222222222", Name: "data"},
@@ -512,7 +540,7 @@ func TestContainerVolumesIgnoreSandboxWorkspaces(t *testing.T) {
 			target.Repo, want = defaultSandboxRepo, volumes[0].ID
 		}
 		var attached string
-		managedTestAPI(t, func(w http.ResponseWriter, r *http.Request) {
+		managedTestAPI(commandState, t, func(w http.ResponseWriter, r *http.Request) {
 			switch r.Method + " " + r.URL.Path {
 			case "GET /api/containers/" + testContainerID:
 				json.NewEncoder(w).Encode(target)
@@ -528,7 +556,7 @@ func TestContainerVolumesIgnoreSandboxWorkspaces(t *testing.T) {
 				http.NotFound(w, r)
 			}
 		})
-		_, err := captureTestStdout(func() error { return executeLifecycleCLI(t, "volume", "attach", "data", testContainerID) })
+		_, err := captureTestStdout(func() error { return executeLifecycleCLI(commandState, t, "volume", "attach", "data", testContainerID) })
 		require.NoError(t, err)
 		require.Equal(t, want, attached, "volume attach resolves the volume kind that matches the target")
 	}

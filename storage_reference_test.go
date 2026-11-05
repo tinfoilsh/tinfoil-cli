@@ -40,18 +40,20 @@ func storageEncodedRootKeyReferences() []struct{ name, reference string } {
 }
 
 func TestStorageRejectsRawKeyReferencesWithoutAmplification(t *testing.T) {
+	commandState := newCommandFixture()
+
 	for _, encoding := range storageEncodedRootKeyReferences() {
 		t.Run(encoding.name, func(t *testing.T) {
 			for _, reference := range []string{encoding.reference, " \n" + encoding.reference + "\r\n\t", encoding.reference[:len(encoding.reference)/2] + "\r\n" + encoding.reference[len(encoding.reference)/2:]} {
-				f := newStorageCPFixture(t)
-				configureStorageCLI(t)
+				f := newStorageCPFixture(commandState, t)
+				configureStorageCLI(commandState, t)
 				f.mu.Lock()
 				beforeRequests := len(f.requests)
 				f.mu.Unlock()
 				fake := &fakeStorageAWS{describeErr: errors.New("tokenERROR " + reference)}
 				random := &rejectingRandom{}
 				args := append([]string{"volume", "auto-unlock", "configure", testVolumeID, "--existing-secret", reference}, storageCLIArtifactFlags(t)...)
-				out, err := executeStorageCLI(t, fakeStorageFactory(fake, random), args...)
+				out, err := executeStorageCLI(commandState, t, fakeStorageFactory(fake, random), args...)
 				require.Error(t, err)
 				assert.NotContains(t, out, encoding.reference)
 				assert.NotContains(t, err.Error(), encoding.reference)
@@ -75,12 +77,14 @@ func TestStorageRejectsRawKeyReferencesWithoutAmplification(t *testing.T) {
 }
 
 func TestStorageUnresolvedReferenceIsNotSavedOrEchoed(t *testing.T) {
-	newStorageCPFixture(t)
-	configureStorageCLI(t)
+	commandState := newCommandFixture()
+
+	newStorageCPFixture(commandState, t)
+	configureStorageCLI(commandState, t)
 	const reference = "customer/unverified-original-name"
 	fake := &fakeStorageAWS{describeErr: errors.New("provider echoed " + storageTestEncoded)}
 	args := append([]string{"volume", "auto-unlock", "configure", testVolumeID, "--existing-secret", reference}, storageCLIArtifactFlags(t)...)
-	out, err := executeStorageCLI(t, fakeStorageFactory(fake, &rejectingRandom{}), args...)
+	out, err := executeStorageCLI(commandState, t, fakeStorageFactory(fake, &rejectingRandom{}), args...)
 	require.Error(t, err)
 	assert.NotContains(t, out, reference)
 	assert.NotContains(t, err.Error(), reference)
@@ -88,13 +92,15 @@ func TestStorageUnresolvedReferenceIsNotSavedOrEchoed(t *testing.T) {
 }
 
 func TestStorageEncodedKeyProviderErrorsStayRedacted(t *testing.T) {
+	commandState := newCommandFixture()
+
 	for _, encoding := range storageEncodedRootKeyReferences() {
 		t.Run(encoding.name, func(t *testing.T) {
-			newStorageCPFixture(t)
-			configureStorageCLI(t)
+			newStorageCPFixture(commandState, t)
+			configureStorageCLI(commandState, t)
 			fake := &fakeStorageAWS{describeErr: errors.New("tokenERROR " + encoding.reference)}
 			args := append([]string{"volume", "auto-unlock", "configure", testVolumeID, "--existing-secret", "customer/original"}, storageCLIArtifactFlags(t)...)
-			out, err := executeStorageCLI(t, fakeStorageFactory(fake, &rejectingRandom{}), args...)
+			out, err := executeStorageCLI(commandState, t, fakeStorageFactory(fake, &rejectingRandom{}), args...)
 			require.Error(t, err)
 			require.NotContains(t, out, encoding.reference)
 			require.NotContains(t, err.Error(), encoding.reference)
@@ -105,8 +111,10 @@ func TestStorageEncodedKeyProviderErrorsStayRedacted(t *testing.T) {
 }
 
 func TestStorageDropsPreviouslyUnverifiedReceiptName(t *testing.T) {
-	f := newStorageCPFixture(t)
-	configureStorageCLI(t)
+	commandState := newCommandFixture()
+
+	f := newStorageCPFixture(commandState, t)
+	configureStorageCLI(commandState, t)
 	r := testStorageReceipt()
 	r.Profile.Scope.ControlplaneURL = f.server.URL
 	r.Generated, r.SecretName, r.Phase = false, storageTestEncoded, storagePhaseVerifying
@@ -115,7 +123,7 @@ func TestStorageDropsPreviouslyUnverifiedReceiptName(t *testing.T) {
 	require.NoError(t, writeStorageJSON(path, r, true))
 	fake := &fakeStorageAWS{}
 	args := append([]string{"volume", "auto-unlock", "configure", testVolumeID, "--existing-secret", "customer/unresolved"}, storageCLIArtifactFlags(t)...)
-	_, err = executeStorageCLI(t, fakeStorageFactory(fake, &rejectingRandom{}), args...)
+	_, err = executeStorageCLI(commandState, t, fakeStorageFactory(fake, &rejectingRandom{}), args...)
 	require.Error(t, err)
 	assertStorageMetadataOmits(t, storageTestEncoded)
 }
