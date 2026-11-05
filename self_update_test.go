@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/require"
 	"github.com/tinfoilsh/tinfoil-cli/internal/selfupdate"
 )
@@ -60,7 +61,7 @@ func TestSelfUpdateCheckIsFreshReadOnlyAndUnauthenticated(t *testing.T) {
 		})
 	}
 	for range 2 {
-		root := newRootCommand()
+		root := &cobra.Command{Use: "tinfoil"}
 		root.AddCommand(newSelfUpdateCommand(newUpdater))
 		var out, stderr bytes.Buffer
 		root.SetOut(&out)
@@ -98,7 +99,7 @@ func TestSelfUpdateCommandResolution(t *testing.T) {
 		})
 	}
 	for _, args := range [][]string{{"update", "extra"}, {"update", "--output", "xml"}, {"update", "--url", "https://example.com"}} {
-		root := newRootCommand()
+		root := &cobra.Command{Use: "tinfoil"}
 		root.SetOut(io.Discard)
 		root.SetErr(io.Discard)
 		root.AddCommand(newSelfUpdateCommand(func() selfUpdateRunner { t.Fatal("invalid args invoked updater"); return nil }))
@@ -129,7 +130,7 @@ func TestSelfUpdateReportsResultWriteFailure(t *testing.T) {
 				if status == selfupdate.StatusAvailable {
 					args = append(args, "--check")
 				}
-				root := newRootCommand()
+				root := &cobra.Command{Use: "tinfoil"}
 				root.AddCommand(newSelfUpdateCommand(func() selfUpdateRunner {
 					return selfUpdateRunFunc(func(ctx context.Context, check bool) (selfupdate.Result, error) {
 						require.Equal(t, status == selfupdate.StatusAvailable, check)
