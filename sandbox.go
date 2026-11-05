@@ -216,8 +216,10 @@ type sandboxSession struct {
 	profile sshProfile
 }
 
-func (s *sandboxSession) close()                           { s.Close() }
-func (s *sandboxSession) enroll(ctx context.Context) error { return s.Enroll(ctx) }
+func (s *sandboxSession) close() { s.Close() }
+func (s *sandboxSession) enroll(ctx context.Context) error {
+	return humanControlplaneError(s.Enroll(ctx))
+}
 
 func connectSandbox(ctx context.Context, target *workloadTarget) (_ *sandboxSession, err error) {
 	scope, cp, err := currentScope()
@@ -261,7 +263,7 @@ func connectSandbox(ctx context.Context, target *workloadTarget) (_ *sandboxSess
 	}
 	s, err := service.OpenSandbox(ctx, owner.Scope(scope), cp.transport(), ownerWorkload(target), m, ownerVerifier{})
 	if err != nil {
-		return nil, err
+		return nil, humanControlplaneError(err)
 	}
 	return &sandboxSession{Sandbox: s, profile: ownerSSHProfile(s.Connection())}, nil
 }
@@ -301,7 +303,7 @@ func relinkSandbox(ctx context.Context, scope accountScope, cp *cpClient, m *mon
 	}
 	connection, err := service.RelinkSandbox(ctx, owner.Scope(scope), cp.transport(), m.Monitor, monitorID, id, ownerWorkload(target), ownerVerifier{})
 	if err != nil || connection == nil {
-		return err
+		return humanControlplaneError(err)
 	}
 	s := &sandboxSession{profile: ownerSSHProfile(*connection)}
 	return s.repinInstalled()

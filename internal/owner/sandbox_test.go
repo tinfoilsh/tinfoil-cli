@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"github.com/tinfoilsh/tinfoil-cli/internal/connection"
 	"github.com/tinfoilsh/tinfoil-cli/internal/controlplane"
 	"github.com/tinfoilsh/tinfoil-go/verify/document"
 	"golang.org/x/crypto/ssh"
@@ -58,13 +59,13 @@ func TestSandboxAttestationRelayUsesCurrentSchema(t *testing.T) {
 		return err
 	}}
 	verificationError := errors.New("verification stopped")
-	verifier := relayVerifier(func(_ string, reference string, raw, nonce []byte) (VerifiedHost, error) {
+	verifier := relayVerifier(func(reference string, raw, nonce []byte) (connection.Evidence, error) {
 		require.Equal(t, doc, raw)
 		require.Equal(t, <-challenges, nonce)
 		require.Equal(t, source, reference)
-		return VerifiedHost{}, verificationError
+		return nil, verificationError
 	})
-	_, err := owner.attest("sandbox.example", source, verifier)
+	_, err := owner.attest(source, verifier)
 	require.ErrorIs(t, err, verificationError)
 }
 
@@ -386,13 +387,13 @@ func TestMonitorRestartRelinksOnlyAuthorizedSandboxes(t *testing.T) {
 	require.NoError(t, err)
 	revision := keys.revision
 
-	verifier := relayVerifier(func(_ string, source string, doc, _ []byte) (VerifiedHost, error) {
+	verifier := relayVerifier(func(source string, doc, _ []byte) (connection.Evidence, error) {
 		for _, f := range fixtures {
 			if strings.Contains(string(doc), f.instance) && strings.Contains(source, storageHash(doc)) {
-				return VerifiedHost{Key: f.host.PublicKey(), Expires: time.Now().Add(time.Hour)}, nil
+				return hostEvidence{host: f.host.PublicKey(), expires: time.Now().Add(time.Hour)}, nil
 			}
 		}
-		return VerifiedHost{}, errors.New("unknown evidence")
+		return nil, errors.New("unknown evidence")
 	})
 
 	relayed := map[string]int{}

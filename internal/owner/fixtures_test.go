@@ -4,15 +4,20 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/x509"
+	"encoding/hex"
 	"net"
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
+	"github.com/tinfoilsh/tinfoil-cli/internal/connection"
 	"github.com/tinfoilsh/tinfoil-cli/internal/controlplane"
 	"github.com/tinfoilsh/tinfoil-cli/internal/keybundle"
 	"github.com/tinfoilsh/tinfoil-cli/internal/statefile"
+	"github.com/tinfoilsh/tinfoil-go/verify/document"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -52,16 +57,30 @@ func connectOwnerSigner(conn net.Conn, host string, hostKey ssh.PublicKey, signe
 	return Connect(conn, host, hostKey, signer, user)
 }
 
-type relayVerifier func(domain, source string, doc, nonce []byte) (VerifiedHost, error)
+type relayVerifier func(source string, doc, nonce []byte) (connection.Evidence, error)
 
-func (f relayVerifier) RelayHost(domain, source string, doc, nonce []byte) (VerifiedHost, error) {
-	return f(domain, source, doc, nonce)
+func (f relayVerifier) RelayEvidence(source string, doc, nonce []byte) (connection.Evidence, error) {
+	return f(source, doc, nonce)
 }
 func (f relayVerifier) MonitorHost(string, string) (ssh.PublicKey, error) {
 	panic("unexpected Monitor verification")
 }
-func (f relayVerifier) DirectHost(context.Context, string, string) (VerifiedHost, error) {
+func (f relayVerifier) DirectEvidence(context.Context, string, string) (connection.Evidence, error) {
 	panic("unexpected direct verification")
+}
+
+type hostEvidence struct {
+	host    ssh.PublicKey
+	expires time.Time
+}
+
+func (e hostEvidence) FreshnessExpiresAt() time.Time { return e.expires }
+func (e hostEvidence) CryptoMaterialData(id, format string) (string, bool) {
+	if id != "host-ssh" || format != document.KeySPKIV1Format || e.host == nil {
+		return "", false
+	}
+	der, err := x509.MarshalPKIXPublicKey(e.host.(ssh.CryptoPublicKey).CryptoPublicKey())
+	return hex.EncodeToString(der), err == nil
 }
 
 type workloadTarget struct {

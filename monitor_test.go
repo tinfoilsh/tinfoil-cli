@@ -22,6 +22,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/require"
+	"github.com/tinfoilsh/tinfoil-cli/internal/connection"
 	"github.com/tinfoilsh/tinfoil-cli/internal/owner"
 	"golang.org/x/crypto/ssh"
 )
@@ -52,10 +53,10 @@ func TestManagedTrustPrecedesCredentials(t *testing.T) {
 type monitorTestVerifier struct{ host ssh.PublicKey }
 
 func (v monitorTestVerifier) MonitorHost(string, string) (ssh.PublicKey, error) { return v.host, nil }
-func (v monitorTestVerifier) DirectHost(context.Context, string, string) (owner.VerifiedHost, error) {
+func (v monitorTestVerifier) DirectEvidence(context.Context, string, string) (connection.Evidence, error) {
 	panic("unexpected sandbox verification")
 }
-func (v monitorTestVerifier) RelayHost(string, string, []byte, []byte) (owner.VerifiedHost, error) {
+func (v monitorTestVerifier) RelayEvidence(string, []byte, []byte) (connection.Evidence, error) {
 	panic("unexpected sandbox verification")
 }
 

@@ -299,7 +299,7 @@ func prepareResourceKeys(ctx context.Context, client *cpClient, scope accountSco
 		}
 		public, err := service.PrepareResourceKeys(ctx, client.transport(), owner.Scope(scope), kind)
 		if err != nil {
-			return "", "", err
+			return "", "", humanControlplaneError(err)
 		}
 		return "tmk", public, nil
 	}

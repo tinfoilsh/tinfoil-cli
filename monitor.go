@@ -76,7 +76,7 @@ func connectMonitorOwner(ctx context.Context, scope accountScope, cp *cpClient, 
 	}
 	m, err := service.ConnectMonitor(ctx, owner.Scope(scope), cp.transport(), ownerWorkload(row), restoreDevice, ownerVerifier{})
 	if err != nil {
-		return nil, err
+		return nil, humanControlplaneError(err)
 	}
 	return &monitorSession{m}, nil
 }

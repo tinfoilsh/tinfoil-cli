@@ -64,6 +64,26 @@ func (e *cpError) Error() string {
 
 func (e *cpError) Unwrap() error { return (*controlplane.Error)(e) }
 
+type displayedAPIError struct {
+	err     error
+	message string
+}
+
+func (e *displayedAPIError) Error() string { return e.message }
+func (e *displayedAPIError) Unwrap() error { return e.err }
+
+func humanControlplaneError(err error) error {
+	var raw *controlplane.Error
+	if !errors.As(err, &raw) {
+		return err
+	}
+	message := strings.Replace(err.Error(), raw.Error(), (*cpError)(raw).Error(), 1)
+	if message == err.Error() {
+		return err
+	}
+	return &displayedAPIError{err: err, message: message}
+}
+
 // errorHint returns a line to print after a failed command's error, or "".
 // Commands wrap controlplane errors in their own context, so the hint is
 // printed once at the end rather than inside the error text.

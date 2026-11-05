@@ -5,8 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"time"
 
+	"github.com/tinfoilsh/tinfoil-cli/internal/connection"
 	"github.com/tinfoilsh/tinfoil-cli/internal/controlplane"
 	"github.com/tinfoilsh/tinfoil-cli/internal/keybundle"
 	"golang.org/x/crypto/ssh"
@@ -93,15 +93,10 @@ func requireRunningConnection(kind string, row controlplane.Container) error {
 	return fmt.Errorf("%s %s is %s; run `tinfoil %s %s`", kind, row.Name, label, strings.ToLower(kind), next)
 }
 
-type VerifiedHost struct {
-	Key     ssh.PublicKey
-	Expires time.Time
-}
-
 type Verifier interface {
 	MonitorHost(domain, source string) (ssh.PublicKey, error)
-	DirectHost(context.Context, string, string) (VerifiedHost, error)
-	RelayHost(domain, source string, document, nonce []byte) (VerifiedHost, error)
+	DirectEvidence(context.Context, string, string) (connection.Evidence, error)
+	RelayEvidence(source string, document, nonce []byte) (connection.Evidence, error)
 }
 
 // Workload keeps the reviewed configuration reference and measured environment

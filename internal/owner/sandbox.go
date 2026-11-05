@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tinfoilsh/tinfoil-cli/internal/connection"
 	"github.com/tinfoilsh/tinfoil-cli/internal/controlplane"
 	"github.com/tinfoilsh/tinfoil-cli/internal/keybundle"
 	"github.com/tinfoilsh/tinfoil-go/verify/document"
@@ -135,25 +136,32 @@ func (service *Service) openSandbox(scope Scope, target *Workload, binding mkBin
 	resourceID := scope.ControlplaneURL + "/" + scope.OrgID + "/" + scope.UserID + "/" + row.ID
 	if noMonitor {
 		defer service.progress(SandboxVerifying, row.Domain)()
-		verified, err := verifier.DirectHost(context.Background(), row.Domain, target.Source)
+		verified, err := verifier.DirectEvidence(context.Background(), row.Domain, target.Source)
 		if err != nil {
 			return nil, err
 		}
-		s.expires = verified.Expires
+		host, err := connection.EndorsedHostKey(row.Domain, verified)
+		if err != nil {
+			return nil, err
+		}
+		s.expires = verified.FreshnessExpiresAt()
 		s.profile = ConnectionInfo{Name: row.Name, HostName: row.Domain, Port: row.SSHPort, HostKeyAlias: row.Domain,
-			User: sandboxLoginUser, IdentityFile: identity, HostKey: verified.Key, ResourceID: resourceID}
+			User: sandboxLoginUser, IdentityFile: identity, HostKey: host, ResourceID: resourceID}
 		service.notify(SandboxDirectVerified, row.Name)
 		return s, nil
 	}
 	s.owner = &sandboxOwner{request: monitor.request, instance: *binding.InstanceID, dial: s.dial}
 	stop := service.progress(SandboxRelayVerifying, row.Name)
-	verified, err := s.owner.attest(row.Domain, target.Source, verifier)
+	verified, err := s.owner.attest(target.Source, verifier)
 	stop()
 	if err != nil {
 		return nil, fmt.Errorf("sandbox attestation through Monitor: %w", err)
 	}
-	host := verified.Key
-	s.expires = verified.Expires
+	host, err := connection.EndorsedHostKey(row.Domain, verified)
+	if err != nil {
+		return nil, err
+	}
+	s.expires = verified.FreshnessExpiresAt()
 	service.notify(SandboxVerified, row.Name)
 	address, port, _ := net.SplitHostPort(monitor.address)
 	portNumber, _ := strconv.Atoi(port)
@@ -332,10 +340,10 @@ type relayReply struct {
 	Body   string `json:"body"`
 }
 
-func (o *sandboxOwner) attest(domain, source string, verifier Verifier) (VerifiedHost, error) {
+func (o *sandboxOwner) attest(source string, verifier Verifier) (connection.Evidence, error) {
 	nonce, err := document.RandomNonce()
 	if err != nil {
-		return VerifiedHost{}, err
+		return nil, err
 	}
 	input := struct {
 		InstanceID string `json:"instance_id"`
@@ -343,20 +351,20 @@ func (o *sandboxOwner) attest(domain, source string, verifier Verifier) (Verifie
 	}{o.instance, hex.EncodeToString(nonce)}
 	var reply relayReply
 	if err := o.request(http.MethodPost, "/sandboxes/relay", input, &reply); err != nil {
-		return VerifiedHost{}, err
+		return nil, err
 	}
 	if reply.Status != http.StatusOK {
-		return VerifiedHost{}, fmt.Errorf("sandbox attestation returned HTTP %d", reply.Status)
+		return nil, fmt.Errorf("sandbox attestation returned HTTP %d", reply.Status)
 	}
 	doc, err := keybundle.DecodeBase64URL(reply.Body, -1)
 	if err != nil {
-		return VerifiedHost{}, err
+		return nil, err
 	}
-	verified, err := verifier.RelayHost(domain, source, doc, nonce)
+	verified, err := verifier.RelayEvidence(source, doc, nonce)
 	if err != nil {
-		return VerifiedHost{}, err
+		return nil, err
 	}
-	o.expires = verified.Expires
+	o.expires = verified.FreshnessExpiresAt()
 	return verified, nil
 }
 

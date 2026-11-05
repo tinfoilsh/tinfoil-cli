@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/tinfoilsh/tinfoil-cli/internal/controlplane"
+	"github.com/tinfoilsh/tinfoil-cli/internal/connection"
 	"github.com/tinfoilsh/tinfoil-cli/internal/keybundle"
 	"github.com/tinfoilsh/tinfoil-cli/internal/owner"
 	"golang.org/x/crypto/ssh"
@@ -13,22 +13,6 @@ import (
 )
 
 type noLocalKeys = owner.NoLocalKeys
-type keyState = controlplane.KeyState
-type keyStateWrite = controlplane.KeyStateWrite
-
-const keyStatePath = controlplane.KeyStatePath
-
-func fetchKeyState(ctx context.Context, cp *cpClient) (*keyState, error) {
-	return cp.transport().KeyState(ctx)
-}
-
-func whileSignedIn(login *clerkGrant, write func() error) error {
-	service, err := authService()
-	if err != nil {
-		return err
-	}
-	return service.WhileSignedIn(login, write)
-}
 
 func resourceDir(scope accountScope, id, name string) (string, error) {
 	path, err := configPath()
@@ -59,10 +43,14 @@ func ownerService(cp *cpClient) (*owner.Service, error) {
 	if err != nil {
 		return nil, err
 	}
+	credentials, err := authService()
+	if err != nil {
+		return nil, err
+	}
 	s := &owner.Service{ConfigPath: path, Home: os.UserHomeDir, IdentityFile: attestSSHIdentity, AgentSocket: os.Getenv("SSH_AUTH_SOCK")}
-	s.ActiveGrant = func(write func() error) error { return whileSignedIn(cp.login, write) }
+	s.ActiveGrant = func(write func() error) error { return credentials.WhileSignedIn(cp.login, write) }
 	s.BundleKey = func(user string) (keybundle.Context, []byte, error) {
-		dek, err := syncedKey(cp.login, user)
+		dek, err := credentials.SyncedKey(cp.login, user)
 		if err != nil {
 			return keybundle.Context{}, nil, err
 		}
@@ -113,7 +101,7 @@ func renderOwnerEvent(event owner.Event) {
 	case owner.MonitorUnlocked:
 		fmt.Fprintf(os.Stderr, "Monitor %s unlocked.\n", event.Name)
 	case owner.MonitorCheckpointFailed:
-		fmt.Fprintf(os.Stderr, "Warning: Monitor generation %d is saved only on this machine; synchronizing it to your key bundle failed: %v\n", event.Generation, event.Err)
+		fmt.Fprintf(os.Stderr, "Warning: Monitor generation %d is saved only on this machine; synchronizing it to your key bundle failed: %v\n", event.Generation, humanControlplaneError(event.Err))
 	case owner.SandboxVerified:
 		fmt.Fprintf(os.Stderr, "Sandbox %s attestation verified.\n", event.Name)
 	case owner.SandboxDirectVerified:
@@ -138,27 +126,21 @@ type ownerVerifier struct{}
 func (ownerVerifier) MonitorHost(domain, source string) (ssh.PublicKey, error) {
 	return attestedHostKey(domain, source, "")
 }
-func (ownerVerifier) DirectHost(ctx context.Context, domain, source string) (owner.VerifiedHost, error) {
+func (ownerVerifier) DirectEvidence(ctx context.Context, domain, source string) (connection.Evidence, error) {
 	secure, err := newVerifiedClient(domain, source, "")
 	if err != nil {
-		return owner.VerifiedHost{}, err
+		return nil, err
 	}
 	verified, err := secure.EnsureVerified(ctx)
 	if err != nil {
-		return owner.VerifiedHost{}, fmt.Errorf("verifying %s: %w", domain, err)
+		return nil, fmt.Errorf("verifying %s: %w", domain, err)
 	}
-	key, err := endorsedHostKey(domain, verified)
-	return owner.VerifiedHost{Key: key, Expires: verified.FreshnessExpiresAt()}, err
+	return verified, nil
 }
-func (ownerVerifier) RelayHost(domain, source string, doc, nonce []byte) (owner.VerifiedHost, error) {
+func (ownerVerifier) RelayEvidence(source string, doc, nonce []byte) (connection.Evidence, error) {
 	options, err := verificationOptions(source, "")
 	if err != nil {
-		return owner.VerifiedHost{}, err
+		return nil, err
 	}
-	verified, err := options.Verifier.VerifyV3(doc, nonce, source)
-	if err != nil {
-		return owner.VerifiedHost{}, err
-	}
-	key, err := endorsedHostKey(domain, verified)
-	return owner.VerifiedHost{Key: key, Expires: verified.FreshnessExpiresAt()}, err
+	return options.Verifier.VerifyV3(doc, nonce, source)
 }

@@ -19,8 +19,22 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"github.com/tinfoilsh/tinfoil-cli/internal/controlplane"
 	"golang.org/x/crypto/ssh"
 )
+
+type keyState = controlplane.KeyState
+type keyStateWrite = controlplane.KeyStateWrite
+
+const keyStatePath = controlplane.KeyStatePath
+
+func whileSignedIn(login *clerkGrant, write func() error) error {
+	service, err := authService()
+	if err != nil {
+		return err
+	}
+	return service.WhileSignedIn(login, write)
+}
 
 func testSeed(t *testing.T) []byte {
 	t.Helper()
