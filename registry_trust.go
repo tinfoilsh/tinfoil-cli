@@ -21,20 +21,20 @@ type registryEnrollment struct {
 	AccountID       string   `json:"account_id"`
 	Label           string   `json:"label,omitempty"`
 	Namespaces      []string `json:"namespaces"`
-	Scope           string   `json:"registry_id"`
+	RegistryID      string   `json:"registry_id"`
 }
 
 type registryAccount struct {
 	OwnerKind  string   `json:"owner_kind"`
 	Namespaces []string `json:"namespaces"`
-	Scope      string   `json:"scope"`
+	RegistryID string   `json:"scope"`
 }
 
-var enrollmentScope string
+var enrollmentRegistryID string
 
 func init() {
 	trustCmd.AddCommand(trustEnrollCmd, trustRemoveCmd)
-	trustEnrollCmd.Flags().StringVar(&enrollmentScope, "registry-id", "", "Expected private registry ID; approves it without a prompt")
+	trustEnrollCmd.Flags().StringVar(&enrollmentRegistryID, "registry-id", "", "Expected private registry ID; approves it without a prompt")
 }
 
 var trustEnrollCmd = &cobra.Command{
@@ -50,7 +50,7 @@ var trustEnrollCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		return enrollRegistry(cmd, cfg, identity, enrollmentScope, term.IsTerminal(int(os.Stdin.Fd())))
+		return enrollRegistry(cmd, cfg, identity, enrollmentRegistryID, term.IsTerminal(int(os.Stdin.Fd())))
 	},
 }
 
@@ -99,7 +99,7 @@ func registryAccountMatches(entry registryEnrollment, account string) bool {
 	return account != "" && (entry.AccountID == account || strings.EqualFold(entry.Label, account) || slices.Contains(entry.Namespaces, "/"+strings.TrimPrefix(account, "/")))
 }
 
-func printRegistryScopes(out io.Writer, entries []registryEnrollment) {
+func printRegistries(out io.Writer, entries []registryEnrollment) {
 	for _, entry := range entries {
 		fmt.Fprintf(out, "Private registry: %s (%s)\n  Control plane: %s\n  Projects under: %s\n", entry.Label, entry.AccountID, entry.ControlplaneURL, strings.Join(entry.Namespaces, ", "))
 	}
@@ -140,21 +140,21 @@ func (e registryEnrollment) validate() error {
 			return err
 		}
 	}
-	return configendorsement.ValidateScope(e.Scope)
+	return configendorsement.ValidateRegistryID(e.RegistryID)
 }
 
-func enrollRegistry(cmd *cobra.Command, cfg cliConfig, identity authContext, expectedScope string, interactive bool) error {
-	if !interactive && expectedScope == "" {
+func enrollRegistry(cmd *cobra.Command, cfg cliConfig, identity authContext, expectedRegistryID string, interactive bool) error {
+	if !interactive && expectedRegistryID == "" {
 		return fmt.Errorf("private registry approval requires a terminal or an explicit --registry-id")
 	}
 	var account registryAccount
 	if _, err := newCPClient(cfg).do("GET", registryEnrollmentPath, nil, nil, &account); err != nil {
 		return err
 	}
-	if expectedScope != "" && expectedScope != account.Scope {
+	if expectedRegistryID != "" && expectedRegistryID != account.RegistryID {
 		return fmt.Errorf("private registry ID does not match the expected registry ID")
 	}
-	entry := registryEnrollment{ControlplaneURL: cfg.ControlplaneURL, AccountID: identity.UserID, Label: identity.UserID, Namespaces: account.Namespaces, Scope: account.Scope}
+	entry := registryEnrollment{ControlplaneURL: cfg.ControlplaneURL, AccountID: identity.UserID, Label: identity.UserID, Namespaces: account.Namespaces, RegistryID: account.RegistryID}
 	if identity.ContextType == "personal" {
 		entry.Label = "Personal"
 		if identity.UserName != "" {
@@ -175,7 +175,7 @@ func enrollRegistry(cmd *cobra.Command, cfg cliConfig, identity authContext, exp
 	if err := entry.validate(); err != nil {
 		return err
 	}
-	return acceptRegistry(cmd.InOrStdin(), cmd.ErrOrStderr(), entry, expectedScope != "")
+	return acceptRegistry(cmd.InOrStdin(), cmd.ErrOrStderr(), entry, expectedRegistryID != "")
 }
 
 func acceptRegistry(in io.Reader, out io.Writer, entry registryEnrollment, explicit bool) error {
@@ -184,16 +184,16 @@ func acceptRegistry(in io.Reader, out io.Writer, entry registryEnrollment, expli
 		return err
 	}
 	for _, previous := range policy.Registries {
-		if previous.ControlplaneURL == entry.ControlplaneURL && previous.AccountID == entry.AccountID && slices.Equal(previous.Namespaces, entry.Namespaces) && previous.Scope == entry.Scope {
-			fmt.Fprintf(out, "Private registry %s is already trusted.\nRegistry ID: %s\n", entry.Label, entry.Scope)
+		if previous.ControlplaneURL == entry.ControlplaneURL && previous.AccountID == entry.AccountID && slices.Equal(previous.Namespaces, entry.Namespaces) && previous.RegistryID == entry.RegistryID {
+			fmt.Fprintf(out, "Private registry %s is already trusted.\nRegistry ID: %s\n", entry.Label, entry.RegistryID)
 			return nil
 		}
-		if previous.ControlplaneURL == entry.ControlplaneURL && previous.AccountID == entry.AccountID && previous.Scope != entry.Scope {
-			fmt.Fprintf(out, "Private registry identity changed.\nPrevious registry ID: %s\n", previous.Scope)
+		if previous.ControlplaneURL == entry.ControlplaneURL && previous.AccountID == entry.AccountID && previous.RegistryID != entry.RegistryID {
+			fmt.Fprintf(out, "Private registry identity changed.\nPrevious registry ID: %s\n", previous.RegistryID)
 		}
 	}
-	printRegistryScopes(out, []registryEnrollment{entry})
-	fmt.Fprintf(out, "Registry ID: %s\n", entry.Scope)
+	printRegistries(out, []registryEnrollment{entry})
+	fmt.Fprintf(out, "Registry ID: %s\n", entry.RegistryID)
 	if !explicit {
 		fmt.Fprint(out, "Trust configs from this private registry? Existing project and config restrictions still apply. [y/N] ")
 		scanner := bufio.NewScanner(in)
@@ -281,7 +281,7 @@ func registrySigningOptions(source string) ([]verify.Option, error) {
 	org, _, _ := strings.Cut(repository, "/")
 	for _, entry := range policy.Registries {
 		if entry.ControlplaneURL == controlplaneURL && slices.Contains(entry.Namespaces, "/"+org) {
-			return []verify.Option{verify.WithConfigScopes(entry.Scope)}, nil
+			return []verify.Option{verify.WithConfigRegistryIDs(entry.RegistryID)}, nil
 		}
 	}
 	return nil, nil

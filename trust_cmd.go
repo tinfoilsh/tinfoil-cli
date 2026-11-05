@@ -136,7 +136,7 @@ func plural(n int, one, many string) string {
 }
 
 func printTrustStore(out io.Writer, policy connectionPolicy) {
-	printRegistryScopes(out, policy.Registries)
+	printRegistries(out, policy.Registries)
 	fmt.Fprintf(out, "Store: %s", policy.path)
 	if _, err := os.Stat(policy.path); os.IsNotExist(err) {
 		fmt.Fprint(out, " (not created yet)")
