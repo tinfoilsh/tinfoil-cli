@@ -139,10 +139,10 @@ func (s *volumeKeyStore) readMatching(ctx context.Context, reference string, pro
 		if volume, present := tags[storageVolumeTag]; present && volume != provenance.VolumeID {
 			return storedVolumeKey{}, fmt.Errorf("existing secret volume provenance does not match this volume; refusing import")
 		}
-		if scope, present := tags[storageScopeTag]; present && scope != provenance.Profile.Scope.key() {
+		if scope, present := tags[storageScopeTag]; present && scope != provenance.Profile.Scope.Key() {
 			return storedVolumeKey{}, fmt.Errorf("existing secret scope provenance does not match this project; refusing import")
 		}
-		if provenance.Generated && (aws.ToString(desc.Name) != provenance.SecretName || tags[storageScopeTag] != provenance.Profile.Scope.key() || tags[storageVolumeTag] != provenance.VolumeID) {
+		if provenance.Generated && (aws.ToString(desc.Name) != provenance.SecretName || tags[storageScopeTag] != provenance.Profile.Scope.Key() || tags[storageVolumeTag] != provenance.VolumeID) {
 			return storedVolumeKey{}, fmt.Errorf("existing secret provenance does not match this volume; refusing replacement")
 		}
 	}
@@ -227,7 +227,7 @@ func (s *volumeKeyStore) create(ctx context.Context, r storageReceipt, beforeGen
 	_, createErr := s.client.CreateSecret(ctx, &secretsmanager.CreateSecretInput{
 		Name: aws.String(r.SecretName), ClientRequestToken: aws.String(r.VolumeID), SecretString: aws.String(string(value)),
 		Tags: []types.Tag{
-			{Key: aws.String(storageScopeTag), Value: aws.String(r.Profile.Scope.key())},
+			{Key: aws.String(storageScopeTag), Value: aws.String(r.Profile.Scope.Key())},
 			{Key: aws.String(storageVolumeTag), Value: aws.String(r.VolumeID)},
 		},
 	})

@@ -6,76 +6,38 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
-	"strconv"
 	"strings"
 	"syscall"
+
+	"github.com/tinfoilsh/tinfoil-cli/internal/autounlock"
 )
 
 const (
 	storageDirMode        = 0o700
 	storageFileMode       = 0o600
-	storageSchemaVersion  = 1
-	storagePhaseAllocated = "allocated"
-	storagePhaseAttempted = "secret_create_attempted"
-	storagePhaseStored    = "secret_stored"
-	storagePhaseVerifying = "verifying_existing_secret"
-	storagePhasePrepared  = "prepared"
+	storageSchemaVersion  = autounlock.SchemaVersion
+	storagePhaseAllocated = autounlock.PhaseAllocated
+	storagePhaseAttempted = autounlock.PhaseAttempted
+	storagePhaseStored    = autounlock.PhaseStored
+	storagePhaseVerifying = autounlock.PhaseVerifying
+	storagePhasePrepared  = autounlock.PhasePrepared
 )
 
 var storageRepoPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*/[a-z0-9_.-]+$`)
-var storageRegionPattern = regexp.MustCompile(`^[a-z]{2}(-[a-z]+)+-[0-9]+$`)
 var storageNamePattern = regexp.MustCompile(`^[A-Za-z0-9/_+=.@-]+$`)
-var storageDomainLabel = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?$`)
 var errStorageLocked = errors.New("locked by another running tinfoil command")
 
-type storageScope struct {
-	ControlplaneURL string `json:"controlplane_url"`
-	OrgID           string `json:"org_id"`
-	Repo            string `json:"repo"`
-}
-
-type storageProfile struct {
-	Version      int          `json:"version"`
-	Scope        storageScope `json:"scope"`
-	KeyserverURL string       `json:"keyserver_url"`
-	AWSRegion    string       `json:"aws_region"`
-	AWSPrefix    string       `json:"aws_prefix"`
-	AWSProfile   string       `json:"aws_profile,omitempty"`
-	Domain       string       `json:"domain,omitempty"`
-}
-
-type storageReceipt struct {
-	Version       int            `json:"version"`
-	Profile       storageProfile `json:"profile"`
-	VolumeID      string         `json:"volume_id"`
-	Mount         string         `json:"mount"`
-	KeySecret     string         `json:"key_secret"`
-	SecretName    string         `json:"secret_name"`
-	SecretARN     string         `json:"secret_arn,omitempty"`
-	SecretVersion string         `json:"secret_version,omitempty"`
-	Generated     bool           `json:"generated"`
-	Phase         string         `json:"phase"`
-	Tag           string         `json:"tag"`
-	Domain        string         `json:"domain"`
-	ConfigPath    string         `json:"config_path,omitempty"`
-	ConfigHash    string         `json:"config_sha256,omitempty"`
-	PolicyPath    string         `json:"policy_path,omitempty"`
-	PolicyHash    string         `json:"policy_sha256,omitempty"`
-}
+type storageScope = autounlock.Scope
+type storageProfile = autounlock.Profile
+type storageReceipt = autounlock.Receipt
 
 func storageHash(data []byte) string {
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:])
-}
-
-func (s storageScope) key() string {
-	data, _ := json.Marshal(s)
-	return storageHash(data)
 }
 
 func storageDirectory() (string, error) {
@@ -91,12 +53,12 @@ func storageMetadataPath(scope storageScope, volume string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	name := "profile-" + scope.key()
+	name := "profile-" + scope.Key()
 	if volume != "" {
 		if !looksLikeUUID(volume) {
 			return "", fmt.Errorf("volume ID must be a UUID")
 		}
-		name = "volume-" + scope.key() + "-" + strings.ToLower(volume)
+		name = "volume-" + scope.Key() + "-" + strings.ToLower(volume)
 	}
 	return filepath.Join(dir, name+".json"), nil
 }
@@ -207,52 +169,11 @@ func loadStorageProfile(scope storageScope) (storageProfile, error) {
 	if p.Version != storageSchemaVersion || p.Scope != scope {
 		return p, fmt.Errorf("storage profile scope/version mismatch")
 	}
-	return p, p.validate()
-}
-
-func (p storageProfile) validate() error {
-	u, err := url.Parse(p.KeyserverURL)
-	if err != nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.ForceQuery || strings.Contains(p.KeyserverURL, "#") || u.Path != "" && u.Path != "/" {
-		return fmt.Errorf("--keyserver-url must be an HTTPS origin without credentials, query, or path")
-	}
-	if strings.HasPrefix(u.Host, "[") {
-		address, err := netip.ParseAddr(u.Hostname())
-		if err != nil || !address.Is6() {
-			return fmt.Errorf("--keyserver-url has an invalid IPv6 host")
-		}
-	} else if strings.ContainsAny(u.Hostname(), "[]:") {
-		return fmt.Errorf("--keyserver-url has an invalid host")
-	}
-	if port := u.Port(); port != "" {
-		value, err := strconv.Atoi(port)
-		if err != nil || value < 1 || value > maxConnectionPort {
-			return fmt.Errorf("--keyserver-url has an invalid port")
-		}
-	} else if strings.HasSuffix(u.Host, ":") {
-		return fmt.Errorf("--keyserver-url has an invalid port")
-	}
-	if !storageRegionPattern.MatchString(p.AWSRegion) {
-		return fmt.Errorf("--aws-region must be an explicit AWS region")
-	}
-	if p.AWSPrefix != "" && (!storageNamePattern.MatchString(p.AWSPrefix) || strings.Trim(p.AWSPrefix, "/") != p.AWSPrefix || len(p.AWSPrefix) > storageMaxPrefixLength) {
-		return fmt.Errorf("--aws-prefix must be a Secrets Manager name prefix without leading/trailing slashes")
-	}
-	if p.Domain != "" {
-		return validateStorageDomain(p.Domain)
-	}
-	return nil
+	return p, p.Validate()
 }
 
 func validateStorageDomain(domain string) error {
-	if len(domain) > 253 || !strings.Contains(domain, ".") {
-		return fmt.Errorf("an exact deployment DNS domain is required (no wildcard, URL, or port)")
-	}
-	for _, label := range strings.Split(domain, ".") {
-		if len(label) > 63 || !storageDomainLabel.MatchString(label) {
-			return fmt.Errorf("an exact lowercase deployment DNS domain is required (no wildcard, URL, or port)")
-		}
-	}
-	return nil
+	return autounlock.ValidateDomain(domain)
 }
 
 func resolveStorageScope(client *cpClient, identifier string) (storageScope, error) {

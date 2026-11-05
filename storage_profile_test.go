@@ -27,7 +27,7 @@ func TestStorageProfileAllowsHTTPSPortBoundaries(t *testing.T) {
 		t.Run(endpoint, func(t *testing.T) {
 			p := testStorageProfile()
 			p.KeyserverURL = endpoint
-			require.NoError(t, p.validate())
+			require.NoError(t, p.Validate())
 		})
 	}
 }

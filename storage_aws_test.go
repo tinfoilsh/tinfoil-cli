@@ -112,7 +112,7 @@ func testStorageReceipt() storageReceipt {
 }
 
 func testStoredSecret(r storageReceipt) *fakeVolumeSecret {
-	return &fakeVolumeSecret{name: r.SecretName, arn: "arn:aws:secretsmanager:us-east-2:123456789012:secret:" + r.SecretName + "-abcdef", version: r.VolumeID, value: `{"value":"` + storageTestEncoded + `"}`, tags: []types.Tag{{Key: aws.String(storageScopeTag), Value: aws.String(r.Profile.Scope.key())}, {Key: aws.String(storageVolumeTag), Value: aws.String(r.VolumeID)}}}
+	return &fakeVolumeSecret{name: r.SecretName, arn: "arn:aws:secretsmanager:us-east-2:123456789012:secret:" + r.SecretName + "-abcdef", version: r.VolumeID, value: `{"value":"` + storageTestEncoded + `"}`, tags: []types.Tag{{Key: aws.String(storageScopeTag), Value: aws.String(r.Profile.Scope.Key())}, {Key: aws.String(storageVolumeTag), Value: aws.String(r.VolumeID)}}}
 }
 
 func TestStorageCreateOnlyAndUncertainResponse(t *testing.T) {

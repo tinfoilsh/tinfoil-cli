@@ -71,7 +71,7 @@ func newProjectStorageCommand() *cobra.Command {
 		p.AWSPrefix, _ = cmd.Flags().GetString("aws-prefix")
 		p.AWSProfile, _ = cmd.Flags().GetString("aws-profile")
 		p.Domain, _ = cmd.Flags().GetString("domain")
-		if err := p.validate(); err != nil {
+		if err := p.Validate(); err != nil {
 			return err
 		}
 		client, err := authedClient()

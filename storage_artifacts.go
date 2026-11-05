@@ -42,7 +42,7 @@ func (o storageArtifactOptions) validate(p storageProfile) error {
 	if err := validateStorageDomain(o.Domain); err != nil {
 		return err
 	}
-	if err := p.validate(); err != nil {
+	if err := p.Validate(); err != nil {
 		return err
 	}
 	paths := []string{o.ConfigFile, o.ConfigOut, o.PolicyFile, o.PolicyOut}
