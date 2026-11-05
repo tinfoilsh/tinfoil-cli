@@ -601,7 +601,7 @@ func TestMonitorRestartRelinksOnlyAuthorizedSandboxes(t *testing.T) {
 				host, err := x509.MarshalPKIXPublicKey(f.host.PublicKey().(ssh.CryptoPublicKey).CryptoPublicKey())
 				require.NoError(t, err)
 				return &testEvidence{expires: time.Now().Add(time.Hour), keys: []document.CryptoMaterialItem{
-					{ID: attestedHostKeyID, Format: document.KeySPKIV1Format, Data: hex.EncodeToString(host)},
+					{ID: "host-ssh", Format: document.KeySPKIV1Format, Data: hex.EncodeToString(host)},
 				}}, nil
 			}
 		}

@@ -1,13 +1,9 @@
 package main
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
-	"io"
-	"os"
 
-	configendorsement "github.com/tinfoilsh/tinfoil-go/endorsement/config"
+	"github.com/tinfoilsh/tinfoil-cli/internal/connection"
 )
 
 var localConfigBytes []byte
@@ -20,20 +16,12 @@ func readLocalConfig() ([]byte, error) {
 	if localConfigBytes != nil {
 		return localConfigBytes, nil
 	}
-	file, err := os.Open(localConfigFile)
+	config, err := connection.ReadConfig(localConfigFile)
 	if err != nil {
-		return nil, fmt.Errorf("reading config: %w", err)
+		return nil, err
 	}
-	defer file.Close()
-	data, err := io.ReadAll(io.LimitReader(file, configendorsement.MaxConfigSize+1))
-	if err != nil {
-		return nil, fmt.Errorf("reading config: %w", err)
-	}
-	if len(data) == 0 || len(data) > configendorsement.MaxConfigSize {
-		return nil, fmt.Errorf("config must contain between 1 and %d bytes", configendorsement.MaxConfigSize)
-	}
-	localConfigBytes = data
-	return data, nil
+	localConfigBytes = config.Bytes()
+	return localConfigBytes, nil
 }
 
 func checkLocalConfigDigest(expected string) error {
@@ -41,9 +29,9 @@ func checkLocalConfigDigest(expected string) error {
 	if err != nil {
 		return err
 	}
-	digest := sha256.Sum256(data)
-	if hex.EncodeToString(digest[:]) != expected {
-		return fmt.Errorf("local config does not match the selected container's config digest")
+	config, err := connection.NewConfig(data)
+	if err != nil {
+		return err
 	}
-	return nil
+	return config.CheckDigest(expected)
 }

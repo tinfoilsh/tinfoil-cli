@@ -9,6 +9,7 @@ import (
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 
+	"github.com/tinfoilsh/tinfoil-cli/internal/connection"
 	"github.com/tinfoilsh/tinfoil-go"
 	"github.com/tinfoilsh/tinfoil-go/verify"
 	"github.com/tinfoilsh/tinfoil-go/verify/document"
@@ -35,51 +36,51 @@ func tlsConnection(enclaveHost string) (*tls.ConnectionState, error) {
 }
 
 func verificationOptions(source, sealedTo string) (*tinfoil.EnclaveOptions, error) {
-	var policy []verify.Option
-	if localConfigFile != "" {
-		if publicRegistry {
-			return nil, fmt.Errorf("--public-registry and --config cannot be used together")
-		}
-		if source != "" {
-			return nil, fmt.Errorf("--config and --repo cannot be used together")
-		}
-		data, err := readLocalConfig()
-		if err != nil {
-			return nil, err
-		}
-		policy = append(policy, verify.WithEmbeddedReferences(verify.EmbeddedReferences{Config: &verify.EmbeddedConfig{Bytes: data}}))
-	} else if source == "" {
-		return nil, fmt.Errorf("v3 verification requires an expected workload; pass --repo owner/name[@tag][@sha256:digest] or --config FILE")
-	} else {
-		var err error
-		policy, err = registrySigningOptions(source)
-		if err != nil {
-			return nil, err
-		}
-	}
-	if sealedTo != "" {
-		pins, err := measurement.ParseExpectedTDX("", "", "", "", sealedTo)
-		if err != nil {
-			return nil, err
-		}
-		policy = append(policy, verify.WithPinnedRegisters(pins))
-	}
-	v, err := verify.NewVerifier(policy...)
+	input, err := verificationInput(source, sealedTo)
 	if err != nil {
 		return nil, err
 	}
-	return &tinfoil.EnclaveOptions{Verifier: v}, nil
+	return input.Options()
+}
+
+func verificationInput(source, sealedTo string) (connection.Verification, error) {
+	input := connection.Verification{Reference: source, RTMR3: sealedTo, PublicRegistry: publicRegistry}
+	if localConfigFile != "" {
+		if publicRegistry {
+			return input, fmt.Errorf("--public-registry and --config cannot be used together")
+		}
+		if source != "" {
+			return input, fmt.Errorf("--config and --repo cannot be used together")
+		}
+		data, err := readLocalConfig()
+		if err != nil {
+			return input, err
+		}
+		input.Config, err = connection.NewConfig(data)
+		if err != nil {
+			return input, err
+		}
+	} else if source == "" {
+		return input, fmt.Errorf("v3 verification requires an expected workload; pass --repo owner/name[@tag][@sha256:digest] or --config FILE")
+	} else {
+		var err error
+		input.RegistryIDs, err = registryIDs(source)
+		if err != nil {
+			return input, err
+		}
+	}
+	return input, nil
 }
 
 func newVerifiedClient(host, source, sealedTo string) (*tinfoil.EnclaveHTTPClient, error) {
 	if host == "" {
 		return nil, fmt.Errorf("--enclave is required")
 	}
-	opts, err := verificationOptions(source, sealedTo)
+	input, err := verificationInput(source, sealedTo)
 	if err != nil {
 		return nil, err
 	}
-	return tinfoil.NewEnclaveHTTPClient(context.Background(), host, source, opts)
+	return connection.NewClient(context.Background(), host, input)
 }
 
 type auditRecord struct {

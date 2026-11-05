@@ -1,24 +1,16 @@
 package main
 
 import (
-	"encoding/json"
+	"context"
 	"errors"
 	"fmt"
-	"io"
 	"net"
-	"net/http"
-	"net/url"
 	"os"
-	"strconv"
 	"strings"
 
-	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
+	"github.com/tinfoilsh/tinfoil-cli/internal/connection"
 )
-
-// debugToolboxContainer is the container tinfoild injects for debug mode
-// (tinfoil-config's ReservedDebugContainerName).
-const debugToolboxContainer = "tinfoil-debug-toolbox"
 
 var (
 	forwardPorts    []string
@@ -73,9 +65,9 @@ A hostname target needs --repo or --config to select the expected workload.`,
 
 			// Parse every forward before binding anything, so a bad spec leaves
 			// nothing listening.
-			specs := make([]forwardSpec, 0, len(forwardPorts))
+			specs := make([]connection.ForwardSpec, 0, len(forwardPorts))
 			for _, raw := range forwardPorts {
-				spec, err := parseForwardSpec(raw)
+				spec, err := connection.ParseForwardSpec(raw)
 				if err != nil {
 					return err
 				}
@@ -96,16 +88,18 @@ A hostname target needs --repo or --config to select the expected workload.`,
 			}
 
 			if forwardStdio != 0 {
-				stream, err := tun.dial(int(forwardStdio))
+				stream, err := tun.Dial(int(forwardStdio))
 				if err != nil {
 					return err
 				}
-				if err := splice(stdioConn{}, stream); err != nil {
-					return fmt.Errorf("tunnel to %s port %d: %w", tun.host, forwardStdio, err)
+				if err := connection.Splice(stdioConn{}, stream); err != nil {
+					return fmt.Errorf("tunnel to %s port %d: %w", target.host, forwardStdio, err)
 				}
 				return nil
 			}
-			return listenAndForward(tun, specs)
+			return connection.ListenAndForward(tun, specs, func(address net.Addr, remote int) {
+				fmt.Printf("Forwarding %s -> %s port %d\n", address, target.host, remote)
+			})
 		},
 	}
 	forwardCmd.Flags().StringArrayVarP(&forwardPorts, "local", "L", nil, "Forward [bind:]<local-port>:<enclave-port>; may be repeated")
@@ -114,66 +108,6 @@ A hostname target needs --repo or --config to select the expected workload.`,
 	forwardCmd.Flags().MarkHidden("sealed-to")
 	addTunnelFlags(forwardCmd)
 	return forwardCmd
-}
-
-type forwardSpec struct {
-	bind   string
-	local  int
-	remote int
-}
-
-func parseForwardSpec(raw string) (forwardSpec, error) {
-	spec := forwardSpec{bind: "127.0.0.1"}
-	fields := strings.Split(raw, ":")
-	if len(fields) == 3 {
-		spec.bind, fields = fields[0], fields[1:]
-		if spec.bind == "" {
-			return spec, fmt.Errorf("invalid forward %q: empty bind address; drop it to listen on 127.0.0.1, or name 0.0.0.0 to listen on every interface", raw)
-		}
-	}
-	if len(fields) != 2 {
-		return spec, fmt.Errorf("invalid forward %q: want [bind:]<local-port>:<enclave-port>", raw)
-	}
-	for i, into := range []*int{&spec.local, &spec.remote} {
-		port, err := strconv.Atoi(fields[i])
-		if err != nil || port < 1 || port > 65535 {
-			return spec, fmt.Errorf("invalid forward %q: port %q must be 1..65535", raw, fields[i])
-		}
-		*into = port
-	}
-	return spec, nil
-}
-
-func listenAndForward(tun *tunnel, specs []forwardSpec) error {
-	failed := make(chan error, len(specs))
-	for _, spec := range specs {
-		listener, err := net.Listen("tcp", net.JoinHostPort(spec.bind, strconv.Itoa(spec.local)))
-		if err != nil {
-			return err
-		}
-		defer listener.Close()
-		fmt.Printf("Forwarding %s -> %s port %d\n", listener.Addr(), tun.host, spec.remote)
-
-		go func() {
-			for {
-				local, err := listener.Accept()
-				if err != nil {
-					failed <- err
-					return
-				}
-				go func() {
-					stream, err := tun.dial(spec.remote)
-					if err != nil {
-						log.WithError(err).Error("opening tunnel")
-						local.Close()
-						return
-					}
-					splice(local, stream)
-				}()
-			}
-		}()
-	}
-	return <-failed
 }
 
 // tunnelTarget is the enclave a tunnel connects to, plus what a container
@@ -288,141 +222,15 @@ func resolveTunnelTarget(identifier string) (*tunnelTarget, error) {
 	}, nil
 }
 
-// tunnel opens TCP streams inside a verified enclave through the shim's HTTP/2
-// CONNECT handler. Each new stream requires unexpired v3 verification and rides
-// a connection pinned to the endorsed TLS key.
-type tunnel struct {
-	transport http.RoundTripper
-	host      string
-	apiKey    string
-}
-
 // Streaming bodies are not replayable, so key-error retries stay disabled.
-func newTunnel(target *tunnelTarget) (*tunnel, error) {
-	secure, err := newVerifiedClient(target.host, target.repo, target.sealedTo)
+func newTunnel(target *tunnelTarget) (*connection.Tunnel, error) {
+	input, err := verificationInput(target.repo, target.sealedTo)
 	if err != nil {
 		return nil, err
 	}
-	tun := &tunnel{host: target.host, apiKey: enclaveAPIKey(), transport: secure.Transport}
-	if err := checkDebugMode(tun, target); err != nil {
-		return nil, err
-	}
-	return tun, nil
-}
-
-// checkDebugMode refuses a tunnel into an enclave running the debug toolbox,
-// which gives anyone holding an injected SSH key a shell next to the workload.
-func checkDebugMode(tun *tunnel, target *tunnelTarget) error {
-	debug, err := target.debug, error(nil)
-	if !debug {
-		debug, err = tun.runsDebugToolbox()
-	}
-
-	var finding string
-	switch {
-	case debug:
-		finding = fmt.Sprintf("%s runs in debug mode", target.host)
-	case err != nil:
-		finding = fmt.Sprintf("cannot tell whether %s runs in debug mode (%v)", target.host, err)
-	default:
-		return nil
-	}
-
-	if !allowDebug {
-		return fmt.Errorf("%s: %s puts an interactive shell inside the enclave, so its confidentiality guarantees do not hold. Pass --allow-debug to tunnel in anyway",
-			finding, debugToolboxContainer)
-	}
-	log.Warnf("%s: anyone holding an injected SSH key has a shell inside the enclave", finding)
-	return nil
-}
-
-// runsDebugToolbox asks the enclave which containers it runs. The answer comes
-// over the pinned connection, so it is authentic to the attested enclave.
-func (t *tunnel) runsDebugToolbox() (bool, error) {
-	resp, err := (&http.Client{Transport: t.transport}).Get("https://" + t.host + "/.well-known/tinfoil-containers")
-	if err != nil {
-		return false, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return false, fmt.Errorf("GET /.well-known/tinfoil-containers: %s", resp.Status)
-	}
-
-	var status struct {
-		Containers []struct {
-			Name string `json:"name"`
-		} `json:"containers"`
-	}
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&status); err != nil {
-		return false, fmt.Errorf("decoding container status: %w", err)
-	}
-	for _, container := range status.Containers {
-		if container.Name == debugToolboxContainer {
-			return true, nil
-		}
-	}
-	return false, nil
-}
-
-func (t *tunnel) dial(port int) (tunnelStream, error) {
-	// The URL selects the attested HTTPS endpoint; CONNECT's authority
-	// selects the destination port inside the enclave.
-	endpoint := &url.URL{Scheme: "https", Host: t.host}
-	authority := net.JoinHostPort(endpoint.Hostname(), strconv.Itoa(port))
-	header := http.Header{}
-	if t.apiKey != "" {
-		header.Set("Authorization", "Bearer "+t.apiKey)
-	}
-
-	body, writer := io.Pipe()
-	resp, err := t.transport.RoundTrip(&http.Request{
-		Method:     http.MethodConnect,
-		URL:        endpoint,
-		Host:       authority,
-		Header:     header,
-		Body:       body,
-		Proto:      "HTTP/2.0",
-		ProtoMajor: 2,
+	return connection.NewTunnel(context.Background(), target.host, input, connection.TunnelOptions{
+		APIKey: enclaveAPIKey(), Debug: target.debug, AllowDebug: allowDebug,
 	})
-	if err != nil {
-		writer.Close()
-		return tunnelStream{}, fmt.Errorf("CONNECT %s: %w", authority, err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		detail, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		resp.Body.Close()
-		writer.Close()
-		return tunnelStream{}, fmt.Errorf("CONNECT %s: %s: %s", authority, resp.Status, strings.TrimSpace(string(detail)))
-	}
-	return tunnelStream{body: resp.Body, writer: writer}, nil
-}
-
-// tunnelStream is the client end of a CONNECT stream: the response body reads,
-// the request body writes.
-type tunnelStream struct {
-	body   io.ReadCloser
-	writer *io.PipeWriter
-}
-
-func (s tunnelStream) Read(p []byte) (int, error)  { return s.body.Read(p) }
-func (s tunnelStream) Write(p []byte) (int, error) { return s.writer.Write(p) }
-
-func (s tunnelStream) Close() error {
-	s.writer.Close()
-	return s.body.Close()
-}
-
-// splice pumps a local connection through a tunnel stream. Ending the request
-// body on a local half-close lets replies still in flight arrive.
-func splice(local io.ReadWriteCloser, stream tunnelStream) error {
-	go func() {
-		_, _ = io.Copy(stream, local)
-		stream.writer.Close()
-	}()
-	_, err := io.Copy(local, stream)
-	local.Close()
-	stream.Close()
-	return err
 }
 
 // stdioConn presents this process's stdin/stdout as one connection, so --stdio

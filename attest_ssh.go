@@ -3,8 +3,6 @@ package main
 import (
 	"bufio"
 	"context"
-	"crypto/x509"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -18,14 +16,11 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
-	"github.com/tinfoilsh/tinfoil-go/verify/document"
+	"github.com/tinfoilsh/tinfoil-cli/internal/connection"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/knownhosts"
 	"golang.org/x/term"
 )
-
-// attestedHostKeyID is the attested-keys declaration a workload serves as its sshd HostKey.
-const attestedHostKeyID = "host-ssh"
 
 // managedSSHHost forwards controlplane-assigned SSH ports to their enclaves.
 const managedSSHHost = "debug.tinfoil.sh"
@@ -163,44 +158,17 @@ func nativeSSHHost(target *tunnelTarget, override string) string {
 // host-ssh key, so a failed verification never falls back to unverified acceptance.
 func attestedHostKey(host, source, sealedTo string) (ssh.PublicKey, error) {
 	defer startConnectionProgress(os.Stderr, "Verifying attestation and SSH host key for "+host)()
-	secure, err := newVerifiedClient(host, source, sealedTo)
+	input, err := verificationInput(source, sealedTo)
 	if err != nil {
 		return nil, err
 	}
-	verified, err := secure.EnsureVerified(context.Background())
-	if err != nil {
-		return nil, fmt.Errorf("verifying %s: %w", host, err)
-	}
-	return endorsedHostKey(host, verified)
+	return connection.AttestedHostKey(context.Background(), host, input)
 }
 
-type attestedEvidence interface {
-	CryptoMaterialData(string, string) (string, bool)
-	FreshnessExpiresAt() time.Time
-}
+type attestedEvidence = connection.Evidence
 
 func endorsedHostKey(host string, verified attestedEvidence) (ssh.PublicKey, error) {
-	public, err := endorsedKey(host, verified, attestedHostKeyID)
-	if err != nil {
-		return nil, err
-	}
-	return ssh.NewPublicKey(public)
-}
-
-func endorsedKey(host string, verified attestedEvidence, id string) (any, error) {
-	data, ok := verified.CryptoMaterialData(id, document.KeySPKIV1Format)
-	if !ok {
-		return nil, fmt.Errorf("%s endorses no attested %q key", host, id)
-	}
-	der, err := hex.DecodeString(data)
-	if err != nil {
-		return nil, fmt.Errorf("attested %q key is not hex: %w", id, err)
-	}
-	public, err := x509.ParsePKIXPublicKey(der)
-	if err != nil {
-		return nil, fmt.Errorf("attested %q key is not SPKI: %w", id, err)
-	}
-	return public, nil
+	return connection.EndorsedHostKey(host, verified)
 }
 
 type sshProfile struct {

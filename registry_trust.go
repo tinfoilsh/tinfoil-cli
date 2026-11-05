@@ -266,6 +266,14 @@ func registryControlplaneURL() (string, error) {
 }
 
 func registrySigningOptions(source string) ([]verify.Option, error) {
+	ids, err := registryIDs(source)
+	if err != nil || len(ids) == 0 {
+		return nil, err
+	}
+	return []verify.Option{verify.WithConfigRegistryIDs(ids...)}, nil
+}
+
+func registryIDs(source string) ([]string, error) {
 	policy, err := loadConnectionPolicy()
 	if err != nil {
 		return nil, err
@@ -284,7 +292,7 @@ func registrySigningOptions(source string) ([]verify.Option, error) {
 	org, _, _ := strings.Cut(repository, "/")
 	for _, entry := range policy.Registries {
 		if entry.ControlplaneURL == controlplaneURL && slices.Contains(entry.Namespaces, "/"+org) {
-			return []verify.Option{verify.WithConfigRegistryIDs(entry.RegistryID)}, nil
+			return []string{entry.RegistryID}, nil
 		}
 	}
 	return nil, nil
