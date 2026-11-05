@@ -27,7 +27,7 @@ const (
 )
 
 func storageMetadataPath(scope storageScope, volume string) (string, error) {
-	service, err := newStorageService()
+	service, err := newStorageService(nil)
 	if err != nil {
 		return "", err
 	}
@@ -35,7 +35,7 @@ func storageMetadataPath(scope storageScope, volume string) (string, error) {
 }
 
 func loadStorageProfile(scope storageScope) (storageProfile, error) {
-	service, err := newStorageService()
+	service, err := newStorageService(nil)
 	if err != nil {
 		return storageProfile{}, err
 	}
@@ -43,7 +43,7 @@ func loadStorageProfile(scope storageScope) (storageProfile, error) {
 }
 
 func loadStorageReceipt(scope storageScope, volume string) (storageReceipt, error) {
-	service, err := newStorageService()
+	service, err := newStorageService(nil)
 	if err != nil {
 		return storageReceipt{}, err
 	}

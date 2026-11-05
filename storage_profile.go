@@ -4,8 +4,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"net/url"
-	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -42,12 +42,12 @@ func storageDirectory() (string, error) {
 	return filepath.Join(filepath.Dir(path), "storage"), nil
 }
 
-func newStorageService() (*autounlock.Service, error) {
+func newStorageService(input io.Reader) (*autounlock.Service, error) {
 	dir, err := storageDirectory()
 	if err != nil {
 		return nil, err
 	}
-	return autounlock.NewService(dir, os.Stdin), nil
+	return autounlock.NewService(dir, input), nil
 }
 
 func readStorageJSON(path string, out any) error {

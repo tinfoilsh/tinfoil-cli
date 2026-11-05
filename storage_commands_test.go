@@ -209,6 +209,26 @@ func TestTreesKeepVolumeFactoriesIndependent(t *testing.T) {
 	require.Zero(t, fixture.allocations, "custody setup failure must precede allocation")
 }
 
+func TestStorageArtifactsReadTheCommandInput(t *testing.T) {
+	commandState := newCommandFixture()
+	newStorageCPFixture(commandState, t)
+	configureStorageCLI(commandState, t)
+	flags := storageCLIArtifactFlags(t)
+	setStorageTestFlag(t, flags, "--config-file", "-")
+	const marker = "# invocation input\n"
+	fake := &fakeStorageAWS{}
+	root := newRootCommandWithDependencies(commandDependencies{
+		in: strings.NewReader(marker + storageTestConfig), out: io.Discard, err: io.Discard,
+		volumeStore: fakeStorageFactory(fake, bytes.NewReader(storageTestKey)),
+	})
+	root.SetArgs(append([]string{"volume", "create", "app-data", "--size", "30GiB", "--host", "inf13", "--auto-unlock"}, flags...))
+	require.NoError(t, root.Execute())
+	output, err := os.ReadFile(storageTestFlag(t, flags, "--config-out"))
+	require.NoError(t, err)
+	require.Contains(t, string(output), marker)
+	require.Equal(t, 1, fake.creates)
+}
+
 func TestStoragePartialFailureRetainsVolumeAndRecoversReadOnly(t *testing.T) {
 	commandState := newCommandFixture()
 

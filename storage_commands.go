@@ -70,7 +70,7 @@ func newProjectStorageCommand(newClient authenticatedClientFactory, outputOpts *
 		if err != nil {
 			return err
 		}
-		service, err := newStorageService()
+		service, err := newStorageService(cmd.InOrStdin())
 		if err != nil {
 			return err
 		}
@@ -139,7 +139,7 @@ func newVolumeAutoUnlockCommand(newClient authenticatedClientFactory, outputOpts
 		if err != nil {
 			return err
 		}
-		p, config, policy, err := storagePreflight(client, &o, true)
+		p, config, policy, err := storagePreflight(cmd.InOrStdin(), client, &o, true)
 		if err != nil {
 			return err
 		}
@@ -189,7 +189,7 @@ func newVolumeAutoUnlockCommand(newClient authenticatedClientFactory, outputOpts
 	return parent
 }
 
-func storagePreflight(client *cpClient, o *storageArtifactOptions, existing bool) (storageProfile, []byte, []byte, error) {
+func storagePreflight(input io.Reader, client *cpClient, o *storageArtifactOptions, existing bool) (storageProfile, []byte, []byte, error) {
 	var p storageProfile
 	if o.Project == "" {
 		return p, nil, nil, fmt.Errorf("--project is required for auto-unlock")
@@ -198,7 +198,7 @@ func storagePreflight(client *cpClient, o *storageArtifactOptions, existing bool
 	if err != nil {
 		return p, nil, nil, err
 	}
-	service, err := newStorageService()
+	service, err := newStorageService(input)
 	if err != nil {
 		return p, nil, nil, err
 	}
@@ -215,7 +215,7 @@ func runAutoUnlockVolumeCreate(newClient authenticatedClientFactory, outputOpts 
 		return err
 	}
 	o := storageOptions(cmd)
-	p, config, policy, err := storagePreflight(client, &o, false)
+	p, config, policy, err := storagePreflight(cmd.InOrStdin(), client, &o, false)
 	if err != nil {
 		return err
 	}
@@ -244,7 +244,7 @@ func configureVolumeStorage(outputOpts *outputOptions, cmd *cobra.Command, store
 			return err
 		}
 	}
-	service, err := newStorageService()
+	service, err := newStorageService(cmd.InOrStdin())
 	var r storageReceipt
 	if err != nil {
 		r = storageReceipt{Profile: p, VolumeID: strings.ToLower(v.ID), Mount: o.Mount, Generated: fresh, Phase: autounlock.PhaseAllocated}
@@ -278,7 +278,7 @@ func printStoragePrepared(outputOpts *outputOptions, out io.Writer, r storageRec
 }
 
 func volumeStorageStatus(scope storageScope, id string) (string, string, error) {
-	service, err := newStorageService()
+	service, err := newStorageService(nil)
 	if err != nil {
 		return "", "", err
 	}
