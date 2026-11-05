@@ -74,10 +74,14 @@ func bucketOwnedBy(bucket, account, user string) bool {
 	return match != nil && match[1] == hex.EncodeToString(digest[:])
 }
 
-var monitorCmd = &cobra.Command{
-	Use:     "monitor",
-	Aliases: []string{"monitors"},
-	Short:   "Manage the Monitor your sandboxes connect through",
+func newMonitorCommand() *cobra.Command {
+	monitorCmd := &cobra.Command{
+		Use:     "monitor",
+		Aliases: []string{"monitors"},
+		Short:   "Manage the Monitor your sandboxes connect through",
+	}
+
+	return monitorCmd
 }
 
 func currentScope() (accountScope, *cpClient, error) {
@@ -384,8 +388,7 @@ func openOwnerChannel(client *ssh.Client, dir, host, token string) (ssh.Channel,
 	return owner.OpenChannel(client, dir, host, token)
 }
 
-func init() {
-	rootCmd.AddCommand(monitorCmd)
+func newMonitorOpenCommand() *cobra.Command {
 	command := &cobra.Command{
 		Use: "open [id|name]", Short: "Unlock and forward the Monitor UI over attested SSH", Args: cobra.ExactArgs(1),
 		Long: "Also restores this device's sandbox connectivity.",
@@ -416,7 +419,7 @@ func init() {
 		},
 	}
 	addTrustDangerousFlag(command)
-	monitorCmd.AddCommand(command)
+	return command
 }
 
 func panelToken() string {

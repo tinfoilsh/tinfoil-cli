@@ -54,39 +54,53 @@ func workspaceSizeChoices(unit string) string {
 
 var sandboxYes bool
 
-func init() {
-	rootCmd.AddCommand(sandboxCmd)
-	sandboxCmd.AddCommand(sandboxStatusCmd, sandboxStartCmd, sandboxRestartCmd, sandboxStopCmd, sandboxDeleteCmd)
-	for _, cmd := range []*cobra.Command{sandboxStartCmd, sandboxRestartCmd} {
-		addTrustDangerousFlag(cmd)
+func newSandboxCommand() *cobra.Command {
+	sandboxCmd := &cobra.Command{
+		Use: "sandbox", Aliases: []string{"sandboxes"}, Short: "Manage your confidential sandboxes",
+	}
+	sandboxCmd.AddCommand(newSandboxStatusCommand(), newSandboxStartCommand(), newSandboxRestartCommand(), newSandboxStopCommand(), newSandboxDeleteCommand())
+	return sandboxCmd
+}
+
+func newSandboxStatusCommand() *cobra.Command {
+	sandboxStatusCmd := newManagedStatusCmd("sandbox")
+
+	return sandboxStatusCmd
+}
+
+func newSandboxStartCommand() *cobra.Command {
+	sandboxStartCmd := &cobra.Command{
+		Use: "start [id|name]", Short: "Start a sandbox and enroll this machine's keys",
+		Args: cobra.ExactArgs(1), RunE: runSandboxAction("start"),
+	}
+	addTrustDangerousFlag(sandboxStartCmd)
+	sandboxStartCmd.Flags().Bool("no-enroll", false, "Boot without unlocking or enrolling this machine's keys")
+	return sandboxStartCmd
+}
+func newSandboxRestartCommand() *cobra.Command {
+	sandboxRestartCmd := &cobra.Command{
+		Use: "restart [id|name]", Short: "Restart a sandbox and enroll this machine's keys",
+		Args: cobra.ExactArgs(1), RunE: runSandboxAction("restart"),
+	}
+	addTrustDangerousFlag(sandboxRestartCmd)
+	sandboxRestartCmd.Flags().Bool("no-enroll", false, "Boot without unlocking or enrolling this machine's keys")
+	return sandboxRestartCmd
+}
+func newSandboxStopCommand() *cobra.Command {
+	sandboxStopCmd := &cobra.Command{
+		Use: "stop [id|name]", Short: "Stop a sandbox, keeping its workspace",
+		Args: cobra.ExactArgs(1), RunE: runSandboxAction("stop"),
+	}
+
+	return sandboxStopCmd
+}
+func newSandboxDeleteCommand() *cobra.Command {
+	sandboxDeleteCmd := &cobra.Command{
+		Use: "delete [id|name]", Short: "Delete a sandbox and its workspace volume",
+		Args: cobra.ExactArgs(1), RunE: runSandboxAction("delete"),
 	}
 	sandboxDeleteCmd.Flags().BoolVar(&sandboxYes, "yes", false, "Skip the confirmation prompt")
-	for _, cmd := range []*cobra.Command{sandboxStartCmd, sandboxRestartCmd} {
-		cmd.Flags().Bool("no-enroll", false, "Boot without unlocking or enrolling this machine's keys")
-	}
-}
-
-var sandboxCmd = &cobra.Command{
-	Use: "sandbox", Aliases: []string{"sandboxes"}, Short: "Manage your confidential sandboxes",
-}
-
-var sandboxStatusCmd = newManagedStatusCmd("sandbox")
-
-var sandboxStartCmd = &cobra.Command{
-	Use: "start [id|name]", Short: "Start a sandbox and enroll this machine's keys",
-	Args: cobra.ExactArgs(1), RunE: runSandboxAction("start"),
-}
-var sandboxRestartCmd = &cobra.Command{
-	Use: "restart [id|name]", Short: "Restart a sandbox and enroll this machine's keys",
-	Args: cobra.ExactArgs(1), RunE: runSandboxAction("restart"),
-}
-var sandboxStopCmd = &cobra.Command{
-	Use: "stop [id|name]", Short: "Stop a sandbox, keeping its workspace",
-	Args: cobra.ExactArgs(1), RunE: runSandboxAction("stop"),
-}
-var sandboxDeleteCmd = &cobra.Command{
-	Use: "delete [id|name]", Short: "Delete a sandbox and its workspace volume",
-	Args: cobra.ExactArgs(1), RunE: runSandboxAction("delete"),
+	return sandboxDeleteCmd
 }
 
 func runSandboxAction(action string) func(*cobra.Command, []string) error {

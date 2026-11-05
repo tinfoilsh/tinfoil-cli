@@ -22,15 +22,6 @@ type storageStoreFactory func(context.Context, storageProfile) (*volumeKeyStore,
 
 var volumeStorageFactory storageStoreFactory = newVolumeKeyStore
 
-func init() {
-	projectCmd.AddCommand(newProjectStorageCommand())
-	volumeCmd.AddCommand(newVolumeAutoUnlockCommand(func(ctx context.Context, p storageProfile) (*volumeKeyStore, error) {
-		return volumeStorageFactory(ctx, p)
-	}))
-	volumeCreateCmd.Flags().Bool("auto-unlock", false, "Prepare private AWS-backed automatic unlock for this new disk")
-	addStorageArtifactFlags(volumeCreateCmd, false)
-}
-
 func newProjectStorageCommand() *cobra.Command {
 	parent := &cobra.Command{Use: "storage", Short: "Configure customer-owned project storage"}
 	cmd := &cobra.Command{Use: "configure [id|owner/repo]", Short: "Save a local AWS keyserver profile without provisioning infrastructure", Args: cobra.MaximumNArgs(1)}

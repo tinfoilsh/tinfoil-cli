@@ -30,13 +30,6 @@ import (
 	"golang.org/x/term"
 )
 
-func init() {
-	rootCmd.AddCommand(loginCmd, logoutCmd, whoamiCmd)
-	loginCmd.Flags().String("url", "", "Controlplane URL for --api-key (default https://api.tinfoil.sh)")
-	loginCmd.Flags().String("api-key", "", "Sign in with an admin API key (admin_...) instead of the browser")
-	loginCmd.Flags().Bool("sync", false, "Sync your sandbox keys to this machine")
-}
-
 const (
 	loginListenPort    = "49152"
 	loginCallbackHost  = "localhost:" + loginListenPort
@@ -49,11 +42,12 @@ const (
 	maxOAuthReplyBytes = 64 << 10
 )
 
-var loginCmd = &cobra.Command{
-	Use:   "login",
-	Short: "Sign in to Tinfoil",
-	Long:  "TINFOIL_ADMIN_KEY (or an admin_ key in TINFOIL_API_KEY) overrides a saved admin key; TINFOIL_CONTROLPLANE_URL overrides its URL.",
-	Example: `  Sign in with your browser
+func newLoginCommand() *cobra.Command {
+	loginCmd := &cobra.Command{
+		Use:   "login",
+		Short: "Sign in to Tinfoil",
+		Long:  "TINFOIL_ADMIN_KEY (or an admin_ key in TINFOIL_API_KEY) overrides a saved admin key; TINFOIL_CONTROLPLANE_URL overrides its URL.",
+		Example: `  Sign in with your browser
   tinfoil login
 
   Sign in and sync your sandbox keys to this machine
@@ -61,117 +55,130 @@ var loginCmd = &cobra.Command{
 
   Store an admin API key for automation
   tinfoil login --api-key admin_...`,
-	RunE: func(cmd *cobra.Command, args []string) error {
-		urlFlag, _ := cmd.Flags().GetString("url")
-		keyFlag, _ := cmd.Flags().GetString("api-key")
-		if keyFlag == "" && urlFlag == "" {
-			sync, _ := cmd.Flags().GetBool("sync")
-			return clerkLogin(cmd, sync)
-		}
+		RunE: func(cmd *cobra.Command, args []string) error {
+			urlFlag, _ := cmd.Flags().GetString("url")
+			keyFlag, _ := cmd.Flags().GetString("api-key")
+			if keyFlag == "" && urlFlag == "" {
+				sync, _ := cmd.Flags().GetBool("sync")
+				return clerkLogin(cmd, sync)
+			}
 
-		cfg, _, err := loadConfig()
-		if err != nil {
-			return err
-		}
-
-		if urlFlag != "" {
-			cfg.ControlplaneURL = strings.TrimRight(urlFlag, "/")
-		}
-		if cfg.ControlplaneURL == "" {
-			cfg.ControlplaneURL = defaultControlplaneURL
-		}
-		if err := validateControlplaneURL(cfg.ControlplaneURL); err != nil {
-			return err
-		}
-
-		key := strings.TrimSpace(keyFlag)
-		if key == "" {
-			key, err = promptSecret("api key", fmt.Sprintf("Enter admin API key for %s: ", cfg.ControlplaneURL))
+			cfg, _, err := loadConfig()
 			if err != nil {
 				return err
 			}
-		}
-		if key == "" {
-			return errors.New("api key is required")
-		}
-		if !strings.HasPrefix(key, adminKeyPrefix) {
-			return fmt.Errorf("expected an admin key (prefix %s), got %q", adminKeyPrefix, redactKey(key))
-		}
 
-		cfg.APIKey = key
+			if urlFlag != "" {
+				cfg.ControlplaneURL = strings.TrimRight(urlFlag, "/")
+			}
+			if cfg.ControlplaneURL == "" {
+				cfg.ControlplaneURL = defaultControlplaneURL
+			}
+			if err := validateControlplaneURL(cfg.ControlplaneURL); err != nil {
+				return err
+			}
 
-		identity, err := authenticatedContext(cfg)
-		if err != nil {
-			return fmt.Errorf("credential check failed: %w", err)
-		}
+			key := strings.TrimSpace(keyFlag)
+			if key == "" {
+				key, err = promptSecret("api key", fmt.Sprintf("Enter admin API key for %s: ", cfg.ControlplaneURL))
+				if err != nil {
+					return err
+				}
+			}
+			if key == "" {
+				return errors.New("api key is required")
+			}
+			if !strings.HasPrefix(key, adminKeyPrefix) {
+				return fmt.Errorf("expected an admin key (prefix %s), got %q", adminKeyPrefix, redactKey(key))
+			}
 
-		path, err := saveConfig(cfg)
-		if err != nil {
-			return err
-		}
-		fmt.Printf("Credentials saved to %s\n", path)
-		printAuthContext("Saved credential", cfg, "file: "+path, identity)
-		effective, _, err := loadConfig()
-		if err != nil {
-			return err
-		}
-		if credentialEnvSource() != "" || effective.ControlplaneURL != cfg.ControlplaneURL {
-			fmt.Fprintln(os.Stderr, "WARNING: environment overrides remain active; the saved credential is not necessarily the effective login.")
-			identity, err = authenticatedContext(effective)
+			cfg.APIKey = key
+
+			identity, err := authenticatedContext(cfg)
 			if err != nil {
-				return fmt.Errorf("credentials saved, but effective environment login could not be verified: %w", err)
+				return fmt.Errorf("credential check failed: %w", err)
 			}
-		}
-		printAuthContext("Effective login", effective, credentialSource(), identity)
-		offerRegistryEnrollment(cmd)
-		return nil
-	},
+
+			path, err := saveConfig(cfg)
+			if err != nil {
+				return err
+			}
+			fmt.Printf("Credentials saved to %s\n", path)
+			printAuthContext("Saved credential", cfg, "file: "+path, identity)
+			effective, _, err := loadConfig()
+			if err != nil {
+				return err
+			}
+			if credentialEnvSource() != "" || effective.ControlplaneURL != cfg.ControlplaneURL {
+				fmt.Fprintln(os.Stderr, "WARNING: environment overrides remain active; the saved credential is not necessarily the effective login.")
+				identity, err = authenticatedContext(effective)
+				if err != nil {
+					return fmt.Errorf("credentials saved, but effective environment login could not be verified: %w", err)
+				}
+			}
+			printAuthContext("Effective login", effective, credentialSource(), identity)
+			offerRegistryEnrollment(cmd)
+			return nil
+		},
+	}
+	loginCmd.Flags().String("url", "", "Controlplane URL for --api-key (default https://api.tinfoil.sh)")
+	loginCmd.Flags().String("api-key", "", "Sign in with an admin API key (admin_...) instead of the browser")
+	loginCmd.Flags().Bool("sync", false, "Sync your sandbox keys to this machine")
+	return loginCmd
 }
 
-var logoutCmd = &cobra.Command{
-	Use:   "logout",
-	Short: "Sign out and remove saved credentials and synced keys",
-	Long:  "Your own SSH keys and locally generated resource keys are kept.",
-	RunE: func(cmd *cobra.Command, args []string) error {
-		clerkErr := clerkLogout(cmd.OutOrStdout())
-		path, removed, err := deleteConfig()
-		switch {
-		case err != nil:
-		case !removed:
-			fmt.Printf("No saved admin key to remove (%s did not exist)\n", path)
-		default:
-			fmt.Printf("Removed %s\n", path)
-		}
-		if source := credentialEnvSource(); source != "" {
-			fmt.Fprintf(os.Stderr, "WARNING: %s is still active; logout removes only the saved file. Unset %s and any admin key in %s to stop using environment credentials.\n", source, envAdminKey, envAPIKey)
-		}
-		return errors.Join(clerkErr, err)
-	},
+func newLogoutCommand() *cobra.Command {
+	logoutCmd := &cobra.Command{
+		Use:   "logout",
+		Short: "Sign out and remove saved credentials and synced keys",
+		Long:  "Your own SSH keys and locally generated resource keys are kept.",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			clerkErr := clerkLogout(cmd.OutOrStdout())
+			path, removed, err := deleteConfig()
+			switch {
+			case err != nil:
+			case !removed:
+				fmt.Printf("No saved admin key to remove (%s did not exist)\n", path)
+			default:
+				fmt.Printf("Removed %s\n", path)
+			}
+			if source := credentialEnvSource(); source != "" {
+				fmt.Fprintf(os.Stderr, "WARNING: %s is still active; logout removes only the saved file. Unset %s and any admin key in %s to stop using environment credentials.\n", source, envAdminKey, envAPIKey)
+			}
+			return errors.Join(clerkErr, err)
+		},
+	}
+
+	return logoutCmd
 }
 
-var whoamiCmd = &cobra.Command{
-	Use:   "whoami",
-	Short: "Show the current login and organization",
-	RunE: func(cmd *cobra.Command, args []string) error {
-		cfg, err := requireAuth()
-		if err != nil {
-			return err
-		}
-
-		identity, err := authenticatedContext(cfg)
-		if err != nil {
-			return fmt.Errorf("verifying credentials: %w", err)
-		}
-		source := credentialSource()
-		if cfg.login != nil {
-			source = "Clerk login"
-			if dek, err := syncedKey(cfg.login, identity.UserID); err != nil || dek == nil {
-				source += " (sandbox keys not synced)"
+func newWhoamiCommand() *cobra.Command {
+	whoamiCmd := &cobra.Command{
+		Use:   "whoami",
+		Short: "Show the current login and organization",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := requireAuth()
+			if err != nil {
+				return err
 			}
-		}
-		printAuthContext("Effective login", cfg, source, identity)
-		return nil
-	},
+
+			identity, err := authenticatedContext(cfg)
+			if err != nil {
+				return fmt.Errorf("verifying credentials: %w", err)
+			}
+			source := credentialSource()
+			if cfg.login != nil {
+				source = "Clerk login"
+				if dek, err := syncedKey(cfg.login, identity.UserID); err != nil || dek == nil {
+					source += " (sandbox keys not synced)"
+				}
+			}
+			printAuthContext("Effective login", cfg, source, identity)
+			return nil
+		},
+	}
+
+	return whoamiCmd
 }
 
 func promptSecret(what, prompt string) (string, error) {

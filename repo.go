@@ -84,227 +84,255 @@ var (
 	repoStatusVersion string
 )
 
-func init() {
-	rootCmd.AddCommand(repoCmd)
+func newRepoCommand() *cobra.Command {
+	repoCmd := &cobra.Command{
+		Use:     "repo",
+		Aliases: []string{"repository", "repositories"},
+		Short:   "Manage container config repositories",
+	}
 	repoCmd.PersistentFlags().StringVarP(&outputFormat, "output", "o", "table", "Output format: table or json")
-	repoCmd.AddCommand(repoConfigCmd, repoPRCmd, repoBuildCmd)
-	repoConfigCmd.AddCommand(repoConfigGetCmd, repoConfigPRCmd)
-	repoPRCmd.AddCommand(repoPRStatusCmd)
-	repoBuildCmd.AddCommand(repoBuildInfoCmd, repoBuildRunCmd, repoBuildStatusCmd)
+	repoCmd.AddCommand(newRepoConfigCommand(), newRepoPRCommand(), newRepoBuildCommand())
+	repoCmd.AddCommand(newRepoSecretCommand())
+	return repoCmd
+}
 
+func newRepoConfigCommand() *cobra.Command {
+	repoConfigCmd := &cobra.Command{
+		Use:   "config",
+		Short: "Read or propose changes to tinfoil-config.yml",
+	}
+	repoConfigCmd.AddCommand(newRepoConfigGetCommand(), newRepoConfigPRCommand())
+	return repoConfigCmd
+}
+
+func newRepoConfigGetCommand() *cobra.Command {
+	repoConfigGetCmd := &cobra.Command{
+		Use:   "get [owner/repo]",
+		Short: "Fetch a repo's tinfoil-config.yml",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if repoConfigRaw && outputFormat == "json" {
+				return fmt.Errorf("--raw and --output json cannot be used together")
+			}
+			repository, client, err := repositoryCommand(args[0])
+			if err != nil {
+				return err
+			}
+			var response repoConfigResponse
+			if _, err := client.do("GET", repository.apiPath()+"/config", nil, nil, &response); err != nil {
+				return err
+			}
+			if outputFormat == "json" {
+				return printJSON(response)
+			}
+			if repoConfigRaw {
+				fmt.Print(response.Raw)
+				return nil
+			}
+			fmt.Printf("Repository:       %s/%s\n", repository.owner, repository.name)
+			fmt.Printf("Default branch:   %s\n", response.DefaultBranch)
+			fmt.Printf("Config exists:    %v\n", response.Exists)
+			fmt.Printf("Release workflow: %v\n", response.HasBuildWorkflow)
+			if response.Raw != "" {
+				fmt.Printf("\n%s", response.Raw)
+			}
+			return nil
+		},
+	}
 	repoConfigGetCmd.Flags().BoolVar(&repoConfigRaw, "raw", false, "Print only the raw tinfoil-config.yml")
+	return repoConfigGetCmd
+}
+
+func newRepoConfigPRCommand() *cobra.Command {
+	repoConfigPRCmd := &cobra.Command{
+		Use:   "pr [owner/repo]",
+		Short: "Open a pull request with a local tinfoil-config.yml",
+		Long:  "The repository is public, so keep secret values out of the config.",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			repository, client, err := repositoryCommand(args[0])
+			if err != nil {
+				return err
+			}
+			raw, err := readConfigInput(repoConfigFile)
+			if err != nil {
+				return err
+			}
+			body := map[string]any{"raw": raw}
+			if repoPRBody != "" {
+				body["pr_body"] = repoPRBody
+			}
+			var response repoConfigPRResponse
+			if _, err := client.do("POST", repository.apiPath()+"/config/pr", nil, body, &response); err != nil {
+				return err
+			}
+			if outputFormat == "json" {
+				return printJSON(response)
+			}
+			fmt.Printf("Opened pull request #%d: %s\n", response.PRNumber, response.PRURL)
+			fmt.Printf("Branch: %s\n", response.Branch)
+			fmt.Println("Merge this pull request before publishing a release; opening it does not change the default branch.")
+			fmt.Printf("Check merge status: tinfoil repo pr status %s/%s %d\n", repository.owner, repository.name, response.PRNumber)
+			return nil
+		},
+	}
 	repoConfigPRCmd.Flags().StringVar(&repoConfigFile, "file", "", "Path to tinfoil-config.yml; use - for stdin")
 	repoConfigPRCmd.Flags().StringVar(&repoPRBody, "body", "", "Optional pull request description")
+	_ = repoConfigPRCmd.MarkFlagRequired("file")
+	return repoConfigPRCmd
+}
+
+func newRepoPRCommand() *cobra.Command {
+	repoPRCmd := &cobra.Command{
+		Use:   "pr",
+		Short: "Inspect config pull requests",
+	}
+	repoPRCmd.AddCommand(newRepoPRStatusCommand())
+	return repoPRCmd
+}
+
+func newRepoPRStatusCommand() *cobra.Command {
+	repoPRStatusCmd := &cobra.Command{
+		Use:   "status [owner/repo] [number]",
+		Short: "Show the status of a config pull request",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			number, err := strconv.Atoi(args[1])
+			if err != nil || number <= 0 {
+				return fmt.Errorf("pull request number must be a positive integer")
+			}
+			repository, client, err := repositoryCommand(args[0])
+			if err != nil {
+				return err
+			}
+			var response repoPullResponse
+			path := repository.apiPath() + "/pulls/" + strconv.Itoa(number)
+			if _, err := client.do("GET", path, nil, nil, &response); err != nil {
+				return err
+			}
+			if outputFormat == "json" {
+				return printJSON(response)
+			}
+			fmt.Printf("Pull request: #%d\n", response.PRNumber)
+			fmt.Printf("State:        %s\n", response.State)
+			fmt.Printf("Merged:       %v\n", response.Merged)
+			fmt.Printf("URL:          %s\n", response.PRURL)
+			return nil
+		},
+	}
+
+	return repoPRStatusCmd
+}
+
+func newRepoBuildCommand() *cobra.Command {
+	repoBuildCmd := &cobra.Command{
+		Use:   "build",
+		Short: "Inspect or trigger the Tinfoil Release workflow",
+	}
+	repoBuildCmd.AddCommand(newRepoBuildInfoCommand(), newRepoBuildRunCommand(), newRepoBuildStatusCommand())
+	return repoBuildCmd
+}
+
+func newRepoBuildInfoCommand() *cobra.Command {
+	repoBuildInfoCmd := &cobra.Command{
+		Use:   "info [owner/repo]",
+		Short: "Show tags, published releases, and the suggested next version",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			repository, client, err := repositoryCommand(args[0])
+			if err != nil {
+				return err
+			}
+			var response repoBuildInfoResponse
+			if _, err := client.do("GET", repository.apiPath()+"/build/info", nil, nil, &response); err != nil {
+				return err
+			}
+			if outputFormat == "json" {
+				return printJSON(response)
+			}
+			latest := response.LatestTag
+			if latest == "" {
+				latest = "-"
+			}
+			fmt.Printf("Latest tag:             %s\n", latest)
+			fmt.Printf("Suggested next version: %s\n", response.SuggestedNextVersion)
+			if response.LatestReleaseTag == "" {
+				fmt.Println("Latest GitHub release:  none published")
+			} else {
+				fmt.Printf("Latest GitHub release:  %s\n", response.LatestReleaseTag)
+			}
+			for _, release := range response.Releases {
+				fmt.Printf("Published release:     %s at %s (prerelease=%t) %s\n", release.TagName, release.PublishedAt, release.Prerelease, release.HTMLURL)
+			}
+			fmt.Println("A tag alone is not deployable. Wait for both Tinfoil Release and Build & Publish to succeed and for the same tag's release to be published.")
+			return nil
+		},
+	}
+
+	return repoBuildInfoCmd
+}
+
+func newRepoBuildRunCommand() *cobra.Command {
+	repoBuildRunCmd := &cobra.Command{
+		Use:   "run [owner/repo]",
+		Short: "Trigger the Tinfoil Release workflow",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			repository, client, err := repositoryCommand(args[0])
+			if err != nil {
+				return err
+			}
+			var response repoBuildResponse
+			body := map[string]string{"version": repoVersion}
+			if _, err := client.do("POST", repository.apiPath()+"/build", nil, body, &response); err != nil {
+				return err
+			}
+			if outputFormat == "json" {
+				return printJSON(response)
+			}
+			fmt.Printf("Queued release %s; not yet deployable.\n", response.Version)
+			fmt.Printf("GitHub Actions: %s\n", response.WorkflowRunURL)
+			fmt.Printf("All workflows (including Build & Publish): https://github.com/%s/%s/actions\n", repository.owner, repository.name)
+			fmt.Printf("Check status (read-only): tinfoil repo build status %s/%s --version %s\n", repository.owner, repository.name, shellQuote(response.Version))
+			fmt.Println("Wait for both Tinfoil Release and Build & Publish to succeed, then confirm the same tag is published with repo build info before creating a container.")
+			return nil
+		},
+	}
 	repoBuildRunCmd.Flags().StringVar(&repoVersion, "version", "", "Release version (for example v1.2.3)")
+	_ = repoBuildRunCmd.MarkFlagRequired("version")
+	return repoBuildRunCmd
+}
+
+func newRepoBuildStatusCommand() *cobra.Command {
+	repoBuildStatusCmd := &cobra.Command{
+		Use:   "status [owner/repo]",
+		Short: "Check a queued release workflow without starting a build",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			repository, client, err := repositoryCommand(args[0])
+			if err != nil {
+				return err
+			}
+			var response repoBuildStatusResponse
+			if _, err := client.do("GET", repository.apiPath()+"/build/status", url.Values{"version": {repoStatusVersion}}, nil, &response); err != nil {
+				return err
+			}
+			if outputFormat == "json" {
+				return printJSON(response)
+			}
+			if response.Run == nil {
+				fmt.Printf("Release %s: waiting for workflow visibility; not yet deployable.\n", response.Version)
+			} else {
+				fmt.Printf("Release %s: %s (conclusion: %s)\nGitHub Actions: %s\n", response.Version, response.Run.Status, response.Run.Conclusion, response.Run.HTMLURL)
+			}
+			fmt.Printf("Confirm Build & Publish also succeeds, then check the published tag: tinfoil repo build info %s/%s\n", repository.owner, repository.name)
+			fmt.Printf("All workflows: https://github.com/%s/%s/actions\n", repository.owner, repository.name)
+			return nil
+		},
+	}
 	repoBuildStatusCmd.Flags().StringVar(&repoStatusVersion, "version", "", "Dispatched release version [required]")
 	_ = repoBuildStatusCmd.MarkFlagRequired("version")
-	_ = repoConfigPRCmd.MarkFlagRequired("file")
-	_ = repoBuildRunCmd.MarkFlagRequired("version")
-}
-
-var repoCmd = &cobra.Command{
-	Use:     "repo",
-	Aliases: []string{"repository", "repositories"},
-	Short:   "Manage container config repositories",
-}
-
-var repoConfigCmd = &cobra.Command{
-	Use:   "config",
-	Short: "Read or propose changes to tinfoil-config.yml",
-}
-
-var repoConfigGetCmd = &cobra.Command{
-	Use:   "get [owner/repo]",
-	Short: "Fetch a repo's tinfoil-config.yml",
-	Args:  cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		if repoConfigRaw && outputFormat == "json" {
-			return fmt.Errorf("--raw and --output json cannot be used together")
-		}
-		repository, client, err := repositoryCommand(args[0])
-		if err != nil {
-			return err
-		}
-		var response repoConfigResponse
-		if _, err := client.do("GET", repository.apiPath()+"/config", nil, nil, &response); err != nil {
-			return err
-		}
-		if outputFormat == "json" {
-			return printJSON(response)
-		}
-		if repoConfigRaw {
-			fmt.Print(response.Raw)
-			return nil
-		}
-		fmt.Printf("Repository:       %s/%s\n", repository.owner, repository.name)
-		fmt.Printf("Default branch:   %s\n", response.DefaultBranch)
-		fmt.Printf("Config exists:    %v\n", response.Exists)
-		fmt.Printf("Release workflow: %v\n", response.HasBuildWorkflow)
-		if response.Raw != "" {
-			fmt.Printf("\n%s", response.Raw)
-		}
-		return nil
-	},
-}
-
-var repoConfigPRCmd = &cobra.Command{
-	Use:   "pr [owner/repo]",
-	Short: "Open a pull request with a local tinfoil-config.yml",
-	Long:  "The repository is public, so keep secret values out of the config.",
-	Args:  cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		repository, client, err := repositoryCommand(args[0])
-		if err != nil {
-			return err
-		}
-		raw, err := readConfigInput(repoConfigFile)
-		if err != nil {
-			return err
-		}
-		body := map[string]any{"raw": raw}
-		if repoPRBody != "" {
-			body["pr_body"] = repoPRBody
-		}
-		var response repoConfigPRResponse
-		if _, err := client.do("POST", repository.apiPath()+"/config/pr", nil, body, &response); err != nil {
-			return err
-		}
-		if outputFormat == "json" {
-			return printJSON(response)
-		}
-		fmt.Printf("Opened pull request #%d: %s\n", response.PRNumber, response.PRURL)
-		fmt.Printf("Branch: %s\n", response.Branch)
-		fmt.Println("Merge this pull request before publishing a release; opening it does not change the default branch.")
-		fmt.Printf("Check merge status: tinfoil repo pr status %s/%s %d\n", repository.owner, repository.name, response.PRNumber)
-		return nil
-	},
-}
-
-var repoPRCmd = &cobra.Command{
-	Use:   "pr",
-	Short: "Inspect config pull requests",
-}
-
-var repoPRStatusCmd = &cobra.Command{
-	Use:   "status [owner/repo] [number]",
-	Short: "Show the status of a config pull request",
-	Args:  cobra.ExactArgs(2),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		number, err := strconv.Atoi(args[1])
-		if err != nil || number <= 0 {
-			return fmt.Errorf("pull request number must be a positive integer")
-		}
-		repository, client, err := repositoryCommand(args[0])
-		if err != nil {
-			return err
-		}
-		var response repoPullResponse
-		path := repository.apiPath() + "/pulls/" + strconv.Itoa(number)
-		if _, err := client.do("GET", path, nil, nil, &response); err != nil {
-			return err
-		}
-		if outputFormat == "json" {
-			return printJSON(response)
-		}
-		fmt.Printf("Pull request: #%d\n", response.PRNumber)
-		fmt.Printf("State:        %s\n", response.State)
-		fmt.Printf("Merged:       %v\n", response.Merged)
-		fmt.Printf("URL:          %s\n", response.PRURL)
-		return nil
-	},
-}
-
-var repoBuildCmd = &cobra.Command{
-	Use:   "build",
-	Short: "Inspect or trigger the Tinfoil Release workflow",
-}
-
-var repoBuildInfoCmd = &cobra.Command{
-	Use:   "info [owner/repo]",
-	Short: "Show tags, published releases, and the suggested next version",
-	Args:  cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		repository, client, err := repositoryCommand(args[0])
-		if err != nil {
-			return err
-		}
-		var response repoBuildInfoResponse
-		if _, err := client.do("GET", repository.apiPath()+"/build/info", nil, nil, &response); err != nil {
-			return err
-		}
-		if outputFormat == "json" {
-			return printJSON(response)
-		}
-		latest := response.LatestTag
-		if latest == "" {
-			latest = "-"
-		}
-		fmt.Printf("Latest tag:             %s\n", latest)
-		fmt.Printf("Suggested next version: %s\n", response.SuggestedNextVersion)
-		if response.LatestReleaseTag == "" {
-			fmt.Println("Latest GitHub release:  none published")
-		} else {
-			fmt.Printf("Latest GitHub release:  %s\n", response.LatestReleaseTag)
-		}
-		for _, release := range response.Releases {
-			fmt.Printf("Published release:     %s at %s (prerelease=%t) %s\n", release.TagName, release.PublishedAt, release.Prerelease, release.HTMLURL)
-		}
-		fmt.Println("A tag alone is not deployable. Wait for both Tinfoil Release and Build & Publish to succeed and for the same tag's release to be published.")
-		return nil
-	},
-}
-
-var repoBuildRunCmd = &cobra.Command{
-	Use:   "run [owner/repo]",
-	Short: "Trigger the Tinfoil Release workflow",
-	Args:  cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		repository, client, err := repositoryCommand(args[0])
-		if err != nil {
-			return err
-		}
-		var response repoBuildResponse
-		body := map[string]string{"version": repoVersion}
-		if _, err := client.do("POST", repository.apiPath()+"/build", nil, body, &response); err != nil {
-			return err
-		}
-		if outputFormat == "json" {
-			return printJSON(response)
-		}
-		fmt.Printf("Queued release %s; not yet deployable.\n", response.Version)
-		fmt.Printf("GitHub Actions: %s\n", response.WorkflowRunURL)
-		fmt.Printf("All workflows (including Build & Publish): https://github.com/%s/%s/actions\n", repository.owner, repository.name)
-		fmt.Printf("Check status (read-only): tinfoil repo build status %s/%s --version %s\n", repository.owner, repository.name, shellQuote(response.Version))
-		fmt.Println("Wait for both Tinfoil Release and Build & Publish to succeed, then confirm the same tag is published with repo build info before creating a container.")
-		return nil
-	},
-}
-
-var repoBuildStatusCmd = &cobra.Command{
-	Use:   "status [owner/repo]",
-	Short: "Check a queued release workflow without starting a build",
-	Args:  cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		repository, client, err := repositoryCommand(args[0])
-		if err != nil {
-			return err
-		}
-		var response repoBuildStatusResponse
-		if _, err := client.do("GET", repository.apiPath()+"/build/status", url.Values{"version": {repoStatusVersion}}, nil, &response); err != nil {
-			return err
-		}
-		if outputFormat == "json" {
-			return printJSON(response)
-		}
-		if response.Run == nil {
-			fmt.Printf("Release %s: waiting for workflow visibility; not yet deployable.\n", response.Version)
-		} else {
-			fmt.Printf("Release %s: %s (conclusion: %s)\nGitHub Actions: %s\n", response.Version, response.Run.Status, response.Run.Conclusion, response.Run.HTMLURL)
-		}
-		fmt.Printf("Confirm Build & Publish also succeeds, then check the published tag: tinfoil repo build info %s/%s\n", repository.owner, repository.name)
-		fmt.Printf("All workflows: https://github.com/%s/%s/actions\n", repository.owner, repository.name)
-		return nil
-	},
+	return repoBuildStatusCmd
 }
 
 type repositoryRef struct {

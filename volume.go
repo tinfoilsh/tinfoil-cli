@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -58,239 +59,265 @@ var (
 	volumeYes           bool
 )
 
-func init() {
-	rootCmd.AddCommand(volumeCmd)
+func newVolumeCommand() *cobra.Command {
+	volumeCmd := &cobra.Command{
+		Use:     "volume",
+		Aliases: []string{"volumes"},
+		Short:   "Manage persistent volumes for containers and sandboxes",
+	}
+	volumeCmd.AddCommand(newVolumeAutoUnlockCommand(func(ctx context.Context, p storageProfile) (*volumeKeyStore, error) {
+		return volumeStorageFactory(ctx, p)
+	}))
 	volumeCmd.PersistentFlags().StringVarP(&outputFormat, "output", "o", "table", "Output format: table or json")
+	volumeCmd.AddCommand(newVolumeListCommand(), newVolumeGetCommand(), newVolumeCreateCommand(), newVolumeRenameCommand(), newVolumeAttachCommand(), newVolumeDetachCommand(), newVolumeDeleteCommand())
+	return volumeCmd
+}
 
-	volumeCmd.AddCommand(volumeListCmd, volumeGetCmd, volumeCreateCmd, volumeRenameCmd, volumeAttachCmd, volumeDetachCmd, volumeDeleteCmd)
+func newVolumeListCommand() *cobra.Command {
+	volumeListCmd := &cobra.Command{
+		Use:     "list",
+		Aliases: []string{"ls"},
+		Short:   "List volumes in the current organization",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			client, err := authedClient()
+			if err != nil {
+				return err
+			}
+			var raw json.RawMessage
+			if _, err := client.do("GET", "/api/volumes", nil, nil, &raw); err != nil {
+				return err
+			}
+			if outputFormat == "json" {
+				os.Stdout.Write(prettyJSON(raw))
+				fmt.Println()
+				return nil
+			}
+			var list volumeList
+			if err := json.Unmarshal(raw, &list); err != nil {
+				return fmt.Errorf("decoding volumes: %w", err)
+			}
+			return renderVolumes(list)
+		},
+	}
 
+	return volumeListCmd
+}
+
+func newVolumeGetCommand() *cobra.Command {
+	volumeGetCmd := &cobra.Command{
+		Use:   "get [id|name]",
+		Short: "Show a single volume",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			client, err := authedClient()
+			if err != nil {
+				return err
+			}
+			v, err := lookupVolume(client, args[0])
+			if err != nil {
+				return err
+			}
+			return renderVolume(*v)
+		},
+	}
+
+	return volumeGetCmd
+}
+
+func newVolumeCreateCommand() *cobra.Command {
+	volumeCreateCmd := &cobra.Command{
+		Use:   "create [name]",
+		Short: "Create an empty volume on a host",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			autoUnlock, _ := cmd.Flags().GetBool("auto-unlock")
+			if autoUnlock && volumeCreateSandbox {
+				return errors.New("--auto-unlock does not apply to sandbox volumes, which are unlocked with their owner's credentials")
+			}
+			if autoUnlock {
+				return runAutoUnlockVolumeCreate(cmd, args[0], volumeStorageFactory)
+			}
+			for _, flag := range []string{"project", "mount", "tag", "domain", "config-file", "config-out", "policy-file", "policy-out"} {
+				if cmd.Flags().Changed(flag) {
+					return fmt.Errorf("--%s requires --auto-unlock", flag)
+				}
+			}
+			size, err := parseSize(volumeCreateSize)
+			if err != nil {
+				return fmt.Errorf("--size: %w", err)
+			}
+			if volumeCreateSandbox && !isWorkspaceSize(size) {
+				return fmt.Errorf("--size for a sandbox volume must be %s", workspaceSizeChoices("GB"))
+			}
+			client, err := authedClient()
+			if err != nil {
+				return err
+			}
+			body := map[string]any{"name": args[0], "size_bytes": size}
+			var host *hostInfo
+			// Controlplane places a sandbox volume on a sandbox host unless one
+			// is chosen.
+			if !volumeCreateSandbox || volumeCreateHost != "" {
+				hosts, err := listHosts(client)
+				if err != nil {
+					return err
+				}
+				host, err = pickVolumeHost(hosts, volumeCreateHost)
+				if err != nil {
+					return err
+				}
+				if volumeCreateHost == "" {
+					fmt.Fprintf(os.Stderr, "Using host %s (the only host available).\n", host.Name)
+				}
+				body["host_id"] = host.ID
+			}
+			if volumeCreateSandbox {
+				body["sandbox"] = true
+			}
+			var created volumeView
+			if _, err := client.do("POST", "/api/volumes", nil, body, &created); err != nil {
+				return err
+			}
+			if host != nil {
+				created.HostName = host.Name
+			}
+			return renderVolume(created)
+		},
+	}
+	volumeCreateCmd.Flags().Bool("auto-unlock", false, "Prepare private AWS-backed automatic unlock for this new disk")
+	addStorageArtifactFlags(volumeCreateCmd, false)
 	volumeCreateCmd.Flags().StringVar(&volumeCreateSize, "size", "", "Volume size, e.g. 16GB or 2TB [required]")
 	volumeCreateCmd.Flags().StringVar(&volumeCreateHost, "host", "", "Host to store the volume on (see 'tinfoil container hosts')")
 	volumeCreateCmd.Flags().BoolVar(&volumeCreateSandbox, "sandbox", false, "Create a sandbox workspace volume of "+workspaceSizeChoices("GB")+"; personal accounts only have sandbox volumes")
 	_ = volumeCreateCmd.MarkFlagRequired("size")
+	return volumeCreateCmd
+}
+
+func newVolumeRenameCommand() *cobra.Command {
+	volumeRenameCmd := &cobra.Command{
+		Use:   "rename [id|name]",
+		Short: "Rename a volume",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			client, err := authedClient()
+			if err != nil {
+				return err
+			}
+			v, err := lookupVolume(client, args[0])
+			if err != nil {
+				return err
+			}
+			body := map[string]any{"name": volumeRenameName}
+			if _, err := client.do("PATCH", pathf("/api/volumes/%s", v.ID), nil, body, nil); err != nil {
+				return err
+			}
+			fmt.Printf("Renamed volume %s to %s\n", v.Name, volumeRenameName)
+			return nil
+		},
+	}
 	volumeRenameCmd.Flags().StringVar(&volumeRenameName, "name", "", "New volume name [required]")
 	_ = volumeRenameCmd.MarkFlagRequired("name")
-	volumeAttachCmd.Flags().StringVar(&volumeAttachAs, "as", "", "Mount name declared in tinfoil-config.yml (defaults to the only declared mount)")
-	volumeDeleteCmd.Flags().BoolVar(&volumeYes, "yes", false, "Skip interactive confirmation")
+	return volumeRenameCmd
 }
 
-var volumeCmd = &cobra.Command{
-	Use:     "volume",
-	Aliases: []string{"volumes"},
-	Short:   "Manage persistent volumes for containers and sandboxes",
-}
-
-var volumeListCmd = &cobra.Command{
-	Use:     "list",
-	Aliases: []string{"ls"},
-	Short:   "List volumes in the current organization",
-	RunE: func(cmd *cobra.Command, args []string) error {
-		client, err := authedClient()
-		if err != nil {
-			return err
-		}
-		var raw json.RawMessage
-		if _, err := client.do("GET", "/api/volumes", nil, nil, &raw); err != nil {
-			return err
-		}
-		if outputFormat == "json" {
-			os.Stdout.Write(prettyJSON(raw))
-			fmt.Println()
+func newVolumeAttachCommand() *cobra.Command {
+	volumeAttachCmd := &cobra.Command{
+		Use:   "attach [volume] [container]",
+		Short: "Attach a volume to a stopped container's declared mount",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			client, err := authedClient()
+			if err != nil {
+				return err
+			}
+			c, err := resolveContainerDetail(client, args[1])
+			if err != nil {
+				return err
+			}
+			list, err := listVolumes(client)
+			if err != nil {
+				return err
+			}
+			v, err := resolveVolumeOfKind(list.Volumes, args[0], c.Repo == defaultSandboxRepo)
+			if err != nil {
+				return err
+			}
+			slot, err := declaredSlot(c, volumeAttachAs, "--as")
+			if err != nil {
+				return err
+			}
+			if err := attachVolume(client, c.ID, slot, v.ID); err != nil {
+				return err
+			}
+			fmt.Printf("Attached %s to %s as %q\n", v.Name, c.Name, slot)
+			printVolumeUnlockGuidance(os.Stdout, c.VolumeSlots)
 			return nil
-		}
-		var list volumeList
-		if err := json.Unmarshal(raw, &list); err != nil {
-			return fmt.Errorf("decoding volumes: %w", err)
-		}
-		return renderVolumes(list)
-	},
+		},
+	}
+	volumeAttachCmd.Flags().StringVar(&volumeAttachAs, "as", "", "Mount name declared in tinfoil-config.yml (defaults to the only declared mount)")
+	return volumeAttachCmd
 }
 
-var volumeGetCmd = &cobra.Command{
-	Use:   "get [id|name]",
-	Short: "Show a single volume",
-	Args:  cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		client, err := authedClient()
-		if err != nil {
-			return err
-		}
-		v, err := lookupVolume(client, args[0])
-		if err != nil {
-			return err
-		}
-		return renderVolume(*v)
-	},
-}
-
-var volumeCreateCmd = &cobra.Command{
-	Use:   "create [name]",
-	Short: "Create an empty volume on a host",
-	Args:  cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		autoUnlock, _ := cmd.Flags().GetBool("auto-unlock")
-		if autoUnlock && volumeCreateSandbox {
-			return errors.New("--auto-unlock does not apply to sandbox volumes, which are unlocked with their owner's credentials")
-		}
-		if autoUnlock {
-			return runAutoUnlockVolumeCreate(cmd, args[0], volumeStorageFactory)
-		}
-		for _, flag := range []string{"project", "mount", "tag", "domain", "config-file", "config-out", "policy-file", "policy-out"} {
-			if cmd.Flags().Changed(flag) {
-				return fmt.Errorf("--%s requires --auto-unlock", flag)
-			}
-		}
-		size, err := parseSize(volumeCreateSize)
-		if err != nil {
-			return fmt.Errorf("--size: %w", err)
-		}
-		if volumeCreateSandbox && !isWorkspaceSize(size) {
-			return fmt.Errorf("--size for a sandbox volume must be %s", workspaceSizeChoices("GB"))
-		}
-		client, err := authedClient()
-		if err != nil {
-			return err
-		}
-		body := map[string]any{"name": args[0], "size_bytes": size}
-		var host *hostInfo
-		// Controlplane places a sandbox volume on a sandbox host unless one
-		// is chosen.
-		if !volumeCreateSandbox || volumeCreateHost != "" {
-			hosts, err := listHosts(client)
+func newVolumeDetachCommand() *cobra.Command {
+	volumeDetachCmd := &cobra.Command{
+		Use:   "detach [volume]",
+		Short: "Detach a volume from its stopped container",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			client, err := authedClient()
 			if err != nil {
 				return err
 			}
-			host, err = pickVolumeHost(hosts, volumeCreateHost)
+			v, err := lookupVolume(client, args[0])
 			if err != nil {
 				return err
 			}
-			if volumeCreateHost == "" {
-				fmt.Fprintf(os.Stderr, "Using host %s (the only host available).\n", host.Name)
+			if v.ContainerID == "" || v.Slot == "" {
+				return fmt.Errorf("volume %s is not attached", v.Name)
 			}
-			body["host_id"] = host.ID
-		}
-		if volumeCreateSandbox {
-			body["sandbox"] = true
-		}
-		var created volumeView
-		if _, err := client.do("POST", "/api/volumes", nil, body, &created); err != nil {
-			return err
-		}
-		if host != nil {
-			created.HostName = host.Name
-		}
-		return renderVolume(created)
-	},
+			if _, err := client.do("DELETE", pathf("/api/containers/%s/volumes/%s", v.ContainerID, v.Slot), nil, nil, nil); err != nil {
+				return err
+			}
+			fmt.Printf("Detached %s from %s\n", v.Name, volumeContainerLabel(*v))
+			return nil
+		},
+	}
+
+	return volumeDetachCmd
 }
 
-var volumeRenameCmd = &cobra.Command{
-	Use:   "rename [id|name]",
-	Short: "Rename a volume",
-	Args:  cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		client, err := authedClient()
-		if err != nil {
-			return err
-		}
-		v, err := lookupVolume(client, args[0])
-		if err != nil {
-			return err
-		}
-		body := map[string]any{"name": volumeRenameName}
-		if _, err := client.do("PATCH", pathf("/api/volumes/%s", v.ID), nil, body, nil); err != nil {
-			return err
-		}
-		fmt.Printf("Renamed volume %s to %s\n", v.Name, volumeRenameName)
-		return nil
-	},
-}
-
-var volumeAttachCmd = &cobra.Command{
-	Use:   "attach [volume] [container]",
-	Short: "Attach a volume to a stopped container's declared mount",
-	Args:  cobra.ExactArgs(2),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		client, err := authedClient()
-		if err != nil {
-			return err
-		}
-		c, err := resolveContainerDetail(client, args[1])
-		if err != nil {
-			return err
-		}
-		list, err := listVolumes(client)
-		if err != nil {
-			return err
-		}
-		v, err := resolveVolumeOfKind(list.Volumes, args[0], c.Repo == defaultSandboxRepo)
-		if err != nil {
-			return err
-		}
-		slot, err := declaredSlot(c, volumeAttachAs, "--as")
-		if err != nil {
-			return err
-		}
-		if err := attachVolume(client, c.ID, slot, v.ID); err != nil {
-			return err
-		}
-		fmt.Printf("Attached %s to %s as %q\n", v.Name, c.Name, slot)
-		printVolumeUnlockGuidance(os.Stdout, c.VolumeSlots)
-		return nil
-	},
-}
-
-var volumeDetachCmd = &cobra.Command{
-	Use:   "detach [volume]",
-	Short: "Detach a volume from its stopped container",
-	Args:  cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		client, err := authedClient()
-		if err != nil {
-			return err
-		}
-		v, err := lookupVolume(client, args[0])
-		if err != nil {
-			return err
-		}
-		if v.ContainerID == "" || v.Slot == "" {
-			return fmt.Errorf("volume %s is not attached", v.Name)
-		}
-		if _, err := client.do("DELETE", pathf("/api/containers/%s/volumes/%s", v.ContainerID, v.Slot), nil, nil, nil); err != nil {
-			return err
-		}
-		fmt.Printf("Detached %s from %s\n", v.Name, volumeContainerLabel(*v))
-		return nil
-	},
-}
-
-var volumeDeleteCmd = &cobra.Command{
-	Use:     "delete [id|name]",
-	Aliases: []string{"rm", "remove"},
-	Short:   "Delete a detached volume and all of its data",
-	Args:    cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		client, err := authedClient()
-		if err != nil {
-			return err
-		}
-		v, err := lookupVolume(client, args[0])
-		if err != nil {
-			return err
-		}
-		if v.ContainerID != "" {
-			return fmt.Errorf("volume %s is attached to %s; detach it first: tinfoil volume detach %s", v.Name, volumeContainerLabel(*v), v.ID)
-		}
-		fmt.Fprintf(os.Stderr, "Deleting volume %s (%s on %s).\n", v.Name, formatSize(v.SizeBytes), v.HostName)
-		fmt.Fprintln(os.Stderr, "This permanently destroys the volume and its data.")
-		if err := confirmYes(volumeYes, "deleting a volume"); err != nil {
-			return err
-		}
-		if _, err := client.do("DELETE", pathf("/api/volumes/%s", v.ID), nil, nil, nil); err != nil {
-			return err
-		}
-		fmt.Printf("Deleted volume %s\n", v.Name)
-		return nil
-	},
+func newVolumeDeleteCommand() *cobra.Command {
+	volumeDeleteCmd := &cobra.Command{
+		Use:     "delete [id|name]",
+		Aliases: []string{"rm", "remove"},
+		Short:   "Delete a detached volume and all of its data",
+		Args:    cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			client, err := authedClient()
+			if err != nil {
+				return err
+			}
+			v, err := lookupVolume(client, args[0])
+			if err != nil {
+				return err
+			}
+			if v.ContainerID != "" {
+				return fmt.Errorf("volume %s is attached to %s; detach it first: tinfoil volume detach %s", v.Name, volumeContainerLabel(*v), v.ID)
+			}
+			fmt.Fprintf(os.Stderr, "Deleting volume %s (%s on %s).\n", v.Name, formatSize(v.SizeBytes), v.HostName)
+			fmt.Fprintln(os.Stderr, "This permanently destroys the volume and its data.")
+			if err := confirmYes(volumeYes, "deleting a volume"); err != nil {
+				return err
+			}
+			if _, err := client.do("DELETE", pathf("/api/volumes/%s", v.ID), nil, nil, nil); err != nil {
+				return err
+			}
+			fmt.Printf("Deleted volume %s\n", v.Name)
+			return nil
+		},
+	}
+	volumeDeleteCmd.Flags().BoolVar(&volumeYes, "yes", false, "Skip interactive confirmation")
+	return volumeDeleteCmd
 }
 
 func listVolumes(client *cpClient) (volumeList, error) {

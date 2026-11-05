@@ -32,67 +32,70 @@ type registryAccount struct {
 
 var enrollmentRegistryID string
 
-func init() {
-	trustCmd.AddCommand(trustEnrollCmd, trustRemoveCmd)
-	trustEnrollCmd.Flags().StringVar(&enrollmentRegistryID, "registry-id", "", "Expected private registry ID; approves it without a prompt")
-}
-
-var trustEnrollCmd = &cobra.Command{
-	Use:   "add",
-	Short: "Trust the current account's private registry",
-	Args:  cobra.NoArgs,
-	RunE: func(cmd *cobra.Command, _ []string) error {
-		cfg, err := requireAuth()
-		if err != nil {
-			return err
-		}
-		identity, err := authenticatedContext(cfg)
-		if err != nil {
-			return err
-		}
-		return enrollRegistry(cmd, cfg, identity, enrollmentRegistryID, term.IsTerminal(int(os.Stdin.Fd())))
-	},
-}
-
-var trustRemoveCmd = &cobra.Command{
-	Use:   "remove <account>",
-	Short: "Stop trusting an account's private registry",
-	Args:  cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		controlplaneURL, err := registryControlplaneURL()
-		if err != nil {
-			return err
-		}
-		policy, err := loadConnectionPolicy()
-		if err != nil {
-			return err
-		}
-		accountID := ""
-		for _, entry := range policy.Registries {
-			if entry.ControlplaneURL == controlplaneURL && entry.AccountID == args[0] {
-				accountID = entry.AccountID
-				break
+func newTrustEnrollCommand() *cobra.Command {
+	trustEnrollCmd := &cobra.Command{
+		Use:   "add",
+		Short: "Trust the current account's private registry",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			cfg, err := requireAuth()
+			if err != nil {
+				return err
 			}
-		}
-		if accountID == "" {
+			identity, err := authenticatedContext(cfg)
+			if err != nil {
+				return err
+			}
+			return enrollRegistry(cmd, cfg, identity, enrollmentRegistryID, term.IsTerminal(int(os.Stdin.Fd())))
+		},
+	}
+	trustEnrollCmd.Flags().StringVar(&enrollmentRegistryID, "registry-id", "", "Expected private registry ID; approves it without a prompt")
+	return trustEnrollCmd
+}
+
+func newTrustRemoveCommand() *cobra.Command {
+	trustRemoveCmd := &cobra.Command{
+		Use:   "remove <account>",
+		Short: "Stop trusting an account's private registry",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			controlplaneURL, err := registryControlplaneURL()
+			if err != nil {
+				return err
+			}
+			policy, err := loadConnectionPolicy()
+			if err != nil {
+				return err
+			}
+			accountID := ""
 			for _, entry := range policy.Registries {
-				if entry.ControlplaneURL == controlplaneURL && registryAccountMatches(entry, args[0]) {
-					if accountID != "" {
-						return fmt.Errorf("multiple private registries match %s; use the account ID shown by tinfoil trust", args[0])
-					}
+				if entry.ControlplaneURL == controlplaneURL && entry.AccountID == args[0] {
 					accountID = entry.AccountID
+					break
 				}
 			}
-		}
-		remaining := slices.DeleteFunc(policy.Registries, func(e registryEnrollment) bool {
-			return e.ControlplaneURL == controlplaneURL && e.AccountID == accountID
-		})
-		if len(remaining) == len(policy.Registries) {
-			return fmt.Errorf("no registry enrollment for account %s", args[0])
-		}
-		policy.Registries = remaining
-		return policy.save()
-	},
+			if accountID == "" {
+				for _, entry := range policy.Registries {
+					if entry.ControlplaneURL == controlplaneURL && registryAccountMatches(entry, args[0]) {
+						if accountID != "" {
+							return fmt.Errorf("multiple private registries match %s; use the account ID shown by tinfoil trust", args[0])
+						}
+						accountID = entry.AccountID
+					}
+				}
+			}
+			remaining := slices.DeleteFunc(policy.Registries, func(e registryEnrollment) bool {
+				return e.ControlplaneURL == controlplaneURL && e.AccountID == accountID
+			})
+			if len(remaining) == len(policy.Registries) {
+				return fmt.Errorf("no registry enrollment for account %s", args[0])
+			}
+			policy.Registries = remaining
+			return policy.save()
+		},
+	}
+
+	return trustRemoveCmd
 }
 
 func registryAccountMatches(entry registryEnrollment, account string) bool {

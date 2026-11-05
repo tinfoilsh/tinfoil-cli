@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 	"text/tabwriter"
 
 	"github.com/fatih/color"
@@ -90,12 +91,35 @@ func newRootCommand() *cobra.Command {
 	cmd.PersistentFlags().StringVar(&localConfigFile, "config", "", "Local config file to launch or trust for verification")
 	cmd.PersistentFlags().BoolVar(&publicRegistry, "public-registry", false, "Require public configs, even when a private registry is trusted")
 	cmd.MarkFlagsMutuallyExclusive("config", "public-registry")
+	configureRootCommand(cmd)
+	cmd.AddCommand(newAttestSSHCommand(), newAttestationCommand(), newLoginCommand(), newLogoutCommand(), newWhoamiCommand(),
+		newContainerCommand(), newDomainCommand(), newHttpCommand(), newModelCommand(), newProjectCommand(), newProxyCommand(),
+		newRegistryCommand(), newRepoCommand(), newSCPCommand(), newSecretCommand(), newSshCommand(), newSshKeyCommand(),
+		newTrustCommand(), newForwardCommand(), newVolumeCommand(), newSelfUpdateCommand(newDefaultSelfUpdater))
+	monitor, sandbox := newMonitorCommand(), newSandboxCommand()
+	monitor.AddCommand(newMonitorOpenCommand())
+	addManagedCommands(monitor, sandbox)
+	cmd.AddCommand(monitor, sandbox)
+	create, _, _ := cmd.Find([]string{"container", "create"})
+	create.MarkFlagsMutuallyExclusive("config", "repo")
+	create.MarkFlagsMutuallyExclusive("config", "tag", "revision")
+	create.MarkFlagsOneRequired("config", "tag", "revision")
+	for _, g := range commandGroups {
+		cmd.AddGroup(&cobra.Group{ID: g.id})
+		for _, child := range cmd.Commands() {
+			if slices.Contains(g.commands, child.Name()) {
+				child.GroupID = g.id
+			}
+		}
+	}
+	cmd.SetHelpCommandGroupID(cliGroup)
+	cmd.SetCompletionCommandGroupID(cliGroup)
 	return cmd
 }
 
-var rootCmd = newRootCommand()
+var helpTemplatesOnce sync.Once
 
-func init() {
+func configureRootCommand(rootCmd *cobra.Command) {
 	rootCmd.PersistentFlags().StringVarP(&enclaveHost, "enclave", "e", "", "Enclave hostname (for example inference.tinfoil.sh)")
 	rootCmd.PersistentFlags().StringVarP(&repo, "repo", "r", "", "Expected config source: owner/name[@tag][@sha256:digest]")
 	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "Verbose output")
@@ -103,6 +127,11 @@ func init() {
 	rootCmd.PersistentFlags().BoolP("help", "h", false, "Show help")
 	_ = rootCmd.PersistentFlags().MarkHidden("help")
 
+	helpTemplatesOnce.Do(registerHelpTemplates)
+	configureHelpTemplates(rootCmd)
+}
+
+func registerHelpTemplates() {
 	literal := color.New(color.FgCyan, color.Bold).SprintFunc()
 	placeholder := color.New(color.FgCyan).SprintFunc()
 	cobra.AddTemplateFunc("heading", color.New(color.FgGreen, color.Bold).SprintFunc())
@@ -152,6 +181,9 @@ func init() {
 		})
 		return fs.FlagUsages()
 	})
+}
+
+func configureHelpTemplates(rootCmd *cobra.Command) {
 	tpl := strings.NewReplacer(
 		"{{.UseLine}}", "{{literal .UseLine}}",
 		"  {{.CommandPath}} [command]", "  {{literal .CommandPath}} [command]",
@@ -169,6 +201,7 @@ func init() {
 }
 
 func main() {
+	rootCmd := newRootCommand()
 	if trace {
 		log.SetLevel(log.TraceLevel)
 	} else if verbose {
@@ -179,17 +212,6 @@ func main() {
 	if !isSelfUpdateCommand(rootCmd, os.Args[1:]) {
 		waitForUpdateCheck = startUpdateCheck()
 	}
-
-	for _, g := range commandGroups {
-		rootCmd.AddGroup(&cobra.Group{ID: g.id})
-		for _, cmd := range rootCmd.Commands() {
-			if slices.Contains(g.commands, cmd.Name()) {
-				cmd.GroupID = g.id
-			}
-		}
-	}
-	rootCmd.SetHelpCommandGroupID(cliGroup)
-	rootCmd.SetCompletionCommandGroupID(cliGroup)
 
 	err := rootCmd.Execute()
 	if hint := errorHint(err); hint != "" {

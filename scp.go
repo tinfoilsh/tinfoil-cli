@@ -9,10 +9,6 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func init() {
-	rootCmd.AddCommand(newSCPCommand())
-}
-
 func newSCPCommand() *cobra.Command {
 	var user string
 	var port uint

@@ -22,17 +22,17 @@ import (
 
 const managedKindAnnotation = "managed-kind"
 
-func init() {
+func addManagedCommands(monitorCmd, sandboxCmd *cobra.Command) {
 	monitorCmd.AddCommand(newManagedStatusCmd("monitor"))
-	start := newManagedContainerCmd("monitor", "start", containerDeployCmd, "no-wait")
+	start := newManagedContainerCmd("monitor", "start", newContainerDeployCommand(), "no-wait")
 	start.Short = "Start a stopped or failed Monitor"
 	monitorCmd.AddCommand(start, newMonitorStopCmd(), newMonitorDeleteCmd())
 	for _, group := range []*cobra.Command{sandboxCmd, monitorCmd} {
 		group.PersistentFlags().StringVarP(&outputFormat, "output", "o", "table", "Output format: table or json")
 		group.PersistentFlags().StringVar(&attestSSHIdentity, "identity", "", "Owner SSH identity file")
-		update := newManagedContainerCmd(group.Name(), "update", containerUpdateCmd, "tag", "yes", "no-wait")
+		update := newManagedContainerCmd(group.Name(), "update", newContainerUpdateCommand(), "tag", "yes", "no-wait")
 		update.Long = "Review and apply a release update, switching traffic automatically. The shared update plan and downtime confirmation still apply, including with --no-wait."
-		metrics := newManagedContainerCmd(group.Name(), "metrics", containerMetricsCmd, "time")
+		metrics := newManagedContainerCmd(group.Name(), "metrics", newContainerMetricsCommand(), "time")
 		group.AddCommand(update, metrics, newManagedCreateCmd(group.Name()))
 	}
 }
@@ -141,7 +141,7 @@ func newMonitorStopCmd() *cobra.Command {
 func newMonitorDeleteCmd() *cobra.Command {
 	var yes bool
 	cmd := &cobra.Command{
-		Use: "delete [id|name]", Aliases: containerDeleteCmd.Aliases, Short: "Delete a Monitor together with its sandboxes and their workspaces", Args: cobra.ExactArgs(1),
+		Use: "delete [id|name]", Aliases: []string{"rm", "remove"}, Short: "Delete a Monitor together with its sandboxes and their workspaces", Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			scope, client, err := currentScope()
 			if err != nil {

@@ -27,17 +27,11 @@ var (
 	sshPort uint
 )
 
-func init() {
-	rootCmd.AddCommand(sshCmd)
-	sshCmd.Flags().StringVarP(&sshUser, "user", "l", "root", "Remote user to log in as")
-	sshCmd.Flags().UintVarP(&sshPort, "port", "p", 0, "Enclave SSH port (default: the published SSH port, else 22)")
-	addTunnelFlags(sshCmd)
-}
-
-var sshCmd = &cobra.Command{
-	Use:   "ssh [container|hostname] [-- ssh arguments...]",
-	Short: "SSH into a container over its attested connection",
-	Example: `  Open a shell
+func newSshCommand() *cobra.Command {
+	sshCmd := &cobra.Command{
+		Use:   "ssh [container|hostname] [-- ssh arguments...]",
+		Short: "SSH into a container over its attested connection",
+		Example: `  Open a shell
   tinfoil ssh my-container
 
   Connect to an enclave hostname on another port
@@ -48,28 +42,33 @@ var sshCmd = &cobra.Command{
 
   Pass options through to ssh
   tinfoil ssh my-container -- -A -L 5432:localhost:5432`,
-	Args: cobra.ArbitraryArgs,
-	RunE: func(cmd *cobra.Command, args []string) error {
-		sshArgs := []string{}
-		if dash := cmd.ArgsLenAtDash(); dash >= 0 {
-			sshArgs, args = args[dash:], args[:dash]
-		}
-		if len(args) > 1 {
-			return fmt.Errorf("expected at most one container, got %d", len(args))
-		}
+		Args: cobra.ArbitraryArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			sshArgs := []string{}
+			if dash := cmd.ArgsLenAtDash(); dash >= 0 {
+				sshArgs, args = args[dash:], args[:dash]
+			}
+			if len(args) > 1 {
+				return fmt.Errorf("expected at most one container, got %d", len(args))
+			}
 
-		var identifier string
-		if len(args) == 1 {
-			identifier = args[0]
-		}
-		target, err := resolveTunnelTarget(identifier)
-		if err != nil {
-			return err
-		}
+			var identifier string
+			if len(args) == 1 {
+				identifier = args[0]
+			}
+			target, err := resolveTunnelTarget(identifier)
+			if err != nil {
+				return err
+			}
 
-		options, command := splitSSHArgs(sshArgs)
-		return sshExit(runSSH(target, sshTargetPort(target, sshPort), sshUser, options, command))
-	},
+			options, command := splitSSHArgs(sshArgs)
+			return sshExit(runSSH(target, sshTargetPort(target, sshPort), sshUser, options, command))
+		},
+	}
+	sshCmd.Flags().StringVarP(&sshUser, "user", "l", "root", "Remote user to log in as")
+	sshCmd.Flags().UintVarP(&sshPort, "port", "p", 0, "Enclave SSH port (default: the published SSH port, else 22)")
+	addTunnelFlags(sshCmd)
+	return sshCmd
 }
 
 func sshTargetPort(target *tunnelTarget, override uint) int {

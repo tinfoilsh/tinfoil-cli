@@ -28,108 +28,123 @@ type domainView struct {
 	WildcardCNAMEConfigured *bool    `json:"wildcard_cname_configured"`
 }
 
-func init() {
-	rootCmd.AddCommand(domainCmd)
+func newDomainCommand() *cobra.Command {
+	domainCmd := &cobra.Command{
+		Use:     "domain",
+		Aliases: []string{"domains"},
+		Short:   "Manage custom domains for containers",
+	}
 	domainCmd.PersistentFlags().StringVarP(&outputFormat, "output", "o", "table", "Output format: table or json")
-	domainCmd.AddCommand(domainListCmd, domainAddCmd, domainVerifyCmd, domainDeleteCmd)
+	domainCmd.AddCommand(newDomainListCommand(), newDomainAddCommand(), newDomainVerifyCommand(), newDomainDeleteCommand())
+	return domainCmd
 }
 
-var domainCmd = &cobra.Command{
-	Use:     "domain",
-	Aliases: []string{"domains"},
-	Short:   "Manage custom domains for containers",
-}
-
-var domainListCmd = &cobra.Command{
-	Use:     "list",
-	Aliases: []string{"ls"},
-	Short:   "List custom domains",
-	RunE: func(cmd *cobra.Command, args []string) error {
-		client, err := authedClient()
-		if err != nil {
-			return err
-		}
-		var list []domainView
-		if _, err := client.do("GET", "/api/domains", nil, nil, &list); err != nil {
-			return err
-		}
-		if outputFormat == "json" {
-			return printJSON(list)
-		}
-		if len(list) == 0 {
-			fmt.Println("No custom domains.")
-			return nil
-		}
-		fmt.Printf("%-40s  %-10s  %-30s  %s\n", "DOMAIN", "VERIFIED", "CNAME TARGET", "USED BY")
-		for _, d := range list {
-			used := strings.Join(d.UsedBy, ", ")
-			if used == "" {
-				used = "-"
+func newDomainListCommand() *cobra.Command {
+	domainListCmd := &cobra.Command{
+		Use:     "list",
+		Aliases: []string{"ls"},
+		Short:   "List custom domains",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			client, err := authedClient()
+			if err != nil {
+				return err
 			}
-			fmt.Printf("%-40s  %-10v  %-30s  %s\n",
-				truncate(d.Domain, 40), d.Verified, truncate(d.CNAMETarget, 30), used,
-			)
-		}
-		return nil
-	},
+			var list []domainView
+			if _, err := client.do("GET", "/api/domains", nil, nil, &list); err != nil {
+				return err
+			}
+			if outputFormat == "json" {
+				return printJSON(list)
+			}
+			if len(list) == 0 {
+				fmt.Println("No custom domains.")
+				return nil
+			}
+			fmt.Printf("%-40s  %-10s  %-30s  %s\n", "DOMAIN", "VERIFIED", "CNAME TARGET", "USED BY")
+			for _, d := range list {
+				used := strings.Join(d.UsedBy, ", ")
+				if used == "" {
+					used = "-"
+				}
+				fmt.Printf("%-40s  %-10v  %-30s  %s\n",
+					truncate(d.Domain, 40), d.Verified, truncate(d.CNAMETarget, 30), used,
+				)
+			}
+			return nil
+		},
+	}
+
+	return domainListCmd
 }
 
-var domainAddCmd = &cobra.Command{
-	Use:   "add [domain]",
-	Short: "Register a custom domain and print its DNS records",
-	Example: `  Add a domain
+func newDomainAddCommand() *cobra.Command {
+	domainAddCmd := &cobra.Command{
+		Use:   "add [domain]",
+		Short: "Register a custom domain and print its DNS records",
+		Example: `  Add a domain
   tinfoil domain add example.com
 
   Add a wildcard, only when one container serves every subdomain
   tinfoil domain add '*.example.com'`,
-	Args: cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		client, err := authedClient()
-		if err != nil {
-			return err
-		}
-		body := map[string]any{"domain": args[0]}
-		var d domainView
-		if _, err := client.do("POST", "/api/domains", nil, body, &d); err != nil {
-			return err
-		}
-		return renderDomain(d, false)
-	},
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			client, err := authedClient()
+			if err != nil {
+				return err
+			}
+			body := map[string]any{"domain": args[0]}
+			var d domainView
+			if _, err := client.do("POST", "/api/domains", nil, body, &d); err != nil {
+				return err
+			}
+			return renderDomain(d, false)
+		},
+	}
+
+	return domainAddCmd
 }
 
-var domainVerifyCmd = &cobra.Command{
-	Use:   "verify [domain]",
-	Short: "Re-check the DNS records and update verification status",
-	Args:  cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		client, err := authedClient()
-		if err != nil {
-			return err
-		}
-		var d domainView
-		if _, err := client.do("POST", pathf("/api/domains/%s/verify", args[0]), nil, nil, &d); err != nil {
-			return err
-		}
-		return renderDomain(d, true)
-	},
+func newDomainVerifyCommand() *cobra.Command {
+	domainVerifyCmd := &cobra.Command{
+		Use:   "verify [domain]",
+		Short: "Re-check the DNS records and update verification status",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			client, err := authedClient()
+			if err != nil {
+				return err
+			}
+			var d domainView
+			if _, err := client.do("POST", pathf("/api/domains/%s/verify", args[0]), nil, nil, &d); err != nil {
+				return err
+			}
+			return renderDomain(d, true)
+		},
+	}
+
+	return domainVerifyCmd
 }
 
-var domainDeleteCmd = &cobra.Command{
-	Use:     "delete [domain]",
-	Aliases: []string{"rm", "remove"},
-	Short:   "Delete a custom domain",
-	Args:    cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		client, err := authedClient()
-		if err != nil {
-			return err
-		}
-		if _, err := client.do("DELETE", pathf("/api/domains/%s", args[0]), nil, nil, nil); err != nil {
-			return err
-		}
-		fmt.Printf("Deleted domain %s\n", args[0])
-		return nil
-	},
+func newDomainDeleteCommand() *cobra.Command {
+	domainDeleteCmd := &cobra.Command{
+		Use:     "delete [domain]",
+		Aliases: []string{"rm", "remove"},
+		Short:   "Delete a custom domain",
+		Args:    cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			client, err := authedClient()
+			if err != nil {
+				return err
+			}
+			if _, err := client.do("DELETE", pathf("/api/domains/%s", args[0]), nil, nil, nil); err != nil {
+				return err
+			}
+			fmt.Printf("Deleted domain %s\n", args[0])
+			return nil
+		},
+	}
+
+	return domainDeleteCmd
 }
 
 func renderDomain(d domainView, verifyMode bool) error {

@@ -26,22 +26,17 @@ var (
 	sshKeySandbox    bool
 )
 
-func init() {
-	rootCmd.AddCommand(sshKeyCmd)
+func newSshKeyCommand() *cobra.Command {
+	sshKeyCmd := &cobra.Command{
+		Use:     "ssh-key",
+		Aliases: []string{"ssh-keys"},
+		Short:   "Manage SSH keys",
+		Long:    "Container keys open debug containers. Sandbox keys (--sandbox, Ed25519) can own sandboxes and Monitors.",
+	}
 	sshKeyCmd.PersistentFlags().StringVarP(&outputFormat, "output", "o", "table", "Output format: table or json")
 	sshKeyCmd.PersistentFlags().BoolVar(&sshKeySandbox, "sandbox", false, "Use the sandbox and Monitor key list instead of container debug keys")
-
-	sshKeyCmd.AddCommand(sshKeyListCmd, sshKeyCreateCmd, sshKeyDeleteCmd)
-
-	sshKeyCreateCmd.Flags().StringVar(&sshPublicKey, "public-key", "", "Public key contents (e.g. \"ssh-ed25519 AAAA...\")")
-	sshKeyCreateCmd.Flags().StringVar(&sshPublicKeyFile, "public-key-file", "", "Read the public key from this file (use - for stdin)")
-}
-
-var sshKeyCmd = &cobra.Command{
-	Use:     "ssh-key",
-	Aliases: []string{"ssh-keys"},
-	Short:   "Manage SSH keys",
-	Long:    "Container keys open debug containers. Sandbox keys (--sandbox, Ed25519) can own sandboxes and Monitors.",
+	sshKeyCmd.AddCommand(newSshKeyListCommand(), newSshKeyCreateCommand(), newSshKeyDeleteCommand())
+	return sshKeyCmd
 }
 
 // sshKeyQuery selects the key list; personal accounts always get sandbox keys.
@@ -52,78 +47,91 @@ func sshKeyQuery() url.Values {
 	return url.Values{"sandbox": {"true"}}
 }
 
-var sshKeyListCmd = &cobra.Command{
-	Use:     "list",
-	Aliases: []string{"ls"},
-	Short:   "List SSH keys",
-	RunE: func(cmd *cobra.Command, args []string) error {
-		client, err := authedClient()
-		if err != nil {
-			return err
-		}
-		var list []sshKeyView
-		if _, err := client.do("GET", "/api/ssh-keys", sshKeyQuery(), nil, &list); err != nil {
-			return err
-		}
-		if outputFormat == "json" {
-			return printJSON(list)
-		}
-		if len(list) == 0 {
-			fmt.Println("No SSH keys.")
-			return nil
-		}
-		fmt.Printf("%-32s  %-12s  %s\n", "NAME", "TYPE", "USED BY")
-		for _, k := range list {
-			used := strings.Join(k.UsedBy, ", ")
-			if used == "" {
-				used = "-"
+func newSshKeyListCommand() *cobra.Command {
+	sshKeyListCmd := &cobra.Command{
+		Use:     "list",
+		Aliases: []string{"ls"},
+		Short:   "List SSH keys",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			client, err := authedClient()
+			if err != nil {
+				return err
 			}
-			fmt.Printf("%-32s  %-12s  %s\n", truncate(k.Name, 32), k.KeyType, used)
-		}
-		return nil
-	},
+			var list []sshKeyView
+			if _, err := client.do("GET", "/api/ssh-keys", sshKeyQuery(), nil, &list); err != nil {
+				return err
+			}
+			if outputFormat == "json" {
+				return printJSON(list)
+			}
+			if len(list) == 0 {
+				fmt.Println("No SSH keys.")
+				return nil
+			}
+			fmt.Printf("%-32s  %-12s  %s\n", "NAME", "TYPE", "USED BY")
+			for _, k := range list {
+				used := strings.Join(k.UsedBy, ", ")
+				if used == "" {
+					used = "-"
+				}
+				fmt.Printf("%-32s  %-12s  %s\n", truncate(k.Name, 32), k.KeyType, used)
+			}
+			return nil
+		},
+	}
+
+	return sshKeyListCmd
 }
 
-var sshKeyCreateCmd = &cobra.Command{
-	Use:   "create [name]",
-	Short: "Add a public SSH key",
-	Args:  cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		client, err := authedClient()
-		if err != nil {
-			return err
-		}
-		key, err := readSSHPublicKey(cmd)
-		if err != nil {
-			return err
-		}
-		body := map[string]any{"name": args[0], "public_key": key}
-		var k sshKeyView
-		if _, err := client.do("POST", "/api/ssh-keys", sshKeyQuery(), body, &k); err != nil {
-			return err
-		}
-		fmt.Printf("Added SSH key %s (%s)\n", k.Name, k.KeyType)
-		return nil
-	},
+func newSshKeyCreateCommand() *cobra.Command {
+	sshKeyCreateCmd := &cobra.Command{
+		Use:   "create [name]",
+		Short: "Add a public SSH key",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			client, err := authedClient()
+			if err != nil {
+				return err
+			}
+			key, err := readSSHPublicKey(cmd)
+			if err != nil {
+				return err
+			}
+			body := map[string]any{"name": args[0], "public_key": key}
+			var k sshKeyView
+			if _, err := client.do("POST", "/api/ssh-keys", sshKeyQuery(), body, &k); err != nil {
+				return err
+			}
+			fmt.Printf("Added SSH key %s (%s)\n", k.Name, k.KeyType)
+			return nil
+		},
+	}
+	sshKeyCreateCmd.Flags().StringVar(&sshPublicKey, "public-key", "", "Public key contents (e.g. \"ssh-ed25519 AAAA...\")")
+	sshKeyCreateCmd.Flags().StringVar(&sshPublicKeyFile, "public-key-file", "", "Read the public key from this file (use - for stdin)")
+	return sshKeyCreateCmd
 }
 
-var sshKeyDeleteCmd = &cobra.Command{
-	Use:     "delete [name]",
-	Aliases: []string{"rm", "remove"},
-	Short:   "Delete an SSH key",
-	Long:    "Sandboxes and Monitors that use a deleted sandbox key keep accepting it.",
-	Args:    cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		client, err := authedClient()
-		if err != nil {
-			return err
-		}
-		if _, err := client.do("DELETE", pathf("/api/ssh-keys/%s", args[0]), sshKeyQuery(), nil, nil); err != nil {
-			return err
-		}
-		fmt.Printf("Deleted SSH key %s\n", args[0])
-		return nil
-	},
+func newSshKeyDeleteCommand() *cobra.Command {
+	sshKeyDeleteCmd := &cobra.Command{
+		Use:     "delete [name]",
+		Aliases: []string{"rm", "remove"},
+		Short:   "Delete an SSH key",
+		Long:    "Sandboxes and Monitors that use a deleted sandbox key keep accepting it.",
+		Args:    cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			client, err := authedClient()
+			if err != nil {
+				return err
+			}
+			if _, err := client.do("DELETE", pathf("/api/ssh-keys/%s", args[0]), sshKeyQuery(), nil, nil); err != nil {
+				return err
+			}
+			fmt.Printf("Deleted SSH key %s\n", args[0])
+			return nil
+		},
+	}
+
+	return sshKeyDeleteCmd
 }
 
 func readSSHPublicKey(cmd *cobra.Command) (string, error) {

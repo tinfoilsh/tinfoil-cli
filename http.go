@@ -37,20 +37,21 @@ func printHTTPResponse(out io.Writer, body io.Reader) error {
 	return err
 }
 
-func init() {
-	rootCmd.AddCommand(httpCmd)
+func newHttpCommand() *cobra.Command {
+	httpCmd := &cobra.Command{
+		Use:   "http",
+		Short: "Make verified HTTP requests",
+		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+			if enclaveHost == "" || repo == "" && localConfigFile == "" {
+				return fmt.Errorf("--enclave and either --repo or --config are required for verified HTTP requests")
+			}
+			return nil
+		},
+	}
 	httpCmd.PersistentFlags().StringArrayVarP(&requestHeaders, "header", "H", nil, `HTTP request header ("Name: Value"); may be repeated`)
-}
-
-var httpCmd = &cobra.Command{
-	Use:   "http",
-	Short: "Make verified HTTP requests",
-	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
-		if enclaveHost == "" || repo == "" && localConfigFile == "" {
-			return fmt.Errorf("--enclave and either --repo or --config are required for verified HTTP requests")
-		}
-		return nil
-	},
+	httpCmd.AddCommand(newHttpGetCommand())
+	httpCmd.AddCommand(newHttpPostCommand())
+	return httpCmd
 }
 
 func parseRequestHeaders(headerArgs []string) (map[string]string, error) {

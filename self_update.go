@@ -19,13 +19,11 @@ type selfUpdateRunner interface {
 	Run(context.Context, bool) (selfupdate.Result, error)
 }
 
-func init() {
-	rootCmd.AddCommand(newSelfUpdateCommand(func() selfUpdateRunner {
-		return selfupdate.NewUpdater(selfupdate.Options{
-			Version: version, GOOS: runtime.GOOS, GOARCH: runtime.GOARCH,
-			Executable: os.Executable,
-		})
-	}))
+func newDefaultSelfUpdater() selfUpdateRunner {
+	return selfupdate.NewUpdater(selfupdate.Options{
+		Version: version, GOOS: runtime.GOOS, GOARCH: runtime.GOARCH,
+		Executable: os.Executable,
+	})
 }
 
 func newSelfUpdateCommand(newUpdater func() selfUpdateRunner) *cobra.Command {

@@ -19,13 +19,6 @@ var (
 	logFormat  string
 )
 
-func init() {
-	rootCmd.AddCommand(proxyCmd)
-	proxyCmd.Flags().UintVarP(&listenPort, "port", "p", 8080, "Port to listen on")
-	proxyCmd.Flags().StringVarP(&listenAddr, "bind", "b", "127.0.0.1", "Address to bind to")
-	proxyCmd.Flags().StringVar(&logFormat, "log-format", "text", "Log format: text or json")
-}
-
 func setupLogger(verbose, trace bool) {
 	if trace {
 		log.SetLevel(log.TraceLevel)
@@ -40,68 +33,76 @@ func setupLogger(verbose, trace bool) {
 	}
 }
 
-var proxyCmd = &cobra.Command{
-	Use:        "proxy",
-	Short:      "Run a local HTTP proxy",
-	Deprecated: "the proxy has moved to github.com/tinfoilsh/tinfoil-proxy. Install the Tinfoil Tray app for a menu-bar UI, or run `go install github.com/tinfoilsh/tinfoil-proxy@latest` for the standalone `tinfoil-proxy` binary.",
-	RunE: func(cmd *cobra.Command, args []string) error {
-		if (enclaveHost == "") != (repo == "" && localConfigFile == "") {
-			return fmt.Errorf("--enclave and either --repo or --config must be supplied together for a custom proxy target")
+func newProxyCommand() *cobra.Command {
+	proxyCmd := &cobra.Command{
+		Use:        "proxy",
+		Short:      "Run a local HTTP proxy",
+		Deprecated: "the proxy has moved to github.com/tinfoilsh/tinfoil-proxy. Install the Tinfoil Tray app for a menu-bar UI, or run `go install github.com/tinfoilsh/tinfoil-proxy@latest` for the standalone `tinfoil-proxy` binary.",
+		RunE:       runProxy,
+	}
+	proxyCmd.Flags().UintVarP(&listenPort, "port", "p", 8080, "Port to listen on")
+	proxyCmd.Flags().StringVarP(&listenAddr, "bind", "b", "127.0.0.1", "Address to bind to")
+	proxyCmd.Flags().StringVar(&logFormat, "log-format", "text", "Log format: text or json")
+	return proxyCmd
+}
+
+func runProxy(cmd *cobra.Command, args []string) error {
+	if (enclaveHost == "") != (repo == "" && localConfigFile == "") {
+		return fmt.Errorf("--enclave and either --repo or --config must be supplied together for a custom proxy target")
+	}
+	verbose, _ := cmd.Flags().GetBool("verbose")
+	trace, _ := cmd.Flags().GetBool("trace")
+	setupLogger(verbose, trace)
+
+	log.WithFields(log.Fields{
+		"enclave_host": enclaveHost,
+		"repo":         repo,
+	}).Info("initializing secure client")
+
+	var httpClient *http.Client
+	var err error
+	if enclaveHost == "" && repo == "" {
+		var router *tinfoil.RouterHTTPClient
+		router, err = tinfoil.NewRouterHTTPClient(cmd.Context(), nil)
+		if err == nil {
+			enclaveHost = router.Enclave()
+			repo = router.Repo()
+			httpClient = router.Client
 		}
-		verbose, _ := cmd.Flags().GetBool("verbose")
-		trace, _ := cmd.Flags().GetBool("trace")
-		setupLogger(verbose, trace)
-
-		log.WithFields(log.Fields{
-			"enclave_host": enclaveHost,
-			"repo":         repo,
-		}).Info("initializing secure client")
-
-		var httpClient *http.Client
-		var err error
-		if enclaveHost == "" && repo == "" {
-			var router *tinfoil.RouterHTTPClient
-			router, err = tinfoil.NewRouterHTTPClient(cmd.Context(), nil)
-			if err == nil {
-				enclaveHost = router.Enclave()
-				repo = router.Repo()
-				httpClient = router.Client
-			}
-		} else {
-			opts, parseErr := verificationOptions(repo, "")
-			if parseErr != nil {
-				return parseErr
-			}
-			var enclave *tinfoil.EnclaveHTTPClient
-			enclave, err = tinfoil.NewEnclaveHTTPClient(cmd.Context(), enclaveHost, repo, opts)
-			if err == nil {
-				httpClient = enclave.Client
-			}
+	} else {
+		opts, parseErr := verificationOptions(repo, "")
+		if parseErr != nil {
+			return parseErr
 		}
-		if err != nil {
-			return err
+		var enclave *tinfoil.EnclaveHTTPClient
+		enclave, err = tinfoil.NewEnclaveHTTPClient(cmd.Context(), enclaveHost, repo, opts)
+		if err == nil {
+			httpClient = enclave.Client
 		}
-		log.Debug("secure HTTP client created successfully")
+	}
+	if err != nil {
+		return err
+	}
+	log.Debug("secure HTTP client created successfully")
 
-		targetUrl, err := url.Parse("https://" + enclaveHost)
-		if err != nil {
-			return err
-		}
+	targetUrl, err := url.Parse("https://" + enclaveHost)
+	if err != nil {
+		return err
+	}
 
-		proxy := httputil.NewSingleHostReverseProxy(targetUrl)
-		proxy.Transport = withLoggingTransport(log.StandardLogger(), httpClient.Transport)
+	proxy := httputil.NewSingleHostReverseProxy(targetUrl)
+	proxy.Transport = withLoggingTransport(log.StandardLogger(), httpClient.Transport)
 
-		http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-			proxy.ServeHTTP(w, r)
-		})
+	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		proxy.ServeHTTP(w, r)
+	})
 
-		addr := net.JoinHostPort(listenAddr, strconv.FormatUint(uint64(listenPort), 10))
-		log.WithFields(log.Fields{
-			"address":      addr,
-			"enclave_host": enclaveHost,
-		}).Info("starting HTTP proxy server")
-		return http.ListenAndServe(addr, nil)
-	},
+	addr := net.JoinHostPort(listenAddr, strconv.FormatUint(uint64(listenPort), 10))
+	log.WithFields(log.Fields{
+		"address":      addr,
+		"enclave_host": enclaveHost,
+	}).Info("starting HTTP proxy server")
+	return http.ListenAndServe(addr, nil)
 }
 
 func withLoggingTransport(logger *log.Logger, base http.RoundTripper) http.RoundTripper {

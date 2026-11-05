@@ -15,14 +15,14 @@ import (
 	"github.com/tinfoilsh/tinfoil-go/verify/measurement"
 )
 
-func init() {
-	rootCmd.AddCommand(attestationCmd)
-}
-
-var attestationCmd = &cobra.Command{
-	Use:     "attestation",
-	Aliases: []string{"att"},
-	Short:   "Verify enclave attestations",
+func newAttestationCommand() *cobra.Command {
+	attestationCmd := &cobra.Command{
+		Use:     "attestation",
+		Aliases: []string{"att"},
+		Short:   "Verify enclave attestations",
+	}
+	attestationCmd.AddCommand(newAttestationVerifyCommand())
+	return attestationCmd
 }
 
 func tlsConnection(enclaveHost string) (*tls.ConnectionState, error) {

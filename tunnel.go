@@ -28,15 +28,6 @@ var (
 	allowDebug      bool
 )
 
-func init() {
-	rootCmd.AddCommand(forwardCmd)
-	forwardCmd.Flags().StringArrayVarP(&forwardPorts, "local", "L", nil, "Forward [bind:]<local-port>:<enclave-port>; may be repeated")
-	forwardCmd.Flags().UintVar(&forwardStdio, "stdio", 0, "Pipe a single stream to <enclave-port> over stdin/stdout instead of listening")
-	forwardCmd.Flags().StringVar(&forwardSealedTo, "sealed-to", "", "RTMR3 the enclave must carry")
-	forwardCmd.Flags().MarkHidden("sealed-to")
-	addTunnelFlags(forwardCmd)
-}
-
 func addTunnelFlags(cmd *cobra.Command) {
 	cmd.Flags().StringVar(&tunnelAPIKey, "api-key", "", "API key (tk_...) for the tunnel (default $"+envTunnelAPIKey+")")
 	cmd.Flags().BoolVar(&allowDebug, "allow-debug", false, "Allow debug-mode enclaves, which have a shell inside")
@@ -54,12 +45,13 @@ func enclaveAPIKey() string {
 	return strings.TrimSpace(os.Getenv(envTunnelAPIKey))
 }
 
-var forwardCmd = &cobra.Command{
-	Use:   "forward [container|hostname]",
-	Short: "Forward local TCP ports into a verified enclave",
-	Long: `Only ports the deployment publishes in tinfoil-config.yml can be forwarded.
+func newForwardCommand() *cobra.Command {
+	forwardCmd := &cobra.Command{
+		Use:   "forward [container|hostname]",
+		Short: "Forward local TCP ports into a verified enclave",
+		Long: `Only ports the deployment publishes in tinfoil-config.yml can be forwarded.
 A hostname target needs --repo or --config to select the expected workload.`,
-	Example: `  Forward one port
+		Example: `  Forward one port
   tinfoil forward my-server -L 25565:25565
 
   Forward several ports
@@ -70,51 +62,58 @@ A hostname target needs --repo or --config to select the expected workload.`,
 
   Verify against a local config file
   tinfoil forward my-server --config tinfoil-config.yml -L 8080:8080`,
-	Args: cobra.MaximumNArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		if (len(forwardPorts) == 0) == (forwardStdio == 0) {
-			return fmt.Errorf("pass either -L <local-port>:<enclave-port> or --stdio <enclave-port>")
-		}
-		if forwardStdio > 65535 {
-			return fmt.Errorf("invalid --stdio port %d: must be 1..65535", forwardStdio)
-		}
+		Args: cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if (len(forwardPorts) == 0) == (forwardStdio == 0) {
+				return fmt.Errorf("pass either -L <local-port>:<enclave-port> or --stdio <enclave-port>")
+			}
+			if forwardStdio > 65535 {
+				return fmt.Errorf("invalid --stdio port %d: must be 1..65535", forwardStdio)
+			}
 
-		// Parse every forward before binding anything, so a bad spec leaves
-		// nothing listening.
-		specs := make([]forwardSpec, 0, len(forwardPorts))
-		for _, raw := range forwardPorts {
-			spec, err := parseForwardSpec(raw)
+			// Parse every forward before binding anything, so a bad spec leaves
+			// nothing listening.
+			specs := make([]forwardSpec, 0, len(forwardPorts))
+			for _, raw := range forwardPorts {
+				spec, err := parseForwardSpec(raw)
+				if err != nil {
+					return err
+				}
+				specs = append(specs, spec)
+			}
+
+			var identifier string
+			if len(args) == 1 {
+				identifier = args[0]
+			}
+			target, err := resolveTunnelTarget(identifier)
 			if err != nil {
 				return err
 			}
-			specs = append(specs, spec)
-		}
-
-		var identifier string
-		if len(args) == 1 {
-			identifier = args[0]
-		}
-		target, err := resolveTunnelTarget(identifier)
-		if err != nil {
-			return err
-		}
-		tun, err := newTunnel(target)
-		if err != nil {
-			return err
-		}
-
-		if forwardStdio != 0 {
-			stream, err := tun.dial(int(forwardStdio))
+			tun, err := newTunnel(target)
 			if err != nil {
 				return err
 			}
-			if err := splice(stdioConn{}, stream); err != nil {
-				return fmt.Errorf("tunnel to %s port %d: %w", tun.host, forwardStdio, err)
+
+			if forwardStdio != 0 {
+				stream, err := tun.dial(int(forwardStdio))
+				if err != nil {
+					return err
+				}
+				if err := splice(stdioConn{}, stream); err != nil {
+					return fmt.Errorf("tunnel to %s port %d: %w", tun.host, forwardStdio, err)
+				}
+				return nil
 			}
-			return nil
-		}
-		return listenAndForward(tun, specs)
-	},
+			return listenAndForward(tun, specs)
+		},
+	}
+	forwardCmd.Flags().StringArrayVarP(&forwardPorts, "local", "L", nil, "Forward [bind:]<local-port>:<enclave-port>; may be repeated")
+	forwardCmd.Flags().UintVar(&forwardStdio, "stdio", 0, "Pipe a single stream to <enclave-port> over stdin/stdout instead of listening")
+	forwardCmd.Flags().StringVar(&forwardSealedTo, "sealed-to", "", "RTMR3 the enclave must carry")
+	forwardCmd.Flags().MarkHidden("sealed-to")
+	addTunnelFlags(forwardCmd)
+	return forwardCmd
 }
 
 type forwardSpec struct {

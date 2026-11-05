@@ -22,19 +22,11 @@ var (
 	trustJSON      bool
 )
 
-func init() {
-	rootCmd.AddCommand(trustCmd)
-	trustCmd.AddCommand(trustSetCmd)
-	trustCmd.Flags().BoolVar(&trustJSON, "json", false, "Show the complete trust policy, including registry IDs")
-	trustSetCmd.Flags().StringVar(&trustSetMode, "mode", "", "prompt (unknown configs ask) or frozen (unknown configs fail)")
-	trustSetCmd.Flags().StringVar(&trustSetRecord, "record", "", "what a yes records: org, project, or pin")
-	trustSetCmd.Flags().BoolVar(&trustSetPrune, "prune", false, "also remove broader allow entries when tightening --record")
-}
-
-var trustCmd = &cobra.Command{
-	Use:   "trust",
-	Short: "Show the known-configs trust store",
-	Example: `  Show the trust store
+func newTrustCommand() *cobra.Command {
+	trustCmd := &cobra.Command{
+		Use:   "trust",
+		Short: "Show the known-configs trust store",
+		Example: `  Show the trust store
   tinfoil trust
 
   Fail on unknown configs instead of asking
@@ -42,47 +34,58 @@ var trustCmd = &cobra.Command{
 
   Record only the exact config when you approve one
   tinfoil trust set --record pin`,
-	Args: cobra.NoArgs,
-	RunE: func(cmd *cobra.Command, args []string) error {
-		policy, err := loadConnectionPolicy()
-		if err != nil {
-			return err
-		}
-		if trustJSON {
-			data, err := json.Marshal(policy)
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			policy, err := loadConnectionPolicy()
 			if err != nil {
 				return err
 			}
-			_, err = fmt.Fprintln(cmd.OutOrStdout(), string(data))
-			return err
-		}
-		printTrustStore(cmd.OutOrStdout(), policy)
-		return nil
-	},
+			if trustJSON {
+				data, err := json.Marshal(policy)
+				if err != nil {
+					return err
+				}
+				_, err = fmt.Fprintln(cmd.OutOrStdout(), string(data))
+				return err
+			}
+			printTrustStore(cmd.OutOrStdout(), policy)
+			return nil
+		},
+	}
+	trustCmd.AddCommand(newTrustEnrollCommand(), newTrustRemoveCommand())
+	trustCmd.AddCommand(newTrustSetCommand())
+	trustCmd.Flags().BoolVar(&trustJSON, "json", false, "Show the complete trust policy, including registry IDs")
+	return trustCmd
 }
 
-var trustSetCmd = &cobra.Command{
-	Use:   "set",
-	Short: "Set the trust store's mode and/or record granularity",
-	Args:  cobra.NoArgs,
-	RunE: func(cmd *cobra.Command, args []string) error {
-		if trustSetMode == "" && trustSetRecord == "" {
-			return fmt.Errorf("nothing to set: pass --mode and/or --record")
-		}
-		policy, err := loadConnectionPolicy()
-		if err != nil {
-			// A malformed store must be fixed by hand, not overwritten.
-			return err
-		}
-		if err := policy.setDefaults(trustSetMode, trustSetRecord); err != nil {
-			return err
-		}
-		if err := offerPrune(cmd, &policy); err != nil {
-			return err
-		}
-		printTrustStore(cmd.OutOrStdout(), policy)
-		return nil
-	},
+func newTrustSetCommand() *cobra.Command {
+	trustSetCmd := &cobra.Command{
+		Use:   "set",
+		Short: "Set the trust store's mode and/or record granularity",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if trustSetMode == "" && trustSetRecord == "" {
+				return fmt.Errorf("nothing to set: pass --mode and/or --record")
+			}
+			policy, err := loadConnectionPolicy()
+			if err != nil {
+				// A malformed store must be fixed by hand, not overwritten.
+				return err
+			}
+			if err := policy.setDefaults(trustSetMode, trustSetRecord); err != nil {
+				return err
+			}
+			if err := offerPrune(cmd, &policy); err != nil {
+				return err
+			}
+			printTrustStore(cmd.OutOrStdout(), policy)
+			return nil
+		},
+	}
+	trustSetCmd.Flags().StringVar(&trustSetMode, "mode", "", "prompt (unknown configs ask) or frozen (unknown configs fail)")
+	trustSetCmd.Flags().StringVar(&trustSetRecord, "record", "", "what a yes records: org, project, or pin")
+	trustSetCmd.Flags().BoolVar(&trustSetPrune, "prune", false, "also remove broader allow entries when tightening --record")
+	return trustSetCmd
 }
 
 // offerPrune makes tightening one deliberate step: when the new level leaves

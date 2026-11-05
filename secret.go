@@ -23,118 +23,133 @@ var (
 	secretValueFile string
 )
 
-func init() {
-	rootCmd.AddCommand(secretCmd)
-	secretCmd.PersistentFlags().StringVarP(&outputFormat, "output", "o", "table", "Output format: table or json")
-
-	secretCmd.AddCommand(secretListCmd, secretGetCmd, secretCreateCmd, secretSetCmd, secretDeleteCmd)
-
-	for _, cmd := range []*cobra.Command{secretCreateCmd, secretSetCmd} {
-		cmd.Flags().StringVar(&secretValue, "value", "", "Secret value (visible in ps; prefer --value-file or stdin)")
-		cmd.Flags().StringVar(&secretValueFile, "value-file", "", "Read the secret value from this file (use - for stdin)")
+func newSecretCommand() *cobra.Command {
+	secretCmd := &cobra.Command{
+		Use:     "secret",
+		Aliases: []string{"secrets"},
+		Short:   "Manage organization-level secrets",
 	}
+	secretCmd.PersistentFlags().StringVarP(&outputFormat, "output", "o", "table", "Output format: table or json")
+	secretCmd.AddCommand(newSecretListCommand(), newSecretGetCommand(), newSecretCreateCommand(), newSecretSetCommand(), newSecretDeleteCommand())
+	return secretCmd
 }
 
-var secretCmd = &cobra.Command{
-	Use:     "secret",
-	Aliases: []string{"secrets"},
-	Short:   "Manage organization-level secrets",
+func newSecretListCommand() *cobra.Command {
+	secretListCmd := &cobra.Command{
+		Use:     "list",
+		Aliases: []string{"ls"},
+		Short:   "List secrets in the organization vault",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			client, err := authedClient()
+			if err != nil {
+				return err
+			}
+			list, err := listSecrets(client, "/api/secrets")
+			if err != nil {
+				return err
+			}
+			return printSecretList(list)
+		},
+	}
+
+	return secretListCmd
 }
 
-var secretListCmd = &cobra.Command{
-	Use:     "list",
-	Aliases: []string{"ls"},
-	Short:   "List secrets in the organization vault",
-	RunE: func(cmd *cobra.Command, args []string) error {
-		client, err := authedClient()
-		if err != nil {
-			return err
-		}
-		list, err := listSecrets(client, "/api/secrets")
-		if err != nil {
-			return err
-		}
-		return printSecretList(list)
-	},
+func newSecretGetCommand() *cobra.Command {
+	secretGetCmd := &cobra.Command{
+		Use:   "get [name]",
+		Short: "Show secret metadata",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			client, err := authedClient()
+			if err != nil {
+				return err
+			}
+			s, err := getSecret(client, pathf("/api/secrets/%s", args[0]))
+			if err != nil {
+				return err
+			}
+			return printSecret(s)
+		},
+	}
+
+	return secretGetCmd
 }
 
-var secretGetCmd = &cobra.Command{
-	Use:   "get [name]",
-	Short: "Show secret metadata",
-	Args:  cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		client, err := authedClient()
-		if err != nil {
-			return err
-		}
-		s, err := getSecret(client, pathf("/api/secrets/%s", args[0]))
-		if err != nil {
-			return err
-		}
-		return printSecret(s)
-	},
+func newSecretCreateCommand() *cobra.Command {
+	secretCreateCmd := &cobra.Command{
+		Use:   "create [name]",
+		Short: "Create a new organization secret",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			client, err := authedClient()
+			if err != nil {
+				return err
+			}
+			value, err := readSecretValue(cmd)
+			if err != nil {
+				return err
+			}
+			s, err := createSecret(client, "/api/secrets", args[0], value)
+			if err != nil {
+				return err
+			}
+			fmt.Printf("Created secret %s\n", s.Name)
+			return nil
+		},
+	}
+	secretCreateCmd.Flags().StringVar(&secretValue, "value", "", "Secret value (visible in ps; prefer --value-file or stdin)")
+	secretCreateCmd.Flags().StringVar(&secretValueFile, "value-file", "", "Read the secret value from this file (use - for stdin)")
+	return secretCreateCmd
 }
 
-var secretCreateCmd = &cobra.Command{
-	Use:   "create [name]",
-	Short: "Create a new organization secret",
-	Args:  cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		client, err := authedClient()
-		if err != nil {
-			return err
-		}
-		value, err := readSecretValue(cmd)
-		if err != nil {
-			return err
-		}
-		s, err := createSecret(client, "/api/secrets", args[0], value)
-		if err != nil {
-			return err
-		}
-		fmt.Printf("Created secret %s\n", s.Name)
-		return nil
-	},
+func newSecretSetCommand() *cobra.Command {
+	secretSetCmd := &cobra.Command{
+		Use:   "set [name]",
+		Short: "Update the value of an existing secret",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			client, err := authedClient()
+			if err != nil {
+				return err
+			}
+			value, err := readSecretValue(cmd)
+			if err != nil {
+				return err
+			}
+			s, err := setSecret(client, pathf("/api/secrets/%s", args[0]), value)
+			if err != nil {
+				return err
+			}
+			fmt.Printf("Updated secret %s (containers using it will be marked stale)\n", s.Name)
+			return nil
+		},
+	}
+	secretSetCmd.Flags().StringVar(&secretValue, "value", "", "Secret value (visible in ps; prefer --value-file or stdin)")
+	secretSetCmd.Flags().StringVar(&secretValueFile, "value-file", "", "Read the secret value from this file (use - for stdin)")
+	return secretSetCmd
 }
 
-var secretSetCmd = &cobra.Command{
-	Use:   "set [name]",
-	Short: "Update the value of an existing secret",
-	Args:  cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		client, err := authedClient()
-		if err != nil {
-			return err
-		}
-		value, err := readSecretValue(cmd)
-		if err != nil {
-			return err
-		}
-		s, err := setSecret(client, pathf("/api/secrets/%s", args[0]), value)
-		if err != nil {
-			return err
-		}
-		fmt.Printf("Updated secret %s (containers using it will be marked stale)\n", s.Name)
-		return nil
-	},
-}
+func newSecretDeleteCommand() *cobra.Command {
+	secretDeleteCmd := &cobra.Command{
+		Use:     "delete [name]",
+		Aliases: []string{"rm", "remove"},
+		Short:   "Delete a secret",
+		Args:    cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			client, err := authedClient()
+			if err != nil {
+				return err
+			}
+			if err := deleteSecret(client, pathf("/api/secrets/%s", args[0])); err != nil {
+				return err
+			}
+			fmt.Printf("Deleted secret %s\n", args[0])
+			return nil
+		},
+	}
 
-var secretDeleteCmd = &cobra.Command{
-	Use:     "delete [name]",
-	Aliases: []string{"rm", "remove"},
-	Short:   "Delete a secret",
-	Args:    cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		client, err := authedClient()
-		if err != nil {
-			return err
-		}
-		if err := deleteSecret(client, pathf("/api/secrets/%s", args[0])); err != nil {
-			return err
-		}
-		fmt.Printf("Deleted secret %s\n", args[0])
-		return nil
-	},
+	return secretDeleteCmd
 }
 
 func listSecrets(client *cpClient, path string) ([]secretView, error) {

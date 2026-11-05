@@ -51,179 +51,189 @@ var (
 	modelWrapPollInterval = 10 * time.Second
 )
 
-func init() {
-	rootCmd.AddCommand(modelCmd)
+func newModelCommand() *cobra.Command {
+	modelCmd := &cobra.Command{
+		Use:     "model",
+		Aliases: []string{"models"},
+		Short:   "Prepare verified model weights for containers",
+	}
 	modelCmd.PersistentFlags().StringVarP(&outputFormat, "output", "o", "table", "Output format: table or json")
+	modelCmd.AddCommand(newModelWrapCommand(), newModelUpdateCommand(), newModelListCommand(), newModelStatusCommand(), newModelDeleteCommand())
+	return modelCmd
+}
 
-	modelCmd.AddCommand(modelWrapCmd, modelUpdateCmd, modelListCmd, modelStatusCmd, modelDeleteCmd)
-
+func newModelWrapCommand() *cobra.Command {
+	modelWrapCmd := &cobra.Command{
+		Use:   "wrap [owner/model]",
+		Short: "Wrap Hugging Face weights into a verified artifact",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			client, err := authedClient()
+			if err != nil {
+				return err
+			}
+			token, err := readHFToken(cmd)
+			if err != nil {
+				return err
+			}
+			body := map[string]any{
+				"repo": args[0],
+				"host": modelWrapHost,
+			}
+			if modelWrapCommit != "" {
+				body["commit"] = modelWrapCommit
+			}
+			if token != "" {
+				body["hf_token"] = token
+			}
+			return runModelWrapJob(client, body, modelWrapWait, nil)
+		},
+	}
 	modelWrapCmd.Flags().StringVar(&modelWrapHost, "host", "", "Host to wrap the model on (see 'tinfoil container hosts') [required]")
 	modelWrapCmd.Flags().StringVar(&modelWrapCommit, "commit", "", "Hugging Face commit SHA to pin (defaults to the repo's latest commit)")
 	modelWrapCmd.Flags().StringVar(&modelWrapHFToken, "hf-token", "", "Hugging Face token (visible in ps; prefer --hf-token-file or stdin)")
 	modelWrapCmd.Flags().StringVar(&modelWrapHFTokenFile, "hf-token-file", "", "Read the Hugging Face token from this file (use - for stdin)")
 	modelWrapCmd.Flags().BoolVar(&modelWrapWait, "wait", false, "Poll until the wrap job finishes and print the config block")
 	_ = modelWrapCmd.MarkFlagRequired("host")
+	return modelWrapCmd
+}
 
+func newModelUpdateCommand() *cobra.Command {
+	modelUpdateCmd := &cobra.Command{
+		Use:   "update [owner/model]",
+		Short: "Wrap a newer revision of a previously wrapped model",
+		Long: `The old artifact is kept. Point tinfoil-config.yml at the new repo/mpk values,
+release, then delete the old wrap job.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			client, err := authedClient()
+			if err != nil {
+				return err
+			}
+			token, err := readHFToken(cmd)
+			if err != nil {
+				return err
+			}
+			repo := args[0]
+
+			previous, err := latestCompleteModelWrap(client, repo, modelUpdateHost)
+			if err != nil {
+				return err
+			}
+			if previous == nil {
+				return fmt.Errorf("no completed wrap job for %s on %s among the %d most recent jobs — start one with `tinfoil model wrap`", repo, modelUpdateHost, modelWrapSearchWindow)
+			}
+
+			target := modelUpdateCommit
+			if target == "" {
+				if target, err = resolveLatestHFCommit(client, repo, token); err != nil {
+					return err
+				}
+			}
+			if target == previous.Commit {
+				if outputFormat == "json" {
+					return printJSON(previous)
+				}
+				fmt.Printf("%s on %s is already at commit %s (job %s).\n", repo, previous.Host, target, previous.JobID)
+				return nil
+			}
+
+			body := map[string]any{
+				"repo":   repo,
+				"host":   modelUpdateHost,
+				"commit": target,
+			}
+			if token != "" {
+				body["hf_token"] = token
+			}
+			if outputFormat != "json" {
+				fmt.Printf("Updating %s on %s: %s -> %s\n\n", repo, previous.Host, shortCommit(previous.Commit), shortCommit(target))
+			}
+			return runModelWrapJob(client, body, modelUpdateWait, func(job modelWrapJobView) {
+				if outputFormat != "json" && job.Status == "complete" {
+					fmt.Printf("\nOnce the new config is released and deployed, reclaim the previous artifact with:\n  tinfoil model delete %s %s\n", previous.Host, previous.JobID)
+				}
+			})
+		},
+	}
 	modelUpdateCmd.Flags().StringVar(&modelUpdateHost, "host", "", "Host the model was wrapped on (see 'tinfoil container hosts') [required]")
 	modelUpdateCmd.Flags().StringVar(&modelUpdateCommit, "commit", "", "Hugging Face commit SHA to update to (defaults to the repo's latest commit)")
 	modelUpdateCmd.Flags().StringVar(&modelUpdateHFToken, "hf-token", "", "Hugging Face token (visible in ps; prefer --hf-token-file or stdin)")
 	modelUpdateCmd.Flags().StringVar(&modelUpdateHFTokenFile, "hf-token-file", "", "Read the Hugging Face token from this file (use - for stdin)")
 	modelUpdateCmd.Flags().BoolVar(&modelUpdateWait, "wait", false, "Poll until the wrap job finishes and print the config block")
 	_ = modelUpdateCmd.MarkFlagRequired("host")
-
-	modelListCmd.Flags().IntVar(&modelListLimit, "limit", 0, "Maximum number of jobs to list (server default 20, max 200)")
-
-	modelStatusCmd.Flags().BoolVar(&modelStatusWait, "wait", false, "Poll until the wrap job finishes")
-	modelStatusCmd.Flags().BoolVar(&modelStatusLogs, "logs", false, "Include the wrap job logs")
+	return modelUpdateCmd
 }
 
-var modelCmd = &cobra.Command{
-	Use:     "model",
-	Aliases: []string{"models"},
-	Short:   "Prepare verified model weights for containers",
-}
-
-var modelWrapCmd = &cobra.Command{
-	Use:   "wrap [owner/model]",
-	Short: "Wrap Hugging Face weights into a verified artifact",
-	Args:  cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		client, err := authedClient()
-		if err != nil {
-			return err
-		}
-		token, err := readHFToken(cmd)
-		if err != nil {
-			return err
-		}
-		body := map[string]any{
-			"repo": args[0],
-			"host": modelWrapHost,
-		}
-		if modelWrapCommit != "" {
-			body["commit"] = modelWrapCommit
-		}
-		if token != "" {
-			body["hf_token"] = token
-		}
-		return runModelWrapJob(client, body, modelWrapWait, nil)
-	},
-}
-
-var modelUpdateCmd = &cobra.Command{
-	Use:   "update [owner/model]",
-	Short: "Wrap a newer revision of a previously wrapped model",
-	Long: `The old artifact is kept. Point tinfoil-config.yml at the new repo/mpk values,
-release, then delete the old wrap job.`,
-	Args: cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		client, err := authedClient()
-		if err != nil {
-			return err
-		}
-		token, err := readHFToken(cmd)
-		if err != nil {
-			return err
-		}
-		repo := args[0]
-
-		previous, err := latestCompleteModelWrap(client, repo, modelUpdateHost)
-		if err != nil {
-			return err
-		}
-		if previous == nil {
-			return fmt.Errorf("no completed wrap job for %s on %s among the %d most recent jobs — start one with `tinfoil model wrap`", repo, modelUpdateHost, modelWrapSearchWindow)
-		}
-
-		target := modelUpdateCommit
-		if target == "" {
-			if target, err = resolveLatestHFCommit(client, repo, token); err != nil {
+func newModelListCommand() *cobra.Command {
+	modelListCmd := &cobra.Command{
+		Use:     "list",
+		Aliases: []string{"ls"},
+		Short:   "List model wrap jobs in the organization",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			client, err := authedClient()
+			if err != nil {
 				return err
 			}
-		}
-		if target == previous.Commit {
-			if outputFormat == "json" {
-				return printJSON(previous)
+			var query url.Values
+			if modelListLimit > 0 {
+				query = url.Values{"limit": []string{strconv.Itoa(modelListLimit)}}
 			}
-			fmt.Printf("%s on %s is already at commit %s (job %s).\n", repo, previous.Host, target, previous.JobID)
+			var list []modelWrapJobView
+			if _, err := client.do("GET", "/api/models/wrap", query, nil, &list); err != nil {
+				return err
+			}
+			return renderModelWrapJobs(list)
+		},
+	}
+	modelListCmd.Flags().IntVar(&modelListLimit, "limit", 0, "Maximum number of jobs to list (server default 20, max 200)")
+	return modelListCmd
+}
+
+func newModelStatusCommand() *cobra.Command {
+	modelStatusCmd := &cobra.Command{
+		Use:     "status [host] [job-id]",
+		Aliases: []string{"get"},
+		Short:   "Show the status of a model wrap job",
+		Args:    cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			client, err := authedClient()
+			if err != nil {
+				return err
+			}
+			job, err := fetchModelWrapJob(client, args[0], args[1], modelStatusWait)
+			if err != nil {
+				return err
+			}
+			return finishModelWrapJob(job, modelStatusLogs, modelStatusWait)
+		},
+	}
+	modelStatusCmd.Flags().BoolVar(&modelStatusWait, "wait", false, "Poll until the wrap job finishes")
+	modelStatusCmd.Flags().BoolVar(&modelStatusLogs, "logs", false, "Include the wrap job logs")
+	return modelStatusCmd
+}
+
+func newModelDeleteCommand() *cobra.Command {
+	modelDeleteCmd := &cobra.Command{
+		Use:     "delete [host] [job-id]",
+		Aliases: []string{"rm", "remove"},
+		Short:   "Delete a wrap job and its artifact once unused",
+		Args:    cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			client, err := authedClient()
+			if err != nil {
+				return err
+			}
+			host, jobID := args[0], args[1]
+			if _, err := client.do("DELETE", pathf("/api/models/wrap/%s/%s", host, jobID), nil, nil, nil); err != nil {
+				return err
+			}
+			fmt.Printf("Deleted model wrap job %s on %s\n", jobID, host)
 			return nil
-		}
+		},
+	}
 
-		body := map[string]any{
-			"repo":   repo,
-			"host":   modelUpdateHost,
-			"commit": target,
-		}
-		if token != "" {
-			body["hf_token"] = token
-		}
-		if outputFormat != "json" {
-			fmt.Printf("Updating %s on %s: %s -> %s\n\n", repo, previous.Host, shortCommit(previous.Commit), shortCommit(target))
-		}
-		return runModelWrapJob(client, body, modelUpdateWait, func(job modelWrapJobView) {
-			if outputFormat != "json" && job.Status == "complete" {
-				fmt.Printf("\nOnce the new config is released and deployed, reclaim the previous artifact with:\n  tinfoil model delete %s %s\n", previous.Host, previous.JobID)
-			}
-		})
-	},
-}
-
-var modelListCmd = &cobra.Command{
-	Use:     "list",
-	Aliases: []string{"ls"},
-	Short:   "List model wrap jobs in the organization",
-	RunE: func(cmd *cobra.Command, args []string) error {
-		client, err := authedClient()
-		if err != nil {
-			return err
-		}
-		var query url.Values
-		if modelListLimit > 0 {
-			query = url.Values{"limit": []string{strconv.Itoa(modelListLimit)}}
-		}
-		var list []modelWrapJobView
-		if _, err := client.do("GET", "/api/models/wrap", query, nil, &list); err != nil {
-			return err
-		}
-		return renderModelWrapJobs(list)
-	},
-}
-
-var modelStatusCmd = &cobra.Command{
-	Use:     "status [host] [job-id]",
-	Aliases: []string{"get"},
-	Short:   "Show the status of a model wrap job",
-	Args:    cobra.ExactArgs(2),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		client, err := authedClient()
-		if err != nil {
-			return err
-		}
-		job, err := fetchModelWrapJob(client, args[0], args[1], modelStatusWait)
-		if err != nil {
-			return err
-		}
-		return finishModelWrapJob(job, modelStatusLogs, modelStatusWait)
-	},
-}
-
-var modelDeleteCmd = &cobra.Command{
-	Use:     "delete [host] [job-id]",
-	Aliases: []string{"rm", "remove"},
-	Short:   "Delete a wrap job and its artifact once unused",
-	Args:    cobra.ExactArgs(2),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		client, err := authedClient()
-		if err != nil {
-			return err
-		}
-		host, jobID := args[0], args[1]
-		if _, err := client.do("DELETE", pathf("/api/models/wrap/%s/%s", host, jobID), nil, nil, nil); err != nil {
-			return err
-		}
-		fmt.Printf("Deleted model wrap job %s on %s\n", jobID, host)
-		return nil
-	},
+	return modelDeleteCmd
 }
 
 func readHFToken(cmd *cobra.Command) (string, error) {

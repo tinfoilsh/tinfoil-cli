@@ -46,8 +46,77 @@ var (
 	attestSSHYes      bool
 )
 
-func init() {
-	rootCmd.AddCommand(attestSSHCmd)
+func newAttestSSHCommand() *cobra.Command {
+	attestSSHCmd := &cobra.Command{
+		Use:   "attest-ssh [container|hostname]",
+		Short: "Pin an enclave's attested SSH host key for native ssh",
+		Long: `Print an ssh profile pinned to the attested host key, or write it with --install.
+A reboot rotates the key, so rerun this after one.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			resolved := startConnectionProgress(cmd.ErrOrStderr(), "Looking up "+args[0])
+			target, err := resolveTunnelTarget(args[0])
+			resolved()
+			if err != nil {
+				return err
+			}
+			if target.container != nil {
+				fmt.Fprintf(cmd.ErrOrStderr(), "%s: %s.\n", target.name, statusLabel(target.container.Status))
+				switch target.container.Repo {
+				case monitorRepo:
+					return fmt.Errorf("Monitor has no interactive shell; use tinfoil monitor open %s", target.name)
+				case defaultSandboxRepo:
+					if attestSSHHost != "" || attestSSHPort != 0 {
+						return errors.New("managed sandboxes use their configured SSH endpoint")
+					}
+					if attestSSHName != "" && !sshProfileNamePattern.MatchString(attestSSHName) {
+						return errors.New("invalid SSH profile name")
+					}
+					s, err := connectSandbox(cmd.Context(), target.workload)
+					if err != nil {
+						return err
+					}
+					defer s.close()
+					if err := s.enroll(cmd.Context()); err != nil {
+						return err
+					}
+					if attestSSHName != "" {
+						s.profile.name = attestSSHName
+						if s.profile.jump != nil {
+							s.profile.jump.name = attestSSHName + monitorJumpSuffix
+						}
+					}
+					if cmd.Flags().Changed("user") {
+						s.profile.user = attestSSHUser
+					}
+					if attestSSHInstall {
+						return s.install()
+					}
+					fmt.Printf("%s\n# ~/.ssh/tinfoil/%s.known_hosts\n%s", s.profile.render(), s.profile.name, s.profile.pin())
+					return nil
+				}
+			}
+			profile := sshProfile{name: attestSSHName, hostName: nativeSSHHost(target, attestSSHHost), port: sshTargetPort(target, attestSSHPort), user: attestSSHUser, identityFile: attestSSHIdentity}
+			if profile.name == "" {
+				profile.name = target.name
+			}
+			if !sshProfileNamePattern.MatchString(profile.name) {
+				return fmt.Errorf("invalid profile name %q: use letters, digits, dots, dashes or underscores, starting with a letter or digit", profile.name)
+			}
+			if profile.port > 65535 {
+				return fmt.Errorf("--ssh-port must be at most 65535 (got %d)", profile.port)
+			}
+			if profile.hostKey, err = attestedHostKey(target.host, target.repo, target.sealedTo); err != nil {
+				return err
+			}
+			fmt.Fprintln(os.Stderr, "Attestation successful.")
+			if !attestSSHInstall {
+				fmt.Printf("%s\n# ~/.ssh/tinfoil/%s.known_hosts\n%s", profile.render(), profile.name, profile.pin())
+				return nil
+			}
+			return profile.install()
+		},
+	}
 	flags := attestSSHCmd.Flags()
 	flags.StringVar(&attestSSHName, "name", "", "Host alias for the profile (default: HOST)")
 	flags.StringVar(&attestSSHHost, "ssh-host", "", "Hostname ssh dials (default: debug.tinfoil.sh for a container with a published SSH port, else HOST)")
@@ -57,77 +126,7 @@ func init() {
 	flags.BoolVar(&attestSSHInstall, "install", false, "Write the profile under ~/.ssh/tinfoil instead of printing it")
 	flags.BoolVar(&attestSSHYes, "yes", false, "Add Include "+sshIncludeGlob+" to ~/.ssh/config without prompting")
 	addTrustDangerousFlag(attestSSHCmd)
-}
-
-var attestSSHCmd = &cobra.Command{
-	Use:   "attest-ssh [container|hostname]",
-	Short: "Pin an enclave's attested SSH host key for native ssh",
-	Long: `Print an ssh profile pinned to the attested host key, or write it with --install.
-A reboot rotates the key, so rerun this after one.`,
-	Args: cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		resolved := startConnectionProgress(cmd.ErrOrStderr(), "Looking up "+args[0])
-		target, err := resolveTunnelTarget(args[0])
-		resolved()
-		if err != nil {
-			return err
-		}
-		if target.container != nil {
-			fmt.Fprintf(cmd.ErrOrStderr(), "%s: %s.\n", target.name, statusLabel(target.container.Status))
-			switch target.container.Repo {
-			case monitorRepo:
-				return fmt.Errorf("Monitor has no interactive shell; use tinfoil monitor open %s", target.name)
-			case defaultSandboxRepo:
-				if attestSSHHost != "" || attestSSHPort != 0 {
-					return errors.New("managed sandboxes use their configured SSH endpoint")
-				}
-				if attestSSHName != "" && !sshProfileNamePattern.MatchString(attestSSHName) {
-					return errors.New("invalid SSH profile name")
-				}
-				s, err := connectSandbox(cmd.Context(), target.workload)
-				if err != nil {
-					return err
-				}
-				defer s.close()
-				if err := s.enroll(cmd.Context()); err != nil {
-					return err
-				}
-				if attestSSHName != "" {
-					s.profile.name = attestSSHName
-					if s.profile.jump != nil {
-						s.profile.jump.name = attestSSHName + monitorJumpSuffix
-					}
-				}
-				if cmd.Flags().Changed("user") {
-					s.profile.user = attestSSHUser
-				}
-				if attestSSHInstall {
-					return s.install()
-				}
-				fmt.Printf("%s\n# ~/.ssh/tinfoil/%s.known_hosts\n%s", s.profile.render(), s.profile.name, s.profile.pin())
-				return nil
-			}
-		}
-		profile := sshProfile{name: attestSSHName, hostName: nativeSSHHost(target, attestSSHHost), port: sshTargetPort(target, attestSSHPort), user: attestSSHUser, identityFile: attestSSHIdentity}
-		if profile.name == "" {
-			profile.name = target.name
-		}
-		if !sshProfileNamePattern.MatchString(profile.name) {
-			return fmt.Errorf("invalid profile name %q: use letters, digits, dots, dashes or underscores, starting with a letter or digit", profile.name)
-		}
-		if profile.port > 65535 {
-			return fmt.Errorf("--ssh-port must be at most 65535 (got %d)", profile.port)
-		}
-		if profile.hostKey, err = attestedHostKey(target.host, target.repo, target.sealedTo); err != nil {
-			return err
-		}
-		fmt.Fprintln(os.Stderr, "Attestation successful.")
-		if !attestSSHInstall {
-			fmt.Printf("%s\n# ~/.ssh/tinfoil/%s.known_hosts\n%s", profile.render(), profile.name, profile.pin())
-			return nil
-		}
-		return profile.install()
-	},
+	return attestSSHCmd
 }
 
 // Stop and join the reporter before the next step or credential prompt.

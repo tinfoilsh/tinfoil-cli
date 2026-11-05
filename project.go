@@ -48,14 +48,98 @@ var (
 	projectUpdateYes               bool
 )
 
-func init() {
-	rootCmd.AddCommand(projectCmd)
+func newProjectCommand() *cobra.Command {
+	projectCmd := &cobra.Command{
+		Use:     "project",
+		Aliases: []string{"projects"},
+		Short:   "Manage groups of containers that share a config repo",
+	}
 	projectCmd.PersistentFlags().StringVarP(&outputFormat, "output", "o", "table", "Output format: table or json")
-	projectCmd.AddCommand(projectListCmd)
-	projectCmd.AddCommand(projectGetCmd)
-	projectCmd.AddCommand(projectSettingsCmd)
-	projectCmd.AddCommand(projectUpdateCmd)
+	projectCmd.AddCommand(newProjectListCommand())
+	projectCmd.AddCommand(newProjectGetCommand())
+	projectCmd.AddCommand(newProjectSettingsCommand())
+	projectCmd.AddCommand(newProjectUpdateCommand())
+	projectCmd.AddCommand(newProjectStorageCommand())
+	return projectCmd
+}
 
+func newProjectListCommand() *cobra.Command {
+	projectListCmd := &cobra.Command{
+		Use:     "list",
+		Aliases: []string{"ls"},
+		Short:   "List projects in the current organization",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			client, err := authedClient()
+			if err != nil {
+				return err
+			}
+			projects, err := listProjects(client)
+			if err != nil {
+				return err
+			}
+			return renderProjects(projects)
+		},
+	}
+
+	return projectListCmd
+}
+
+func newProjectGetCommand() *cobra.Command {
+	projectGetCmd := &cobra.Command{
+		Use:   "get [id|owner/repo]",
+		Short: "Show a project",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			client, err := authedClient()
+			if err != nil {
+				return err
+			}
+			project, err := resolveProject(client, args[0])
+			if err != nil {
+				return err
+			}
+			return renderProject(*project)
+		},
+	}
+
+	return projectGetCmd
+}
+
+func newProjectSettingsCommand() *cobra.Command {
+	projectSettingsCmd := &cobra.Command{
+		Use:     "settings [id|owner/repo]",
+		Aliases: []string{"set"},
+		Short:   "Update project settings",
+		Args:    cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			body := map[string]any{}
+			if projectSettingsHoldByDefault != "" {
+				hold, err := parseTriBool(projectSettingsHoldByDefault)
+				if err != nil {
+					return fmt.Errorf("--hold-by-default: %w", err)
+				}
+				body["hold_by_default"] = hold
+			}
+			if len(body) == 0 {
+				return fmt.Errorf("specify --hold-by-default")
+			}
+
+			client, err := authedClient()
+			if err != nil {
+				return err
+			}
+			project, err := resolveProject(client, args[0])
+			if err != nil {
+				return err
+			}
+			updated, err := patchProject(client, project.ID, body)
+			if err != nil {
+				return err
+			}
+			updated = preserveProjectCounts(updated, *project)
+			return renderProject(updated)
+		},
+	}
 	projectSettingsCmd.Flags().StringVar(
 		&projectSettingsHoldByDefault,
 		"hold-by-default",
@@ -63,7 +147,52 @@ func init() {
 		"Hold new versions for review by default (true/false)",
 	)
 	projectSettingsCmd.Flags().Lookup("hold-by-default").NoOptDefVal = "true"
+	return projectSettingsCmd
+}
 
+func newProjectUpdateCommand() *cobra.Command {
+	projectUpdateCmd := &cobra.Command{
+		Use:   "update [id|owner/repo]",
+		Short: "Update every running instance of a project to a tag",
+		Long:  `Stopped and failed instances are skipped; start them with "tinfoil container deploy".`,
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			body := map[string]any{
+				"tag": projectUpdateTag,
+			}
+			if err := setMarkLatestRelease(cmd, body, projectUpdateMarkLatestRelease); err != nil {
+				return err
+			}
+			if cmd.Flags().Changed("hold") {
+				hold, err := parseTriBool(projectUpdateHold)
+				if err != nil {
+					return fmt.Errorf("--hold: %w", err)
+				}
+				body["hold"] = hold
+			}
+			if len(projectUpdateInstanceIDs) > 0 {
+				body["instance_ids"] = projectUpdateInstanceIDs
+			}
+
+			client, err := authedClient()
+			if err != nil {
+				return err
+			}
+			project, err := resolveProject(client, args[0])
+			if err != nil {
+				return err
+			}
+
+			response, err := updateProjectInstances(client, project.ID, body)
+			if err != nil {
+				if len(response.Results) > 0 {
+					return errors.Join(err, renderProjectUpdateResults(response.Results))
+				}
+				return err
+			}
+			return renderProjectUpdateResults(response.Results)
+		},
+	}
 	projectUpdateCmd.Flags().StringVar(&projectUpdateTag, "tag", "", "Release tag to update to")
 	projectUpdateCmd.Flags().StringVar(&projectUpdateHold, "hold", "", "Hold the new version for review (default: the project's setting)")
 	projectUpdateCmd.Flags().Lookup("hold").NoOptDefVal = "true"
@@ -76,124 +205,7 @@ func init() {
 	)
 	projectUpdateCmd.Flags().BoolVar(&projectUpdateYes, "yes", false, "Approve the update plan, including any downtime")
 	_ = projectUpdateCmd.MarkFlagRequired("tag")
-}
-
-var projectCmd = &cobra.Command{
-	Use:     "project",
-	Aliases: []string{"projects"},
-	Short:   "Manage groups of containers that share a config repo",
-}
-
-var projectListCmd = &cobra.Command{
-	Use:     "list",
-	Aliases: []string{"ls"},
-	Short:   "List projects in the current organization",
-	RunE: func(cmd *cobra.Command, args []string) error {
-		client, err := authedClient()
-		if err != nil {
-			return err
-		}
-		projects, err := listProjects(client)
-		if err != nil {
-			return err
-		}
-		return renderProjects(projects)
-	},
-}
-
-var projectGetCmd = &cobra.Command{
-	Use:   "get [id|owner/repo]",
-	Short: "Show a project",
-	Args:  cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		client, err := authedClient()
-		if err != nil {
-			return err
-		}
-		project, err := resolveProject(client, args[0])
-		if err != nil {
-			return err
-		}
-		return renderProject(*project)
-	},
-}
-
-var projectSettingsCmd = &cobra.Command{
-	Use:     "settings [id|owner/repo]",
-	Aliases: []string{"set"},
-	Short:   "Update project settings",
-	Args:    cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		body := map[string]any{}
-		if projectSettingsHoldByDefault != "" {
-			hold, err := parseTriBool(projectSettingsHoldByDefault)
-			if err != nil {
-				return fmt.Errorf("--hold-by-default: %w", err)
-			}
-			body["hold_by_default"] = hold
-		}
-		if len(body) == 0 {
-			return fmt.Errorf("specify --hold-by-default")
-		}
-
-		client, err := authedClient()
-		if err != nil {
-			return err
-		}
-		project, err := resolveProject(client, args[0])
-		if err != nil {
-			return err
-		}
-		updated, err := patchProject(client, project.ID, body)
-		if err != nil {
-			return err
-		}
-		updated = preserveProjectCounts(updated, *project)
-		return renderProject(updated)
-	},
-}
-
-var projectUpdateCmd = &cobra.Command{
-	Use:   "update [id|owner/repo]",
-	Short: "Update every running instance of a project to a tag",
-	Long:  `Stopped and failed instances are skipped; start them with "tinfoil container deploy".`,
-	Args:  cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		body := map[string]any{
-			"tag": projectUpdateTag,
-		}
-		if err := setMarkLatestRelease(cmd, body, projectUpdateMarkLatestRelease); err != nil {
-			return err
-		}
-		if cmd.Flags().Changed("hold") {
-			hold, err := parseTriBool(projectUpdateHold)
-			if err != nil {
-				return fmt.Errorf("--hold: %w", err)
-			}
-			body["hold"] = hold
-		}
-		if len(projectUpdateInstanceIDs) > 0 {
-			body["instance_ids"] = projectUpdateInstanceIDs
-		}
-
-		client, err := authedClient()
-		if err != nil {
-			return err
-		}
-		project, err := resolveProject(client, args[0])
-		if err != nil {
-			return err
-		}
-
-		response, err := updateProjectInstances(client, project.ID, body)
-		if err != nil {
-			if len(response.Results) > 0 {
-				return errors.Join(err, renderProjectUpdateResults(response.Results))
-			}
-			return err
-		}
-		return renderProjectUpdateResults(response.Results)
-	},
+	return projectUpdateCmd
 }
 
 func listProjects(client *cpClient) ([]projectView, error) {
