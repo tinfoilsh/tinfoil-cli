@@ -1,19 +1,17 @@
 package main
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
-	"time"
 
+	"github.com/tinfoilsh/tinfoil-cli/internal/auth"
 	"github.com/tinfoilsh/tinfoil-cli/internal/config"
 	"github.com/tinfoilsh/tinfoil-cli/internal/controlplane"
 	"github.com/tinfoilsh/tinfoil-cli/internal/keybundle"
-	"github.com/zalando/go-keyring"
 )
 
 var (
@@ -25,12 +23,9 @@ var (
 )
 
 const (
-	oauthCallback       = "http://127.0.0.1:49152/oauth/callback"
-	keySyncCallback     = "http://localhost:49152/callback"
-	credentialService   = "tinfoil-cli"
-	loginRecordName     = "login"
-	credentialLockWait  = 45 * time.Second
-	credentialLockRetry = 20 * time.Millisecond
+	oauthCallback   = "http://127.0.0.1:49152/oauth/callback"
+	keySyncCallback = "http://localhost:49152/callback"
+	loginRecordName = "login"
 )
 
 var (
@@ -88,123 +83,46 @@ func credentialFile(name string) (string, error) {
 	return filepath.Join(filepath.Dir(config), "credentials", name+".json"), nil
 }
 
-var osCredentials interface {
-	Get(service, user string) (string, error)
-	Set(service, user, secret string) error
-	Delete(service, user string) error
-} = osKeyring{}
+var osCredentials auth.Keyring = auth.OSKeyring{}
 
-type osKeyring struct{}
-
-func (osKeyring) Get(service, user string) (string, error) { return keyring.Get(service, user) }
-func (osKeyring) Set(service, user, secret string) error   { return keyring.Set(service, user, secret) }
-func (osKeyring) Delete(service, user string) error        { return keyring.Delete(service, user) }
-
-type credentialSlot struct {
-	Keyring bool            `json:"keyring"`
-	Record  json.RawMessage `json:"record,omitempty"`
-	Deleted bool            `json:"deleted,omitempty"`
-}
-
-func readCredentialSlot(name string) (string, *credentialSlot, error) {
-	path, err := credentialFile(name)
+func credentialStore() (*auth.Store, error) {
+	path, err := configPath()
 	if err != nil {
-		return "", nil, err
+		return nil, err
 	}
-	var slot credentialSlot
-	if err := readStorageJSON(path, &slot); errors.Is(err, os.ErrNotExist) {
-		return path, nil, nil
-	} else if err != nil {
-		return path, nil, fmt.Errorf("%s: %w", path, err)
-	}
-	return path, &slot, nil
+	return auth.NewStore(filepath.Join(filepath.Dir(path), "credentials"), osCredentials), nil
 }
 
 func readCredential(name string, out any) (bool, error) {
-	_, slot, err := readCredentialSlot(name)
-	if err != nil || slot == nil || slot.Deleted {
+	store, err := credentialStore()
+	if err != nil {
 		return false, err
 	}
-	if slot.Record != nil {
-		return true, json.Unmarshal(slot.Record, out)
-	}
-	secret, err := osCredentials.Get(credentialService, name)
-	if err != nil {
-		return false, fmt.Errorf("reading %s from the OS credential service: %w", name, err)
-	}
-	return true, json.Unmarshal([]byte(secret), out)
+	return store.Read(name, out)
 }
 
 func writeCredential(name string, value any) error {
-	data, err := json.Marshal(value)
+	store, err := credentialStore()
 	if err != nil {
 		return err
 	}
-	defer clear(data)
-	path, previous, err := readCredentialSlot(name)
-	if err != nil {
-		return err
-	}
-	if err := prepareStorageDirectory(filepath.Dir(path)); err != nil {
-		return err
-	}
-	if previous == nil || !previous.Keyring {
-		marker := credentialSlot{Keyring: true, Deleted: previous == nil}
-		if previous != nil {
-			marker.Record = previous.Record
-		}
-		if err := writeCredentialSlot(path, marker); err != nil {
-			return err
-		}
-	}
-	slot := credentialSlot{Keyring: true}
-	if osCredentials.Set(credentialService, name, string(data)) != nil {
-		slot.Record = data
-	}
-	return writeCredentialSlot(path, slot)
-}
-
-func writeCredentialSlot(path string, slot credentialSlot) error {
-	encoded, err := json.Marshal(slot)
-	if err != nil {
-		return err
-	}
-	defer clear(encoded)
-	return writeStorageFile(path, encoded, false)
+	return store.Write(name, value)
 }
 
 func deleteCredential(name string) error {
-	path, slot, err := readCredentialSlot(name)
-	if slot == nil && err == nil {
-		return nil
-	}
-	if err != nil || slot.Keyring {
-		if err := osCredentials.Delete(credentialService, name); err != nil && !errors.Is(err, keyring.ErrNotFound) {
-			return errors.Join(fmt.Errorf("%s is no longer used, but the OS credential service still holds a copy; rerun `tinfoil logout` when it is available: %w", name, err),
-				writeCredentialSlot(path, credentialSlot{Keyring: true, Deleted: true}))
-		}
-	}
-	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+	store, err := credentialStore()
+	if err != nil {
 		return err
 	}
-	return nil
+	return store.Delete(name)
 }
 
 func withCredentialLock(fn func() error) error {
-	path, err := credentialFile("credentials")
+	store, err := credentialStore()
 	if err != nil {
 		return err
 	}
-	unlock, err := acquireStorageLock(path)
-	for deadline := time.Now().Add(credentialLockWait); errors.Is(err, errStorageLocked) && time.Now().Before(deadline); {
-		time.Sleep(credentialLockRetry)
-		unlock, err = acquireStorageLock(path)
-	}
-	if err != nil {
-		return err
-	}
-	defer unlock()
-	return fn()
+	return store.WithLock(fn)
 }
 
 func currentGrant() (*clerkGrant, error) {

@@ -274,7 +274,7 @@ func TestCredentialStoreSurvivesServiceOutagesWithoutResurrection(t *testing.T) 
 	require.NoError(t, err)
 
 	service.onSet = func(user string) {
-		var selector credentialSlot
+		var selector struct{ Keyring bool }
 		require.NoError(t, readStorageJSON(slot, &selector), "the selector exists before the service holds a copy")
 		require.True(t, selector.Keyring)
 	}
