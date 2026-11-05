@@ -19,17 +19,17 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"github.com/tinfoilsh/tinfoil-cli/internal/owner"
 	"github.com/tinfoilsh/tinfoil-go/verify/document"
 	"golang.org/x/crypto/ssh"
 )
 
 const (
-	defaultSandboxRepo  = "tinfoilsh/confidential-agent-sandbox"
-	sandboxLoginUser    = "sandbox"
-	sandboxOwnerEnv     = "SANDBOX_OWNER_PUBLIC_KEY"
-	tmkOwnerKeyName     = "owner_tmk_ed25519"
-	sandboxBootTimeout  = 10 * time.Minute
-	maxEnrollReplyBytes = 1 << 12
+	defaultSandboxRepo = "tinfoilsh/confidential-agent-sandbox"
+	sandboxLoginUser   = "sandbox"
+	sandboxOwnerEnv    = "SANDBOX_OWNER_PUBLIC_KEY"
+	tmkOwnerKeyName    = "owner_tmk_ed25519"
+	sandboxBootTimeout = 10 * time.Minute
 
 	// Controlplane gives a new sandbox this workspace size when none is chosen.
 	defaultWorkspaceSizeGB = 16
@@ -231,7 +231,7 @@ const (
 	sandboxOwnerRequest  = "sudo -n -- curl -sS --fail-with-body --unix-socket /run/workspace/owner.sock http://sandbox"
 	sandboxStatusCommand = sandboxOwnerRequest + "/status"
 	sandboxEnrollCommand = sandboxOwnerRequest + "/enroll --data-binary @-"
-	ownerConnectTimeout  = 30 * time.Second
+	ownerConnectTimeout  = owner.ConnectTimeout
 
 	// Monitor routes to a sandbox boot by a name derived from its SSH host key.
 	sandboxRouteSuffix = ".sandbox.invalid"
@@ -803,40 +803,5 @@ func (s *sandboxSession) unlockDirect(ctx context.Context) error {
 }
 
 func sendOwnerCommand(ctx context.Context, dial func(context.Context) (*ssh.Client, error), command string, body []byte) (string, error) {
-	ctx, cancel := context.WithTimeout(ctx, sandboxBootTimeout)
-	defer cancel()
-	if err := ctx.Err(); err != nil {
-		return "", err
-	}
-	client, err := dial(ctx)
-	if err != nil {
-		return "", err
-	}
-	defer client.Close()
-	stop := context.AfterFunc(ctx, func() { client.Close() })
-	defer stop()
-	session, err := client.NewSession()
-	if err != nil {
-		return "", err
-	}
-	defer session.Close()
-	session.Stdin = bytes.NewReader(body)
-	var output, message limitedUnlockOutput
-	session.Stdout, session.Stderr = &output, &message
-	if err := session.Run(command); err != nil {
-		var exit *ssh.ExitError
-		if !errors.As(err, &exit) {
-			return "", fmt.Errorf("owner command has an unknown outcome: %w", err)
-		}
-		return "", fmt.Errorf("%w: %s", err, strings.TrimSpace(string(message)+string(output)))
-	}
-	return strings.TrimSpace(string(output)), nil
-}
-
-type limitedUnlockOutput []byte
-
-func (b *limitedUnlockOutput) Write(p []byte) (int, error) {
-	n := min(len(p), maxEnrollReplyBytes-len(*b))
-	*b = append(*b, p[:n]...)
-	return len(p), nil
+	return owner.SendCommand(ctx, dial, command, body)
 }

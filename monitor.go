@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"github.com/tinfoilsh/tinfoil-cli/internal/owner"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/term"
 )
@@ -34,15 +35,12 @@ const (
 	monitorOwnerEnv = "MONITOR_OWNER_PUBLIC_KEY"
 
 	monitorDeviceKeyName = "device_ed25519"
-	monitorProfileFile   = "profile.json"
+	monitorProfileFile   = owner.ProfileFile
 
 	// A relayed sandbox attestation is up to 32 MiB before base64 and JSON.
 	maxMonitorReplyBytes = 48 << 20
 
 	monitorRequestTimeout = time.Minute
-
-	profileLockAttempts = 50
-	profileLockRetry    = 20 * time.Millisecond
 )
 
 // Monitor names are scoped to an account and control plane.
@@ -55,16 +53,7 @@ type accountScope struct {
 }
 
 // Persist the domain, boot key and minimum generation.
-type monitorProfile struct {
-	Domain      string `json:"domain"`
-	Address     string `json:"address,omitempty"`
-	ContainerID string `json:"container_id,omitempty"`
-	Owner       string `json:"owner_public_key,omitempty"`
-	Storage     string `json:"storage,omitempty"`
-	HostKey     string `json:"host_key,omitempty"`
-	Generation  uint64 `json:"generation"`
-	Custody     string `json:"custody,omitempty"`
-}
+type monitorProfile = owner.Profile
 
 func (s accountScope) account() string {
 	if s.OrgID != "" {
@@ -113,33 +102,7 @@ func currentScope() (accountScope, *cpClient, error) {
 
 // Serialize updates to preserve boot-key pins and the maximum generation.
 func updateProfile(dir string, update func(*monitorProfile) error) (monitorProfile, error) {
-	path := filepath.Join(dir, monitorProfileFile)
-	unlock, err := acquireStorageLock(path)
-	for attempt := 1; err != nil && attempt < profileLockAttempts; attempt++ {
-		time.Sleep(profileLockRetry)
-		unlock, err = acquireStorageLock(path)
-	}
-	if err != nil {
-		return monitorProfile{}, err
-	}
-	defer unlock()
-	var profile monitorProfile
-	if err := readStorageJSON(path, &profile); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return profile, err
-	}
-	if err := update(&profile); err != nil {
-		return profile, err
-	}
-	return profile, writeStorageJSON(path, profile, false)
-}
-
-const ownerSSHChannel = "tinfoil-owner-http-v1"
-const ownerGenerationRequest = "tinfoil-owner-generation-v1"
-
-type ownerChannelOptions struct {
-	Host       string
-	Token      string
-	Generation uint64
+	return owner.UpdateProfile(dir, update)
 }
 
 type monitorSession struct {
@@ -414,47 +377,11 @@ func monitorOwnerRequest(client *ssh.Client, dir, method, path string, input, ou
 
 // Authenticate only against the SSH host key endorsed by attestation.
 func connectOwnerSigner(conn net.Conn, host string, hostKey ssh.PublicKey, signer ssh.Signer, user string) (*ssh.Client, error) {
-	// SSH-forwarded connections do not implement SetDeadline.
-	timer := time.AfterFunc(30*time.Second, func() { conn.Close() })
-	defer timer.Stop()
-	c, channels, requests, err := ssh.NewClientConn(conn, host, &ssh.ClientConfig{
-		User: user, Auth: []ssh.AuthMethod{ssh.PublicKeys(signer)}, HostKeyCallback: ssh.FixedHostKey(hostKey),
-	})
-	if err != nil {
-		conn.Close()
-		return nil, fmt.Errorf("owner SSH: %w", err)
-	}
-	return ssh.NewClient(c, channels, requests), nil
+	return owner.Connect(conn, host, hostKey, signer, user)
 }
 
 func openOwnerChannel(client *ssh.Client, dir, host, token string) (ssh.Channel, error) {
-	var profile monitorProfile
-	if err := readStorageJSON(filepath.Join(dir, monitorProfileFile), &profile); err != nil {
-		return nil, err
-	}
-	ch, requests, err := client.OpenChannel(ownerSSHChannel, ssh.Marshal(ownerChannelOptions{host, token, profile.Generation}))
-	if err != nil {
-		return nil, err
-	}
-	go func() {
-		for request := range requests {
-			var message struct{ Generation uint64 }
-			ok := request.Type == ownerGenerationRequest && request.WantReply && ssh.Unmarshal(request.Payload, &message) == nil && message.Generation >= profile.Generation
-			if ok {
-				_, err := updateProfile(dir, func(p *monitorProfile) error {
-					p.Generation = max(p.Generation, message.Generation)
-					return nil
-				})
-				ok = err == nil
-			}
-			request.Reply(ok, nil)
-			if !ok {
-				ch.Close()
-				return
-			}
-		}
-	}()
-	return ch, nil
+	return owner.OpenChannel(client, dir, host, token)
 }
 
 func init() {
