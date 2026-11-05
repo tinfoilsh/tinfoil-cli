@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"os"
 	"sort"
 	"strings"
 
@@ -170,14 +169,14 @@ func newContainerListCommand(outputOpts *outputOptions) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return listContainers(outputOpts, client, "")
+			return listContainers(commandStreams(cmd), outputOpts, client, "")
 		},
 	}
 
 	return containerListCmd
 }
 
-func listContainers(outputOpts *outputOptions, client *cpClient, kind string) error {
+func listContainers(streams commandIO, outputOpts *outputOptions, client *cpClient, kind string) error {
 	var rows []containerView
 	if _, err := client.do("GET", "/api/containers", nil, nil, &rows); err != nil {
 		return err
@@ -188,7 +187,7 @@ func listContainers(outputOpts *outputOptions, client *cpClient, kind string) er
 			list = append(list, row)
 		}
 	}
-	return renderContainers(outputOpts, list)
+	return renderContainers(streams, outputOpts, list)
 }
 
 func newContainerGetCommand(outputOpts *outputOptions) *cobra.Command {
@@ -209,7 +208,7 @@ func newContainerGetCommand(outputOpts *outputOptions) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return renderContainerDetail(outputOpts, *c, attached)
+			return renderContainerDetail(commandStreams(cmd), outputOpts, *c, attached)
 		},
 	}
 
@@ -302,7 +301,7 @@ func newContainerCreateCommand(containerCreateOpts *containerCreateOptions, outp
 			}
 
 			if containerCreateOpts.createDisableCC {
-				if err := confirmNonCCMode(containerCreateOpts); err != nil {
+				if err := confirmNonCCMode(commandStreams(cmd), containerCreateOpts); err != nil {
 					return err
 				}
 			}
@@ -404,7 +403,7 @@ func newContainerCreateCommand(containerCreateOpts *containerCreateOptions, outp
 			}
 			// The caller just told us exactly what they intend to run: seed the
 			// trust store now so the first connect needs no prompt.
-			seedTrustFromCreate(containerCreateOpts.createRepo, revision)
+			seedTrustFromCreate(commandStreams(cmd), containerCreateOpts.createRepo, revision)
 			deployBody := map[string]any{}
 			if value, ok := body["mark_latest_release"].(bool); ok {
 				deployBody["mark_latest_release"] = value
@@ -414,7 +413,7 @@ func newContainerCreateCommand(containerCreateOpts *containerCreateOptions, outp
 				if len(requests) > 0 {
 					return createFollowupError(created, replaceID, fmt.Errorf("the returned configuration declares no mounts; --volume was not applied"))
 				}
-				return createFollowupError(created, replaceID, followAndRender(outputOpts, waitOpts, client, created, nil))
+				return createFollowupError(created, replaceID, followAndRender(commandStreams(cmd), outputOpts, waitOpts, client, created, nil))
 			}
 			if len(requests) > 0 {
 				if err := attachVolumes(client, &created, requests, volumes); err != nil {
@@ -431,7 +430,7 @@ func newContainerCreateCommand(containerCreateOpts *containerCreateOptions, outp
 			if err != nil {
 				return createFollowupError(created, replaceID, fmt.Errorf("deploy was accepted (status %s), but could not load attached volumes: %w", deployed.Status, err))
 			}
-			return createFollowupError(created, replaceID, followAndRender(outputOpts, waitOpts, client, deployed, attached))
+			return createFollowupError(created, replaceID, followAndRender(commandStreams(cmd), outputOpts, waitOpts, client, deployed, attached))
 		},
 	}
 	containerCreateCmd.Flags().BoolVar(&waitOpts.noWait, "no-wait", false, "Return once the request is accepted")
@@ -483,7 +482,7 @@ func newContainerDeleteCommand(containerDeleteOpts *containerDeleteOptions) *cob
 			if err := refuseStandaloneMonitor(*c, "delete"); err != nil {
 				return err
 			}
-			fmt.Fprintf(os.Stderr, "Deleting %s (%s).\n", c.Name, c.ID)
+			fmt.Fprintf(commandStreams(cmd).err, "Deleting %s (%s).\n", c.Name, c.ID)
 			volumes := "Attached volumes are kept."
 			if c.Repo == defaultSandboxRepo {
 				volumes = "It has no attached workspace volume."
@@ -491,14 +490,14 @@ func newContainerDeleteCommand(containerDeleteOpts *containerDeleteOptions) *cob
 					volumes = "Its workspace volume and all of its data are deleted too."
 				}
 			}
-			fmt.Fprintln(os.Stderr, "This removes the container, its saved configuration, and its DNS records. "+volumes)
-			if err := confirmYes(containerDeleteOpts.deleteYes, cmd.CommandPath()); err != nil {
+			fmt.Fprintln(commandStreams(cmd).err, "This removes the container, its saved configuration, and its DNS records. "+volumes)
+			if err := confirmYes(commandStreams(cmd), containerDeleteOpts.deleteYes, cmd.CommandPath()); err != nil {
 				return err
 			}
 			if _, err := client.do("DELETE", pathf("/api/containers/%s", c.ID), nil, nil, nil); err != nil {
 				return err
 			}
-			fmt.Printf("Deleted container %s (%s)\n", c.Name, c.ID)
+			fmt.Fprintf(commandStreams(cmd).out, "Deleted container %s (%s)\n", c.Name, c.ID)
 			return nil
 		},
 	}
@@ -552,9 +551,9 @@ func newContainerStopCommand(outputOpts *outputOptions) *cobra.Command {
 				return err
 			}
 			if outputOpts.outputFormat != "json" {
-				fmt.Printf("Stopping %s. Its configuration and volumes are kept; run \"tinfoil container deploy %s\" to bring it back.\n", c.Name, c.Name)
+				fmt.Fprintf(commandStreams(cmd).out, "Stopping %s. Its configuration and volumes are kept; run \"tinfoil container deploy %s\" to bring it back.\n", c.Name, c.Name)
 			}
-			return renderContainer(outputOpts, stopped)
+			return renderContainer(commandStreams(cmd), outputOpts, stopped)
 		},
 	}
 
@@ -613,15 +612,15 @@ func newContainerHostsCommand(outputOpts *outputOptions) *cobra.Command {
 				return err
 			}
 			if outputOpts.outputFormat == "json" {
-				return printJSON(hosts)
+				return printJSON(commandStreams(cmd), hosts)
 			}
 			if len(hosts) == 0 {
-				fmt.Println("No container hosts available.")
+				fmt.Fprintln(commandStreams(cmd).out, "No container hosts available.")
 				return nil
 			}
-			fmt.Printf("%-24s  %-10s  %s\n", "NAME", "DEFAULT", "GPU SIZES")
+			fmt.Fprintf(commandStreams(cmd).out, "%-24s  %-10s  %s\n", "NAME", "DEFAULT", "GPU SIZES")
 			for _, h := range hosts {
-				fmt.Printf("%-24s  %-10v  %s\n", h.Name, h.IsDefault, formatInts(h.AvailableGpuValues))
+				fmt.Fprintf(commandStreams(cmd).out, "%-24s  %-10v  %s\n", h.Name, h.IsDefault, formatInts(h.AvailableGpuValues))
 			}
 			return nil
 		},
@@ -649,9 +648,9 @@ func newContainerPromoteCommand(outputOpts *outputOptions, waitOpts *waitOptions
 				return err
 			}
 			if outputOpts.outputFormat != "json" {
-				fmt.Printf("Promoted update on %s; traffic is switching to %s.\n", c.Name, promoted.CurrentTag)
+				fmt.Fprintf(commandStreams(cmd).out, "Promoted update on %s; traffic is switching to %s.\n", c.Name, promoted.CurrentTag)
 			}
-			return followAndRender(outputOpts, waitOpts, client, promoted, nil)
+			return followAndRender(commandStreams(cmd), outputOpts, waitOpts, client, promoted, nil)
 		},
 	}
 	containerPromoteCmd.Flags().BoolVar(&waitOpts.noWait, "no-wait", false, "Return once the request is accepted")
@@ -693,10 +692,10 @@ func newContainerCancelCommand(containerCancelOpts *containerCancelOptions) *cob
 				if status != http.StatusOK || !acknowledgment.RollbackLatest || strings.TrimSpace(acknowledgment.Tag) == "" {
 					return fmt.Errorf("update cancellation may have completed, but the controlplane did not confirm latest release restoration (HTTP %d)", status)
 				}
-				fmt.Printf("Canceled in-progress update on %s; latest release restoration to %s requested\n", c.Name, acknowledgment.Tag)
+				fmt.Fprintf(commandStreams(cmd).out, "Canceled in-progress update on %s; latest release restoration to %s requested\n", c.Name, acknowledgment.Tag)
 				return nil
 			}
-			fmt.Printf("Canceled update on %s; %s keeps running.\n", c.Name, c.CurrentTag)
+			fmt.Fprintf(commandStreams(cmd).out, "Canceled update on %s; %s keeps running.\n", c.Name, c.CurrentTag)
 			return nil
 		},
 	}
@@ -753,19 +752,19 @@ func newContainerConnectCommand(containerConnectOpts *containerConnectOptions, p
 			} else if rootOpts.repo == "" {
 				// The expectation came from the controlplane response, not the
 				// caller: check it against the connection policy before trusting it.
-				if err := enforceConnectionPolicy(trustOpts, target.source); err != nil {
+				if err := enforceConnectionPolicy(commandStreams(cmd), trustOpts, target.source); err != nil {
 					return err
 				}
-			} else if err := assertTrustedSource(rootOpts.repo, target.source); err != nil {
+			} else if err := assertTrustedSource(commandStreams(cmd), rootOpts.repo, target.source); err != nil {
 				return err
 			}
-			fmt.Printf("Connecting verified proxy to %s: %s (expected %s)\n", c.Name, target.URL, expected)
+			fmt.Fprintf(commandStreams(cmd).out, "Connecting verified proxy to %s: %s (expected %s)\n", c.Name, target.URL, expected)
 
-			rootOpts.enclaveHost = target.host
-			rootOpts.repo = target.source
-			proxyOpts.listenAddr = containerConnectOpts.connectBindAddr
-			proxyOpts.listenPort = containerConnectOpts.connectPort
-			return runProxy(proxyOpts, rootOpts, cmd, nil)
+			connection := *rootOpts
+			connection.enclaveHost, connection.repo = target.host, target.source
+			proxy := *proxyOpts
+			proxy.listenAddr, proxy.listenPort = containerConnectOpts.connectBindAddr, containerConnectOpts.connectPort
+			return runProxy(&proxy, &connection, cmd, nil)
 		},
 	}
 	containerConnectCmd.Flags().UintVarP(&containerConnectOpts.connectPort, "port", "p", 8080, "Local port for the verified proxy")
@@ -957,29 +956,29 @@ func setMarkLatestRelease(cmd *cobra.Command, body map[string]any, value string)
 // user toggles "Disable Confidential Compute", then requires the user to type
 // "yes" before proceeding. --yes bypasses the prompt for scripted use. When
 // stdin is not a TTY and --yes was not passed, abort rather than block.
-func confirmNonCCMode(containerCreateOpts *containerCreateOptions) error {
-	fmt.Fprintln(os.Stderr, "EXPERIMENTAL: Disable Confidential Compute")
-	fmt.Fprintln(os.Stderr)
-	fmt.Fprintln(os.Stderr, "Disables memory encryption and hardware attestation for this container.")
-	fmt.Fprintln(os.Stderr, "It will not provide CC guarantees and is not suitable for production")
-	fmt.Fprintln(os.Stderr, "workloads. Intended for benchmarking against non-CC baselines.")
-	fmt.Fprintln(os.Stderr)
-	fmt.Fprintln(os.Stderr, "WARNING: This container will deploy without confidential computing")
-	fmt.Fprintln(os.Stderr, "protections. The host operator can read memory and observe execution.")
-	fmt.Fprintln(os.Stderr)
-	return confirmYes(containerCreateOpts.createYes, "--disable-cc-mode")
+func confirmNonCCMode(streams commandIO, containerCreateOpts *containerCreateOptions) error {
+	fmt.Fprintln(streams.err, "EXPERIMENTAL: Disable Confidential Compute")
+	fmt.Fprintln(streams.err)
+	fmt.Fprintln(streams.err, "Disables memory encryption and hardware attestation for this container.")
+	fmt.Fprintln(streams.err, "It will not provide CC guarantees and is not suitable for production")
+	fmt.Fprintln(streams.err, "workloads. Intended for benchmarking against non-CC baselines.")
+	fmt.Fprintln(streams.err)
+	fmt.Fprintln(streams.err, "WARNING: This container will deploy without confidential computing")
+	fmt.Fprintln(streams.err, "protections. The host operator can read memory and observe execution.")
+	fmt.Fprintln(streams.err)
+	return confirmYes(streams, containerCreateOpts.createYes, "--disable-cc-mode")
 }
 
-func confirmYes(skip bool, what string) error {
+func confirmYes(streams commandIO, skip bool, what string) error {
 	if skip {
-		fmt.Fprintln(os.Stderr, "Proceeding (--yes).")
+		fmt.Fprintln(streams.err, "Proceeding (--yes).")
 		return nil
 	}
-	if !term.IsTerminal(int(os.Stdin.Fd())) {
+	if !term.IsTerminal(int(streamFD(streams.in))) {
 		return fmt.Errorf("%s requires interactive confirmation; pass --yes to skip the prompt", what)
 	}
-	fmt.Fprint(os.Stderr, "Type \"yes\" to proceed: ")
-	scanner := bufio.NewScanner(os.Stdin)
+	fmt.Fprint(streams.err, "Type \"yes\" to proceed: ")
+	scanner := bufio.NewScanner(streams.in)
 	if !scanner.Scan() {
 		return fmt.Errorf("aborted")
 	}
@@ -1011,57 +1010,57 @@ func formatInts(in []int) string {
 	return strings.Join(out, ",")
 }
 
-func renderContainer(outputOpts *outputOptions, c containerView) error {
-	return renderContainerDetail(outputOpts, c, nil)
+func renderContainer(streams commandIO, outputOpts *outputOptions, c containerView) error {
+	return renderContainerDetail(streams, outputOpts, c, nil)
 }
 
 // renderContainerDetail prints c with its declared volumes; attached maps a
 // slot to its volume when known, otherwise the view's volume ID is shown.
-func renderContainerDetail(outputOpts *outputOptions, c containerView, attached map[string]volumeView) error {
+func renderContainerDetail(streams commandIO, outputOpts *outputOptions, c containerView, attached map[string]volumeView) error {
 	if outputOpts.outputFormat == "json" {
-		return printJSON(c)
+		return printJSON(streams, c)
 	}
-	fmt.Printf("ID:           %s\n", c.ID)
-	fmt.Printf("Name:         %s\n", c.Name)
-	fmt.Printf("Status:       %s\n", statusLabel(c.Status))
+	fmt.Fprintf(streams.out, "ID:           %s\n", c.ID)
+	fmt.Fprintf(streams.out, "Name:         %s\n", c.Name)
+	fmt.Fprintf(streams.out, "Status:       %s\n", statusLabel(c.Status))
 	if c.ConfigName != "" {
-		fmt.Printf("Config:       %s\n", c.ConfigName)
-		fmt.Printf("Release:      %s\n", c.CurrentTag)
+		fmt.Fprintf(streams.out, "Config:       %s\n", c.ConfigName)
+		fmt.Fprintf(streams.out, "Release:      %s\n", c.CurrentTag)
 	} else if c.Source == containerSourceLocal {
-		fmt.Printf("Config:       local\n")
+		fmt.Fprintf(streams.out, "Config:       local\n")
 	} else {
-		fmt.Printf("Repo:         %s@%s\n", c.Repo, c.CurrentTag)
+		fmt.Fprintf(streams.out, "Repo:         %s@%s\n", c.Repo, c.CurrentTag)
 	}
 	if c.ProjectID != "" {
-		fmt.Printf("Project:      %s\n", c.ProjectID)
+		fmt.Fprintf(streams.out, "Project:      %s\n", c.ProjectID)
 	}
 	if c.Domain != "" {
-		fmt.Printf("Domain:       %s\n", c.Domain)
+		fmt.Fprintf(streams.out, "Domain:       %s\n", c.Domain)
 	}
 	if c.InternalDomain != "" && c.InternalDomain != c.Domain {
-		fmt.Printf("Internal:     %s\n", c.InternalDomain)
+		fmt.Fprintf(streams.out, "Internal:     %s\n", c.InternalDomain)
 	}
 	if c.HostName != "" {
-		fmt.Printf("Host:         %s (cpu=%s gpu=%s)\n", c.HostName, c.HostCpuType, c.HostGpuType)
+		fmt.Fprintf(streams.out, "Host:         %s (cpu=%s gpu=%s)\n", c.HostName, c.HostCpuType, c.HostGpuType)
 	}
-	fmt.Printf("Resources:    cpus=%d gpus=%d mem=%dMB\n", c.CPUs, c.GPUs, c.MemoryMB)
+	fmt.Fprintf(streams.out, "Resources:    cpus=%d gpus=%d mem=%dMB\n", c.CPUs, c.GPUs, c.MemoryMB)
 	if c.MarkLatestRelease != nil {
-		fmt.Printf("Mark latest:  %t\n", *c.MarkLatestRelease)
+		fmt.Fprintf(streams.out, "Mark latest:  %t\n", *c.MarkLatestRelease)
 	}
 	if c.Debug {
-		fmt.Printf("Debug:        yes (SSH enabled, does not pass attestation)\n")
+		fmt.Fprintf(streams.out, "Debug:        yes (SSH enabled, does not pass attestation)\n")
 	}
 	if c.UpdateTag != "" && c.candidateHeld() {
-		fmt.Printf("Held:         yes (this version is waiting for review; promote to switch traffic)\n")
+		fmt.Fprintf(streams.out, "Held:         yes (this version is waiting for review; promote to switch traffic)\n")
 	}
 	if c.DisableCCMode {
-		fmt.Printf("Confidential: disabled\n")
+		fmt.Fprintf(streams.out, "Confidential: disabled\n")
 	}
 	if c.UpdateStrategy == updateStrategyReplace {
-		fmt.Printf("Updates:      replace (%s; updates cause downtime)\n", replaceReason(c))
+		fmt.Fprintf(streams.out, "Updates:      replace (%s; updates cause downtime)\n", replaceReason(c))
 	}
 	if c.SSHPort > 0 {
-		fmt.Printf("SSH port:     %d\n", c.SSHPort)
+		fmt.Fprintf(streams.out, "SSH port:     %d\n", c.SSHPort)
 	}
 	if vars, _ := decodeContainerVariables(c.Variables); len(vars) > 0 {
 		keys := make([]string, 0, len(vars))
@@ -1069,47 +1068,47 @@ func renderContainerDetail(outputOpts *outputOptions, c containerView, attached 
 			keys = append(keys, k)
 		}
 		sort.Strings(keys)
-		fmt.Printf("Variables:    %s\n", strings.Join(keys, ", "))
+		fmt.Fprintf(streams.out, "Variables:    %s\n", strings.Join(keys, ", "))
 	}
 	if len(c.Secrets) > 0 {
-		fmt.Printf("Secrets:      %s\n", strings.Join(c.Secrets, ", "))
+		fmt.Fprintf(streams.out, "Secrets:      %s\n", strings.Join(c.Secrets, ", "))
 	}
 	if len(c.SSHKeys) > 0 {
-		fmt.Printf("SSH keys:     %s\n", strings.Join(c.SSHKeys, ", "))
+		fmt.Fprintf(streams.out, "SSH keys:     %s\n", strings.Join(c.SSHKeys, ", "))
 	}
 	label := "Volumes:      "
 	for _, slot := range c.VolumeSlots {
 		switch v, ok := attached[slot.Name]; {
 		case ok:
-			fmt.Printf("%s%s ← %s (%s)\n", label, slot.Name, v.Name, formatSize(v.SizeBytes))
+			fmt.Fprintf(streams.out, "%s%s ← %s (%s)\n", label, slot.Name, v.Name, formatSize(v.SizeBytes))
 		case c.Volumes[slot.Name] != "":
-			fmt.Printf("%s%s ← %s\n", label, slot.Name, c.Volumes[slot.Name])
+			fmt.Fprintf(streams.out, "%s%s ← %s\n", label, slot.Name, c.Volumes[slot.Name])
 		default:
-			fmt.Printf("%s%s (none attached)\n", label, slot.Name)
+			fmt.Fprintf(streams.out, "%s%s (none attached)\n", label, slot.Name)
 		}
 		label = strings.Repeat(" ", len(label))
 	}
-	printVolumeUnlockGuidance(os.Stdout, c.VolumeSlots)
+	printVolumeUnlockGuidance(streams.out, c.VolumeSlots)
 	if c.UpdateTag != "" {
-		fmt.Printf("Updating to:  %s (%s)\n", c.UpdateTag, updateLabel(c))
+		fmt.Fprintf(streams.out, "Updating to:  %s (%s)\n", c.UpdateTag, updateLabel(c))
 	}
 	if message := containerFailureMessage(c); message != "" {
-		fmt.Printf("Error:        %s\n", humanVolumeMessage(message))
+		fmt.Fprintf(streams.out, "Error:        %s\n", humanVolumeMessage(message))
 	}
-	printBootStages(os.Stdout, c.BootStages)
-	printContainerConnections(os.Stdout, c)
+	printBootStages(streams.out, c.BootStages)
+	printContainerConnections(streams.out, c)
 	return nil
 }
 
-func renderContainers(outputOpts *outputOptions, list []containerView) error {
+func renderContainers(streams commandIO, outputOpts *outputOptions, list []containerView) error {
 	if outputOpts.outputFormat == "json" {
-		return printJSON(list)
+		return printJSON(streams, list)
 	}
 	if len(list) == 0 {
-		fmt.Println("No containers.")
+		fmt.Fprintln(streams.out, "No containers.")
 		return nil
 	}
-	fmt.Printf("%-24s  %-10s  %-30s  %-10s  %s\n", "NAME", "STATUS", "DOMAIN", "TAG", "SOURCE")
+	fmt.Fprintf(streams.out, "%-24s  %-10s  %-30s  %-10s  %s\n", "NAME", "STATUS", "DOMAIN", "TAG", "SOURCE")
 	for _, c := range list {
 		domain := c.Domain
 		if domain == "" {
@@ -1125,7 +1124,7 @@ func renderContainers(outputOpts *outputOptions, list []containerView) error {
 		} else if c.Source == containerSourceLocal {
 			source = containerSourceLocal
 		}
-		fmt.Printf("%-24s  %-10s  %-30s  %-10s  %s\n",
+		fmt.Fprintf(streams.out, "%-24s  %-10s  %-30s  %-10s  %s\n",
 			truncate(c.Name, 24), statusLabel(c.Status), truncate(domain, 30), truncate(tag, 10), source,
 		)
 	}
@@ -1142,8 +1141,8 @@ func truncate(s string, max int) string {
 	return s[:max-1] + "…"
 }
 
-func printJSON(v any) error {
-	enc := json.NewEncoder(os.Stdout)
+func printJSON(streams commandIO, v any) error {
+	enc := json.NewEncoder(streams.out)
 	enc.SetIndent("", "  ")
 	return enc.Encode(v)
 }
@@ -1211,8 +1210,8 @@ func runContainerDeploy(containerDeployOpts *containerDeployOptions, outputOpts 
 		return err
 	}
 	if c.Status == statusFailed && c.ErrorMessage != "" && outputOpts.outputFormat != "json" {
-		fmt.Fprintf(os.Stderr, "Last attempt failed: %s\n", humanVolumeMessage(c.ErrorMessage))
-		fmt.Fprintln(os.Stderr, "Deploying again with the same settings; pass flags to change them.")
+		fmt.Fprintf(commandStreams(cmd).err, "Last attempt failed: %s\n", humanVolumeMessage(c.ErrorMessage))
+		fmt.Fprintln(commandStreams(cmd).err, "Deploying again with the same settings; pass flags to change them.")
 	}
 	if len(requests) > 0 {
 		list, err := listVolumes(client)
@@ -1247,7 +1246,7 @@ func runContainerDeploy(containerDeployOpts *containerDeployOptions, outputOpts 
 	if err != nil {
 		return err
 	}
-	return followAndRender(outputOpts, waitOpts, client, deployed, attached)
+	return followAndRender(commandStreams(cmd), outputOpts, waitOpts, client, deployed, attached)
 }
 
 func runContainerUpdate(containerUpdateOpts *containerUpdateOptions, outputOpts *outputOptions, waitOpts *waitOptions, cmd *cobra.Command, args []string) error {
@@ -1280,12 +1279,12 @@ func runContainerUpdate(containerUpdateOpts *containerUpdateOptions, outputOpts 
 		return err
 	}
 	var updated containerView
-	if err := postLifecycleUpdate(outputOpts, client, pathf("/api/containers/%s/update", c.ID), body, &updated, containerUpdateOpts.updateYes, cmd.CommandPath(), func() (updateReview, error) {
+	if err := postLifecycleUpdate(commandStreams(cmd), outputOpts, client, pathf("/api/containers/%s/update", c.ID), body, &updated, containerUpdateOpts.updateYes, cmd.CommandPath(), func() (updateReview, error) {
 		return planContainerUpdate(client, c.ID, body)
 	}); err != nil {
 		return err
 	}
-	return followAndRender(outputOpts, waitOpts, client, updated, nil)
+	return followAndRender(commandStreams(cmd), outputOpts, waitOpts, client, updated, nil)
 }
 
 func runContainerMetrics(containerMetricsOpts *containerMetricsOptions, cmd *cobra.Command, args []string) error {
@@ -1307,7 +1306,7 @@ func runContainerMetrics(containerMetricsOpts *containerMetricsOptions, cmd *cob
 	}
 	// Metrics are time-series data; printing JSON is the most useful
 	// default. Users who want a chart can pipe into jq.
-	os.Stdout.Write(prettyJSON(raw))
-	fmt.Println()
+	commandStreams(cmd).out.Write(prettyJSON(raw))
+	fmt.Fprintln(commandStreams(cmd).out)
 	return nil
 }

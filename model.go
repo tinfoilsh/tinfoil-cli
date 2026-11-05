@@ -68,7 +68,7 @@ func newModelWrapCommand(modelWrapOpts *modelWrapOptions, outputOpts *outputOpti
 			if token != "" {
 				body["hf_token"] = token
 			}
-			return runModelWrapJob(outputOpts, client, body, modelWrapOpts.modelWrapWait, nil)
+			return runModelWrapJob(commandStreams(cmd), outputOpts, client, body, modelWrapOpts.modelWrapWait, nil)
 		},
 	}
 	modelWrapCmd.Flags().StringVar(&modelWrapOpts.modelWrapHost, "host", "", "Host to wrap the model on (see 'tinfoil container hosts') [required]")
@@ -114,9 +114,9 @@ release, then delete the old wrap job.`,
 			}
 			if target == previous.Commit {
 				if outputOpts.outputFormat == "json" {
-					return printJSON(previous)
+					return printJSON(commandStreams(cmd), previous)
 				}
-				fmt.Printf("%s on %s is already at commit %s (job %s).\n", repo, previous.Host, target, previous.JobID)
+				fmt.Fprintf(commandStreams(cmd).out, "%s on %s is already at commit %s (job %s).\n", repo, previous.Host, target, previous.JobID)
 				return nil
 			}
 
@@ -129,11 +129,11 @@ release, then delete the old wrap job.`,
 				body["hf_token"] = token
 			}
 			if outputOpts.outputFormat != "json" {
-				fmt.Printf("Updating %s on %s: %s -> %s\n\n", repo, previous.Host, shortCommit(previous.Commit), shortCommit(target))
+				fmt.Fprintf(commandStreams(cmd).out, "Updating %s on %s: %s -> %s\n\n", repo, previous.Host, shortCommit(previous.Commit), shortCommit(target))
 			}
-			return runModelWrapJob(outputOpts, client, body, modelUpdateOpts.modelUpdateWait, func(job modelWrapJobView) {
+			return runModelWrapJob(commandStreams(cmd), outputOpts, client, body, modelUpdateOpts.modelUpdateWait, func(job modelWrapJobView) {
 				if outputOpts.outputFormat != "json" && job.Status == "complete" {
-					fmt.Printf("\nOnce the new config is released and deployed, reclaim the previous artifact with:\n  tinfoil model delete %s %s\n", previous.Host, previous.JobID)
+					fmt.Fprintf(commandStreams(cmd).out, "\nOnce the new config is released and deployed, reclaim the previous artifact with:\n  tinfoil model delete %s %s\n", previous.Host, previous.JobID)
 				}
 			})
 		},
@@ -165,7 +165,7 @@ func newModelListCommand(modelListOpts *modelListOptions, outputOpts *outputOpti
 			if _, err := client.do("GET", "/api/models/wrap", query, nil, &list); err != nil {
 				return err
 			}
-			return renderModelWrapJobs(outputOpts, list)
+			return renderModelWrapJobs(commandStreams(cmd), outputOpts, list)
 		},
 	}
 	modelListCmd.Flags().IntVar(&modelListOpts.modelListLimit, "limit", 0, "Maximum number of jobs to list (server default 20, max 200)")
@@ -183,11 +183,11 @@ func newModelStatusCommand(modelStatusOpts *modelStatusOptions, outputOpts *outp
 			if err != nil {
 				return err
 			}
-			job, err := fetchModelWrapJob(client, args[0], args[1], modelStatusOpts.modelStatusWait)
+			job, err := fetchModelWrapJob(commandStreams(cmd), client, args[0], args[1], modelStatusOpts.modelStatusWait)
 			if err != nil {
 				return err
 			}
-			return finishModelWrapJob(outputOpts, job, modelStatusOpts.modelStatusLogs, modelStatusOpts.modelStatusWait)
+			return finishModelWrapJob(commandStreams(cmd), outputOpts, job, modelStatusOpts.modelStatusLogs, modelStatusOpts.modelStatusWait)
 		},
 	}
 	modelStatusCmd.Flags().BoolVar(&modelStatusOpts.modelStatusWait, "wait", false, "Poll until the wrap job finishes")
@@ -210,7 +210,7 @@ func newModelDeleteCommand() *cobra.Command {
 			if _, err := client.do("DELETE", pathf("/api/models/wrap/%s/%s", host, jobID), nil, nil, nil); err != nil {
 				return err
 			}
-			fmt.Printf("Deleted model wrap job %s on %s\n", jobID, host)
+			fmt.Fprintf(commandStreams(cmd).out, "Deleted model wrap job %s on %s\n", jobID, host)
 			return nil
 		},
 	}
@@ -231,7 +231,7 @@ func readHFToken(cmd *cobra.Command) (string, error) {
 			return "", err
 		}
 		if file == "-" {
-			data, err := io.ReadAll(os.Stdin)
+			data, err := io.ReadAll(commandStreams(cmd).in)
 			if err != nil {
 				return "", fmt.Errorf("reading stdin: %w", err)
 			}
@@ -252,9 +252,9 @@ func modelWrapFinished(status string) bool {
 
 // fetchModelWrapJob reads the job's current state, polling to a terminal
 // status when wait is set.
-func fetchModelWrapJob(client *cpClient, host, jobID string, wait bool) (modelWrapJobView, error) {
+func fetchModelWrapJob(streams commandIO, client *cpClient, host, jobID string, wait bool) (modelWrapJobView, error) {
 	if wait {
-		job, err := waitForModelWrap(client, host, jobID)
+		job, err := waitForModelWrap(streams, client, host, jobID)
 		if err != nil {
 			return modelWrapJobView{}, err
 		}
@@ -269,8 +269,8 @@ func fetchModelWrapJob(client *cpClient, host, jobID string, wait bool) (modelWr
 
 // finishModelWrapJob renders the job and reports a waited-on failure as an
 // error so the command exits non-zero.
-func finishModelWrapJob(outputOpts *outputOptions, job modelWrapJobView, showLogs, waited bool) error {
-	if err := renderModelWrapJob(outputOpts, job, showLogs); err != nil {
+func finishModelWrapJob(streams commandIO, outputOpts *outputOptions, job modelWrapJobView, showLogs, waited bool) error {
+	if err := renderModelWrapJob(streams, outputOpts, job, showLogs); err != nil {
 		return err
 	}
 	if waited && job.Status == "failed" {
@@ -282,19 +282,19 @@ func finishModelWrapJob(outputOpts *outputOptions, job modelWrapJobView, showLog
 // runModelWrapJob submits a wrap job, optionally polls it to a terminal
 // status, and finishes it, running epilogue on the rendered job. A waited-on
 // failure skips epilogue, which only concerns completed jobs.
-func runModelWrapJob(outputOpts *outputOptions, client *cpClient, body map[string]any, wait bool, epilogue func(modelWrapJobView)) error {
+func runModelWrapJob(streams commandIO, outputOpts *outputOptions, client *cpClient, body map[string]any, wait bool, epilogue func(modelWrapJobView)) error {
 	var job modelWrapJobView
 	if _, err := client.do("POST", "/api/models/wrap", nil, body, &job); err != nil {
 		return err
 	}
 	if wait {
-		finished, err := waitForModelWrap(client, job.Host, job.JobID)
+		finished, err := waitForModelWrap(streams, client, job.Host, job.JobID)
 		if err != nil {
 			return err
 		}
 		job = *finished
 	}
-	if err := finishModelWrapJob(outputOpts, job, false, wait); err != nil {
+	if err := finishModelWrapJob(streams, outputOpts, job, false, wait); err != nil {
 		return err
 	}
 	if epilogue != nil {
@@ -371,7 +371,7 @@ func shortCommit(commit string) string {
 
 // waitForModelWrap polls the job until it reaches a terminal status,
 // reporting status changes on stderr so stdout stays machine-readable.
-func waitForModelWrap(client *cpClient, host, jobID string) (*modelWrapJobView, error) {
+func waitForModelWrap(streams commandIO, client *cpClient, host, jobID string) (*modelWrapJobView, error) {
 	lastStatus := ""
 	for {
 		var job modelWrapJobView
@@ -382,7 +382,7 @@ func waitForModelWrap(client *cpClient, host, jobID string) (*modelWrapJobView, 
 			return &job, nil
 		}
 		if job.Status != lastStatus {
-			fmt.Fprintf(os.Stderr, "Wrap job %s: %s (large models can take several minutes)\n", jobID, job.Status)
+			fmt.Fprintf(streams.err, "Wrap job %s: %s (large models can take several minutes)\n", jobID, job.Status)
 			lastStatus = job.Status
 		}
 		time.Sleep(modelWrapPollInterval)
@@ -403,61 +403,61 @@ func modelMPK(job modelWrapJobView) string {
 	return fmt.Sprintf("%s_%d_%s", job.RootHash, job.Offset, job.VerityUUID)
 }
 
-func renderModelWrapJob(outputOpts *outputOptions, job modelWrapJobView, showLogs bool) error {
+func renderModelWrapJob(streams commandIO, outputOpts *outputOptions, job modelWrapJobView, showLogs bool) error {
 	if outputOpts.outputFormat == "json" {
-		return printJSON(job)
+		return printJSON(streams, job)
 	}
-	fmt.Printf("Job ID:   %s\n", job.JobID)
-	fmt.Printf("Host:     %s\n", job.Host)
-	fmt.Printf("Repo:     %s\n", job.Repo)
+	fmt.Fprintf(streams.out, "Job ID:   %s\n", job.JobID)
+	fmt.Fprintf(streams.out, "Host:     %s\n", job.Host)
+	fmt.Fprintf(streams.out, "Repo:     %s\n", job.Repo)
 	if job.Commit != "" {
-		fmt.Printf("Commit:   %s\n", job.Commit)
+		fmt.Fprintf(streams.out, "Commit:   %s\n", job.Commit)
 	}
-	fmt.Printf("Status:   %s\n", job.Status)
+	fmt.Fprintf(streams.out, "Status:   %s\n", job.Status)
 	if job.StartedAt != "" {
-		fmt.Printf("Started:  %s\n", job.StartedAt)
+		fmt.Fprintf(streams.out, "Started:  %s\n", job.StartedAt)
 	}
 	if job.EndedAt != nil {
-		fmt.Printf("Ended:    %s\n", *job.EndedAt)
+		fmt.Fprintf(streams.out, "Ended:    %s\n", *job.EndedAt)
 	}
 	if job.Error != "" {
-		fmt.Printf("Error:    %s\n", job.Error)
+		fmt.Fprintf(streams.out, "Error:    %s\n", job.Error)
 	}
 
 	switch {
 	case job.Status == "complete" && job.RootHash != "":
-		fmt.Printf("\nAdd this to tinfoil-config.yml:\n\n")
-		fmt.Printf("models:\n")
-		fmt.Printf("  - name: %q\n", modelNameFromRepo(job.Repo))
-		fmt.Printf("    repo: %q\n", job.Repo+"@"+job.Commit)
-		fmt.Printf("    mpk: %q\n", modelMPK(job))
-		fmt.Printf("\nThe verified weights are mounted in the enclave at:\n")
-		fmt.Printf("  /tinfoil/mpk/mpk-%s\n", job.RootHash)
+		fmt.Fprintf(streams.out, "\nAdd this to tinfoil-config.yml:\n\n")
+		fmt.Fprintf(streams.out, "models:\n")
+		fmt.Fprintf(streams.out, "  - name: %q\n", modelNameFromRepo(job.Repo))
+		fmt.Fprintf(streams.out, "    repo: %q\n", job.Repo+"@"+job.Commit)
+		fmt.Fprintf(streams.out, "    mpk: %q\n", modelMPK(job))
+		fmt.Fprintf(streams.out, "\nThe verified weights are mounted in the enclave at:\n")
+		fmt.Fprintf(streams.out, "  /tinfoil/mpk/mpk-%s\n", job.RootHash)
 	case !modelWrapFinished(job.Status):
-		fmt.Printf("\nPoll with `tinfoil model status %s %s`.\n", job.Host, job.JobID)
+		fmt.Fprintf(streams.out, "\nPoll with `tinfoil model status %s %s`.\n", job.Host, job.JobID)
 	}
 
 	if showLogs && job.Logs != "" {
-		fmt.Printf("\nLogs:\n%s\n", strings.TrimRight(job.Logs, "\n"))
+		fmt.Fprintf(streams.out, "\nLogs:\n%s\n", strings.TrimRight(job.Logs, "\n"))
 	}
 	return nil
 }
 
-func renderModelWrapJobs(outputOpts *outputOptions, list []modelWrapJobView) error {
+func renderModelWrapJobs(streams commandIO, outputOpts *outputOptions, list []modelWrapJobView) error {
 	if outputOpts.outputFormat == "json" {
-		return printJSON(list)
+		return printJSON(streams, list)
 	}
 	if len(list) == 0 {
-		fmt.Println("No model wrap jobs.")
+		fmt.Fprintln(streams.out, "No model wrap jobs.")
 		return nil
 	}
-	fmt.Printf("%-16s  %-12s  %-32s  %-12s  %-8s  %s\n", "JOB ID", "HOST", "REPO", "COMMIT", "STATUS", "STARTED")
+	fmt.Fprintf(streams.out, "%-16s  %-12s  %-32s  %-12s  %-8s  %s\n", "JOB ID", "HOST", "REPO", "COMMIT", "STATUS", "STARTED")
 	for _, job := range list {
 		commit := job.Commit
 		if commit == "" {
 			commit = "-"
 		}
-		fmt.Printf("%-16s  %-12s  %-32s  %-12s  %-8s  %s\n",
+		fmt.Fprintf(streams.out, "%-16s  %-12s  %-32s  %-12s  %-8s  %s\n",
 			job.JobID, truncate(job.Host, 12), truncate(job.Repo, 32),
 			truncate(commit, 12), job.Status, truncate(job.StartedAt, 19),
 		)

@@ -38,7 +38,7 @@ func newAttestationVerifyCommand(attestationVerifyOpts *attestationVerifyOptions
 			}
 
 			if attestationVerifyOpts.jsonOutput {
-				fmt.Println(string(output))
+				fmt.Fprintln(commandStreams(cmd).out, string(output))
 			}
 
 			if attestationVerifyOpts.jsonFile != "" {

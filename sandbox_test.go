@@ -68,7 +68,7 @@ func TestSandboxStartUsesSavedAliasWithoutMonitorLookup(t *testing.T) {
 				require.NoError(t, err)
 				return &http.Response{StatusCode: 200, Body: io.NopCloser(bytes.NewReader(body))}, nil
 			})
-			_, err := startSandboxRow(client, row, tc.restart)
+			_, err := startSandboxRow(testStreams(), client, row, tc.restart)
 			require.ErrorContains(t, err, "test boot failure")
 			expected := []string{"/api/containers/work-id/deploy"}
 			if tc.restart && tc.state == statusRunning {
@@ -100,7 +100,7 @@ func TestSandboxRequiresRestrictedAliasBeforeStoppingOrDeploying(t *testing.T) {
 		row.NetworkPolicy = policy
 		for _, state := range []string{statusRunning, statusStopped} {
 			row.Status = state
-			_, err := startSandboxRow(client, row, state == statusRunning)
+			_, err := startSandboxRow(testStreams(), client, row, state == statusRunning)
 			require.ErrorContains(t, err, "TCP alias")
 		}
 	}
@@ -226,20 +226,20 @@ func TestContainedProfileJumpsThroughMonitorAndKeepsItsAlias(t *testing.T) {
 
 	other := []byte("Host work\n  HostName work.example\n  IdentityFile ~/.ssh/id_work\n")
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "work.conf"), other, 0o600))
-	require.ErrorContains(t, installSandboxAlias(profile, home), "profile of another resource")
+	require.ErrorContains(t, installSandboxAlias(testStreams(), profile, home), "profile of another resource")
 	kept, err := os.ReadFile(filepath.Join(dir, "work.conf"))
 	require.NoError(t, err)
 	require.Equal(t, other, kept, "another host keeps its alias")
 
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "work.conf"), []byte("# tinfoil-resource: cp/org/user/resource\nHost work\n"), 0600))
-	require.NoError(t, installSandboxAlias(profile, home))
+	require.NoError(t, installSandboxAlias(testStreams(), profile, home))
 	updated, err := os.ReadFile(filepath.Join(dir, "work.conf"))
 	require.NoError(t, err)
 	require.Contains(t, string(updated), "IdentityFile \"/keys/my work/owner_ed25519\"\n")
 
 	rebooted := testHostKey(t)
 	profile.hostName, profile.hostKey = routeName(rebooted), rebooted
-	require.NoError(t, installSandboxAlias(profile, home), "a new boot replaces this sandbox's own profile")
+	require.NoError(t, installSandboxAlias(testStreams(), profile, home), "a new boot replaces this sandbox's own profile")
 
 	path := filepath.Join(dir, "work.conf")
 	for host, expected := range map[string][]string{
@@ -347,7 +347,7 @@ func TestSandboxEnrollDecidesFromMonitorIdentityAndSandboxStatus(t *testing.T) {
 			s := &sandboxSession{box: containerView{Name: "work", OwnerPublicKey: owner}, keys: keys, monitor: m, expires: time.Now().Add(time.Hour),
 				binding: mkBinding{Account: "personal", ContainerID: "11111111-1111-4111-8111-111111111111", InstanceID: &instance, VolumeID: &volume},
 				owner:   rpc}
-			err = s.enroll(t.Context())
+			err = s.enroll(testStreams(), t.Context())
 			endpoint.mu.Lock()
 			defer endpoint.mu.Unlock()
 			if test.err != "" {
@@ -461,7 +461,7 @@ func TestDirectProfileUnlocksOverAttestedOwnerSSH(t *testing.T) {
 			s := &sandboxSession{box: containerView{Name: "work", Domain: "sandbox.invalid", OwnerPublicKey: owner}, keys: keys, noMonitor: true, expires: time.Now().Add(time.Hour),
 				binding: mkBinding{Account: "personal", ContainerID: "11111111-1111-4111-8111-111111111111", InstanceID: &instance, VolumeID: &volumeID},
 				profile: sshProfile{hostName: address, port: portNumber, hostKey: host.PublicKey()}}
-			err := s.enroll(t.Context())
+			err := s.enroll(testStreams(), t.Context())
 			require.NoError(t, err)
 			status := <-calls
 			require.Equal(t, "/usr/local/bin/workspace-unlock --status", status.command)
@@ -482,7 +482,7 @@ func TestUnlockRequiresUnexpiredAttestationBeforeDial(t *testing.T) {
 	for _, expiry := range []time.Time{{}, time.Now().Add(-time.Second)} {
 		for _, noMonitor := range []bool{false, true} {
 			session := sandboxSession{expires: expiry, noMonitor: noMonitor, keys: &resourceKeys{}, profile: sshProfile{hostKey: testHostKey(t)}}
-			require.ErrorContains(t, session.enroll(t.Context()), "attestation expired")
+			require.ErrorContains(t, session.enroll(testStreams(), t.Context()), "attestation expired")
 		}
 	}
 }
@@ -651,7 +651,7 @@ func TestMonitorRestartRelinksOnlyAuthorizedSandboxes(t *testing.T) {
 	resourceID := scope.ControlplaneURL + "/" + scope.OrgID + "/" + scope.UserID + "/" + fixtures["a"].id
 	require.NoError(t, os.WriteFile(filepath.Join(profiles, "a-alias.conf"), []byte("# tinfoil-resource: "+resourceID+"\nHost a-alias\n"), 0o600))
 
-	failures := relinkSandboxes(commandState.identityOpts, commandState.rootOpts, commandState.trustOpts, t.Context(), scope, cp, m, monitorID)
+	failures := relinkSandboxes(testStreams(), commandState.identityOpts, commandState.rootOpts, commandState.trustOpts, t.Context(), scope, cp, m, monitorID)
 	var reported []string
 	for _, failure := range failures {
 		reported = append(reported, failure.Error())
@@ -695,7 +695,7 @@ func TestMonitorRestartRelinksOnlyAuthorizedSandboxes(t *testing.T) {
 	for _, name := range []string{"a", "b"} {
 		fixtures[name].owner.reset()
 	}
-	require.Len(t, relinkSandboxes(commandState.identityOpts, commandState.rootOpts, commandState.trustOpts, t.Context(), scope, cp, m, monitorID), 3)
+	require.Len(t, relinkSandboxes(testStreams(), commandState.identityOpts, commandState.rootOpts, commandState.trustOpts, t.Context(), scope, cp, m, monitorID), 3)
 	for _, name := range []string{"a", "b"} {
 		require.Len(t, fixtures[name].owner.calls(), 1, "%s: status only", name)
 	}
@@ -711,7 +711,7 @@ func TestMonitorRestartRelinksOnlyAuthorizedSandboxes(t *testing.T) {
 			changedCreator.Store(tc.changedCreator)
 			m.keys.mode = tc.mode
 			before := relayed["a"]
-			err := relinkSandbox(commandState.identityOpts, commandState.rootOpts, commandState.trustOpts, t.Context(), scope, cp, m, monitorID, fixtures["a"].id)
+			err := relinkSandbox(testStreams(), commandState.identityOpts, commandState.rootOpts, commandState.trustOpts, t.Context(), scope, cp, m, monitorID, fixtures["a"].id)
 			require.ErrorContains(t, err, tc.want)
 			require.Equal(t, before, relayed["a"], "invalid ownership or custody must not contact the sandbox")
 			require.Equal(t, revision, keys.revision, "re-linking does not change key state")

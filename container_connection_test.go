@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -10,8 +11,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/spf13/cobra"
 )
 
 const reviewContainerFixture = `{"id":"61bd4a3e-5b48-4320-9215-0c7a7f974979","name":"app","repo":"acme/app","status":"running","current_tag":"v1","domain":"production.example.com","update_tag":"v2","update_status":"ready","update_type":"blue_green","update_deployment_id":"candidate-1","update_config":{"hold":true},"connections":{"production":{"url":"https://production.example.com","repo":"acme/app","tag":"v1"},"review":{"url":"https://review.example.com:4443","repo":"acme/app","tag":"v2"}}}`
@@ -39,7 +38,7 @@ func TestFollowReadyPrintsVerifiedCandidateRequest(t *testing.T) {
 	c.UpdateStatus = statusDeploying
 	c.Connections.Review = nil
 	out, err := captureTestStdout(func() error {
-		return followAndRender(commandState.outputOpts, commandState.waitOpts, newCPClient(cliConfig{ControlplaneURL: server.URL}), c, nil)
+		return followAndRender(testStreams(), commandState.outputOpts, commandState.waitOpts, newCPClient(cliConfig{ControlplaneURL: server.URL}), c, nil)
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -57,10 +56,6 @@ func TestReviewConnectInvalidHostFailsBeforeProxy(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { json.NewEncoder(w).Encode(c) }))
 	defer server.Close()
 	configureContainerPromotionTest(commandState, t, server.URL)
-	oldRun, oldRepo := commandState.proxyCmd.RunE, commandState.rootOpts.repo
-	t.Cleanup(func() { commandState.proxyCmd.RunE = oldRun; commandState.rootOpts.repo = oldRepo })
-	commandState.rootOpts.repo = ""
-	commandState.proxyCmd.RunE = func(_ *cobra.Command, _ []string) error { t.Fatal("proxy started for invalid host"); return nil }
 	_, err := captureTestStdout(func() error {
 		return executeLifecycleCLI(commandState, t, "container", "connect", testContainerID, "--review")
 	})
@@ -184,37 +179,47 @@ func TestConnectionRejectsInvalidHostAndSource(t *testing.T) {
 
 func TestReviewConnectCommandUsesActualDescriptor(t *testing.T) {
 	commandState := newCommandFixture()
-
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/check" {
+			t.Errorf("unexpected proxy path %s", r.URL)
+		}
+		io.WriteString(w, "review response")
+	}))
+	defer upstream.Close()
+	container := reviewContainer(t)
+	container.Connections.Review.URL = upstream.URL
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet || r.URL.Path != "/api/containers/"+testContainerID {
 			t.Errorf("unexpected lookup %s", r.URL)
 		}
-		io.WriteString(w, reviewContainerFixture)
+		json.NewEncoder(w).Encode(container)
 	}))
 	defer server.Close()
 	configureContainerPromotionTest(commandState, t, server.URL)
 	gateEnv(t, `{"allow":{"projects":["acme/app"]}}`) // the gate is not under test here
-	oldRun, oldRepo, oldHost, oldReview := commandState.proxyCmd.RunE, commandState.rootOpts.repo, commandState.rootOpts.enclaveHost, commandState.containerConnectOpts.connectReview
-	t.Cleanup(func() {
-		commandState.proxyCmd.RunE = oldRun
-		commandState.rootOpts.repo = oldRepo
-		commandState.rootOpts.enclaveHost = oldHost
-		commandState.containerConnectOpts.connectReview = oldReview
-	})
-	commandState.rootOpts.repo = ""
-	called := false
-	commandState.proxyCmd.RunE = func(_ *cobra.Command, _ []string) error {
-		called = true
-		if commandState.rootOpts.enclaveHost != "review.example.com:4443" || commandState.rootOpts.repo != "acme/app@v2" {
-			t.Fatalf("proxy target %s %s", commandState.rootOpts.enclaveHost, commandState.rootOpts.repo)
+	commandState.rootOpts.dependencies.proxyClient = func(_ context.Context, host, source string) (*http.Client, error) {
+		if host != strings.TrimPrefix(upstream.URL, "https://") || source != "acme/app@v2" {
+			t.Fatalf("proxy target %s %s", host, source)
 		}
-		return nil
+		return upstream.Client(), nil
+	}
+	var response []byte
+	commandState.rootOpts.dependencies.serveProxy = func(_ string, handler http.Handler) error {
+		proxy := httptest.NewServer(handler)
+		defer proxy.Close()
+		res, err := proxy.Client().Get(proxy.URL + "/check")
+		if err != nil {
+			return err
+		}
+		defer res.Body.Close()
+		response, err = io.ReadAll(res.Body)
+		return err
 	}
 	_, err := captureTestStdout(func() error {
 		return executeLifecycleCLI(commandState, t, "container", "connect", testContainerID, "--review")
 	})
-	if err != nil || !called {
-		t.Fatalf("connect err=%v called=%t", err, called)
+	if err != nil || string(response) != "review response" {
+		t.Fatalf("connect err=%v response=%q", err, response)
 	}
 }
 
@@ -240,25 +245,9 @@ func TestConnectCommandFailsClosedWithoutTrustStore(t *testing.T) {
 	oldStdin := os.Stdin
 	os.Stdin = pipeR
 	t.Cleanup(func() { os.Stdin = oldStdin; pipeR.Close() })
-	oldRun, oldRepo, oldHost, oldReview := commandState.proxyCmd.RunE, commandState.rootOpts.repo, commandState.rootOpts.enclaveHost, commandState.containerConnectOpts.connectReview
-	t.Cleanup(func() {
-		commandState.proxyCmd.RunE = oldRun
-		commandState.rootOpts.repo = oldRepo
-		commandState.rootOpts.enclaveHost = oldHost
-		commandState.containerConnectOpts.connectReview = oldReview
-	})
-	commandState.rootOpts.repo = ""
-	called := false
-	commandState.proxyCmd.RunE = func(_ *cobra.Command, _ []string) error {
-		called = true
-		return nil
-	}
 	_, err = captureTestStdout(func() error { return executeLifecycleCLI(commandState, t, "container", "connect", testContainerID) })
 	if err == nil || !strings.Contains(err.Error(), "--repo") {
 		t.Fatalf("expected fail-closed with guidance, got %v", err)
-	}
-	if called {
-		t.Fatal("proxy must not start for an untrusted config")
 	}
 }
 
@@ -275,7 +264,7 @@ func TestContainerGetAndReadyOutputShowVerifiedNextSteps(t *testing.T) {
 			c.UpdateDeploymentID = ""
 			c.Connections.Review = nil
 		}
-		out, err := captureTestStdout(func() error { return renderContainer(commandState.outputOpts, c) })
+		out, err := captureTestStdout(func() error { return renderContainer(testStreams(), commandState.outputOpts, c) })
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -377,7 +366,7 @@ func TestFollowConnectionGuidancePreservesChangesWithoutDuplicates(t *testing.T)
 			_, err = captureTestStderr(func() error {
 				var runErr error
 				stdout, runErr = captureTestStdout(func() error {
-					return followAndRender(commandState.outputOpts, commandState.waitOpts, client, initial, nil)
+					return followAndRender(testStreams(), commandState.outputOpts, commandState.waitOpts, client, initial, nil)
 				})
 				return runErr
 			})

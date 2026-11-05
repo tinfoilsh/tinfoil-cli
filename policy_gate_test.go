@@ -114,7 +114,7 @@ func TestAssertTrustedSource(t *testing.T) {
 	} {
 		t.Run(tc.assertion, func(t *testing.T) {
 			path := gateEnv(t, "")
-			if err := assertTrustedSource(tc.assertion, source); err != nil {
+			if err := assertTrustedSource(testStreams(), tc.assertion, source); err != nil {
 				t.Fatal(err)
 			}
 			policy, err := loadConnectionPolicyFrom(path)
@@ -148,7 +148,7 @@ func TestAssertTrustedSourceRecordsUnderBroaderGrant(t *testing.T) {
 	// later pruning of the org entry does not erase it.
 	path := gateEnv(t, `{"allow":{"orgs":["acme"]}}`)
 	source := "acme/api@r12@" + testDigestA
-	if err := assertTrustedSource("acme/api", source); err != nil {
+	if err := assertTrustedSource(testStreams(), "acme/api", source); err != nil {
 		t.Fatal(err)
 	}
 	policy, err := loadConnectionPolicyFrom(path)
@@ -167,7 +167,7 @@ func TestAssertTrustedSourceRecordsUnderBroaderGrant(t *testing.T) {
 func TestAssertTrustedSourceMismatchFails(t *testing.T) {
 	path := gateEnv(t, "")
 	for _, assertion := range []string{"widgets", "acme/other", "acme/api@r13@" + testDigestB, "acmecorp", "acme/api@" + testDigestB, "acme/api@r13@" + testDigestA} {
-		if err := assertTrustedSource(assertion, "acme/api@r12@"+testDigestA); err == nil {
+		if err := assertTrustedSource(testStreams(), assertion, "acme/api@r12@"+testDigestA); err == nil {
 			t.Errorf("assertion %q must not match", assertion)
 		}
 	}
@@ -223,7 +223,7 @@ func TestInvalidStoreBlocksConnections(t *testing.T) {
 			t.Fatalf("invalid store must not prompt: %q", out.String())
 		}
 	}
-	if err := assertTrustedSource("acme/api", source); err == nil {
+	if err := assertTrustedSource(testStreams(), "acme/api", source); err == nil {
 		t.Fatal("explicit assertions must also report the invalid store")
 	}
 	data, err := os.ReadFile(path)
@@ -248,7 +248,7 @@ func TestGateSubstitutionScenario(t *testing.T) {
 
 func TestSeedTrustFromCreate(t *testing.T) {
 	path := gateEnv(t, "")
-	seedTrustFromCreate("acme/api", "v1.2.3")
+	seedTrustFromCreate(testStreams(), "acme/api", "v1.2.3")
 	policy, err := loadConnectionPolicyFrom(path)
 	if err != nil {
 		t.Fatal(err)
@@ -259,7 +259,7 @@ func TestSeedTrustFromCreate(t *testing.T) {
 	}
 
 	// Creating again inside existing trust journals quietly, no duplicates.
-	seedTrustFromCreate("acme/api", "v1.2.4")
+	seedTrustFromCreate(testStreams(), "acme/api", "v1.2.4")
 	reloaded, err := loadConnectionPolicyFrom(path)
 	if err != nil {
 		t.Fatal(err)
@@ -271,7 +271,7 @@ func TestSeedTrustFromCreate(t *testing.T) {
 
 func TestSeedTrustFromCreateDigestRevision(t *testing.T) {
 	path := gateEnv(t, "")
-	seedTrustFromCreate("acme/api", testDigestA)
+	seedTrustFromCreate(testStreams(), "acme/api", testDigestA)
 	policy, err := loadConnectionPolicyFrom(path)
 	if err != nil {
 		t.Fatal(err)

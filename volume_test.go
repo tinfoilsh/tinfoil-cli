@@ -587,7 +587,7 @@ func configureVolumeTest(commandState *commandFixture, t *testing.T, serverURL s
 
 func TestRenderVolumesShowsKind(t *testing.T) {
 	out, err := captureTestStdout(func() error {
-		return renderVolumes(volumeList{Volumes: []volumeView{{Name: "workspace", Sandbox: true}, {Name: "data"}}})
+		return renderVolumes(testStreams(), volumeList{Volumes: []volumeView{{Name: "workspace", Sandbox: true}, {Name: "data"}}})
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -602,7 +602,7 @@ func TestRenderVolumesShowsKind(t *testing.T) {
 
 func TestRenderVolumesStorageSummaryUsesDecimalUnits(t *testing.T) {
 	out, err := captureTestStdout(func() error {
-		return renderVolumes(volumeList{AllocatedBytes: 24e9, MaxBytes: 512e9, AvailableBytes: 488e9})
+		return renderVolumes(testStreams(), volumeList{AllocatedBytes: 24e9, MaxBytes: 512e9, AvailableBytes: 488e9})
 	})
 	if err != nil {
 		t.Fatal(err)

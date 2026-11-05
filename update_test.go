@@ -8,13 +8,13 @@ import (
 func TestUpdateCheckDisabledForDevBuildsAndOptOut(t *testing.T) {
 	setVersionForTest(t, defaultVersion)
 	t.Setenv(envNoUpdateCheck, "")
-	if updateCheckEnabled() {
+	if updateCheckEnabled(testStreams()) {
 		t.Fatal("update check should be disabled for dev builds")
 	}
 
 	setVersionForTest(t, "0.16.3")
 	t.Setenv(envNoUpdateCheck, "1")
-	if updateCheckEnabled() {
+	if updateCheckEnabled(testStreams()) {
 		t.Fatalf("update check should be disabled when %s is set", envNoUpdateCheck)
 	}
 }
@@ -48,7 +48,7 @@ func TestStartReturnsPromptResult(t *testing.T) {
 func TestStartUpdateCheckReturnsNothingWhenDisabled(t *testing.T) {
 	setVersionForTest(t, defaultVersion)
 
-	if latest, ok := startUpdateCheck()(); ok {
+	if latest, ok := startUpdateCheck(testStreams())(); ok {
 		t.Fatalf("startUpdateCheck() = (%q, true), want disabled", latest)
 	}
 }

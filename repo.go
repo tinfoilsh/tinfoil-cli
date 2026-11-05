@@ -115,18 +115,18 @@ func newRepoConfigGetCommand(outputOpts *outputOptions, repoConfigGetOpts *repoC
 				return err
 			}
 			if outputOpts.outputFormat == "json" {
-				return printJSON(response)
+				return printJSON(commandStreams(cmd), response)
 			}
 			if repoConfigGetOpts.repoConfigRaw {
-				fmt.Print(response.Raw)
+				fmt.Fprint(commandStreams(cmd).out, response.Raw)
 				return nil
 			}
-			fmt.Printf("Repository:       %s/%s\n", repository.owner, repository.name)
-			fmt.Printf("Default branch:   %s\n", response.DefaultBranch)
-			fmt.Printf("Config exists:    %v\n", response.Exists)
-			fmt.Printf("Release workflow: %v\n", response.HasBuildWorkflow)
+			fmt.Fprintf(commandStreams(cmd).out, "Repository:       %s/%s\n", repository.owner, repository.name)
+			fmt.Fprintf(commandStreams(cmd).out, "Default branch:   %s\n", response.DefaultBranch)
+			fmt.Fprintf(commandStreams(cmd).out, "Config exists:    %v\n", response.Exists)
+			fmt.Fprintf(commandStreams(cmd).out, "Release workflow: %v\n", response.HasBuildWorkflow)
 			if response.Raw != "" {
-				fmt.Printf("\n%s", response.Raw)
+				fmt.Fprintf(commandStreams(cmd).out, "\n%s", response.Raw)
 			}
 			return nil
 		},
@@ -146,7 +146,7 @@ func newRepoConfigPRCommand(outputOpts *outputOptions, repoConfigPROpts *repoCon
 			if err != nil {
 				return err
 			}
-			raw, err := readConfigInput(repoConfigPROpts.repoConfigFile)
+			raw, err := readConfigInput(commandStreams(cmd), repoConfigPROpts.repoConfigFile)
 			if err != nil {
 				return err
 			}
@@ -159,12 +159,12 @@ func newRepoConfigPRCommand(outputOpts *outputOptions, repoConfigPROpts *repoCon
 				return err
 			}
 			if outputOpts.outputFormat == "json" {
-				return printJSON(response)
+				return printJSON(commandStreams(cmd), response)
 			}
-			fmt.Printf("Opened pull request #%d: %s\n", response.PRNumber, response.PRURL)
-			fmt.Printf("Branch: %s\n", response.Branch)
-			fmt.Println("Merge this pull request before publishing a release; opening it does not change the default branch.")
-			fmt.Printf("Check merge status: tinfoil repo pr status %s/%s %d\n", repository.owner, repository.name, response.PRNumber)
+			fmt.Fprintf(commandStreams(cmd).out, "Opened pull request #%d: %s\n", response.PRNumber, response.PRURL)
+			fmt.Fprintf(commandStreams(cmd).out, "Branch: %s\n", response.Branch)
+			fmt.Fprintln(commandStreams(cmd).out, "Merge this pull request before publishing a release; opening it does not change the default branch.")
+			fmt.Fprintf(commandStreams(cmd).out, "Check merge status: tinfoil repo pr status %s/%s %d\n", repository.owner, repository.name, response.PRNumber)
 			return nil
 		},
 	}
@@ -203,12 +203,12 @@ func newRepoPRStatusCommand(outputOpts *outputOptions) *cobra.Command {
 				return err
 			}
 			if outputOpts.outputFormat == "json" {
-				return printJSON(response)
+				return printJSON(commandStreams(cmd), response)
 			}
-			fmt.Printf("Pull request: #%d\n", response.PRNumber)
-			fmt.Printf("State:        %s\n", response.State)
-			fmt.Printf("Merged:       %v\n", response.Merged)
-			fmt.Printf("URL:          %s\n", response.PRURL)
+			fmt.Fprintf(commandStreams(cmd).out, "Pull request: #%d\n", response.PRNumber)
+			fmt.Fprintf(commandStreams(cmd).out, "State:        %s\n", response.State)
+			fmt.Fprintf(commandStreams(cmd).out, "Merged:       %v\n", response.Merged)
+			fmt.Fprintf(commandStreams(cmd).out, "URL:          %s\n", response.PRURL)
 			return nil
 		},
 	}
@@ -240,23 +240,23 @@ func newRepoBuildInfoCommand(outputOpts *outputOptions) *cobra.Command {
 				return err
 			}
 			if outputOpts.outputFormat == "json" {
-				return printJSON(response)
+				return printJSON(commandStreams(cmd), response)
 			}
 			latest := response.LatestTag
 			if latest == "" {
 				latest = "-"
 			}
-			fmt.Printf("Latest tag:             %s\n", latest)
-			fmt.Printf("Suggested next version: %s\n", response.SuggestedNextVersion)
+			fmt.Fprintf(commandStreams(cmd).out, "Latest tag:             %s\n", latest)
+			fmt.Fprintf(commandStreams(cmd).out, "Suggested next version: %s\n", response.SuggestedNextVersion)
 			if response.LatestReleaseTag == "" {
-				fmt.Println("Latest GitHub release:  none published")
+				fmt.Fprintln(commandStreams(cmd).out, "Latest GitHub release:  none published")
 			} else {
-				fmt.Printf("Latest GitHub release:  %s\n", response.LatestReleaseTag)
+				fmt.Fprintf(commandStreams(cmd).out, "Latest GitHub release:  %s\n", response.LatestReleaseTag)
 			}
 			for _, release := range response.Releases {
-				fmt.Printf("Published release:     %s at %s (prerelease=%t) %s\n", release.TagName, release.PublishedAt, release.Prerelease, release.HTMLURL)
+				fmt.Fprintf(commandStreams(cmd).out, "Published release:     %s at %s (prerelease=%t) %s\n", release.TagName, release.PublishedAt, release.Prerelease, release.HTMLURL)
 			}
-			fmt.Println("A tag alone is not deployable. Wait for both Tinfoil Release and Build & Publish to succeed and for the same tag's release to be published.")
+			fmt.Fprintln(commandStreams(cmd).out, "A tag alone is not deployable. Wait for both Tinfoil Release and Build & Publish to succeed and for the same tag's release to be published.")
 			return nil
 		},
 	}
@@ -280,13 +280,13 @@ func newRepoBuildRunCommand(outputOpts *outputOptions, repoBuildRunOpts *repoBui
 				return err
 			}
 			if outputOpts.outputFormat == "json" {
-				return printJSON(response)
+				return printJSON(commandStreams(cmd), response)
 			}
-			fmt.Printf("Queued release %s; not yet deployable.\n", response.Version)
-			fmt.Printf("GitHub Actions: %s\n", response.WorkflowRunURL)
-			fmt.Printf("All workflows (including Build & Publish): https://github.com/%s/%s/actions\n", repository.owner, repository.name)
-			fmt.Printf("Check status (read-only): tinfoil repo build status %s/%s --version %s\n", repository.owner, repository.name, shellQuote(response.Version))
-			fmt.Println("Wait for both Tinfoil Release and Build & Publish to succeed, then confirm the same tag is published with repo build info before creating a container.")
+			fmt.Fprintf(commandStreams(cmd).out, "Queued release %s; not yet deployable.\n", response.Version)
+			fmt.Fprintf(commandStreams(cmd).out, "GitHub Actions: %s\n", response.WorkflowRunURL)
+			fmt.Fprintf(commandStreams(cmd).out, "All workflows (including Build & Publish): https://github.com/%s/%s/actions\n", repository.owner, repository.name)
+			fmt.Fprintf(commandStreams(cmd).out, "Check status (read-only): tinfoil repo build status %s/%s --version %s\n", repository.owner, repository.name, shellQuote(response.Version))
+			fmt.Fprintln(commandStreams(cmd).out, "Wait for both Tinfoil Release and Build & Publish to succeed, then confirm the same tag is published with repo build info before creating a container.")
 			return nil
 		},
 	}
@@ -310,15 +310,15 @@ func newRepoBuildStatusCommand(outputOpts *outputOptions, repoBuildStatusOpts *r
 				return err
 			}
 			if outputOpts.outputFormat == "json" {
-				return printJSON(response)
+				return printJSON(commandStreams(cmd), response)
 			}
 			if response.Run == nil {
-				fmt.Printf("Release %s: waiting for workflow visibility; not yet deployable.\n", response.Version)
+				fmt.Fprintf(commandStreams(cmd).out, "Release %s: waiting for workflow visibility; not yet deployable.\n", response.Version)
 			} else {
-				fmt.Printf("Release %s: %s (conclusion: %s)\nGitHub Actions: %s\n", response.Version, response.Run.Status, response.Run.Conclusion, response.Run.HTMLURL)
+				fmt.Fprintf(commandStreams(cmd).out, "Release %s: %s (conclusion: %s)\nGitHub Actions: %s\n", response.Version, response.Run.Status, response.Run.Conclusion, response.Run.HTMLURL)
 			}
-			fmt.Printf("Confirm Build & Publish also succeeds, then check the published tag: tinfoil repo build info %s/%s\n", repository.owner, repository.name)
-			fmt.Printf("All workflows: https://github.com/%s/%s/actions\n", repository.owner, repository.name)
+			fmt.Fprintf(commandStreams(cmd).out, "Confirm Build & Publish also succeeds, then check the published tag: tinfoil repo build info %s/%s\n", repository.owner, repository.name)
+			fmt.Fprintf(commandStreams(cmd).out, "All workflows: https://github.com/%s/%s/actions\n", repository.owner, repository.name)
 			return nil
 		},
 	}
@@ -360,14 +360,14 @@ func repositoryCommand(value string) (repositoryRef, *cpClient, error) {
 	return repository, client, nil
 }
 
-func readConfigInput(path string) (string, error) {
+func readConfigInput(streams commandIO, path string) (string, error) {
 	var (
 		reader io.Reader
 		file   *os.File
 		err    error
 	)
 	if path == "-" {
-		reader = os.Stdin
+		reader = streams.in
 	} else {
 		file, err = os.Open(path)
 		if err != nil {

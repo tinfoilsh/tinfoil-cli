@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"math/big"
 	"net/http"
-	"os"
 	"slices"
 	"strings"
 
@@ -79,15 +78,15 @@ func newVolumeListCommand(outputOpts *outputOptions) *cobra.Command {
 				return err
 			}
 			if outputOpts.outputFormat == "json" {
-				os.Stdout.Write(prettyJSON(raw))
-				fmt.Println()
+				commandStreams(cmd).out.Write(prettyJSON(raw))
+				fmt.Fprintln(commandStreams(cmd).out)
 				return nil
 			}
 			var list volumeList
 			if err := json.Unmarshal(raw, &list); err != nil {
 				return fmt.Errorf("decoding volumes: %w", err)
 			}
-			return renderVolumes(list)
+			return renderVolumes(commandStreams(cmd), list)
 		},
 	}
 
@@ -108,7 +107,7 @@ func newVolumeGetCommand(outputOpts *outputOptions) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return renderVolume(outputOpts, *v)
+			return renderVolume(commandStreams(cmd), outputOpts, *v)
 		},
 	}
 
@@ -158,7 +157,7 @@ func newVolumeCreateCommand(outputOpts *outputOptions, volumeCreateOpts *volumeC
 					return err
 				}
 				if volumeCreateOpts.volumeCreateHost == "" {
-					fmt.Fprintf(os.Stderr, "Using host %s (the only host available).\n", host.Name)
+					fmt.Fprintf(commandStreams(cmd).err, "Using host %s (the only host available).\n", host.Name)
 				}
 				body["host_id"] = host.ID
 			}
@@ -172,7 +171,7 @@ func newVolumeCreateCommand(outputOpts *outputOptions, volumeCreateOpts *volumeC
 			if host != nil {
 				created.HostName = host.Name
 			}
-			return renderVolume(outputOpts, created)
+			return renderVolume(commandStreams(cmd), outputOpts, created)
 		},
 	}
 	volumeCreateCmd.Flags().Bool("auto-unlock", false, "Prepare private AWS-backed automatic unlock for this new disk")
@@ -202,7 +201,7 @@ func newVolumeRenameCommand(volumeRenameOpts *volumeRenameOptions) *cobra.Comman
 			if _, err := client.do("PATCH", pathf("/api/volumes/%s", v.ID), nil, body, nil); err != nil {
 				return err
 			}
-			fmt.Printf("Renamed volume %s to %s\n", v.Name, volumeRenameOpts.volumeRenameName)
+			fmt.Fprintf(commandStreams(cmd).out, "Renamed volume %s to %s\n", v.Name, volumeRenameOpts.volumeRenameName)
 			return nil
 		},
 	}
@@ -240,8 +239,8 @@ func newVolumeAttachCommand(volumeAttachOpts *volumeAttachOptions) *cobra.Comman
 			if err := attachVolume(client, c.ID, slot, v.ID); err != nil {
 				return err
 			}
-			fmt.Printf("Attached %s to %s as %q\n", v.Name, c.Name, slot)
-			printVolumeUnlockGuidance(os.Stdout, c.VolumeSlots)
+			fmt.Fprintf(commandStreams(cmd).out, "Attached %s to %s as %q\n", v.Name, c.Name, slot)
+			printVolumeUnlockGuidance(commandStreams(cmd).out, c.VolumeSlots)
 			return nil
 		},
 	}
@@ -269,7 +268,7 @@ func newVolumeDetachCommand() *cobra.Command {
 			if _, err := client.do("DELETE", pathf("/api/containers/%s/volumes/%s", v.ContainerID, v.Slot), nil, nil, nil); err != nil {
 				return err
 			}
-			fmt.Printf("Detached %s from %s\n", v.Name, volumeContainerLabel(*v))
+			fmt.Fprintf(commandStreams(cmd).out, "Detached %s from %s\n", v.Name, volumeContainerLabel(*v))
 			return nil
 		},
 	}
@@ -295,15 +294,15 @@ func newVolumeDeleteCommand(volumeDeleteOpts *volumeDeleteOptions) *cobra.Comman
 			if v.ContainerID != "" {
 				return fmt.Errorf("volume %s is attached to %s; detach it first: tinfoil volume detach %s", v.Name, volumeContainerLabel(*v), v.ID)
 			}
-			fmt.Fprintf(os.Stderr, "Deleting volume %s (%s on %s).\n", v.Name, formatSize(v.SizeBytes), v.HostName)
-			fmt.Fprintln(os.Stderr, "This permanently destroys the volume and its data.")
-			if err := confirmYes(volumeDeleteOpts.volumeYes, "deleting a volume"); err != nil {
+			fmt.Fprintf(commandStreams(cmd).err, "Deleting volume %s (%s on %s).\n", v.Name, formatSize(v.SizeBytes), v.HostName)
+			fmt.Fprintln(commandStreams(cmd).err, "This permanently destroys the volume and its data.")
+			if err := confirmYes(commandStreams(cmd), volumeDeleteOpts.volumeYes, "deleting a volume"); err != nil {
 				return err
 			}
 			if _, err := client.do("DELETE", pathf("/api/volumes/%s", v.ID), nil, nil, nil); err != nil {
 				return err
 			}
-			fmt.Printf("Deleted volume %s\n", v.Name)
+			fmt.Fprintf(commandStreams(cmd).out, "Deleted volume %s\n", v.Name)
 			return nil
 		},
 	}
@@ -811,23 +810,23 @@ func formatSize(n int64) string {
 	return fmt.Sprintf("%d B", n)
 }
 
-func renderVolumes(list volumeList) error {
+func renderVolumes(streams commandIO, list volumeList) error {
 	if len(list.Volumes) == 0 {
-		fmt.Println("No volumes.")
+		fmt.Fprintln(streams.out, "No volumes.")
 	} else {
-		fmt.Printf("%-24s  %-9s  %-10s  %-16s  %-24s  %s\n", "NAME", "KIND", "SIZE", "HOST", "ATTACHED TO", "CREATED")
+		fmt.Fprintf(streams.out, "%-24s  %-9s  %-10s  %-16s  %-24s  %s\n", "NAME", "KIND", "SIZE", "HOST", "ATTACHED TO", "CREATED")
 		for _, v := range list.Volumes {
 			attached := "-"
 			if v.ContainerID != "" {
 				attached = volumeContainerLabel(v)
 			}
-			fmt.Printf("%-24s  %-9s  %-10s  %-16s  %-24s  %s\n",
+			fmt.Fprintf(streams.out, "%-24s  %-9s  %-10s  %-16s  %-24s  %s\n",
 				truncate(v.Name, 24), volumeKind(v), formatSize(v.SizeBytes), truncate(v.HostName, 16), truncate(attached, 24), v.CreatedAt,
 			)
 		}
 	}
-	fmt.Println()
-	fmt.Printf("Storage: %s of %s used, %s available\n", formatSize(list.AllocatedBytes), formatSize(list.MaxBytes), formatSize(list.AvailableBytes))
+	fmt.Fprintln(streams.out)
+	fmt.Fprintf(streams.out, "Storage: %s of %s used, %s available\n", formatSize(list.AllocatedBytes), formatSize(list.MaxBytes), formatSize(list.AvailableBytes))
 	return nil
 }
 
@@ -840,22 +839,22 @@ func volumeKind(v volumeView) string {
 	return "container"
 }
 
-func renderVolume(outputOpts *outputOptions, v volumeView) error {
+func renderVolume(streams commandIO, outputOpts *outputOptions, v volumeView) error {
 	if outputOpts.outputFormat == "json" {
-		return printJSON(v)
+		return printJSON(streams, v)
 	}
-	fmt.Printf("Name:         %s\n", v.Name)
-	fmt.Printf("ID:           %s\n", v.ID)
-	fmt.Printf("Kind:         %s\n", volumeKind(v))
-	fmt.Printf("Size:         %s\n", formatSize(v.SizeBytes))
+	fmt.Fprintf(streams.out, "Name:         %s\n", v.Name)
+	fmt.Fprintf(streams.out, "ID:           %s\n", v.ID)
+	fmt.Fprintf(streams.out, "Kind:         %s\n", volumeKind(v))
+	fmt.Fprintf(streams.out, "Size:         %s\n", formatSize(v.SizeBytes))
 	if v.HostName != "" {
-		fmt.Printf("Host:         %s\n", v.HostName)
+		fmt.Fprintf(streams.out, "Host:         %s\n", v.HostName)
 	}
 	if v.ContainerID == "" {
-		fmt.Printf("Attached to:  not attached\n")
+		fmt.Fprintf(streams.out, "Attached to:  not attached\n")
 	} else {
-		fmt.Printf("Attached to:  %s (as %q)\n", volumeContainerLabel(v), v.Slot)
+		fmt.Fprintf(streams.out, "Attached to:  %s (as %q)\n", volumeContainerLabel(v), v.Slot)
 	}
-	fmt.Printf("Created:      %s\n", v.CreatedAt)
+	fmt.Fprintf(streams.out, "Created:      %s\n", v.CreatedAt)
 	return nil
 }

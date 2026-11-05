@@ -51,13 +51,13 @@ func newSshCommand(forwardOpts *forwardOptions, rootOpts *rootOptions, sshOpts *
 			if len(args) == 1 {
 				identifier = args[0]
 			}
-			target, err := resolveTunnelTarget(forwardOpts, rootOpts, trustOpts, identifier)
+			target, err := resolveTunnelTarget(commandStreams(cmd), forwardOpts, rootOpts, trustOpts, identifier)
 			if err != nil {
 				return err
 			}
 
 			options, command := splitSSHArgs(sshArgs)
-			code, err := runSSH(rootOpts, tunnelOpts, target, sshTargetPort(target, sshOpts.sshPort), sshOpts.sshUser, options, command)
+			code, err := runSSH(commandStreams(cmd), rootOpts, tunnelOpts, target, sshTargetPort(target, sshOpts.sshPort), sshOpts.sshUser, options, command)
 			return sshExit(code, err)
 		},
 	}
@@ -82,7 +82,7 @@ func sshTargetPort(target *tunnelTarget, override uint) int {
 
 // runSSH returns ssh's exit status rather than exiting on it, so a caller can
 // finish what the session was for before the process ends.
-func runSSH(rootOpts *rootOptions, tunnelOpts *tunnelOptions, target *tunnelTarget, port int, user string, options, command []string) (int, error) {
+func runSSH(streams commandIO, rootOpts *rootOptions, tunnelOpts *tunnelOptions, target *tunnelTarget, port int, user string, options, command []string) (int, error) {
 	argv, err := sshProxyOptions(rootOpts, tunnelOpts, target, port)
 	if err != nil {
 		return 0, err
@@ -91,7 +91,7 @@ func runSSH(rootOpts *rootOptions, tunnelOpts *tunnelOptions, target *tunnelTarg
 	argv = append(argv, options...)
 	argv = append(argv, "-o", "ServerAliveInterval="+strconv.Itoa(int(sshServerAliveInterval/time.Second)), target.host)
 	argv = append(argv, command...)
-	return runSSHClient(tunnelOpts, "ssh", argv)
+	return runSSHClient(streams, tunnelOpts, "ssh", argv)
 }
 
 // sshProxyOptions supplies the same attested connection to ssh and scp.
@@ -109,9 +109,9 @@ func sshProxyOptions(rootOpts *rootOptions, tunnelOpts *tunnelOptions, target *t
 	}, nil
 }
 
-func runSSHClient(tunnelOpts *tunnelOptions, program string, argv []string) (int, error) {
+func runSSHClient(streams commandIO, tunnelOpts *tunnelOptions, program string, argv []string) (int, error) {
 	client := exec.Command(program, argv...)
-	client.Stdin, client.Stdout, client.Stderr = os.Stdin, os.Stdout, os.Stderr
+	client.Stdin, client.Stdout, client.Stderr = streams.in, streams.out, streams.err
 	// Keep the API key out of the ProxyCommand shown in the process table.
 	client.Env = os.Environ()
 	if key := enclaveAPIKey(tunnelOpts); key != "" {

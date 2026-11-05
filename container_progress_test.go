@@ -114,7 +114,7 @@ func TestFollowContainerStopsAtTerminalStateAndFailsOnFailed(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = captureTestStdout(func() error {
-		return followAndRender(commandState.outputOpts, commandState.waitOpts, client, containerView{ID: testContainerID, Name: "app", Status: statusPending, TinfoildDeploymentID: "deploy-1"}, nil)
+		return followAndRender(testStreams(), commandState.outputOpts, commandState.waitOpts, client, containerView{ID: testContainerID, Name: "app", Status: statusPending, TinfoildDeploymentID: "deploy-1"}, nil)
 	})
 	if err == nil || err.Error() != "health check failed" {
 		t.Fatalf("error = %v, want the container's error message", err)
@@ -139,7 +139,7 @@ func TestFollowAndRenderExitsNonZeroWhenInitialResponseAlreadyFailed(t *testing.
 		t.Run(mode.name, func(t *testing.T) {
 			commandState.waitOpts.noWait, commandState.outputOpts.outputFormat = mode.noWait, mode.format
 			_, err := captureTestStdout(func() error {
-				return followAndRender(commandState.outputOpts, commandState.waitOpts, nil, containerView{ID: testContainerID, Name: "app", Status: statusFailed, ErrorMessage: "boot failed"}, nil)
+				return followAndRender(testStreams(), commandState.outputOpts, commandState.waitOpts, nil, containerView{ID: testContainerID, Name: "app", Status: statusFailed, ErrorMessage: "boot failed"}, nil)
 			})
 			if err == nil || err.Error() != "boot failed" {
 				t.Fatalf("error = %v, want the container's error message", err)

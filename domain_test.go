@@ -27,7 +27,7 @@ func TestRenderDomainListsBothCNAMERecords(t *testing.T) {
 	commandState.outputOpts.outputFormat = "table"
 	t.Cleanup(func() { commandState.outputOpts.outputFormat = saved })
 	captured, err := captureTestStdout(func() error {
-		return renderDomain(commandState.outputOpts, d, true)
+		return renderDomain(testStreams(), commandState.outputOpts, d, true)
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -72,7 +72,7 @@ func TestRenderDomainListsWildcardRecordForWildcardDomains(t *testing.T) {
 	commandState.outputOpts.outputFormat = "table"
 	t.Cleanup(func() { commandState.outputOpts.outputFormat = saved })
 	captured, err := captureTestStdout(func() error {
-		return renderDomain(commandState.outputOpts, d, true)
+		return renderDomain(testStreams(), commandState.outputOpts, d, true)
 	})
 	if err != nil {
 		t.Fatal(err)

@@ -179,9 +179,9 @@ func TestSecretDeliveryInvalidPlansFailClosed(t *testing.T) {
 				client := &cpClient{baseURL: server.URL, http: server.Client()}
 				var err error
 				if project {
-					_, err = updateProjectInstances(commandState.outputOpts, commandState.projectUpdateOpts, client, "project-1", map[string]any{"tag": "v2"})
+					_, err = updateProjectInstances(testStreams(), commandState.outputOpts, commandState.projectUpdateOpts, client, "project-1", map[string]any{"tag": "v2"})
 				} else {
-					err = postLifecycleUpdate(commandState.outputOpts, client, "/update", map[string]any{}, nil, true, "update", func() (updateReview, error) {
+					err = postLifecycleUpdate(testStreams(), commandState.outputOpts, client, "/update", map[string]any{}, nil, true, "update", func() (updateReview, error) {
 						return planContainerUpdate(client, testContainerID, map[string]any{})
 					})
 				}

@@ -30,8 +30,8 @@ func TestProjectOutputLabelsDeployingAndPreservesJSONField(t *testing.T) {
 		name string
 		run  func() error
 	}{
-		{name: "get", run: func() error { return renderProject(commandState.outputOpts, deployment) }},
-		{name: "list", run: func() error { return renderProjects(commandState.outputOpts, []projectView{deployment}) }},
+		{name: "get", run: func() error { return renderProject(testStreams(), commandState.outputOpts, deployment) }},
+		{name: "list", run: func() error { return renderProjects(testStreams(), commandState.outputOpts, []projectView{deployment}) }},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			commandState.outputOpts.outputFormat = "table"
@@ -321,7 +321,7 @@ func TestProjectUpdateResultsFailForIncompleteUpdates(t *testing.T) {
 	for _, format := range []string{"table", "json"} {
 		t.Run(format, func(t *testing.T) {
 			commandState.outputOpts.outputFormat = format
-			if err := renderProjectUpdateResults(commandState.outputOpts, results); err == nil {
+			if err := renderProjectUpdateResults(testStreams(), commandState.outputOpts, results); err == nil {
 				t.Fatal("expected incomplete deployment update error")
 			}
 		})

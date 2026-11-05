@@ -93,7 +93,7 @@ func offerPrune(trustSetOpts *trustSetOptions, cmd *cobra.Command, policy *conne
 	}
 	out := cmd.OutOrStdout()
 	prune := trustSetOpts.trustSetPrune
-	if !prune && term.IsTerminal(int(os.Stdin.Fd())) {
+	if !prune && term.IsTerminal(int(streamFD(commandStreams(cmd).in))) {
 		fmt.Fprintf(out, "Record is now set to: %s. %d broader entr%s still grant%s more:\n", policy.Record, len(broader), plural(len(broader), "y", "ies"), plural(len(broader), "s", ""))
 		for _, entry := range broader {
 			fmt.Fprintf(out, "  %s\n", entry)

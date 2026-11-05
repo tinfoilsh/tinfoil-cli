@@ -41,7 +41,7 @@ A reboot rotates the key, so rerun this after one.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			resolved := startConnectionProgress(cmd.ErrOrStderr(), "Looking up "+args[0])
-			target, err := resolveTunnelTarget(forwardOpts, rootOpts, trustOpts, args[0])
+			target, err := resolveTunnelTarget(commandStreams(cmd), forwardOpts, rootOpts, trustOpts, args[0])
 			resolved()
 			if err != nil {
 				return err
@@ -58,12 +58,12 @@ A reboot rotates the key, so rerun this after one.`,
 					if attestSSHOpts.attestSSHName != "" && !sshProfileNamePattern.MatchString(attestSSHOpts.attestSSHName) {
 						return errors.New("invalid SSH profile name")
 					}
-					s, err := connectSandbox(identityOpts, rootOpts, trustOpts, cmd.Context(), target.workload)
+					s, err := connectSandbox(commandStreams(cmd), identityOpts, rootOpts, trustOpts, cmd.Context(), target.workload)
 					if err != nil {
 						return err
 					}
 					defer s.close()
-					if err := s.enroll(cmd.Context()); err != nil {
+					if err := s.enroll(commandStreams(cmd), cmd.Context()); err != nil {
 						return err
 					}
 					if attestSSHOpts.attestSSHName != "" {
@@ -76,9 +76,9 @@ A reboot rotates the key, so rerun this after one.`,
 						s.profile.user = attestSSHOpts.attestSSHUser
 					}
 					if attestSSHOpts.attestSSHInstall {
-						return s.install()
+						return s.install(commandStreams(cmd))
 					}
-					fmt.Printf("%s\n# ~/.ssh/tinfoil/%s.known_hosts\n%s", s.profile.render(), s.profile.name, s.profile.pin())
+					fmt.Fprintf(commandStreams(cmd).out, "%s\n# ~/.ssh/tinfoil/%s.known_hosts\n%s", s.profile.render(), s.profile.name, s.profile.pin())
 					return nil
 				}
 			}
@@ -92,15 +92,15 @@ A reboot rotates the key, so rerun this after one.`,
 			if profile.port > 65535 {
 				return fmt.Errorf("--ssh-port must be at most 65535 (got %d)", profile.port)
 			}
-			if profile.hostKey, err = attestedHostKey(rootOpts, target.host, target.repo, target.sealedTo); err != nil {
+			if profile.hostKey, err = attestedHostKey(commandStreams(cmd), rootOpts, target.host, target.repo, target.sealedTo); err != nil {
 				return err
 			}
-			fmt.Fprintln(os.Stderr, "Attestation successful.")
+			fmt.Fprintln(commandStreams(cmd).err, "Attestation successful.")
 			if !attestSSHOpts.attestSSHInstall {
-				fmt.Printf("%s\n# ~/.ssh/tinfoil/%s.known_hosts\n%s", profile.render(), profile.name, profile.pin())
+				fmt.Fprintf(commandStreams(cmd).out, "%s\n# ~/.ssh/tinfoil/%s.known_hosts\n%s", profile.render(), profile.name, profile.pin())
 				return nil
 			}
-			return profile.install(attestSSHOpts)
+			return profile.install(commandStreams(cmd), attestSSHOpts)
 		},
 	}
 	flags := attestSSHCmd.Flags()
@@ -147,8 +147,8 @@ func nativeSSHHost(target *tunnelTarget, override string) string {
 
 // attestedHostKey verifies host against source and returns the endorsed
 // host-ssh key, so a failed verification never falls back to unverified acceptance.
-func attestedHostKey(rootOpts *rootOptions, host, source, sealedTo string) (ssh.PublicKey, error) {
-	defer startConnectionProgress(os.Stderr, "Verifying attestation and SSH host key for "+host)()
+func attestedHostKey(streams commandIO, rootOpts *rootOptions, host, source, sealedTo string) (ssh.PublicKey, error) {
+	defer startConnectionProgress(streams.err, "Verifying attestation and SSH host key for "+host)()
 	input, err := verificationInput(rootOpts, source, sealedTo)
 	if err != nil {
 		return nil, err
@@ -228,12 +228,12 @@ func (p sshProfile) pin() string {
 	return pin
 }
 
-func (p sshProfile) install(attestSSHOpts *attestSSHOptions) error {
+func (p sshProfile) install(streams commandIO, attestSSHOpts *attestSSHOptions) error {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return err
 	}
-	return p.installTo(home, os.Stdin, os.Stderr, term.IsTerminal(int(os.Stdin.Fd())), attestSSHOpts.attestSSHYes)
+	return p.installTo(home, streams.in, streams.err, term.IsTerminal(streamFD(streams.in)), attestSSHOpts.attestSSHYes)
 }
 
 func (p sshProfile) installTo(home string, in io.Reader, out io.Writer, interactive, autoYes bool) error {

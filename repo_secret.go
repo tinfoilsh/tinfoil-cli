@@ -37,7 +37,7 @@ func newRepoSecretListCommand(outputOpts *outputOptions) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return printSecretList(outputOpts, list)
+			return printSecretList(commandStreams(cmd), outputOpts, list)
 		},
 	}
 
@@ -58,7 +58,7 @@ func newRepoSecretGetCommand(outputOpts *outputOptions) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return printSecret(outputOpts, secret)
+			return printSecret(commandStreams(cmd), outputOpts, secret)
 		},
 	}
 
@@ -83,7 +83,7 @@ func newRepoSecretCreateCommand(secretValueOpts *secretValueOptions) *cobra.Comm
 			if err != nil {
 				return err
 			}
-			fmt.Printf("Created repository secret %s\n", secret.Name)
+			fmt.Fprintf(commandStreams(cmd).out, "Created repository secret %s\n", secret.Name)
 			return nil
 		},
 	}
@@ -110,7 +110,7 @@ func newRepoSecretSetCommand(secretValueOpts *secretValueOptions) *cobra.Command
 			if err != nil {
 				return err
 			}
-			fmt.Printf("Updated repository secret %s (matching containers will be marked stale)\n", secret.Name)
+			fmt.Fprintf(commandStreams(cmd).out, "Updated repository secret %s (matching containers will be marked stale)\n", secret.Name)
 			return nil
 		},
 	}
@@ -133,7 +133,7 @@ func newRepoSecretDeleteCommand() *cobra.Command {
 			if err := deleteSecret(client, repository.secretAPIPath(args[1])); err != nil {
 				return err
 			}
-			fmt.Printf("Deleted repository secret %s\n", args[1])
+			fmt.Fprintf(commandStreams(cmd).out, "Deleted repository secret %s\n", args[1])
 			return nil
 		},
 	}

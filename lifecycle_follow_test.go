@@ -89,12 +89,12 @@ func TestFollowDeploymentGeneration(t *testing.T) {
 				progress, err := captureTestStderr(func() error {
 					if render {
 						_, err := captureTestStdout(func() error {
-							return followAndRender(commandState.outputOpts, commandState.waitOpts, client, initial, nil)
+							return followAndRender(testStreams(), commandState.outputOpts, commandState.waitOpts, client, initial, nil)
 						})
 						return err
 					}
 					var err error
-					final, err = followContainer(client, initial.ID, initial)
+					final, err = followContainer(testStreams(), client, initial.ID, initial)
 					return err
 				})
 				if tt.wantErr == "" && err != nil || tt.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tt.wantErr)) {

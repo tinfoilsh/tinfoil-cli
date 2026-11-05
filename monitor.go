@@ -130,14 +130,14 @@ type monitorView struct {
 	} `json:"config"`
 }
 
-func connectMonitorOwner(identityOpts *identityOptions, rootOpts *rootOptions, ctx context.Context, scope accountScope, cp *cpClient, row *workloadTarget, restoreDevice bool) (_ *monitorSession, err error) {
+func connectMonitorOwner(streams commandIO, identityOpts *identityOptions, rootOpts *rootOptions, ctx context.Context, scope accountScope, cp *cpClient, row *workloadTarget, restoreDevice bool) (_ *monitorSession, err error) {
 	if err := requireRunningConnection("Monitor", row.containerView); err != nil {
 		return nil, err
 	}
 	if row.SSHPort < 1 || row.SSHPort > maxConnectionPort {
 		return nil, errors.New("Monitor has no published SSH port")
 	}
-	fmt.Fprintf(os.Stderr, "Monitor %s: running.\n", row.Name)
+	fmt.Fprintf(streams.err, "Monitor %s: running.\n", row.Name)
 	bucket := row.env["TINFOIL_STORAGE_BUCKET"]
 	if len(bucket) > maxBucketChars || !bucketOwnedBy(bucket, scope.account(), scope.UserID) {
 		return nil, errors.New("Monitor storage does not belong to this account")
@@ -174,7 +174,7 @@ func connectMonitorOwner(identityOpts *identityOptions, rootOpts *rootOptions, c
 	if err != nil {
 		return nil, err
 	}
-	if m.hostKey, err = attestedHostKey(rootOpts, row.Domain, row.source, ""); err != nil {
+	if m.hostKey, err = attestedHostKey(streams, rootOpts, row.Domain, row.source, ""); err != nil {
 		return nil, err
 	}
 	if _, err := updateProfile(dir, func(p *monitorProfile) error {
@@ -183,8 +183,8 @@ func connectMonitorOwner(identityOpts *identityOptions, rootOpts *rootOptions, c
 	}); err != nil {
 		return nil, err
 	}
-	fmt.Fprintf(os.Stderr, "Monitor %s attestation verified.\n", row.Name)
-	fmt.Fprintln(os.Stderr, "Connecting to Monitor "+row.Name+" over attested SSH")
+	fmt.Fprintf(streams.err, "Monitor %s attestation verified.\n", row.Name)
+	fmt.Fprintln(streams.err, "Connecting to Monitor "+row.Name+" over attested SSH")
 	conn, err := (&net.Dialer{Timeout: 30 * time.Second}).DialContext(ctx, "tcp", m.address)
 	if err != nil {
 		return nil, err
@@ -195,14 +195,14 @@ func connectMonitorOwner(identityOpts *identityOptions, rootOpts *rootOptions, c
 	m.request = func(method, path string, input, out any) error {
 		return monitorOwnerRequest(m.client, m.dir, method, path, input, out)
 	}
-	if err := m.open(ctx, row.Name, row.OwnerPublicKey, binding, restoreDevice); err != nil {
+	if err := m.open(streams, ctx, row.Name, row.OwnerPublicKey, binding, restoreDevice); err != nil {
 		return nil, err
 	}
-	fmt.Fprintf(os.Stderr, "Monitor %s unlocked.\n", row.Name)
+	fmt.Fprintf(streams.err, "Monitor %s unlocked.\n", row.Name)
 	return m, nil
 }
 
-func (m *monitorSession) open(ctx context.Context, name, owner string, binding mkBinding, restoreDevice bool) error {
+func (m *monitorSession) open(streams commandIO, ctx context.Context, name, owner string, binding mkBinding, restoreDevice bool) error {
 	var health struct {
 		State string `json:"state"`
 	}
@@ -220,11 +220,11 @@ func (m *monitorSession) open(ctx context.Context, name, owner string, binding m
 			return err
 		}
 	}
-	fmt.Fprintln(os.Stderr, "Unlocking Monitor "+name+" encrypted state")
+	fmt.Fprintln(streams.err, "Unlocking Monitor "+name+" encrypted state")
 	if err := m.unlock(restoreDevice); err != nil {
 		return fmt.Errorf("unlock Monitor: %w", err)
 	}
-	m.checkpoint(ctx)
+	m.checkpoint(streams, ctx)
 	return nil
 }
 
@@ -277,17 +277,17 @@ func (m *monitorSession) authorizes(agent string) bool {
 	return false
 }
 
-func (m *monitorSession) enrollAgent(ctx context.Context, name, agent string) error {
+func (m *monitorSession) enrollAgent(streams commandIO, ctx context.Context, name, agent string) error {
 	var view monitorView
 	if err := m.request(http.MethodPost, "/enroll", map[string]any{name: map[string]any{"key": agent}}, &view); err != nil {
 		return err
 	}
 	m.view = view
-	m.checkpoint(ctx)
+	m.checkpoint(streams, ctx)
 	return nil
 }
 
-func (m *monitorSession) checkpoint(ctx context.Context) {
+func (m *monitorSession) checkpoint(streams commandIO, ctx context.Context) {
 	if m.keys.mk == nil {
 		return
 	}
@@ -307,7 +307,7 @@ func (m *monitorSession) checkpoint(ctx context.Context) {
 		})
 	}
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: Monitor generation %d is saved only on this machine; synchronizing it to your key bundle failed: %v\n", profile.Generation, err)
+		fmt.Fprintf(streams.err, "Warning: Monitor generation %d is saved only on this machine; synchronizing it to your key bundle failed: %v\n", profile.Generation, err)
 		return
 	}
 	m.keys.minGeneration = profile.Generation
@@ -403,19 +403,19 @@ func newMonitorOpenCommand(identityOpts *identityOptions, rootOpts *rootOptions,
 			if err != nil {
 				return err
 			}
-			target, err := resolveWorkload(rootOpts, trustOpts, *row, monitorRepo, rootOpts.repo)
+			target, err := resolveWorkload(commandStreams(cmd), rootOpts, trustOpts, *row, monitorRepo, rootOpts.repo)
 			if err != nil {
 				return err
 			}
-			m, err := connectMonitorOwner(identityOpts, rootOpts, cmd.Context(), scope, cp, target, true)
+			m, err := connectMonitorOwner(commandStreams(cmd), identityOpts, rootOpts, cmd.Context(), scope, cp, target, true)
 			if err != nil {
 				return err
 			}
 			defer m.close()
-			for _, failure := range relinkSandboxes(identityOpts, rootOpts, trustOpts, cmd.Context(), scope, cp, m, row.ID) {
+			for _, failure := range relinkSandboxes(commandStreams(cmd), identityOpts, rootOpts, trustOpts, cmd.Context(), scope, cp, m, row.ID) {
 				fmt.Fprintf(cmd.ErrOrStderr(), "Could not re-link %v\n", failure)
 			}
-			return serveMonitorPanel(cmd, m.client, m.dir, "127.0.0.1:0")
+			return serveMonitorPanel(cmd, m.client, m.dir, "127.0.0.1:0", rootOpts.dependencies.browser())
 		},
 	}
 	addTrustDangerousFlag(trustOpts, command)
@@ -428,7 +428,7 @@ func panelToken() string {
 	return base64.RawURLEncoding.EncodeToString(token)
 }
 
-func serveMonitorPanel(cmd *cobra.Command, client *ssh.Client, dir, address string) error {
+func serveMonitorPanel(cmd *cobra.Command, client *ssh.Client, dir, address string, openBrowser func(string) error) error {
 	listener, err := net.Listen("tcp4", address)
 	if err != nil {
 		return err
@@ -454,7 +454,7 @@ func serveMonitorPanel(cmd *cobra.Command, client *ssh.Client, dir, address stri
 		fmt.Fprintln(cmd.ErrOrStderr(), "Press Enter to open the Monitor in your browser.")
 		// Input must not block forwarding or shutdown of the SSH connection.
 		go func() {
-			if err := openMonitorBrowserOnEnter(ctx, input, url); err != nil && ctx.Err() == nil {
+			if err := openMonitorBrowserOnEnter(ctx, input, url, openBrowser); err != nil && ctx.Err() == nil {
 				fmt.Fprintf(cmd.ErrOrStderr(), "Could not open your browser: %v. Open the Local Monitor panel URL above manually.\n", err)
 			}
 		}()
@@ -486,7 +486,7 @@ func serveMonitorPanel(cmd *cobra.Command, client *ssh.Client, dir, address stri
 	}
 }
 
-func openMonitorBrowserOnEnter(ctx context.Context, input io.Reader, url string) error {
+func openMonitorBrowserOnEnter(ctx context.Context, input io.Reader, url string, openBrowser func(string) error) error {
 	if ctx.Err() != nil {
 		return nil
 	}
@@ -496,7 +496,7 @@ func openMonitorBrowserOnEnter(ctx context.Context, input io.Reader, url string)
 	return openBrowser(url)
 }
 
-var openBrowser = func(url string) error {
+func openBrowser(url string) error {
 	opener := "xdg-open"
 	if runtime.GOOS == "darwin" {
 		opener = "open"

@@ -43,7 +43,7 @@ func newSecretListCommand(outputOpts *outputOptions) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return printSecretList(outputOpts, list)
+			return printSecretList(commandStreams(cmd), outputOpts, list)
 		},
 	}
 
@@ -64,7 +64,7 @@ func newSecretGetCommand(outputOpts *outputOptions) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return printSecret(outputOpts, s)
+			return printSecret(commandStreams(cmd), outputOpts, s)
 		},
 	}
 
@@ -89,7 +89,7 @@ func newSecretCreateCommand(secretValueOpts *secretValueOptions) *cobra.Command 
 			if err != nil {
 				return err
 			}
-			fmt.Printf("Created secret %s\n", s.Name)
+			fmt.Fprintf(commandStreams(cmd).out, "Created secret %s\n", s.Name)
 			return nil
 		},
 	}
@@ -116,7 +116,7 @@ func newSecretSetCommand(secretValueOpts *secretValueOptions) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			fmt.Printf("Updated secret %s (containers using it will be marked stale)\n", s.Name)
+			fmt.Fprintf(commandStreams(cmd).out, "Updated secret %s (containers using it will be marked stale)\n", s.Name)
 			return nil
 		},
 	}
@@ -139,7 +139,7 @@ func newSecretDeleteCommand() *cobra.Command {
 			if err := deleteSecret(client, pathf("/api/secrets/%s", args[0])); err != nil {
 				return err
 			}
-			fmt.Printf("Deleted secret %s\n", args[0])
+			fmt.Fprintf(commandStreams(cmd).out, "Deleted secret %s\n", args[0])
 			return nil
 		},
 	}
@@ -186,38 +186,38 @@ func deleteSecret(client *cpClient, path string) error {
 	return err
 }
 
-func printSecretList(outputOpts *outputOptions, list []secretView) error {
+func printSecretList(streams commandIO, outputOpts *outputOptions, list []secretView) error {
 	if outputOpts.outputFormat == "json" {
-		return printJSON(list)
+		return printJSON(streams, list)
 	}
 	if len(list) == 0 {
-		fmt.Println("No secrets.")
+		fmt.Fprintln(streams.out, "No secrets.")
 		return nil
 	}
-	fmt.Printf("%-32s  %-30s  %s\n", "NAME", "UPDATED", "USED BY")
+	fmt.Fprintf(streams.out, "%-32s  %-30s  %s\n", "NAME", "UPDATED", "USED BY")
 	for _, secret := range list {
 		used := strings.Join(secret.UsedBy, ", ")
 		if used == "" {
 			used = "-"
 		}
-		fmt.Printf("%-32s  %-30s  %s\n", truncate(secret.Name, 32), truncate(secret.UpdatedAt, 30), used)
+		fmt.Fprintf(streams.out, "%-32s  %-30s  %s\n", truncate(secret.Name, 32), truncate(secret.UpdatedAt, 30), used)
 	}
 	return nil
 }
 
-func printSecret(outputOpts *outputOptions, secret secretView) error {
+func printSecret(streams commandIO, outputOpts *outputOptions, secret secretView) error {
 	if outputOpts.outputFormat == "json" {
-		return printJSON(secret)
+		return printJSON(streams, secret)
 	}
-	fmt.Printf("Name:      %s\n", secret.Name)
-	fmt.Printf("ID:        %s\n", secret.ID)
-	fmt.Printf("Created:   %s\n", secret.CreatedAt)
-	fmt.Printf("Updated:   %s\n", secret.UpdatedAt)
+	fmt.Fprintf(streams.out, "Name:      %s\n", secret.Name)
+	fmt.Fprintf(streams.out, "ID:        %s\n", secret.ID)
+	fmt.Fprintf(streams.out, "Created:   %s\n", secret.CreatedAt)
+	fmt.Fprintf(streams.out, "Updated:   %s\n", secret.UpdatedAt)
 	used := strings.Join(secret.UsedBy, ", ")
 	if used == "" {
 		used = "-"
 	}
-	fmt.Printf("Used by:   %s\n", used)
+	fmt.Fprintf(streams.out, "Used by:   %s\n", used)
 	return nil
 }
 
@@ -233,7 +233,7 @@ func readSecretValue(secretValueOpts *secretValueOptions, cmd *cobra.Command) (s
 
 	if hasFile {
 		if secretValueOpts.secretValueFile == "-" {
-			data, err := io.ReadAll(os.Stdin)
+			data, err := io.ReadAll(commandStreams(cmd).in)
 			if err != nil {
 				return "", fmt.Errorf("reading stdin: %w", err)
 			}
@@ -251,9 +251,13 @@ func readSecretValue(secretValueOpts *secretValueOptions, cmd *cobra.Command) (s
 	}
 
 	// Fall back to stdin if it's a pipe.
-	stat, err := os.Stdin.Stat()
-	if err == nil && (stat.Mode()&os.ModeCharDevice) == 0 {
-		data, err := io.ReadAll(os.Stdin)
+	piped := true
+	if file, ok := cmd.InOrStdin().(*os.File); ok {
+		stat, err := file.Stat()
+		piped = err == nil && (stat.Mode()&os.ModeCharDevice) == 0
+	}
+	if piped {
+		data, err := io.ReadAll(commandStreams(cmd).in)
 		if err != nil {
 			return "", fmt.Errorf("reading stdin: %w", err)
 		}

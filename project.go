@@ -67,7 +67,7 @@ func newProjectListCommand(outputOpts *outputOptions) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return renderProjects(outputOpts, projects)
+			return renderProjects(commandStreams(cmd), outputOpts, projects)
 		},
 	}
 
@@ -88,7 +88,7 @@ func newProjectGetCommand(outputOpts *outputOptions) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return renderProject(outputOpts, *project)
+			return renderProject(commandStreams(cmd), outputOpts, *project)
 		},
 	}
 
@@ -127,7 +127,7 @@ func newProjectSettingsCommand(outputOpts *outputOptions, projectSettingsOpts *p
 				return err
 			}
 			updated = preserveProjectCounts(updated, *project)
-			return renderProject(outputOpts, updated)
+			return renderProject(commandStreams(cmd), outputOpts, updated)
 		},
 	}
 	projectSettingsCmd.Flags().StringVar(
@@ -173,14 +173,14 @@ func newProjectUpdateCommand(outputOpts *outputOptions, projectUpdateOpts *proje
 				return err
 			}
 
-			response, err := updateProjectInstances(outputOpts, projectUpdateOpts, client, project.ID, body)
+			response, err := updateProjectInstances(commandStreams(cmd), outputOpts, projectUpdateOpts, client, project.ID, body)
 			if err != nil {
 				if len(response.Results) > 0 {
-					return errors.Join(err, renderProjectUpdateResults(outputOpts, response.Results))
+					return errors.Join(err, renderProjectUpdateResults(commandStreams(cmd), outputOpts, response.Results))
 				}
 				return err
 			}
-			return renderProjectUpdateResults(outputOpts, response.Results)
+			return renderProjectUpdateResults(commandStreams(cmd), outputOpts, response.Results)
 		},
 	}
 	projectUpdateCmd.Flags().StringVar(&projectUpdateOpts.projectUpdateTag, "tag", "", "Release tag to update to")
@@ -232,7 +232,7 @@ func patchProject(client *cpClient, projectID string, body map[string]any) (proj
 	return updated, nil
 }
 
-func updateProjectInstances(outputOpts *outputOptions, projectUpdateOpts *projectUpdateOptions, client *cpClient, projectID string, body map[string]any) (projectUpdateResponse, error) {
+func updateProjectInstances(streams commandIO, outputOpts *outputOptions, projectUpdateOpts *projectUpdateOptions, client *cpClient, projectID string, body map[string]any) (projectUpdateResponse, error) {
 	var response projectUpdateResponse
 	var excluded []projectInstanceResult
 	seen := make(map[string]bool)
@@ -254,7 +254,7 @@ func updateProjectInstances(outputOpts *outputOptions, projectUpdateOpts *projec
 		}
 		return review, nil
 	}
-	err := postLifecycleUpdate(outputOpts, client, pathf("/api/containers/projects/%s/update", projectID), body, &response, projectUpdateOpts.projectUpdateYes, "project update", replan)
+	err := postLifecycleUpdate(streams, outputOpts, client, pathf("/api/containers/projects/%s/update", projectID), body, &response, projectUpdateOpts.projectUpdateYes, "project update", replan)
 	response.Results = append(response.Results, excluded...)
 	return response, err
 }
@@ -268,34 +268,34 @@ func preserveProjectCounts(updated, current projectView) projectView {
 	return updated
 }
 
-func renderProject(outputOpts *outputOptions, project projectView) error {
+func renderProject(streams commandIO, outputOpts *outputOptions, project projectView) error {
 	if outputOpts.outputFormat == "json" {
-		return printJSON(project)
+		return printJSON(streams, project)
 	}
-	fmt.Printf("ID:              %s\n", project.ID)
-	fmt.Printf("Repository:      %s\n", project.Repo)
-	fmt.Printf("Instances:       %d\n", project.InstanceCount)
-	fmt.Printf("Running:         %d\n", project.RunningCount)
-	fmt.Printf("Deploying:       %d\n", project.DeployingCount)
-	fmt.Printf("Failed:          %d\n", project.FailedCount)
-	fmt.Printf("Stopped:         %d\n", project.StoppedCount)
-	fmt.Printf("Default hold: %v\n", project.HoldByDefault)
+	fmt.Fprintf(streams.out, "ID:              %s\n", project.ID)
+	fmt.Fprintf(streams.out, "Repository:      %s\n", project.Repo)
+	fmt.Fprintf(streams.out, "Instances:       %d\n", project.InstanceCount)
+	fmt.Fprintf(streams.out, "Running:         %d\n", project.RunningCount)
+	fmt.Fprintf(streams.out, "Deploying:       %d\n", project.DeployingCount)
+	fmt.Fprintf(streams.out, "Failed:          %d\n", project.FailedCount)
+	fmt.Fprintf(streams.out, "Stopped:         %d\n", project.StoppedCount)
+	fmt.Fprintf(streams.out, "Default hold: %v\n", project.HoldByDefault)
 	return nil
 }
 
-func renderProjects(outputOpts *outputOptions, projects []projectView) error {
+func renderProjects(streams commandIO, outputOpts *outputOptions, projects []projectView) error {
 	if outputOpts.outputFormat == "json" {
-		return printJSON(projects)
+		return printJSON(streams, projects)
 	}
 	if len(projects) == 0 {
-		fmt.Println("No projects.")
+		fmt.Fprintln(streams.out, "No projects.")
 		return nil
 	}
-	fmt.Printf("%-36s  %-9s  %-7s  %-11s  %s\n",
+	fmt.Fprintf(streams.out, "%-36s  %-9s  %-7s  %-11s  %s\n",
 		"REPOSITORY", "INSTANCES", "RUNNING", "DEPLOYING", "FAILED",
 	)
 	for _, project := range projects {
-		fmt.Printf("%-36s  %-9d  %-7d  %-11d  %d\n",
+		fmt.Fprintf(streams.out, "%-36s  %-9d  %-7d  %-11d  %d\n",
 			truncate(project.Repo, 36),
 			project.InstanceCount,
 			project.RunningCount,
@@ -306,20 +306,20 @@ func renderProjects(outputOpts *outputOptions, projects []projectView) error {
 	return nil
 }
 
-func renderProjectUpdateResults(outputOpts *outputOptions, results []projectInstanceResult) error {
+func renderProjectUpdateResults(streams commandIO, outputOpts *outputOptions, results []projectInstanceResult) error {
 	if outputOpts.outputFormat == "json" {
-		if err := printJSON(projectUpdateResponse{Results: results}); err != nil {
+		if err := printJSON(streams, projectUpdateResponse{Results: results}); err != nil {
 			return err
 		}
 	}
 	if len(results) == 0 {
 		if outputOpts.outputFormat != "json" {
-			fmt.Println("No project instances were selected.")
+			fmt.Fprintln(streams.out, "No project instances were selected.")
 		}
 		return nil
 	}
 	if outputOpts.outputFormat != "json" {
-		fmt.Printf("%-24s  %-10s  %s\n", "NAME", "STATUS", "DETAIL")
+		fmt.Fprintf(streams.out, "%-24s  %-10s  %s\n", "NAME", "STATUS", "DETAIL")
 	}
 	failed, skipped := 0, 0
 	for _, result := range results {
@@ -328,7 +328,7 @@ func renderProjectUpdateResults(outputOpts *outputOptions, results []projectInst
 			if detail == "" {
 				detail = result.ContainerID
 			}
-			fmt.Printf("%-24s  %-10s  %s\n", truncate(result.Name, 24), result.Status, detail)
+			fmt.Fprintf(streams.out, "%-24s  %-10s  %s\n", truncate(result.Name, 24), result.Status, detail)
 		}
 		switch result.Status {
 		case projectInstanceStatusFailed:

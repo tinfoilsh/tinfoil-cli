@@ -49,7 +49,7 @@ func newHttpPostCommand(headersOpts *headersOptions, httpPostOpts *httpPostOptio
 
 				scanner := bufio.NewScanner(resp.Body)
 				for scanner.Scan() {
-					fmt.Println(scanner.Text())
+					fmt.Fprintln(commandStreams(cmd).out, scanner.Text())
 				}
 				if err := scanner.Err(); err != nil {
 					return fmt.Errorf("error reading stream: %w", err)

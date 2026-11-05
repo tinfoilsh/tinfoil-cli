@@ -1,5 +1,11 @@
 package main
 
+import (
+	"context"
+	"io"
+	"net/http"
+)
+
 type attestSSHOptions struct {
 	attestSSHHost    string
 	attestSSHInstall bool
@@ -178,7 +184,21 @@ type rootOptions struct {
 type sandboxEvidenceVerifier func(doc, nonce []byte, source string) (attestedEvidence, error)
 
 type commandDependencies struct {
+	version               string
+	in                    io.Reader
+	out                   io.Writer
+	err                   io.Writer
+	proxyClient           func(context.Context, string, string) (*http.Client, error)
+	serveProxy            func(string, http.Handler) error
+	openBrowser           func(string) error
 	verifySandboxEvidence sandboxEvidenceVerifier
+}
+
+func (d commandDependencies) browser() func(string) error {
+	if d.openBrowser != nil {
+		return d.openBrowser
+	}
+	return openBrowser
 }
 
 type sandboxActionOptions struct {

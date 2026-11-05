@@ -40,15 +40,15 @@ func TestManagedTrustPrecedesCredentials(t *testing.T) {
 
 		row := containerView{Repo: managedRepo(test.kind), Domain: "work.example", Config: "containers: [{env: [{OWNER: owner}]}]"}
 		row.ConfigName = test.prefix + "/" + storageHash([]byte(row.Config))
-		_, err := resolveWorkload(commandState.rootOpts, commandState.trustOpts, row, row.Repo, "")
+		_, err := resolveWorkload(testStreams(), commandState.rootOpts, commandState.trustOpts, row, row.Repo, "")
 		require.ErrorContains(t, err, "mode: frozen")
-		target, err := resolveWorkload(commandState.rootOpts, commandState.trustOpts, row, row.Repo, strings.TrimPrefix(test.prefix, "/"))
+		target, err := resolveWorkload(testStreams(), commandState.rootOpts, commandState.trustOpts, row, row.Repo, strings.TrimPrefix(test.prefix, "/"))
 		require.NoError(t, err)
 		row.Config += "\n# changed"
-		_, err = resolveWorkload(commandState.rootOpts, commandState.trustOpts, row, row.Repo, target.source)
+		_, err = resolveWorkload(testStreams(), commandState.rootOpts, commandState.trustOpts, row, row.Repo, target.source)
 		require.ErrorContains(t, err, "digest")
 		row.ConfigName = test.prefix + "/" + storageHash([]byte(row.Config))
-		_, err = resolveWorkload(commandState.rootOpts, commandState.trustOpts, row, row.Repo, target.source)
+		_, err = resolveWorkload(testStreams(), commandState.rootOpts, commandState.trustOpts, row, row.Repo, target.source)
 		require.ErrorContains(t, err, "does not match --repo")
 	}
 	for _, env := range []string{"[OWNER]", "[{OWNER: null}]", "[{}]", "[{OWNER: a}, {OWNER: b}]"} {
@@ -150,7 +150,7 @@ func TestMonitorSessionAgainstRealMonitor(t *testing.T) {
 	require.Equal(t, "absent", health.State)
 	require.Error(t, m.request(http.MethodGet, "/policy", nil, nil))
 	require.ErrorContains(t, m.request(http.MethodPost, "/unlock", map[string]any{"storage_key": saved.StorageKey, "initialize": true}, nil), "initialize", "clients cannot direct initialization")
-	require.NoError(t, m.open(t.Context(), "monitor", saved.OwnerPublicKey, mkBinding{}, true))
+	require.NoError(t, m.open(testStreams(), t.Context(), "monitor", saved.OwnerPublicKey, mkBinding{}, true))
 	require.NoError(t, m.request(http.MethodGet, "/healthz", nil, &health))
 	require.Equal(t, "present", health.State)
 
@@ -170,7 +170,7 @@ func TestMonitorSessionAgainstRealMonitor(t *testing.T) {
 	agentSigner := testSigner(t)
 	agent := authorizedLine(agentSigner)
 	require.False(t, m.authorizes(agent))
-	require.NoError(t, m.enrollAgent(t.Context(), "sandbox-work", agent))
+	require.NoError(t, m.enrollAgent(testStreams(), t.Context(), "sandbox-work", agent))
 	require.True(t, m.authorizes(agent))
 	var profile monitorProfile
 	require.NoError(t, readStorageJSON(filepath.Join(dir, monitorProfileFile), &profile))
@@ -250,8 +250,8 @@ func TestMonitorSessionAgainstRealMonitor(t *testing.T) {
 	}, nil))
 	require.NoError(t, m.unlock(false))
 	require.False(t, m.authorizes(agent))
-	require.ErrorContains(t, m.enrollAgent(t.Context(), "sandbox-work", agent), "revoked")
-	m.checkpoint(t.Context())
+	require.ErrorContains(t, m.enrollAgent(testStreams(), t.Context(), "sandbox-work", agent), "revoked")
+	m.checkpoint(testStreams(), t.Context())
 	removedAt := minimum()
 	require.Greater(t, removedAt, profile.Generation)
 
@@ -295,7 +295,7 @@ func TestMonitorSessionAgainstRealMonitor(t *testing.T) {
 	command.SetErr(&stderr)
 	done := make(chan error, 1)
 	go func() {
-		err := serveMonitorPanel(command, m.client, dir, "127.0.0.1:0")
+		err := serveMonitorPanel(command, m.client, dir, "127.0.0.1:0", openBrowser)
 		outputWriter.Close()
 		done <- err
 	}()
@@ -427,7 +427,7 @@ func nativeSandboxTransport(t *testing.T, monitorAddress string, monitorKey ssh.
 	profile := sshProfile{name: "work", hostName: routeName(hostSigner.PublicKey()), port: defaultSSHPort, hostKeyAlias: "work.sandbox.example",
 		user: current.Username, identityFile: owner, hostKey: hostSigner.PublicKey(), resourceID: "cp/org/user/resource",
 		jump: monitorJump("work", monitorHost, monitorPortNumber, monitorDir, monitorKey, "monitor.example")}
-	require.NoError(t, installSandboxAlias(profile, home))
+	require.NoError(t, installSandboxAlias(testStreams(), profile, home))
 	// ssh expands ~ from the passwd entry, so keep the run inside the temporary home.
 	installed, err := os.ReadFile(filepath.Join(home, ".ssh", "tinfoil", "work.conf"))
 	require.NoError(t, err)
@@ -511,7 +511,7 @@ func TestOpenMonitorBrowserOnEnter(t *testing.T) {
 			if test.canceled {
 				cancel()
 			}
-			require.NoError(t, openMonitorBrowserOnEnter(ctx, strings.NewReader(test.input), panelURL))
+			require.NoError(t, openMonitorBrowserOnEnter(ctx, strings.NewReader(test.input), panelURL, openBrowser))
 			args, err := os.ReadFile(record)
 			if test.opened {
 				require.NoError(t, err)
@@ -529,7 +529,7 @@ func TestOpenMonitorBrowserOnEnter(t *testing.T) {
 		defer input.Close()
 		defer writer.Close()
 		done := make(chan error, 1)
-		go func() { done <- openMonitorBrowserOnEnter(ctx, input, panelURL) }()
+		go func() { done <- openMonitorBrowserOnEnter(ctx, input, panelURL, openBrowser) }()
 		_, err := io.WriteString(writer, " ")
 		require.NoError(t, err)
 		cancel()
@@ -541,7 +541,7 @@ func TestOpenMonitorBrowserOnEnter(t *testing.T) {
 	})
 	t.Run("launcher failure", func(t *testing.T) {
 		require.NoError(t, os.WriteFile(filepath.Join(dir, opener), []byte("#!/bin/sh\nexit 7\n"), 0700))
-		require.ErrorContains(t, openMonitorBrowserOnEnter(t.Context(), strings.NewReader("\n"), panelURL), "exit status 7")
+		require.ErrorContains(t, openMonitorBrowserOnEnter(t.Context(), strings.NewReader("\n"), panelURL, openBrowser), "exit status 7")
 	})
 }
 

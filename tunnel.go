@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"strings"
@@ -70,7 +71,7 @@ A hostname target needs --repo or --config to select the expected workload.`,
 			if len(args) == 1 {
 				identifier = args[0]
 			}
-			target, err := resolveTunnelTarget(forwardOpts, rootOpts, trustOpts, identifier)
+			target, err := resolveTunnelTarget(commandStreams(cmd), forwardOpts, rootOpts, trustOpts, identifier)
 			if err != nil {
 				return err
 			}
@@ -84,13 +85,13 @@ A hostname target needs --repo or --config to select the expected workload.`,
 				if err != nil {
 					return err
 				}
-				if err := connection.Splice(stdioConn{}, stream); err != nil {
+				if err := connection.Splice(stdioConn{in: cmd.InOrStdin(), out: cmd.OutOrStdout()}, stream); err != nil {
 					return fmt.Errorf("tunnel to %s port %d: %w", target.host, forwardOpts.forwardStdio, err)
 				}
 				return nil
 			}
 			return connection.ListenAndForward(tun, specs, func(address net.Addr, remote int) {
-				fmt.Printf("Forwarding %s -> %s port %d\n", address, target.host, remote)
+				fmt.Fprintf(cmd.OutOrStdout(), "Forwarding %s -> %s port %d\n", address, target.host, remote)
 			})
 		},
 	}
@@ -120,7 +121,7 @@ type tunnelTarget struct {
 // resolveTunnelTarget accepts an enclave hostname, a container name, or a
 // container ID. A dotted identifier is a hostname: dev-launched and sandbox
 // CVMs answer on one but have no controlplane record.
-func resolveTunnelTarget(forwardOpts *forwardOptions, rootOpts *rootOptions, trustOpts *trustOptions, identifier string) (*tunnelTarget, error) {
+func resolveTunnelTarget(streams commandIO, forwardOpts *forwardOptions, rootOpts *rootOptions, trustOpts *trustOptions, identifier string) (*tunnelTarget, error) {
 	if identifier == "" {
 		identifier = rootOpts.enclaveHost
 	}
@@ -149,7 +150,7 @@ func resolveTunnelTarget(forwardOpts *forwardOptions, rootOpts *rootOptions, tru
 				return nil, errors.New("sandbox resource changed while resolving it")
 			}
 		}
-		target, err := resolveWorkload(rootOpts, trustOpts, *container, defaultSandboxRepo, rootOpts.repo)
+		target, err := resolveWorkload(streams, rootOpts, trustOpts, *container, defaultSandboxRepo, rootOpts.repo)
 		if err != nil {
 			return nil, err
 		}
@@ -200,7 +201,7 @@ func resolveTunnelTarget(forwardOpts *forwardOptions, rootOpts *rootOptions, tru
 	if container.Source == containerSourceLocal {
 		// A local config is a caller-held expectation: the file's digest is
 		// the trust decision, so the connection policy does not apply.
-	} else if err := trustConnectionSource(trustOpts, container.Repo, rootOpts.repo); err != nil {
+	} else if err := trustConnectionSource(streams, trustOpts, container.Repo, rootOpts.repo); err != nil {
 		return nil, err
 	}
 	return &tunnelTarget{
@@ -227,8 +228,16 @@ func newTunnel(rootOpts *rootOptions, tunnelOpts *tunnelOptions, target *tunnelT
 
 // stdioConn presents this process's stdin/stdout as one connection, so --stdio
 // can serve as an ssh ProxyCommand.
-type stdioConn struct{}
+type stdioConn struct {
+	in  io.Reader
+	out io.Writer
+}
 
-func (stdioConn) Read(p []byte) (int, error)  { return os.Stdin.Read(p) }
-func (stdioConn) Write(p []byte) (int, error) { return os.Stdout.Write(p) }
-func (stdioConn) Close() error                { return os.Stdout.Close() }
+func (s stdioConn) Read(p []byte) (int, error)  { return s.in.Read(p) }
+func (s stdioConn) Write(p []byte) (int, error) { return s.out.Write(p) }
+func (s stdioConn) Close() error {
+	if closer, ok := s.out.(io.Closer); ok {
+		return closer.Close()
+	}
+	return nil
+}

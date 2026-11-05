@@ -37,7 +37,7 @@ func TestCandidateHoldOverridesCurrentVersion(t *testing.T) {
 			if c.candidateHeld() != tt.want || isTerminal(c) != tt.want {
 				t.Fatalf("candidate hold/terminal = %v/%v, want %v", c.candidateHeld(), isTerminal(c), tt.want)
 			}
-			out, err := captureTestStdout(func() error { return renderContainer(commandState.outputOpts, c) })
+			out, err := captureTestStdout(func() error { return renderContainer(testStreams(), commandState.outputOpts, c) })
 			if err != nil {
 				t.Fatal(err)
 			}

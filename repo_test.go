@@ -131,7 +131,7 @@ func TestReadConfigInputRejectsOversizedFile(t *testing.T) {
 		t.Fatalf("write config: %v", err)
 	}
 
-	if _, err := readConfigInput(path); err == nil {
+	if _, err := readConfigInput(testStreams(), path); err == nil {
 		t.Fatal("expected oversized config error")
 	}
 }

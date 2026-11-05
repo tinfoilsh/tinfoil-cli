@@ -54,19 +54,19 @@ func newDomainListCommand(outputOpts *outputOptions) *cobra.Command {
 				return err
 			}
 			if outputOpts.outputFormat == "json" {
-				return printJSON(list)
+				return printJSON(commandStreams(cmd), list)
 			}
 			if len(list) == 0 {
-				fmt.Println("No custom domains.")
+				fmt.Fprintln(commandStreams(cmd).out, "No custom domains.")
 				return nil
 			}
-			fmt.Printf("%-40s  %-10s  %-30s  %s\n", "DOMAIN", "VERIFIED", "CNAME TARGET", "USED BY")
+			fmt.Fprintf(commandStreams(cmd).out, "%-40s  %-10s  %-30s  %s\n", "DOMAIN", "VERIFIED", "CNAME TARGET", "USED BY")
 			for _, d := range list {
 				used := strings.Join(d.UsedBy, ", ")
 				if used == "" {
 					used = "-"
 				}
-				fmt.Printf("%-40s  %-10v  %-30s  %s\n",
+				fmt.Fprintf(commandStreams(cmd).out, "%-40s  %-10v  %-30s  %s\n",
 					truncate(d.Domain, 40), d.Verified, truncate(d.CNAMETarget, 30), used,
 				)
 			}
@@ -97,7 +97,7 @@ func newDomainAddCommand(outputOpts *outputOptions) *cobra.Command {
 			if _, err := client.do("POST", "/api/domains", nil, body, &d); err != nil {
 				return err
 			}
-			return renderDomain(outputOpts, d, false)
+			return renderDomain(commandStreams(cmd), outputOpts, d, false)
 		},
 	}
 
@@ -118,7 +118,7 @@ func newDomainVerifyCommand(outputOpts *outputOptions) *cobra.Command {
 			if _, err := client.do("POST", pathf("/api/domains/%s/verify", args[0]), nil, nil, &d); err != nil {
 				return err
 			}
-			return renderDomain(outputOpts, d, true)
+			return renderDomain(commandStreams(cmd), outputOpts, d, true)
 		},
 	}
 
@@ -139,7 +139,7 @@ func newDomainDeleteCommand() *cobra.Command {
 			if _, err := client.do("DELETE", pathf("/api/domains/%s", args[0]), nil, nil, nil); err != nil {
 				return err
 			}
-			fmt.Printf("Deleted domain %s\n", args[0])
+			fmt.Fprintf(commandStreams(cmd).out, "Deleted domain %s\n", args[0])
 			return nil
 		},
 	}
@@ -147,39 +147,39 @@ func newDomainDeleteCommand() *cobra.Command {
 	return domainDeleteCmd
 }
 
-func renderDomain(outputOpts *outputOptions, d domainView, verifyMode bool) error {
+func renderDomain(streams commandIO, outputOpts *outputOptions, d domainView, verifyMode bool) error {
 	if outputOpts.outputFormat == "json" {
-		return printJSON(d)
+		return printJSON(streams, d)
 	}
-	fmt.Printf("Domain:     %s\n", d.Domain)
-	fmt.Printf("Verified:   %v\n", d.Verified)
+	fmt.Fprintf(streams.out, "Domain:     %s\n", d.Domain)
+	fmt.Fprintf(streams.out, "Verified:   %v\n", d.Verified)
 	if d.VerifiedAt != nil {
-		fmt.Printf("Verified at: %s\n", *d.VerifiedAt)
+		fmt.Fprintf(streams.out, "Verified at: %s\n", *d.VerifiedAt)
 	}
-	fmt.Printf("\nConfigure these DNS records on your domain:\n")
-	fmt.Printf("  CNAME  %s  =>  %s\n", d.Domain, d.CNAMETarget)
-	fmt.Printf("  CNAME  %s  =>  %s\n", d.ACMEChallengeHost, d.ACMEChallengeTarget)
+	fmt.Fprintf(streams.out, "\nConfigure these DNS records on your domain:\n")
+	fmt.Fprintf(streams.out, "  CNAME  %s  =>  %s\n", d.Domain, d.CNAMETarget)
+	fmt.Fprintf(streams.out, "  CNAME  %s  =>  %s\n", d.ACMEChallengeHost, d.ACMEChallengeTarget)
 	if d.Wildcard {
-		fmt.Printf("  CNAME  *.%s  =>  %s\n", d.Domain, d.CNAMETarget)
-		fmt.Printf("\nSubdomains reach the same container, not different ones. Set\nshim.tls-wildcard: true in tinfoil-config.yml so its certificate covers them.\n")
+		fmt.Fprintf(streams.out, "  CNAME  *.%s  =>  %s\n", d.Domain, d.CNAMETarget)
+		fmt.Fprintf(streams.out, "\nSubdomains reach the same container, not different ones. Set\nshim.tls-wildcard: true in tinfoil-config.yml so its certificate covers them.\n")
 	}
 	if verifyMode && d.CNAMEConfigured != nil {
-		fmt.Printf("\nTraffic CNAME currently observed: %v\n", *d.CNAMEConfigured)
+		fmt.Fprintf(streams.out, "\nTraffic CNAME currently observed: %v\n", *d.CNAMEConfigured)
 	}
 	if verifyMode && d.ACMEChallengeConfigured != nil {
-		fmt.Printf("Certificate CNAME currently observed: %v\n", *d.ACMEChallengeConfigured)
+		fmt.Fprintf(streams.out, "Certificate CNAME currently observed: %v\n", *d.ACMEChallengeConfigured)
 	}
 	if verifyMode && d.WildcardCNAMEConfigured != nil {
-		fmt.Printf("Wildcard CNAME currently observed: %v\n", *d.WildcardCNAMEConfigured)
+		fmt.Fprintf(streams.out, "Wildcard CNAME currently observed: %v\n", *d.WildcardCNAMEConfigured)
 	}
 	if len(d.WildcardTLSMissing) > 0 {
-		fmt.Printf("\nWarning: these containers do not request a wildcard certificate, so their\nsubdomains fail TLS: %s\n", strings.Join(d.WildcardTLSMissing, ", "))
+		fmt.Fprintf(streams.out, "\nWarning: these containers do not request a wildcard certificate, so their\nsubdomains fail TLS: %s\n", strings.Join(d.WildcardTLSMissing, ", "))
 	}
 	if !d.Verified {
-		fmt.Printf("\nRun `tinfoil domain verify %s` after the %s CNAME propagates.\n", d.Domain, d.ACMEChallengeHost)
+		fmt.Fprintf(streams.out, "\nRun `tinfoil domain verify %s` after the %s CNAME propagates.\n", d.Domain, d.ACMEChallengeHost)
 	}
 	if len(d.UsedBy) > 0 {
-		fmt.Printf("\nUsed by: %s\n", strings.Join(d.UsedBy, ", "))
+		fmt.Fprintf(streams.out, "\nUsed by: %s\n", strings.Join(d.UsedBy, ", "))
 	}
 	return nil
 }

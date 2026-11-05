@@ -13,18 +13,21 @@ import (
 	"github.com/tinfoilsh/tinfoil-go"
 )
 
-func setupLogger(proxyOpts *proxyOptions, verbose, trace bool) {
+func setupLogger(streams commandIO, proxyOpts *proxyOptions, verbose, trace bool) *log.Logger {
+	logger := log.New()
+	logger.SetOutput(streams.err)
 	if trace {
-		log.SetLevel(log.TraceLevel)
+		logger.SetLevel(log.TraceLevel)
 	} else if verbose {
-		log.SetLevel(log.InfoLevel)
+		logger.SetLevel(log.InfoLevel)
 	}
 
 	if proxyOpts.logFormat == "json" {
-		log.SetFormatter(&log.JSONFormatter{})
+		logger.SetFormatter(&log.JSONFormatter{})
 	} else {
-		log.SetFormatter(&log.TextFormatter{})
+		logger.SetFormatter(&log.TextFormatter{})
 	}
+	return logger
 }
 
 func newProxyCommand(proxyOpts *proxyOptions, rootOpts *rootOptions) *cobra.Command {
@@ -43,14 +46,16 @@ func newProxyCommand(proxyOpts *proxyOptions, rootOpts *rootOptions) *cobra.Comm
 }
 
 func runProxy(proxyOpts *proxyOptions, rootOpts *rootOptions, cmd *cobra.Command, args []string) error {
+	options := *rootOpts
+	rootOpts = &options
 	if (rootOpts.enclaveHost == "") != (rootOpts.repo == "" && rootOpts.localConfigFile == "") {
 		return fmt.Errorf("--enclave and either --repo or --config must be supplied together for a custom proxy target")
 	}
 	verbose, _ := cmd.Flags().GetBool("verbose")
 	trace, _ := cmd.Flags().GetBool("trace")
-	setupLogger(proxyOpts, verbose, trace)
+	logger := setupLogger(commandStreams(cmd), proxyOpts, verbose, trace)
 
-	log.WithFields(log.Fields{
+	logger.WithFields(log.Fields{
 		"enclave_host": rootOpts.enclaveHost,
 		"repo":         rootOpts.repo,
 	}).Info("initializing secure client")
@@ -65,6 +70,8 @@ func runProxy(proxyOpts *proxyOptions, rootOpts *rootOptions, cmd *cobra.Command
 			rootOpts.repo = router.Repo()
 			httpClient = router.Client
 		}
+	} else if client := rootOpts.dependencies.proxyClient; client != nil {
+		httpClient, err = client(cmd.Context(), rootOpts.enclaveHost, rootOpts.repo)
 	} else {
 		opts, parseErr := verificationOptions(rootOpts, rootOpts.repo, "")
 		if parseErr != nil {
@@ -79,7 +86,7 @@ func runProxy(proxyOpts *proxyOptions, rootOpts *rootOptions, cmd *cobra.Command
 	if err != nil {
 		return err
 	}
-	log.Debug("secure HTTP client created successfully")
+	logger.Debug("secure HTTP client created successfully")
 
 	targetUrl, err := url.Parse("https://" + rootOpts.enclaveHost)
 	if err != nil {
@@ -87,18 +94,23 @@ func runProxy(proxyOpts *proxyOptions, rootOpts *rootOptions, cmd *cobra.Command
 	}
 
 	proxy := httputil.NewSingleHostReverseProxy(targetUrl)
-	proxy.Transport = withLoggingTransport(log.StandardLogger(), httpClient.Transport)
+	proxy.Transport = withLoggingTransport(logger, httpClient.Transport)
 
-	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		proxy.ServeHTTP(w, r)
 	})
 
 	addr := net.JoinHostPort(proxyOpts.listenAddr, strconv.FormatUint(uint64(proxyOpts.listenPort), 10))
-	log.WithFields(log.Fields{
+	logger.WithFields(log.Fields{
 		"address":      addr,
 		"enclave_host": rootOpts.enclaveHost,
 	}).Info("starting HTTP proxy server")
-	return http.ListenAndServe(addr, nil)
+	serve := rootOpts.dependencies.serveProxy
+	if serve == nil {
+		serve = http.ListenAndServe
+	}
+	return serve(addr, mux)
 }
 
 func withLoggingTransport(logger *log.Logger, base http.RoundTripper) http.RoundTripper {

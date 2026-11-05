@@ -56,19 +56,19 @@ func newSshKeyListCommand(outputOpts *outputOptions, sshKeyOpts *sshKeyOptions) 
 				return err
 			}
 			if outputOpts.outputFormat == "json" {
-				return printJSON(list)
+				return printJSON(commandStreams(cmd), list)
 			}
 			if len(list) == 0 {
-				fmt.Println("No SSH keys.")
+				fmt.Fprintln(commandStreams(cmd).out, "No SSH keys.")
 				return nil
 			}
-			fmt.Printf("%-32s  %-12s  %s\n", "NAME", "TYPE", "USED BY")
+			fmt.Fprintf(commandStreams(cmd).out, "%-32s  %-12s  %s\n", "NAME", "TYPE", "USED BY")
 			for _, k := range list {
 				used := strings.Join(k.UsedBy, ", ")
 				if used == "" {
 					used = "-"
 				}
-				fmt.Printf("%-32s  %-12s  %s\n", truncate(k.Name, 32), k.KeyType, used)
+				fmt.Fprintf(commandStreams(cmd).out, "%-32s  %-12s  %s\n", truncate(k.Name, 32), k.KeyType, used)
 			}
 			return nil
 		},
@@ -96,7 +96,7 @@ func newSshKeyCreateCommand(sshKeyOpts *sshKeyOptions, sshKeyCreateOpts *sshKeyC
 			if _, err := client.do("POST", "/api/ssh-keys", sshKeyQuery(sshKeyOpts), body, &k); err != nil {
 				return err
 			}
-			fmt.Printf("Added SSH key %s (%s)\n", k.Name, k.KeyType)
+			fmt.Fprintf(commandStreams(cmd).out, "Added SSH key %s (%s)\n", k.Name, k.KeyType)
 			return nil
 		},
 	}
@@ -120,7 +120,7 @@ func newSshKeyDeleteCommand(sshKeyOpts *sshKeyOptions) *cobra.Command {
 			if _, err := client.do("DELETE", pathf("/api/ssh-keys/%s", args[0]), sshKeyQuery(sshKeyOpts), nil, nil); err != nil {
 				return err
 			}
-			fmt.Printf("Deleted SSH key %s\n", args[0])
+			fmt.Fprintf(commandStreams(cmd).out, "Deleted SSH key %s\n", args[0])
 			return nil
 		},
 	}
@@ -136,7 +136,7 @@ func readSSHPublicKey(sshKeyCreateOpts *sshKeyCreateOptions, cmd *cobra.Command)
 	}
 	if hasFile {
 		if sshKeyCreateOpts.sshPublicKeyFile == "-" {
-			data, err := io.ReadAll(os.Stdin)
+			data, err := io.ReadAll(commandStreams(cmd).in)
 			if err != nil {
 				return "", fmt.Errorf("reading stdin: %w", err)
 			}

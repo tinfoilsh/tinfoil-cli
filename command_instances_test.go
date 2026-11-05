@@ -1,6 +1,24 @@
 package main
 
-import "github.com/spf13/cobra"
+import (
+	"os"
+
+	"github.com/spf13/cobra"
+)
+
+func testStreams() commandIO {
+	return commandIO{in: os.Stdin, out: os.Stdout, err: os.Stderr}
+}
+
+func replaceTestCommand(root, replacement *cobra.Command) {
+	for _, command := range root.Commands() {
+		if command.Name() == replacement.Name() {
+			replacement.GroupID = command.GroupID
+			root.RemoveCommand(command)
+		}
+	}
+	root.AddCommand(replacement)
+}
 
 type commandFixture struct {
 	attestSSHOpts         *attestSSHOptions
@@ -206,7 +224,7 @@ func newCommandFixture() *commandFixture {
 	f.httpCmd = newHttpCommand(f.headersOpts, f.rootOpts)
 	f.httpGetCmd = newHttpGetCommand(f.headersOpts, f.rootOpts)
 	f.httpPostCmd = newHttpPostCommand(f.headersOpts, f.httpPostOpts, f.rootOpts)
-	f.loginCmd = newLoginCommand()
+	f.loginCmd = newLoginCommand(openBrowser)
 	f.logoutCmd = newLogoutCommand()
 	f.modelCmd = newModelCommand(f.outputOpts)
 	f.modelDeleteCmd = newModelDeleteCommand()

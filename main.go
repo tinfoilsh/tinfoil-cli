@@ -80,18 +80,25 @@ func newRootCommand() *cobra.Command {
 
 func newRootCommandWithDependencies(dependencies commandDependencies) *cobra.Command {
 	rootOpts := &rootOptions{dependencies: dependencies}
+	commandVersion := dependencies.version
+	if commandVersion == "" {
+		commandVersion = version
+	}
 
 	cmd := &cobra.Command{
 		Use:          "tinfoil",
 		Short:        "Verify, connect to, and manage Tinfoil enclaves",
-		Version:      version,
+		Version:      commandVersion,
 		SilenceUsage: true,
 	}
+	cmd.SetIn(dependencies.in)
+	cmd.SetOut(dependencies.out)
+	cmd.SetErr(dependencies.err)
 	cmd.PersistentFlags().StringVar(&rootOpts.localConfigFile, "config", "", "Local config file to launch or trust for verification")
 	cmd.PersistentFlags().BoolVar(&rootOpts.publicRegistry, "public-registry", false, "Require public configs, even when a private registry is trusted")
 	cmd.MarkFlagsMutuallyExclusive("config", "public-registry")
 	configureRootCommand(rootOpts, cmd)
-	cmd.AddCommand(newAttestSSHCommand(&attestSSHOptions{}, &forwardOptions{}, &identityOptions{}, rootOpts, &trustOptions{}), newAttestationCommand(rootOpts), newLoginCommand(), newLogoutCommand(), newWhoamiCommand(),
+	cmd.AddCommand(newAttestSSHCommand(&attestSSHOptions{}, &forwardOptions{}, &identityOptions{}, rootOpts, &trustOptions{}), newAttestationCommand(rootOpts), newLoginCommand(dependencies.browser()), newLogoutCommand(), newWhoamiCommand(),
 		newContainerCommand(&outputOptions{}, rootOpts), newDomainCommand(&outputOptions{}), newHttpCommand(&headersOptions{}, rootOpts), newModelCommand(&outputOptions{}), newProjectCommand(&outputOptions{}), newProxyCommand(&proxyOptions{}, rootOpts),
 		newRegistryCommand(&outputOptions{}), newRepoCommand(&outputOptions{}), newSCPCommand(&forwardOptions{}, rootOpts, &trustOptions{}, &tunnelOptions{}), newSecretCommand(&outputOptions{}), newSshCommand(&forwardOptions{}, rootOpts, &sshOptions{}, &trustOptions{}, &tunnelOptions{}), newSshKeyCommand(&outputOptions{}, &sshKeyOptions{}),
 		newTrustCommand(&trustOptions{}), newForwardCommand(&forwardOptions{}, rootOpts, &trustOptions{}, &tunnelOptions{}), newVolumeCommand(&outputOptions{}), newSelfUpdateCommand(newDefaultSelfUpdater))
@@ -214,10 +221,11 @@ func run(args []string, dependencies commandDependencies) int {
 
 func runCommand(rootCmd *cobra.Command, args []string) int {
 	rootCmd.SilenceErrors = true
+	rootCmd.SilenceUsage = true
 	rootCmd.SetArgs(args)
 	waitForUpdateCheck := func() (string, bool) { return "", false }
 	if !isSelfUpdateCommand(rootCmd, args) {
-		waitForUpdateCheck = startUpdateCheck()
+		waitForUpdateCheck = startUpdateCheck(commandStreams(rootCmd))
 	}
 
 	err := rootCmd.Execute()
@@ -230,7 +238,7 @@ func runCommand(rootCmd *cobra.Command, args []string) int {
 	}
 
 	if latest, ok := waitForUpdateCheck(); ok {
-		printUpdateNotice(latest)
+		printUpdateNotice(commandStreams(rootCmd), latest)
 	}
 
 	if err != nil {

@@ -150,7 +150,7 @@ func newMonitorStopCmd(outputOpts *outputOptions) *cobra.Command {
 				restart += ", then \"tinfoil sandbox start NAME\" for each sandbox"
 			}
 			fmt.Fprintln(cmd.ErrOrStderr(), restart+".")
-			return renderContainer(outputOpts, *stopped)
+			return renderContainer(commandStreams(cmd), outputOpts, *stopped)
 		},
 	}
 }
@@ -178,7 +178,7 @@ func newMonitorDeleteCmd() *cobra.Command {
 			} else {
 				fmt.Fprintln(cmd.ErrOrStderr(), "This permanently deletes them, with the sandboxes' workspaces and all of their data.")
 			}
-			if err := confirmYes(yes, cmd.CommandPath()); err != nil {
+			if err := confirmYes(commandStreams(cmd), yes, cmd.CommandPath()); err != nil {
 				return err
 			}
 			if _, err := client.do("DELETE", pathf("/api/monitors/%s", monitor.ID), nil, nil, nil); err != nil {
@@ -263,7 +263,7 @@ with those, storage keys are created on first open and kept only on that machine
 			}
 			// Provisioning and storage attachment belong to Controlplane. Follow
 			// the returned deployment exactly like an ordinary container.
-			return createFollowupError(created, "", followAndRender(outputOpts, waitOpts, client, created, nil))
+			return createFollowupError(created, "", followAndRender(commandStreams(cmd), outputOpts, waitOpts, client, created, nil))
 		},
 	}
 	cmd.Flags().StringVar(&tag, "tag", "", "Published release tag [required]")
@@ -389,7 +389,7 @@ func newManagedStatusCmd(outputOpts *outputOptions, kind string) *cobra.Command 
 				if watch {
 					return fmt.Errorf("choose a %s name or ID to watch", kind)
 				}
-				return listContainers(outputOpts, client, kind)
+				return listContainers(commandStreams(cmd), outputOpts, client, kind)
 			}
 			row, err := managedRow(client, kind, args[0])
 			if err != nil {
@@ -403,7 +403,7 @@ func newManagedStatusCmd(outputOpts *outputOptions, kind string) *cobra.Command 
 						return err
 					}
 				}
-				return renderContainerDetail(outputOpts, *row, attached)
+				return renderContainerDetail(commandStreams(cmd), outputOpts, *row, attached)
 			}
 			ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 			defer cancel()
@@ -416,7 +416,7 @@ func newManagedStatusCmd(outputOpts *outputOptions, kind string) *cobra.Command 
 					return false, nil
 				}
 				previous = &current
-				return false, renderContainer(outputOpts, current)
+				return false, renderContainer(commandStreams(cmd), outputOpts, current)
 			})
 			if ctx.Err() == context.Canceled {
 				return nil

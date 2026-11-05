@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"fmt"
 	"io"
-	"os"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -26,16 +25,16 @@ func addTrustDangerousFlag(trustOpts *trustOptions, cmd *cobra.Command) {
 	cmd.Flags().BoolVar(&trustOpts.trustDangerous, "dangerous", false, "Trust whatever config the controlplane returns, without recording it")
 }
 
-func enforceConnectionPolicy(trustOpts *trustOptions, source string) error {
-	interactive := term.IsTerminal(int(os.Stdin.Fd()))
-	return gateConnectionPolicy(source, os.Stdin, os.Stderr, interactive, trustOpts.trustDangerous)
+func enforceConnectionPolicy(streams commandIO, trustOpts *trustOptions, source string) error {
+	interactive := term.IsTerminal(int(streamFD(streams.in)))
+	return gateConnectionPolicy(source, streams.in, streams.err, interactive, trustOpts.trustDangerous)
 }
 
-func trustConnectionSource(trustOpts *trustOptions, source, assertion string) error {
+func trustConnectionSource(streams commandIO, trustOpts *trustOptions, source, assertion string) error {
 	if assertion != "" {
-		return assertTrustedSource(assertion, source)
+		return assertTrustedSource(streams, assertion, source)
 	}
-	return enforceConnectionPolicy(trustOpts, source)
+	return enforceConnectionPolicy(streams, trustOpts, source)
 }
 
 func gateConnectionPolicy(source string, in io.Reader, out io.Writer, interactive, dangerous bool) error {
@@ -109,7 +108,7 @@ func journalPin(policy *connectionPolicy, source string, out io.Writer) {
 // --repo is the assertion (project granularity); the revision rides along as
 // the pin, including digest-form revisions (sha256:…). Best-effort: the
 // container exists either way.
-func seedTrustFromCreate(repoRef, revision string) {
+func seedTrustFromCreate(streams commandIO, repoRef, revision string) {
 	assertion := strings.TrimSpace(repoRef)
 	if assertion == "" {
 		return
@@ -118,8 +117,8 @@ func seedTrustFromCreate(repoRef, revision string) {
 	if rev := strings.TrimSpace(revision); rev != "" {
 		source += "@" + rev
 	}
-	if err := assertTrustedSource(assertion, source); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: not recording %s: %v\n", source, err)
+	if err := assertTrustedSource(streams, assertion, source); err != nil {
+		fmt.Fprintf(streams.err, "warning: not recording %s: %v\n", source, err)
 	}
 }
 
@@ -131,7 +130,7 @@ func seedTrustFromCreate(repoRef, revision string) {
 // assertion's granularity) instead of being retyped forever. Recording
 // failures warn rather than block: the assertion already protected this
 // invocation.
-func assertTrustedSource(assertion, resolvedSource string) error {
+func assertTrustedSource(streams commandIO, assertion, resolvedSource string) error {
 	assertion = strings.TrimSpace(assertion)
 	resolvedSource = strings.TrimSpace(resolvedSource)
 	recordSource, level, err := trust.AssertionRecord(assertion, resolvedSource)
@@ -148,14 +147,14 @@ func assertTrustedSource(assertion, resolvedSource string) error {
 	// makes this a no-op when everything is already present.
 	changed, err := policy.RecordTrustAt(recordSource, level)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "warning: could not record %s in known-configs: %v\n", resolvedSource, err)
+		fmt.Fprintf(streams.err, "warning: could not record %s in known-configs: %v\n", resolvedSource, err)
 		return nil
 	}
 	if changed {
-		fmt.Fprintf(os.Stderr, "Recorded %s as %s in %s\n", recordSource, level, policy.Path())
+		fmt.Fprintf(streams.err, "Recorded %s as %s in %s\n", recordSource, level, policy.Path())
 	}
 	if recordSource != resolvedSource {
-		journalPin(&policy, resolvedSource, os.Stderr)
+		journalPin(&policy, resolvedSource, streams.err)
 	}
 	return nil
 }

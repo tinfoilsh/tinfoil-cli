@@ -35,7 +35,7 @@ func TestContainerDetailIncludesMarkLatestRelease(t *testing.T) {
 			}
 
 			commandState.outputOpts.outputFormat = "table"
-			output, err := captureTestStdout(func() error { return renderContainer(commandState.outputOpts, container) })
+			output, err := captureTestStdout(func() error { return renderContainer(testStreams(), commandState.outputOpts, container) })
 			if err != nil {
 				t.Fatalf("render human output: %v", err)
 			}
@@ -48,7 +48,7 @@ func TestContainerDetailIncludesMarkLatestRelease(t *testing.T) {
 			}
 
 			commandState.outputOpts.outputFormat = "json"
-			output, err = captureTestStdout(func() error { return renderContainer(commandState.outputOpts, container) })
+			output, err = captureTestStdout(func() error { return renderContainer(testStreams(), commandState.outputOpts, container) })
 			if err != nil {
 				t.Fatalf("render JSON output: %v", err)
 			}

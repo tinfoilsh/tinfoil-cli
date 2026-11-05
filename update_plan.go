@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"os"
 	"reflect"
 	"slices"
 	"strings"
@@ -151,29 +150,29 @@ func planProjectUpdate(client *cpClient, id string, body map[string]any) (update
 	return updateReview{plans: plans, project: &response}, nil
 }
 
-func (review updateReview) render(outputOpts *outputOptions) error {
+func (review updateReview) render(streams commandIO, outputOpts *outputOptions) error {
 	if outputOpts.outputFormat == "json" {
 		if review.project != nil {
-			return json.NewEncoder(os.Stderr).Encode(review.project)
+			return json.NewEncoder(streams.err).Encode(review.project)
 		}
-		return json.NewEncoder(os.Stderr).Encode(review.plans[0])
+		return json.NewEncoder(streams.err).Encode(review.plans[0])
 	}
 	if response := review.project; response != nil {
-		fmt.Fprintf(os.Stderr, "Project plan (read-only): %d eligible, %d skipped, %d failed\n", response.EligibleCount, response.SkippedCount, response.FailedCount)
-		fmt.Fprintf(os.Stderr, "GitHub latest release: %s\n", displayNames([]string{response.LatestReleaseTag}))
+		fmt.Fprintf(streams.err, "Project plan (read-only): %d eligible, %d skipped, %d failed\n", response.EligibleCount, response.SkippedCount, response.FailedCount)
+		fmt.Fprintf(streams.err, "GitHub latest release: %s\n", displayNames([]string{response.LatestReleaseTag}))
 		for _, result := range response.Results {
 			if result.Plan != nil {
-				renderUpdatePlan(os.Stderr, *result.Plan)
+				renderUpdatePlan(streams.err, *result.Plan)
 			} else {
 				detail := ""
 				if result.Error != nil {
 					detail = secretDeliveryMessage(*result.Error)
 				}
-				fmt.Fprintf(os.Stderr, "%s (%s): %s %s\n", result.Name, result.InstanceID, result.Status, detail)
+				fmt.Fprintf(streams.err, "%s (%s): %s %s\n", result.Name, result.InstanceID, result.Status, detail)
 			}
 		}
 	} else {
-		renderUpdatePlan(os.Stderr, review.plans[0])
+		renderUpdatePlan(streams.err, review.plans[0])
 	}
 	return nil
 }
@@ -285,7 +284,7 @@ func plannedMemory(memory *int) string {
 	return fmt.Sprint(*memory)
 }
 
-func confirmUpdatePlans(plans []updatePlan, yes bool, action string, changed bool) error {
+func confirmUpdatePlans(streams commandIO, plans []updatePlan, yes bool, action string, changed bool) error {
 	var downtime []string
 	for _, plan := range plans {
 		if plan.Hold && !plan.HoldAvailable {
@@ -299,14 +298,14 @@ func confirmUpdatePlans(plans []updatePlan, yes bool, action string, changed boo
 		return nil
 	}
 	if changed {
-		fmt.Fprintln(os.Stderr, "The reviewed update changed; fresh confirmation is required.")
+		fmt.Fprintln(streams.err, "The reviewed update changed; fresh confirmation is required.")
 	}
 	if len(downtime) > 0 {
-		fmt.Fprintf(os.Stderr, "This update will cause downtime for: %s. Each instance is unreachable until its replacement is Running.\n", strings.Join(downtime, ", "))
+		fmt.Fprintf(streams.err, "This update will cause downtime for: %s. Each instance is unreachable until its replacement is Running.\n", strings.Join(downtime, ", "))
 	}
 	if yes {
-		fmt.Fprintln(os.Stderr, "Accepting the displayed update plan automatically (--yes).")
+		fmt.Fprintln(streams.err, "Accepting the displayed update plan automatically (--yes).")
 		return nil
 	}
-	return confirmYes(false, action)
+	return confirmYes(streams, false, action)
 }

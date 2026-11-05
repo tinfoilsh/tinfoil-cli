@@ -34,14 +34,14 @@ func TestMountTerminologyPreservesVolumeWireFields(t *testing.T) {
 	previous := commandState.outputOpts.outputFormat
 	t.Cleanup(func() { commandState.outputOpts.outputFormat = previous })
 	commandState.outputOpts.outputFormat = "json"
-	out, err := captureTestStdout(func() error { return renderContainer(commandState.outputOpts, c) })
+	out, err := captureTestStdout(func() error { return renderContainer(testStreams(), commandState.outputOpts, c) })
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(string(out), `"volume_slots"`) || strings.Contains(string(out), `"mounts"`) {
 		t.Fatalf("container wire contract changed: %s", out)
 	}
-	out, err = captureTestStdout(func() error { return renderVolume(commandState.outputOpts, v) })
+	out, err = captureTestStdout(func() error { return renderVolume(testStreams(), commandState.outputOpts, v) })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,7 +61,7 @@ func TestMountTerminologyPreservesVolumeWireFields(t *testing.T) {
 			t.Fatalf("human API error = %v", cp)
 		}
 		c.ErrorMessage = message
-		out, err = captureTestStdout(func() error { return renderContainer(commandState.outputOpts, c) })
+		out, err = captureTestStdout(func() error { return renderContainer(testStreams(), commandState.outputOpts, c) })
 		if err != nil {
 			t.Fatal(err)
 		}

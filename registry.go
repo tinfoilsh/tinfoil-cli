@@ -56,9 +56,9 @@ func newRegistryListCommand(outputOpts *outputOptions) *cobra.Command {
 				return err
 			}
 			if outputOpts.outputFormat == "json" {
-				return printJSON(resp)
+				return printJSON(commandStreams(cmd), resp)
 			}
-			fmt.Printf("%-12s  %-10s  %-30s  %s\n", "REGISTRY", "STATUS", "USERNAME", "UPDATED")
+			fmt.Fprintf(commandStreams(cmd).out, "%-12s  %-10s  %-30s  %s\n", "REGISTRY", "STATUS", "USERNAME", "UPDATED")
 			printRegistry := func(name string, s registryStatus) {
 				status := "missing"
 				if s.HasCredentials {
@@ -75,7 +75,7 @@ func newRegistryListCommand(outputOpts *outputOptions) *cobra.Command {
 				if updated == "" {
 					updated = "-"
 				}
-				fmt.Printf("%-12s  %-10s  %-30s  %s\n", name, status, user, updated)
+				fmt.Fprintf(commandStreams(cmd).out, "%-12s  %-10s  %-30s  %s\n", name, status, user, updated)
 			}
 			printRegistry(registryGHCR, resp.GHCR)
 			printRegistry(registryGCR, resp.GCR)
@@ -107,10 +107,10 @@ func newRegistrySetCommand(registrySetOpts *registrySetOptions) *cobra.Command {
 				return err
 			}
 			if msg, ok := resp["message"].(string); ok && msg != "" {
-				fmt.Println(msg)
+				fmt.Fprintln(commandStreams(cmd).out, msg)
 				return nil
 			}
-			fmt.Printf("%s credentials updated\n", registry)
+			fmt.Fprintf(commandStreams(cmd).out, "%s credentials updated\n", registry)
 			return nil
 		},
 	}
@@ -138,7 +138,7 @@ func newRegistryDeleteCommand() *cobra.Command {
 			if _, err := client.do("DELETE", pathf("/api/registry-credentials/%s", registry), nil, nil, nil); err != nil {
 				return err
 			}
-			fmt.Printf("Deleted %s credentials\n", registry)
+			fmt.Fprintf(commandStreams(cmd).out, "Deleted %s credentials\n", registry)
 			return nil
 		},
 	}
@@ -166,7 +166,7 @@ func buildRegistryBody(registrySetOpts *registrySetOptions, registry string, cmd
 			err  error
 		)
 		if registrySetOpts.registryKeyFile == "-" {
-			data, err = io.ReadAll(os.Stdin)
+			data, err = io.ReadAll(commandStreams(cmd).in)
 		} else {
 			data, err = os.ReadFile(registrySetOpts.registryKeyFile)
 		}

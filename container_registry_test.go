@@ -155,19 +155,19 @@ func TestRegistryConnectionPinsNameAndDigest(t *testing.T) {
 	previousRepo := commandState.rootOpts.repo
 	commandState.rootOpts.repo = ""
 	t.Cleanup(func() { commandState.rootOpts.repo = previousRepo })
-	tunnel, err := resolveTunnelTarget(commandState.forwardOpts, commandState.rootOpts, commandState.trustOpts, testContainerID)
+	tunnel, err := resolveTunnelTarget(testStreams(), commandState.forwardOpts, commandState.rootOpts, commandState.trustOpts, testContainerID)
 	require.NoError(t, err)
 	require.Equal(t, expected, tunnel.repo)
 	require.Equal(t, target.host, tunnel.host)
 	require.Contains(t, containerConnectionGuidance(c, false), "--repo "+expected)
 
 	descriptor.ConfigDigest = strings.TrimPrefix(testDigestB, "sha256:")
-	_, err = resolveTunnelTarget(commandState.forwardOpts, commandState.rootOpts, commandState.trustOpts, testContainerID)
+	_, err = resolveTunnelTarget(testStreams(), commandState.forwardOpts, commandState.rootOpts, commandState.trustOpts, testContainerID)
 	require.ErrorContains(t, err, "not in your known configs")
 	descriptor.ConfigDigest = registryConfigDigest
 
 	commandState.rootOpts.repo = "acme/app@sha256:" + strings.Repeat("a", len(registryConfigDigest))
-	tunnel, err = resolveTunnelTarget(commandState.forwardOpts, commandState.rootOpts, commandState.trustOpts, testContainerID)
+	tunnel, err = resolveTunnelTarget(testStreams(), commandState.forwardOpts, commandState.rootOpts, commandState.trustOpts, testContainerID)
 	require.NoError(t, err)
 	require.Equal(t, commandState.rootOpts.repo, tunnel.repo)
 	policy, err := loadConnectionPolicy()

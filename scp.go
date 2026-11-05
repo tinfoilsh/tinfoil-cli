@@ -43,11 +43,11 @@ Put native scp options after --; -p before -- is the enclave SSH port.`,
 			if port > 65535 {
 				return fmt.Errorf("invalid --port %d: must be 1..65535", port)
 			}
-			target, paths, err := resolveSCPPaths(forwardOpts, rootOpts, trustOpts, args, user)
+			target, paths, err := resolveSCPPaths(commandStreams(cmd), forwardOpts, rootOpts, trustOpts, args, user)
 			if err != nil {
 				return err
 			}
-			code, err := runSCP(rootOpts, tunnelOpts, target, sshTargetPort(target, port), options, paths)
+			code, err := runSCP(commandStreams(cmd), rootOpts, tunnelOpts, target, sshTargetPort(target, port), options, paths)
 			return sshExit(code, err)
 		},
 	}
@@ -83,7 +83,7 @@ func parseSCPPath(raw string) (scpPath, error) {
 	return scpPath{remote: true, identifier: host, user: user, path: path}, nil
 }
 
-func resolveSCPPaths(forwardOpts *forwardOptions, rootOpts *rootOptions, trustOpts *trustOptions, args []string, user string) (*tunnelTarget, []string, error) {
+func resolveSCPPaths(streams commandIO, forwardOpts *forwardOptions, rootOpts *rootOptions, trustOpts *trustOptions, args []string, user string) (*tunnelTarget, []string, error) {
 	paths := make([]scpPath, len(args))
 	var identifier string
 	hasRemote := false
@@ -117,7 +117,7 @@ func resolveSCPPaths(forwardOpts *forwardOptions, rootOpts *rootOptions, trustOp
 			}
 		}
 	}
-	target, err := resolveTunnelTarget(forwardOpts, rootOpts, trustOpts, identifier)
+	target, err := resolveTunnelTarget(streams, forwardOpts, rootOpts, trustOpts, identifier)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -134,7 +134,7 @@ func resolveSCPPaths(forwardOpts *forwardOptions, rootOpts *rootOptions, trustOp
 	return target, resolved, nil
 }
 
-func runSCP(rootOpts *rootOptions, tunnelOpts *tunnelOptions, target *tunnelTarget, port int, options, paths []string) (int, error) {
+func runSCP(streams commandIO, rootOpts *rootOptions, tunnelOpts *tunnelOptions, target *tunnelTarget, port int, options, paths []string) (int, error) {
 	argv, err := sshProxyOptions(rootOpts, tunnelOpts, target, port)
 	if err != nil {
 		return 0, err
@@ -142,5 +142,5 @@ func runSCP(rootOpts *rootOptions, tunnelOpts *tunnelOptions, target *tunnelTarg
 	argv = append(argv, options...)
 	argv = append(argv, "-o", "ServerAliveInterval="+strconv.Itoa(int(sshServerAliveInterval/time.Second)), "--")
 	argv = append(argv, paths...)
-	return runSSHClient(tunnelOpts, "scp", argv)
+	return runSSHClient(streams, tunnelOpts, "scp", argv)
 }

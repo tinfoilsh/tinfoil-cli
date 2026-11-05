@@ -18,7 +18,7 @@ import (
 	"golang.org/x/term"
 )
 
-func newLoginCommand() *cobra.Command {
+func newLoginCommand(openBrowser func(string) error) *cobra.Command {
 	loginCmd := &cobra.Command{
 		Use:   "login",
 		Short: "Sign in to Tinfoil",
@@ -36,7 +36,7 @@ func newLoginCommand() *cobra.Command {
 			keyFlag, _ := cmd.Flags().GetString("api-key")
 			if keyFlag == "" && urlFlag == "" {
 				sync, _ := cmd.Flags().GetBool("sync")
-				return clerkLogin(cmd, sync)
+				return clerkLogin(cmd, sync, openBrowser)
 			}
 
 			cfg, _, err := loadConfig()
@@ -56,7 +56,7 @@ func newLoginCommand() *cobra.Command {
 
 			key := strings.TrimSpace(keyFlag)
 			if key == "" {
-				key, err = promptSecret("api key", fmt.Sprintf("Enter admin API key for %s: ", cfg.ControlplaneURL))
+				key, err = promptSecret(commandStreams(cmd), "api key", fmt.Sprintf("Enter admin API key for %s: ", cfg.ControlplaneURL))
 				if err != nil {
 					return err
 				}
@@ -79,20 +79,20 @@ func newLoginCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			fmt.Printf("Credentials saved to %s\n", path)
-			printAuthContext("Saved credential", cfg, "file: "+path, identity)
+			fmt.Fprintf(commandStreams(cmd).out, "Credentials saved to %s\n", path)
+			printAuthContext(commandStreams(cmd), "Saved credential", cfg, "file: "+path, identity)
 			effective, _, err := loadConfig()
 			if err != nil {
 				return err
 			}
 			if credentialEnvSource() != "" || effective.ControlplaneURL != cfg.ControlplaneURL {
-				fmt.Fprintln(os.Stderr, "WARNING: environment overrides remain active; the saved credential is not necessarily the effective login.")
+				fmt.Fprintln(commandStreams(cmd).err, "WARNING: environment overrides remain active; the saved credential is not necessarily the effective login.")
 				identity, err = authenticatedContext(effective)
 				if err != nil {
 					return fmt.Errorf("credentials saved, but effective environment login could not be verified: %w", err)
 				}
 			}
-			printAuthContext("Effective login", effective, credentialSource(), identity)
+			printAuthContext(commandStreams(cmd), "Effective login", effective, credentialSource(), identity)
 			offerRegistryEnrollment(cmd)
 			return nil
 		},
@@ -114,12 +114,12 @@ func newLogoutCommand() *cobra.Command {
 			switch {
 			case err != nil:
 			case !removed:
-				fmt.Printf("No saved admin key to remove (%s did not exist)\n", path)
+				fmt.Fprintf(commandStreams(cmd).out, "No saved admin key to remove (%s did not exist)\n", path)
 			default:
-				fmt.Printf("Removed %s\n", path)
+				fmt.Fprintf(commandStreams(cmd).out, "Removed %s\n", path)
 			}
 			if source := credentialEnvSource(); source != "" {
-				fmt.Fprintf(os.Stderr, "WARNING: %s is still active; logout removes only the saved file. Unset %s and any admin key in %s to stop using environment credentials.\n", source, envAdminKey, envAPIKey)
+				fmt.Fprintf(commandStreams(cmd).err, "WARNING: %s is still active; logout removes only the saved file. Unset %s and any admin key in %s to stop using environment credentials.\n", source, envAdminKey, envAPIKey)
 			}
 			return errors.Join(clerkErr, err)
 		},
@@ -149,7 +149,7 @@ func newWhoamiCommand() *cobra.Command {
 					source += " (sandbox keys not synced)"
 				}
 			}
-			printAuthContext("Effective login", cfg, source, identity)
+			printAuthContext(commandStreams(cmd), "Effective login", cfg, source, identity)
 			return nil
 		},
 	}
@@ -157,18 +157,18 @@ func newWhoamiCommand() *cobra.Command {
 	return whoamiCmd
 }
 
-func promptSecret(what, prompt string) (string, error) {
-	fmt.Fprint(os.Stderr, prompt)
-	if term.IsTerminal(int(os.Stdin.Fd())) {
-		raw, err := term.ReadPassword(int(os.Stdin.Fd()))
-		fmt.Fprintln(os.Stderr)
+func promptSecret(streams commandIO, what, prompt string) (string, error) {
+	fmt.Fprint(streams.err, prompt)
+	if term.IsTerminal(int(streamFD(streams.in))) {
+		raw, err := term.ReadPassword(int(streamFD(streams.in)))
+		fmt.Fprintln(streams.err)
 		if err != nil {
 			return "", fmt.Errorf("reading %s: %w", what, err)
 		}
 		return strings.TrimSpace(string(raw)), nil
 	}
 
-	scanner := bufio.NewScanner(os.Stdin)
+	scanner := bufio.NewScanner(streams.in)
 	scanner.Buffer(make([]byte, 0, 4096), 1<<20)
 	if !scanner.Scan() {
 		if err := scanner.Err(); err != nil {
@@ -235,7 +235,7 @@ func authService() (*auth.Service, error) {
 	}), nil
 }
 
-func clerkLogin(cmd *cobra.Command, syncKeys bool) error {
+func clerkLogin(cmd *cobra.Command, syncKeys bool, openBrowser func(string) error) error {
 	service, err := authService()
 	if err != nil {
 		return err
@@ -307,18 +307,18 @@ func credentialSource() string {
 	return "file: " + path
 }
 
-func printAuthContext(label string, cfg cliConfig, source string, identity authContext) {
-	fmt.Printf("%s:\n", label)
-	fmt.Printf("  Controlplane: %s\n  Credential: %s\n", cfg.ControlplaneURL, source)
+func printAuthContext(streams commandIO, label string, cfg cliConfig, source string, identity authContext) {
+	fmt.Fprintf(streams.out, "%s:\n", label)
+	fmt.Fprintf(streams.out, "  Controlplane: %s\n  Credential: %s\n", cfg.ControlplaneURL, source)
 	if cfg.APIKey != "" {
-		fmt.Printf("  API key: %s\n", redactKey(cfg.APIKey))
+		fmt.Fprintf(streams.out, "  API key: %s\n", redactKey(cfg.APIKey))
 	}
-	fmt.Printf("  Context: %s\n", identity.ContextType)
+	fmt.Fprintf(streams.out, "  Context: %s\n", identity.ContextType)
 	if identity.Organization != nil {
-		fmt.Printf("  Organization ID: %s\n", identity.Organization.ID)
+		fmt.Fprintf(streams.out, "  Organization ID: %s\n", identity.Organization.ID)
 		if identity.Organization.Name != "" {
-			fmt.Printf("  Organization name: %s\n", identity.Organization.Name)
+			fmt.Fprintf(streams.out, "  Organization name: %s\n", identity.Organization.Name)
 		}
 	}
-	fmt.Printf("  User ID: %s\n", identity.UserID)
+	fmt.Fprintf(streams.out, "  User ID: %s\n", identity.UserID)
 }

@@ -31,8 +31,8 @@ func newUpdateChecker() (*selfupdate.Checker, error) {
 // updateNoticeWait for the lookup and reports the newer version, if there is
 // one; a lookup that is still in flight is abandoned so the command exits
 // promptly.
-func startUpdateCheck() func() (string, bool) {
-	if !updateCheckEnabled() {
+func startUpdateCheck(streams commandIO) func() (string, bool) {
+	if !updateCheckEnabled(streams) {
 		return func() (string, bool) { return "", false }
 	}
 	checker, err := newUpdateChecker()
@@ -64,16 +64,16 @@ func startBackgroundUpdateCheck(newerVersion func() (string, bool), maxWait time
 
 // updateCheckEnabled skips the check for dev builds, when explicitly opted
 // out, and when stderr is not a terminal so scripts never see the notice.
-func updateCheckEnabled() bool {
+func updateCheckEnabled(streams commandIO) bool {
 	if version == defaultVersion {
 		return false
 	}
 	if os.Getenv(envNoUpdateCheck) != "" {
 		return false
 	}
-	return term.IsTerminal(int(os.Stderr.Fd()))
+	return term.IsTerminal(streamFD(streams.err))
 }
 
-func printUpdateNotice(latest string) {
-	fmt.Fprintf(os.Stderr, "\nwarning: a new version of tinfoil is available (%s -> %s)\nupdate with: %s\n", version, latest, updateCommand)
+func printUpdateNotice(streams commandIO, latest string) {
+	fmt.Fprintf(streams.err, "\nwarning: a new version of tinfoil is available (%s -> %s)\nupdate with: %s\n", version, latest, updateCommand)
 }

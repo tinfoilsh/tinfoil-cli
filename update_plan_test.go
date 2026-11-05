@@ -233,7 +233,7 @@ func TestHoldSpaceFalseIsRejectedBeforeRequest(t *testing.T) {
 
 func executeLifecycleCLI(commandState *commandFixture, t *testing.T, args ...string) error {
 	t.Helper()
-	root := newRootCommand()
+	root := newRootCommandWithDependencies(commandState.rootOpts.dependencies)
 	root.SetIn(commandState.rootCmd.InOrStdin())
 	root.SetOut(commandState.rootCmd.OutOrStdout())
 	root.SetErr(commandState.rootCmd.ErrOrStderr())

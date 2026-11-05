@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 
@@ -75,7 +74,7 @@ func replaceReason(c containerView) string {
 	return "it has persistent volumes"
 }
 
-func postLifecycleUpdate(outputOpts *outputOptions, client *cpClient, path string, body map[string]any, out any, yes bool, action string, replan func() (updateReview, error)) error {
+func postLifecycleUpdate(streams commandIO, outputOpts *outputOptions, client *cpClient, path string, body map[string]any, out any, yes bool, action string, replan func() (updateReview, error)) error {
 	delete(body, "confirm_downtime")
 	review, err := replan()
 	if err != nil {
@@ -83,13 +82,13 @@ func postLifecycleUpdate(outputOpts *outputOptions, client *cpClient, path strin
 	}
 	changed, retried := false, false
 	for range maxUpdatePlanReviews {
-		if err := review.render(outputOpts); err != nil {
+		if err := review.render(streams, outputOpts); err != nil {
 			return err
 		}
 		if err := review.freezeSelection(body); err != nil {
 			return err
 		}
-		if err := confirmUpdatePlans(review.plans, yes, action, changed); err != nil {
+		if err := confirmUpdatePlans(streams, review.plans, yes, action, changed); err != nil {
 			return err
 		}
 		next, err := replan()
@@ -113,7 +112,7 @@ func postLifecycleUpdate(outputOpts *outputOptions, client *cpClient, path strin
 			return planErr
 		}
 		if !refreshed.requiresDowntime() {
-			if printErr := refreshed.render(outputOpts); printErr != nil {
+			if printErr := refreshed.render(streams, outputOpts); printErr != nil {
 				return printErr
 			}
 			return fmt.Errorf("execution requires downtime but the refreshed plan does not; no retry was sent: %w", err)
@@ -122,7 +121,7 @@ func postLifecycleUpdate(outputOpts *outputOptions, client *cpClient, path strin
 		review = refreshed
 		changed, retried = true, true
 	}
-	if err := review.render(outputOpts); err != nil {
+	if err := review.render(streams, outputOpts); err != nil {
 		return err
 	}
 	return fmt.Errorf("update plan did not stabilize after %d reviews; no further update was sent; rerun to review current settings", maxUpdatePlanReviews)
@@ -150,14 +149,14 @@ func activeBootStage(stages []bootStage) string {
 // reaches a terminal state, printing each change the way the dashboard shows
 // it. JSON output and --no-wait print the initial response only. Exits
 // non-zero when the container or its update candidate fails.
-func followAndRender(outputOpts *outputOptions, waitOpts *waitOptions, client *cpClient, c containerView, attached map[string]volumeView) error {
-	if err := renderContainerDetail(outputOpts, c, attached); err != nil {
+func followAndRender(streams commandIO, outputOpts *outputOptions, waitOpts *waitOptions, client *cpClient, c containerView, attached map[string]volumeView) error {
+	if err := renderContainerDetail(streams, outputOpts, c, attached); err != nil {
 		return err
 	}
 	if outputOpts.outputFormat != "json" && !waitOpts.noWait && !isTerminal(c) {
-		final, err := followContainer(client, c.ID, c)
+		final, err := followContainer(streams, client, c.ID, c)
 		if err == nil {
-			printChangedContainerConnections(os.Stdout, c, final)
+			printChangedContainerConnections(streams.out, c, final)
 		}
 		return err
 	}
@@ -222,7 +221,7 @@ func followedDeploymentState(c containerView, deploymentID string) (bool, error)
 // followContainer polls the container until isTerminal, printing one line per
 // observed change. The last line is left in place; intermediate lines are
 // overwritten when stderr is a terminal.
-func followContainer(client *cpClient, id string, initial containerView) (containerView, error) {
+func followContainer(streams commandIO, client *cpClient, id string, initial containerView) (containerView, error) {
 	deploymentID := initial.UpdateDeploymentID
 	if deploymentID == "" && initial.UpdateTag == "" && initial.UpdateType == "" {
 		deploymentID = initial.TinfoildDeploymentID
@@ -230,24 +229,24 @@ func followContainer(client *cpClient, id string, initial containerView) (contai
 	if deploymentID == "" {
 		return initial, fmt.Errorf("cannot follow %s: response has no deployment ID; check \"tinfoil container get %s\"", initial.Name, id)
 	}
-	tty := term.IsTerminal(int(os.Stderr.Fd()))
+	tty := term.IsTerminal(int(streamFD(streams.err)))
 	last := ""
 	print := func(line string) {
 		if line == last {
 			return
 		}
 		if tty && last != "" {
-			fmt.Fprint(os.Stderr, "\r\033[K")
+			fmt.Fprint(streams.err, "\r\033[K")
 		}
-		fmt.Fprint(os.Stderr, line)
+		fmt.Fprint(streams.err, line)
 		if !tty {
-			fmt.Fprintln(os.Stderr)
+			fmt.Fprintln(streams.err)
 		}
 		last = line
 	}
 	finish := func() {
 		if tty && last != "" {
-			fmt.Fprintln(os.Stderr)
+			fmt.Fprintln(streams.err)
 		}
 	}
 	defer finish()

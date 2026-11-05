@@ -109,12 +109,12 @@ func TestLocalConnectionRequiresTrustedFile(t *testing.T) {
 	commandState.rootOpts.repo = ""
 	t.Cleanup(func() { commandState.rootOpts.repo = previousRepo })
 
-	_, err := resolveTunnelTarget(commandState.forwardOpts, commandState.rootOpts, commandState.trustOpts, testContainerID)
+	_, err := resolveTunnelTarget(testStreams(), commandState.forwardOpts, commandState.rootOpts, commandState.trustOpts, testContainerID)
 	require.ErrorContains(t, err, "requires --config")
 	require.ErrorContains(t, commandState.containerConnectCmd.RunE(commandState.containerConnectCmd, []string{testContainerID}), "requires --config")
 	commandState.rootOpts.localConfigFile = path
 	require.ErrorContains(t, checkLocalConfigDigest(commandState.rootOpts, registryConfigDigest), "does not match")
-	target, err := resolveTunnelTarget(commandState.forwardOpts, commandState.rootOpts, commandState.trustOpts, testContainerID)
+	target, err := resolveTunnelTarget(testStreams(), commandState.forwardOpts, commandState.rootOpts, commandState.trustOpts, testContainerID)
 	require.NoError(t, err)
 	require.Empty(t, target.repo)
 	require.Equal(t, "app.example.com", target.host)

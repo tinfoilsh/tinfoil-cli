@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"fmt"
 	"io"
-	"os"
 	"slices"
 	"strings"
 
@@ -37,7 +36,7 @@ func newTrustEnrollCommand(trustEnrollOpts *trustEnrollOptions) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return enrollRegistry(cmd, cfg, identity, trustEnrollOpts.enrollmentRegistryID, term.IsTerminal(int(os.Stdin.Fd())))
+			return enrollRegistry(cmd, cfg, identity, trustEnrollOpts.enrollmentRegistryID, term.IsTerminal(int(streamFD(commandStreams(cmd).in))))
 		},
 	}
 	trustEnrollCmd.Flags().StringVar(&trustEnrollOpts.enrollmentRegistryID, "registry-id", "", "Expected private registry ID; approves it without a prompt")
@@ -72,7 +71,7 @@ func printRegistries(out io.Writer, entries []registryEnrollment) {
 }
 
 func offerRegistryEnrollment(cmd *cobra.Command) {
-	if !term.IsTerminal(int(os.Stdin.Fd())) {
+	if !term.IsTerminal(int(streamFD(commandStreams(cmd).in))) {
 		return
 	}
 	cfg, err := requireAuth()
