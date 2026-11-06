@@ -355,5 +355,5 @@ func hasTopLevelInclude(config []byte) bool {
 
 // A predictable temp name lets anyone who can write the directory pre-create a symlink we would follow.
 func writeAtomic(path string, data []byte) error {
-	return statefile.Replace(path, data)
+	return statefile.Write(path, data, false)
 }

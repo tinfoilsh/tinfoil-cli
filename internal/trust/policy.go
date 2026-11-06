@@ -417,7 +417,7 @@ func (p *Policy) save() error {
 	if err := os.MkdirAll(filepath.Dir(p.path), 0o700); err != nil {
 		return fmt.Errorf("creating %s: %w", filepath.Dir(p.path), err)
 	}
-	if err := statefile.Replace(p.path, append(data, '\n')); err != nil {
+	if err := statefile.Write(p.path, append(data, '\n'), false); err != nil {
 		return fmt.Errorf("writing %s: %w", p.path, err)
 	}
 	return nil

@@ -519,7 +519,7 @@ func (s *Service) userSigner(name, owner, dir string) (ssh.Signer, string, func(
 			for _, signer := range signers {
 				if bytes.Equal(signer.PublicKey().Marshal(), public.Marshal()) {
 					path := filepath.Join(dir, "owner.pub")
-					if err := statefile.Replace(path, ssh.MarshalAuthorizedKey(public)); err != nil {
+					if err := statefile.Write(path, ssh.MarshalAuthorizedKey(public), false); err != nil {
 						conn.Close()
 						return nil, "", close, err
 					}
