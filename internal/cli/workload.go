@@ -69,14 +69,3 @@ func measuredEnvironment(raw string) (map[string]string, error) {
 	}
 	return values, nil
 }
-
-func requireRunningConnection(kind string, row containerView) error {
-	if row.Status == statusRunning {
-		return nil
-	}
-	next := "status " + row.Name + " --watch"
-	if row.Status == statusStopped || row.Status == statusFailed {
-		next = "start " + row.Name
-	}
-	return fmt.Errorf("%s %s is %s; run `tinfoil %s %s`", kind, row.Name, statusLabel(row.Status), strings.ToLower(kind), next)
-}
