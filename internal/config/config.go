@@ -108,7 +108,7 @@ func Save(cfg Config) (string, error) {
 		return path, fmt.Errorf("encoding config: %w", err)
 	}
 
-	if err := statefile.Write(path, append(data, '\n'), false); err != nil {
+	if err := statefile.Replace(path, append(data, '\n')); err != nil {
 		return path, fmt.Errorf("writing %s: %w", path, err)
 	}
 	return path, nil
