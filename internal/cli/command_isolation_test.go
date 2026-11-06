@@ -188,6 +188,24 @@ func TestRunnerReturnsStatusAfterCommandCleanup(t *testing.T) {
 	require.Contains(t, stderr.String(), "Error: failed")
 }
 
+func TestProcessRunSendsUnknownHelpTopicsToStderr(t *testing.T) {
+	t.Setenv(envNoUpdateCheck, "1")
+	var status int
+	var stdout []byte
+	stderr, err := captureTestStderr(func() error {
+		var captureErr error
+		stdout, captureErr = captureTestStdout(func() error {
+			status = Run([]string{"help", "bogus"}, Build{}, nil, os.Stdout, os.Stderr)
+			return nil
+		})
+		return captureErr
+	})
+	require.NoError(t, err)
+	require.Equal(t, 0, status)
+	require.Empty(t, string(stdout))
+	require.Contains(t, string(stderr), "Unknown help topic")
+}
+
 func TestRunnerRoutesAPIErrorHintsToItsErrorStream(t *testing.T) {
 	t.Setenv(envNoUpdateCheck, "1")
 	commandAPI(t, func(w http.ResponseWriter, _ *http.Request) {

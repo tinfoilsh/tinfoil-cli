@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"regexp"
 	"slices"
 	"strings"
@@ -106,7 +107,11 @@ func newRootCommandWithDependencies(dependencies commandDependencies) *cobra.Com
 		SilenceUsage: true,
 	}
 	cmd.SetIn(dependencies.in)
-	cmd.SetOut(dependencies.out)
+	// Cobra prints diagnostics such as unknown help topics through
+	// OutOrStderr, which reaches stderr only while no output writer is set.
+	if dependencies.out != os.Stdout {
+		cmd.SetOut(dependencies.out)
+	}
 	cmd.SetErr(dependencies.err)
 	rootOpts.registryOrigin = func() (string, error) { return accounts.registryControlplaneURL(commandStreams(cmd)) }
 	cmd.PersistentFlags().StringVar(&rootOpts.localConfigFile, "config", "", "Local config file to launch or trust for verification")
