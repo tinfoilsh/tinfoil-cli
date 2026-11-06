@@ -122,11 +122,11 @@ type mkBinding = keybundle.Binding
 type b64u = keybundle.Base64URL
 
 const (
-	monitorDeviceKeyName = "device_ed25519"
-	tmkOwnerKeyName      = "owner_tmk_ed25519"
-	sandboxLoginUser     = "sandbox"
-	monitorSSHUser       = "device"
-	monitorJumpSuffix    = ".monitor"
+	MonitorDeviceKeyName = "device_ed25519"
+	TMKOwnerKeyName      = "owner_tmk_ed25519"
+	SandboxLoginUser     = "sandbox"
+	MonitorSSHUser       = "device"
+	MonitorJumpSuffix    = ".monitor"
 	defaultSSHPort       = 22
 	maxConnectionPort    = 65535
 )

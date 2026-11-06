@@ -24,10 +24,10 @@ import (
 )
 
 const (
-	defaultSandboxRepo = "tinfoilsh/confidential-agent-sandbox"
-	sandboxOwnerEnv    = "SANDBOX_OWNER_PUBLIC_KEY"
-	// sandboxWorkspaceSlot is the volume mount that holds a sandbox's workspace.
-	sandboxWorkspaceSlot = "workspace"
+	DefaultSandboxRepo = "tinfoilsh/confidential-agent-sandbox"
+	SandboxOwnerEnv    = "SANDBOX_OWNER_PUBLIC_KEY"
+	// SandboxWorkspaceSlot is the volume mount that holds a sandbox's workspace.
+	SandboxWorkspaceSlot = "workspace"
 )
 
 // The fixed endpoint is usable only with an explicit matching alias policy.
@@ -101,14 +101,14 @@ func SandboxBinding(scope Scope, target *Workload) (keybundle.Binding, error) {
 	if err := requireRunningConnection("Sandbox", row); err != nil {
 		return mkBinding{}, err
 	}
-	volumeID, instance := row.Volumes[sandboxWorkspaceSlot], env["SANDBOX_INSTANCE_ID"]
+	volumeID, instance := row.Volumes[SandboxWorkspaceSlot], env["SANDBOX_INSTANCE_ID"]
 	if len(row.Volumes) != 1 || !validLowerUUID(volumeID) {
 		return mkBinding{}, errors.New("sandbox has no unique workspace volume binding")
 	}
 	if !validLowerUUID(instance) {
 		return mkBinding{}, errors.New("sandbox release lacks a measured instance ID; use compatible templates")
 	}
-	if env[sandboxOwnerEnv] != row.OwnerPublicKey {
+	if env[SandboxOwnerEnv] != row.OwnerPublicKey {
 		return mkBinding{}, errors.New("sandbox's measured owner is not its owner key")
 	}
 	if err := ValidateSandboxNetwork(row, env); err != nil {
@@ -148,7 +148,7 @@ func (service *Service) openSandbox(scope Scope, target *Workload, binding mkBin
 		}
 		s.expires = verified.FreshnessExpiresAt()
 		s.profile = ConnectionInfo{Name: row.Name, HostName: row.Domain, Port: row.SSHPort, HostKeyAlias: row.Domain,
-			User: sandboxLoginUser, IdentityFile: identity, HostKey: host, ResourceID: resourceID}
+			User: SandboxLoginUser, IdentityFile: identity, HostKey: host, ResourceID: resourceID}
 		service.notify(SandboxDirectVerified, row.Name)
 		return s, nil
 	}
@@ -168,7 +168,7 @@ func (service *Service) openSandbox(scope Scope, target *Workload, binding mkBin
 	address, port, _ := net.SplitHostPort(monitor.address)
 	portNumber, _ := strconv.Atoi(port)
 	s.profile = ConnectionInfo{Name: row.Name, HostName: routeName(host), Port: defaultSSHPort, HostKeyAlias: row.Domain,
-		User: sandboxLoginUser, IdentityFile: identity, HostKey: host, ResourceID: resourceID,
+		User: SandboxLoginUser, IdentityFile: identity, HostKey: host, ResourceID: resourceID,
 		Jump: monitorJump(row.Name, address, portNumber, monitor.dir, monitor.hostKey, monitor.domain)}
 	return s, nil
 }
@@ -235,7 +235,7 @@ func (s *Sandbox) close() {
 // usually in ssh-agent. The device key is an unencrypted file, so the hop needs
 // no agent.
 func monitorJump(sandbox, host string, port int, dir string, hostKey ssh.PublicKey, domain string) *ConnectionInfo {
-	return &ConnectionInfo{Name: sandbox + monitorJumpSuffix, HostName: host, Port: port, User: monitorSSHUser, IdentityFile: filepath.Join(dir, monitorDeviceKeyName), HostKey: hostKey, HostKeyAlias: domain, NoAgent: true}
+	return &ConnectionInfo{Name: sandbox + MonitorJumpSuffix, HostName: host, Port: port, User: MonitorSSHUser, IdentityFile: filepath.Join(dir, MonitorDeviceKeyName), HostKey: hostKey, HostKeyAlias: domain, NoAgent: true}
 }
 
 type sandboxStatus struct {
@@ -383,7 +383,7 @@ func (c *sandboxRouteConn) Close() error {
 }
 
 func (m *Monitor) dialSandbox(ctx context.Context, host ssh.PublicKey) (net.Conn, error) {
-	device, err := loadSigner(filepath.Join(m.dir, monitorDeviceKeyName))
+	device, err := loadSigner(filepath.Join(m.dir, MonitorDeviceKeyName))
 	if err != nil {
 		return nil, err
 	}
@@ -393,7 +393,7 @@ func (m *Monitor) dialSandbox(ctx context.Context, host ssh.PublicKey) (net.Conn
 	}
 	stop := context.AfterFunc(ctx, func() { conn.Close() })
 	defer stop()
-	client, err := Connect(conn, m.domain, m.hostKey, device, monitorSSHUser)
+	client, err := Connect(conn, m.domain, m.hostKey, device, MonitorSSHUser)
 	if err != nil {
 		return nil, err
 	}
@@ -422,7 +422,7 @@ func (s *Sandbox) dial(ctx context.Context) (*ssh.Client, error) {
 	}
 	stop := context.AfterFunc(ctx, func() { conn.Close() })
 	defer stop()
-	return Connect(conn, s.box.Domain, s.profile.HostKey, s.keys.signer, sandboxLoginUser)
+	return Connect(conn, s.box.Domain, s.profile.HostKey, s.keys.signer, SandboxLoginUser)
 }
 
 func (o *sandboxOwner) call(ctx context.Context, command string, input, out any) error {

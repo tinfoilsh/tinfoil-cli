@@ -26,8 +26,8 @@ import (
 )
 
 const (
-	monitorRepo     = "tinfoilsh/confidential-agent-monitor"
-	monitorOwnerEnv = "MONITOR_OWNER_PUBLIC_KEY"
+	MonitorRepo     = "tinfoilsh/confidential-agent-monitor"
+	MonitorOwnerEnv = "MONITOR_OWNER_PUBLIC_KEY"
 
 	// A relayed sandbox attestation is up to 32 MiB before base64 and JSON.
 	maxMonitorReplyBytes = 48 << 20
@@ -81,7 +81,7 @@ func (s *Service) ConnectMonitor(ctx context.Context, scope Scope, cp *controlpl
 	if len(bucket) > keybundle.MaxBucketChars || !bucketOwnedBy(bucket, scope.Account(), scope.UserID) {
 		return nil, errors.New("Monitor storage does not belong to this account")
 	}
-	if row.Environment[monitorOwnerEnv] != row.OwnerPublicKey {
+	if row.Environment[MonitorOwnerEnv] != row.OwnerPublicKey {
 		return nil, errors.New("Monitor's measured owner is not its owner key")
 	}
 	dir, err := s.monitorRecord(scope, row)
@@ -104,7 +104,7 @@ func (s *Service) ConnectMonitor(ctx context.Context, scope Scope, cp *controlpl
 	}); err != nil {
 		return nil, err
 	}
-	device := func() error { _, err := ensureSSHKey(filepath.Join(dir, monitorDeviceKeyName)); return err }
+	device := func() error { _, err := ensureSSHKey(filepath.Join(dir, MonitorDeviceKeyName)); return err }
 	if m.keys.mode == "tmk" {
 		err = s.activeGrant(device)
 	} else {
@@ -187,7 +187,7 @@ func (m *Monitor) unlock(restoreDevice bool) error {
 		DeviceKey  string `json:"device_key,omitempty"`
 	}{Generation: profile.Generation, StorageKey: m.keys.storageKey}
 	if restoreDevice {
-		device, err := loadSSHKey(filepath.Join(m.dir, monitorDeviceKeyName))
+		device, err := loadSSHKey(filepath.Join(m.dir, MonitorDeviceKeyName))
 		if err != nil {
 			return fmt.Errorf("restore Monitor device key: %w", err)
 		}
@@ -261,10 +261,10 @@ func (s *Service) monitorRecord(scope Scope, row *Workload) (string, error) {
 	}
 	_, err = UpdateProfile(dir, func(p *Profile) error {
 		if p.Domain != "" && p.Domain != row.Domain || p.ContainerID != "" && p.ContainerID != row.ID ||
-			p.Owner != "" && (p.Owner != row.Environment[monitorOwnerEnv] || p.Storage != row.Environment["TINFOIL_STORAGE_BUCKET"]) {
+			p.Owner != "" && (p.Owner != row.Environment[MonitorOwnerEnv] || p.Storage != row.Environment["TINFOIL_STORAGE_BUCKET"]) {
 			return errors.New("Monitor identity or storage binding changed")
 		}
-		p.Domain, p.ContainerID, p.Owner, p.Storage = row.Domain, row.ID, row.Environment[monitorOwnerEnv], row.Environment["TINFOIL_STORAGE_BUCKET"]
+		p.Domain, p.ContainerID, p.Owner, p.Storage = row.Domain, row.ID, row.Environment[MonitorOwnerEnv], row.Environment["TINFOIL_STORAGE_BUCKET"]
 		return nil
 	})
 	return dir, err

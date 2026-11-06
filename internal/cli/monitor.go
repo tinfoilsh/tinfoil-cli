@@ -20,9 +20,9 @@ import (
 )
 
 const (
-	monitorRepo          = "tinfoilsh/confidential-agent-monitor"
-	monitorOwnerEnv      = "MONITOR_OWNER_PUBLIC_KEY"
-	monitorDeviceKeyName = "device_ed25519"
+	monitorRepo          = owner.MonitorRepo
+	monitorOwnerEnv      = owner.MonitorOwnerEnv
+	monitorDeviceKeyName = owner.MonitorDeviceKeyName
 	monitorProfileFile   = owner.ProfileFile
 )
 

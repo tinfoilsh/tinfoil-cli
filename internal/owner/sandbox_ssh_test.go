@@ -75,7 +75,7 @@ func testSandboxSSH(t *testing.T, host ssh.Signer, owner *fakeSandboxOwner) stri
 	public, err := ssh.NewPublicKey(owner.owner)
 	require.NoError(t, err)
 	config := &ssh.ServerConfig{PublicKeyCallback: func(conn ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error) {
-		if conn.User() != sandboxLoginUser || !bytes.Equal(key.Marshal(), public.Marshal()) {
+		if conn.User() != SandboxLoginUser || !bytes.Equal(key.Marshal(), public.Marshal()) {
 			return nil, errors.New("wrong owner")
 		}
 		return nil, nil
@@ -216,7 +216,7 @@ func testSandboxRoutes(t *testing.T, host ssh.Signer, device ssh.PublicKey, rout
 	require.NoError(t, err)
 	t.Cleanup(func() { listener.Close() })
 	config := &ssh.ServerConfig{PublicKeyCallback: func(conn ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error) {
-		if conn.User() != monitorSSHUser || !bytes.Equal(key.Marshal(), device.Marshal()) {
+		if conn.User() != MonitorSSHUser || !bytes.Equal(key.Marshal(), device.Marshal()) {
 			return nil, errors.New("unexpected device")
 		}
 		return nil, nil

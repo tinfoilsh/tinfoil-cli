@@ -16,16 +16,16 @@ import (
 )
 
 const (
-	defaultSandboxRepo = "tinfoilsh/confidential-agent-sandbox"
-	sandboxLoginUser   = "sandbox"
-	sandboxOwnerEnv    = "SANDBOX_OWNER_PUBLIC_KEY"
-	tmkOwnerKeyName    = "owner_tmk_ed25519"
-	monitorSSHUser     = "device"
-	monitorJumpSuffix  = ".monitor"
+	defaultSandboxRepo = owner.DefaultSandboxRepo
+	sandboxLoginUser   = owner.SandboxLoginUser
+	sandboxOwnerEnv    = owner.SandboxOwnerEnv
+	tmkOwnerKeyName    = owner.TMKOwnerKeyName
+	monitorSSHUser     = owner.MonitorSSHUser
+	monitorJumpSuffix  = owner.MonitorJumpSuffix
 	// Controlplane gives a new sandbox this workspace size when none is chosen.
 	defaultWorkspaceSizeGB = 16
 	// sandboxWorkspaceSlot is the volume mount that holds a sandbox's workspace.
-	sandboxWorkspaceSlot = "workspace"
+	sandboxWorkspaceSlot = owner.SandboxWorkspaceSlot
 )
 
 // sandboxWorkspaceSizesGB are the workspace volume sizes Controlplane accepts,

@@ -368,7 +368,7 @@ func TestCredentialsUseOnlyResourcePaths(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv(envConfigPath, filepath.Join(home, "config.json"))
 	scope := accountScope{ControlplaneURL: "https://cp.example", UserID: "owner"}
-	row := containerView{ID: "11111111-1111-4111-8111-111111111111", Name: "work", Repo: monitorRepo}
+	row := containerView{ID: "11111111-1111-4111-8111-111111111111", Name: "work", Repo: MonitorRepo}
 	data, err := json.Marshal(scope)
 	require.NoError(t, err)
 	require.NoError(t, writeStorageJSON(filepath.Join(home, "sandboxes", row.Name, "monitor.json"), map[string]any{"scope": scope, "monitor": "personal"}, false))
@@ -530,7 +530,7 @@ func TestExistingResourcePathsRemainUsable(t *testing.T) {
 func TestResourceDirectoriesRejectAmbiguity(t *testing.T) {
 	t.Setenv(envConfigPath, filepath.Join(t.TempDir(), "config.json"))
 	scope := accountScope{ControlplaneURL: "https://cp.example", UserID: "owner"}
-	row := containerView{ID: "11111111-1111-4111-8111-111111111111", Name: "work", Repo: defaultSandboxRepo}
+	row := containerView{ID: "11111111-1111-4111-8111-111111111111", Name: "work", Repo: DefaultSandboxRepo}
 	dir, err := resourceDir(scope, row.ID, row.Name)
 	require.NoError(t, err)
 	savedResource(t, dir)

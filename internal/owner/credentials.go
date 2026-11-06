@@ -341,7 +341,7 @@ func (k *resourceKeys) generateUMKKeys(kind, owner string, binding mkBinding) er
 }
 
 func (s *Service) exportTMKIdentity(dir string, seed []byte) (string, error) {
-	path := filepath.Join(dir, tmkOwnerKeyName)
+	path := filepath.Join(dir, TMKOwnerKeyName)
 	return path, s.activeGrant(func() error {
 		if err := statefile.PrepareDirectory(dir); err != nil {
 			return err
@@ -353,7 +353,7 @@ func (s *Service) exportTMKIdentity(dir string, seed []byte) (string, error) {
 
 func RemoveExportedKeys(configPath, agentSocket string) error {
 	resources := filepath.Join(filepath.Dir(configPath), "resources")
-	exported, err := filepath.Glob(filepath.Join(resources, "*", "*", tmkOwnerKeyName))
+	exported, err := filepath.Glob(filepath.Join(resources, "*", "*", TMKOwnerKeyName))
 	if err != nil {
 		return err
 	}
@@ -361,7 +361,7 @@ func RemoveExportedKeys(configPath, agentSocket string) error {
 	for _, path := range profiles {
 		var profile Profile
 		if statefile.ReadJSON(path, &profile) == nil && profile.Custody == "tmk" {
-			exported = append(exported, filepath.Join(filepath.Dir(path), monitorDeviceKeyName))
+			exported = append(exported, filepath.Join(filepath.Dir(path), MonitorDeviceKeyName))
 		}
 	}
 	var keys agent.ExtendedAgent

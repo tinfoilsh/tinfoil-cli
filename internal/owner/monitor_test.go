@@ -92,7 +92,7 @@ func TestMonitorSessionAgainstRealMonitor(t *testing.T) {
 		// A clean client opens with the minimum generation recovered from the key bundle.
 		_, err = UpdateProfile(dir, func(p *Profile) error { p.Generation = max(p.Generation, minimum()); return nil })
 		require.NoError(t, err)
-		_, err = ensureSSHKey(filepath.Join(dir, monitorDeviceKeyName))
+		_, err = ensureSSHKey(filepath.Join(dir, MonitorDeviceKeyName))
 		require.NoError(t, err)
 		m := &Monitor{service: cp.service, client: client, dir: dir, domain: "localhost", address: sshAddress, hostKey: hostKey,
 			keys: &resourceKeys{service: cp.service, mode: "tmk", signer: signer, storageKey: bytes.Clone(storage), mk: mk, keyID: saved.KeyID, minGeneration: minimum()}}
@@ -167,13 +167,13 @@ func TestMonitorSessionAgainstRealMonitor(t *testing.T) {
 			go func() { defer conn.Close(); io.Copy(conn, conn) }()
 		}
 	}()
-	device, err := loadSigner(filepath.Join(dir, monitorDeviceKeyName))
+	device, err := loadSigner(filepath.Join(dir, MonitorDeviceKeyName))
 	require.NoError(t, err)
 	checkRoute := func(allowed bool) {
 		t.Helper()
 		conn, err := net.Dial("tcp", sshAddress)
 		require.NoError(t, err)
-		client, err := Connect(conn, "localhost", hostKey, device, monitorSSHUser)
+		client, err := Connect(conn, "localhost", hostKey, device, MonitorSSHUser)
 		require.NoError(t, err)
 		defer client.Close()
 		routed, err := client.DialContext(t.Context(), "tcp", net.JoinHostPort(routeName(publisherSigner.PublicKey()), "22"))
@@ -232,8 +232,8 @@ func TestMonitorUnlockMissingDeviceKey(t *testing.T) {
 	m := &Monitor{dir: dir, keys: &resourceKeys{storageKey: testSeed(t)}}
 	err := m.unlock(true)
 	require.ErrorContains(t, err, "restore Monitor device key")
-	require.ErrorContains(t, err, filepath.Join(dir, monitorDeviceKeyName))
-	require.NoFileExists(t, filepath.Join(dir, monitorDeviceKeyName), "restoration must not replace a lost key")
+	require.ErrorContains(t, err, filepath.Join(dir, MonitorDeviceKeyName))
+	require.NoFileExists(t, filepath.Join(dir, MonitorDeviceKeyName), "restoration must not replace a lost key")
 }
 
 func freeAddress(t *testing.T) string {

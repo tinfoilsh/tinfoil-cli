@@ -335,7 +335,7 @@ func TestMonitorRestartRelinksOnlyAuthorizedSandboxes(t *testing.T) {
 		}}
 		routes[net.JoinHostPort(routeName(f.host.PublicKey()), strconv.Itoa(defaultSSHPort))] = testSandboxSSH(t, f.host, f.owner)
 		config := fmt.Sprintf("containers: [{env: [{SANDBOX_OWNER_PUBLIC_KEY: %q}, {SANDBOX_INSTANCE_ID: %q}]}]", f.key.OwnerPublicKey, f.instance)
-		rows = append(rows, containerView{ID: f.id, Name: name, Repo: defaultSandboxRepo, Status: statusRunning, ClerkUserID: "user_owner", Config: config,
+		rows = append(rows, containerView{ID: f.id, Name: name, Repo: DefaultSandboxRepo, Status: statusRunning, ClerkUserID: "user_owner", Config: config,
 			Domain: name + ".example", ConfigName: "/tinfoil/containers/" + storageHash([]byte(config)),
 			OwnerKeyMode: "tmk", OwnerPublicKey: f.key.OwnerPublicKey, Volumes: map[string]string{"workspace": f.volume},
 			NetworkPolicy: &containerNetworkPolicy{EgressMode: "restricted", Egress: []containerPeer{{ContainerID: f.monitor, Port: 22, Alias: &containerAlias{IP: "10.254.0.1", Port: 22}}}}})
@@ -399,7 +399,7 @@ func TestMonitorRestartRelinksOnlyAuthorizedSandboxes(t *testing.T) {
 	relayed := map[string]int{}
 	var monitorCalls []string
 	m := &monitorSession{dir: t.TempDir(), domain: "monitor.example", hostKey: newHost, keys: &resourceKeys{}}
-	device, err := ensureSSHIdentity(filepath.Join(m.dir, monitorDeviceKeyName), nil)
+	device, err := ensureSSHIdentity(filepath.Join(m.dir, MonitorDeviceKeyName), nil)
 	require.NoError(t, err)
 	m.address = testSandboxRoutes(t, monitorSigner, device.PublicKey(), routes)
 	m.view.Config.Identities = map[string]struct {
@@ -439,7 +439,7 @@ func TestMonitorRestartRelinksOnlyAuthorizedSandboxes(t *testing.T) {
 			return err
 		}
 		f := fixtures[row.Name]
-		target := &Workload{Container: row, Source: row.ConfigName, Environment: map[string]string{sandboxOwnerEnv: f.key.OwnerPublicKey, "SANDBOX_INSTANCE_ID": f.instance}}
+		target := &Workload{Container: row, Source: row.ConfigName, Environment: map[string]string{SandboxOwnerEnv: f.key.OwnerPublicKey, "SANDBOX_INSTANCE_ID": f.instance}}
 		info, err := cp.service.RelinkSandbox(t.Context(), scope, cp.Client, m, monitorID, id, target, verifier)
 		if info != nil {
 			connections[row.Name] = info
