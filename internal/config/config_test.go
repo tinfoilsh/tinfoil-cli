@@ -159,6 +159,23 @@ func TestSavedConfigFormatAndDeletion(t *testing.T) {
 	require.False(t, deleted)
 }
 
+func TestSaveDoesNotFollowPlantedTemporaryFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	t.Setenv(EnvConfigPath, path)
+	victim := filepath.Join(dir, "victim")
+	require.NoError(t, os.WriteFile(victim, []byte("unchanged"), 0o600))
+	require.NoError(t, os.Symlink(victim, path+".tmp"))
+	_, err := Save(Config{ControlplaneURL: "https://api.example", APIKey: "admin_saved"})
+	require.NoError(t, err)
+	data, err := os.ReadFile(victim)
+	require.NoError(t, err)
+	require.Equal(t, "unchanged", string(data))
+	info, err := os.Lstat(path)
+	require.NoError(t, err)
+	require.True(t, info.Mode().IsRegular())
+}
+
 func TestUnreadableConfigReturnsDiagnosticAndEnvironment(t *testing.T) {
 	path := t.TempDir()
 	t.Setenv(EnvConfigPath, path)

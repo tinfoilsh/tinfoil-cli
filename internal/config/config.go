@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/tinfoilsh/tinfoil-cli/internal/statefile"
 )
 
 const (
@@ -106,13 +108,8 @@ func Save(cfg Config) (string, error) {
 		return path, fmt.Errorf("encoding config: %w", err)
 	}
 
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, append(data, '\n'), 0o600); err != nil {
-		return path, fmt.Errorf("writing %s: %w", tmp, err)
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		_ = os.Remove(tmp)
-		return path, fmt.Errorf("renaming to %s: %w", path, err)
+	if err := statefile.Write(path, append(data, '\n'), false); err != nil {
+		return path, fmt.Errorf("writing %s: %w", path, err)
 	}
 	return path, nil
 }
