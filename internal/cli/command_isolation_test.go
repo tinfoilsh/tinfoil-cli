@@ -178,13 +178,13 @@ func TestRunnerReturnsStatusAfterCommandCleanup(t *testing.T) {
 		}}
 		root.SetOut(&output)
 		root.SetErr(&output)
-		require.Equal(t, status, runCommand(root, nil, nil))
+		require.Equal(t, status, runCommand(root, []string{}, nil))
 		require.Equal(t, "cleaned up\n", output.String())
 	}
 	var stderr bytes.Buffer
 	root := &cobra.Command{Use: "test", RunE: func(*cobra.Command, []string) error { return errors.New("failed") }}
 	root.SetErr(&stderr)
-	require.Equal(t, 1, runCommand(root, nil, nil))
+	require.Equal(t, 1, runCommand(root, []string{}, nil))
 	require.Contains(t, stderr.String(), "Error: failed")
 }
 

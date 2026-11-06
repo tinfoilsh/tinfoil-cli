@@ -575,14 +575,8 @@ func configureVolumeTest(commandState *commandFixture, t *testing.T, serverURL s
 	t.Setenv(envCPURL, serverURL)
 	t.Setenv(envAdminKey, "admin_test")
 	t.Setenv(envConfigPath, filepath.Join(t.TempDir(), "missing-config.json"))
-	previousOutput := commandState.outputOpts.outputFormat
-	previousAs, previousYes := commandState.volumeAttachOpts.volumeAttachAs, commandState.volumeDeleteOpts.volumeYes
 	commandState.outputOpts.outputFormat = "table"
 	commandState.volumeAttachOpts.volumeAttachAs, commandState.volumeDeleteOpts.volumeYes = "", false
-	t.Cleanup(func() {
-		commandState.outputOpts.outputFormat = previousOutput
-		commandState.volumeAttachOpts.volumeAttachAs, commandState.volumeDeleteOpts.volumeYes = previousAs, previousYes
-	})
 }
 
 func TestRenderVolumesShowsKind(t *testing.T) {
