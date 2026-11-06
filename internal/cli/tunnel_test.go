@@ -44,7 +44,7 @@ func TestProxyCommandNamesResolvedHost(t *testing.T) {
 	}
 
 	host := "otter-4s7ut6c3.box2.tinfoil.sh"
-	bare, err := proxyCommand(&rootOptions{}, &tunnelOptions{}, &tunnelTarget{name: host, host: host}, 2022)
+	bare, err := proxyCommand(&rootOptions{}, &tunnelOptions{tunnelAPIKey: "test-key"}, &tunnelTarget{name: host, host: host}, 2022)
 	if err != nil {
 		t.Fatal(err)
 	}
