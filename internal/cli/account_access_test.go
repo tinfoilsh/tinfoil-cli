@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/spf13/cobra"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tinfoilsh/tinfoil-cli/internal/auth"
 )
@@ -45,17 +46,17 @@ func TestTreesOwnTheirCredentialsBuildSettingsAndClientVersions(t *testing.T) {
 			requests.Unlock()
 			switch r.URL.Path {
 			case "/oauth/token":
-				require.NoError(t, r.ParseForm())
-				require.Equal(t, clientID, r.Form.Get("client_id"))
-				require.Equal(t, origin, r.Form.Get("resource"))
-				require.Equal(t, "refresh-"+suffix, r.Form.Get("refresh_token"))
+				assert.NoError(t, r.ParseForm())
+				assert.Equal(t, clientID, r.Form.Get("client_id"))
+				assert.Equal(t, origin, r.Form.Get("resource"))
+				assert.Equal(t, "refresh-"+suffix, r.Form.Get("refresh_token"))
 				json.NewEncoder(w).Encode(map[string]any{"access_token": token, "refresh_token": "renewed-" + suffix, "token_type": "bearer", "expires_in": 3600})
 			case "/oauth/userinfo":
-				require.Equal(t, "Bearer "+token, r.Header.Get("Authorization"))
+				assert.Equal(t, "Bearer "+token, r.Header.Get("Authorization"))
 				json.NewEncoder(w).Encode(map[string]string{"sub": user})
 			case "/api/auth/context":
-				require.Equal(t, "Bearer "+token, r.Header.Get("Authorization"))
-				require.Equal(t, "tinfoil-cli/"+currentVersion, r.Header.Get("User-Agent"))
+				assert.Equal(t, "Bearer "+token, r.Header.Get("Authorization"))
+				assert.Equal(t, "tinfoil-cli/"+currentVersion, r.Header.Get("User-Agent"))
 				json.NewEncoder(w).Encode(authContext{ContextType: "personal", UserID: user})
 			default:
 				t.Errorf("unexpected request %s", r.URL)

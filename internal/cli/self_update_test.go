@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/spf13/cobra"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tinfoilsh/tinfoil-cli/internal/selfupdate"
 )
@@ -38,10 +39,10 @@ func TestSelfUpdateCheckIsFreshReadOnlyAndUnauthenticated(t *testing.T) {
 	var requests atomic.Int32
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests.Add(1)
-		require.Equal(t, "/repos/tinfoilsh/tinfoil-cli/releases/latest", r.URL.Path)
-		require.Equal(t, "tinfoil-cli/"+testUpdateCurrent, r.Header.Get("User-Agent"))
-		require.Empty(t, r.Header.Get("Authorization"))
-		require.Empty(t, r.Header.Get("Cookie"))
+		assert.Equal(t, "/repos/tinfoilsh/tinfoil-cli/releases/latest", r.URL.Path)
+		assert.Equal(t, "tinfoil-cli/"+testUpdateCurrent, r.Header.Get("User-Agent"))
+		assert.Empty(t, r.Header.Get("Authorization"))
+		assert.Empty(t, r.Header.Get("Cookie"))
 		_, _ = io.WriteString(w, testUpdateRelease)
 	}))
 	defer server.Close()

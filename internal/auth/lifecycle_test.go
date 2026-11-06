@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tinfoilsh/tinfoil-cli/internal/statefile"
 )
@@ -17,13 +18,13 @@ func fixtureGrant(service *Service, user string) *Grant {
 		UserID: user, Account: "personal", AccessToken: "access-fixture", ExpiresAt: time.Now().Add(time.Hour).Unix()}
 }
 
-func requireCredentialLock(t *testing.T, store *Store) {
+func assertCredentialLock(t *testing.T, store *Store) {
 	t.Helper()
 	unlock, err := statefile.Lock(store.file("credentials"))
 	if unlock != nil {
 		unlock()
 	}
-	require.ErrorIs(t, err, statefile.ErrLocked)
+	assert.ErrorIs(t, err, statefile.ErrLocked)
 }
 
 func TestLifecycleCleanupSharesTheActiveGrantTransaction(t *testing.T) {
@@ -40,17 +41,17 @@ func TestLifecycleCleanupSharesTheActiveGrantTransaction(t *testing.T) {
 			require.NoError(t, service.store.write(dekName, SyncedDEK{Version: 1}))
 			path := filepath.Join(t.TempDir(), "owner-key")
 			service.lifecycle.CleanupResources = func() error {
-				requireCredentialLock(t, service.store)
+				assertCredentialLock(t, service.store)
 				grant, err := service.CurrentGrant()
-				require.NoError(t, err)
-				require.Nil(t, grant, "cleanup precedes publication of a replacement grant")
+				assert.NoError(t, err)
+				assert.Nil(t, grant, "cleanup precedes publication of a replacement grant")
 				var dek SyncedDEK
 				found, err := service.store.read(dekName, &dek)
-				require.NoError(t, err)
-				require.False(t, found)
+				assert.NoError(t, err)
+				assert.False(t, found)
 				data, err := os.ReadFile(path)
-				require.NoError(t, err)
-				require.Equal(t, "exported material", string(data))
+				assert.NoError(t, err)
+				assert.Equal(t, "exported material", string(data))
 				return os.Remove(path)
 			}
 
@@ -64,7 +65,7 @@ func TestLifecycleCleanupSharesTheActiveGrantTransaction(t *testing.T) {
 				})
 			}()
 			<-started
-			requireCredentialLock(t, service.store)
+			assertCredentialLock(t, service.store)
 			replacement := fixtureGrant(service, "user_replacement")
 			completed := make(chan error, 1)
 			go func() {
@@ -100,7 +101,7 @@ func TestAccountSwitchDoesNotPublishAfterCleanupFailure(t *testing.T) {
 	require.NoError(t, service.commitLogin(t.Context(), previous))
 	cleanupErr := errors.New("exported key could not be removed")
 	service.lifecycle.CleanupResources = func() error {
-		requireCredentialLock(t, service.store)
+		assertCredentialLock(t, service.store)
 		return cleanupErr
 	}
 	replacement := fixtureGrant(service, "user_replacement")
@@ -117,7 +118,7 @@ func TestLoginCommitFollowupRunsUnderTheCredentialLock(t *testing.T) {
 	grant := fixtureGrant(service, "user_owner")
 	followupErr := errors.New("saved admin credential could not be removed")
 	service.lifecycle.LoginCommitted = func() error {
-		requireCredentialLock(t, service.store)
+		assertCredentialLock(t, service.store)
 		current, err := service.CurrentGrant()
 		require.NoError(t, err)
 		require.Equal(t, grant, current)

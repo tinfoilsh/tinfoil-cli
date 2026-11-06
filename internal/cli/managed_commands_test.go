@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/ssh"
 )
@@ -393,12 +394,12 @@ func TestSyncedCreateSavesKeysBeforeAllocation(t *testing.T) {
 				Mode  string `json:"owner_key_mode"`
 				Owner string `json:"owner_public_key"`
 			}
-			require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
-			require.Equal(t, "tmk", body.Mode)
+			assert.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+			assert.Equal(t, "tmk", body.Mode)
 			payload := keys.payload(t, dek, mkContext{APIOrigin: fixedAPIOrigin, UserID: "user_owner", DEKID: *keys.dekID})
 			saved := findKey(payload, func(k *mkResource) bool { return k.OwnerPublicKey == body.Owner })
-			require.NotNil(t, saved, "the key bundle holds the owner key before allocation")
-			require.Nil(t, saved.Binding)
+			assert.NotNil(t, saved, "the key bundle holds the owner key before allocation")
+			assert.Nil(t, saved.Binding)
 			created = append(created, saved.Kind)
 			json.NewEncoder(w).Encode(containerView{ID: testContainerID, Name: "work", Status: statusDeploying})
 		default:

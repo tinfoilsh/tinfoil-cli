@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tinfoilsh/tinfoil-cli/internal/controlplane"
 	"github.com/tinfoilsh/tinfoil-cli/internal/keybundle"
@@ -16,13 +17,13 @@ import (
 func TestInjectedClientAndVersionReachClerkAndKeySync(t *testing.T) {
 	var state controlplane.KeyState
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		require.Equal(t, "Bearer access-fixture", r.Header.Get("Authorization"))
+		assert.Equal(t, "Bearer access-fixture", r.Header.Get("Authorization"))
 		switch r.URL.Path {
 		case "/oauth/userinfo":
 			io.WriteString(w, `{"sub":"user_owner"}`)
 		case controlplane.KeyStatePath:
-			require.Equal(t, "GET", r.Method)
-			require.Equal(t, "tinfoil-cli/auth-test", r.Header.Get("User-Agent"))
+			assert.Equal(t, "GET", r.Method)
+			assert.Equal(t, "tinfoil-cli/auth-test", r.Header.Get("User-Agent"))
 			json.NewEncoder(w).Encode(state)
 		default:
 			t.Errorf("unexpected request: %s", r.URL.Path)

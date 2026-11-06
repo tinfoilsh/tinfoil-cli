@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tinfoilsh/tinfoil-cli/internal/auth"
 )
@@ -255,7 +256,7 @@ func TestEachTreeSuppliesItsVersionToUpdateRequests(t *testing.T) {
 	var agents []string
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		agents = append(agents, r.Header.Get("User-Agent"))
-		require.Equal(t, "/repos/tinfoilsh/tinfoil-cli/releases/latest", r.URL.Path)
+		assert.Equal(t, "/repos/tinfoilsh/tinfoil-cli/releases/latest", r.URL.Path)
 		io.WriteString(w, testUpdateRelease)
 	}))
 	defer server.Close()

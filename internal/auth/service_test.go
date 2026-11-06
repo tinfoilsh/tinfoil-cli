@@ -22,6 +22,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tinfoilsh/tinfoil-cli/internal/controlplane"
 	"github.com/tinfoilsh/tinfoil-cli/internal/keybundle"
@@ -281,9 +282,9 @@ func TestClerkIdentity(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				require.Equal(t, "GET /oauth/userinfo", r.Method+" "+r.URL.Path)
-				require.Empty(t, r.URL.RawQuery)
-				require.Equal(t, "Bearer access-1", r.Header.Get("Authorization"))
+				assert.Equal(t, "GET /oauth/userinfo", r.Method+" "+r.URL.Path)
+				assert.Empty(t, r.URL.RawQuery)
+				assert.Equal(t, "Bearer access-1", r.Header.Get("Authorization"))
 				w.WriteHeader(tc.status)
 				io.WriteString(w, tc.reply)
 			}))

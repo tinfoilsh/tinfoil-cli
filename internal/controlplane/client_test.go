@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -38,20 +39,20 @@ func TestRequestPreservesContextHeadersAndEncoding(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				require.Equal(t, "/api/test?name=a%2Fb", r.RequestURI)
-				require.Equal(t, "POST", r.Method)
-				require.Equal(t, "Bearer admin_test", r.Header.Get("Authorization"))
-				require.Equal(t, "tinfoil-cli/test-version", r.Header.Get("User-Agent"))
-				require.Equal(t, "application/json", r.Header.Get("Accept"))
-				require.Equal(t, "hf_test", r.Header.Get("X-Hugging-Face-Token"))
+				assert.Equal(t, "/api/test?name=a%2Fb", r.RequestURI)
+				assert.Equal(t, "POST", r.Method)
+				assert.Equal(t, "Bearer admin_test", r.Header.Get("Authorization"))
+				assert.Equal(t, "tinfoil-cli/test-version", r.Header.Get("User-Agent"))
+				assert.Equal(t, "application/json", r.Header.Get("Accept"))
+				assert.Equal(t, "hf_test", r.Header.Get("X-Hugging-Face-Token"))
 				if tc.body == nil {
-					require.Empty(t, r.Header.Get("Content-Type"))
+					assert.Empty(t, r.Header.Get("Content-Type"))
 				} else {
-					require.Equal(t, "application/json", r.Header.Get("Content-Type"))
+					assert.Equal(t, "application/json", r.Header.Get("Content-Type"))
 				}
 				body, err := io.ReadAll(r.Body)
-				require.NoError(t, err)
-				require.Equal(t, tc.want, string(body))
+				assert.NoError(t, err)
+				assert.Equal(t, tc.want, string(body))
 				w.WriteHeader(http.StatusAccepted)
 				_, _ = io.WriteString(w, `{"result":"accepted"}`)
 			}))

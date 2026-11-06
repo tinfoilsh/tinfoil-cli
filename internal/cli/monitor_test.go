@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tinfoilsh/tinfoil-cli/internal/connection"
 	"github.com/tinfoilsh/tinfoil-cli/internal/owner"
@@ -120,7 +121,7 @@ func TestMonitorPanelAndNativeTransportAgainstRealMonitor(t *testing.T) {
 	policy := sandboxNetworkPolicy(row.ID)
 	synced.NetworkPolicy = &policy
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		require.Equal(t, "/api/containers/"+synced.ID, r.URL.Path)
+		assert.Equal(t, "/api/containers/"+synced.ID, r.URL.Path)
 		json.NewEncoder(w).Encode(synced)
 	}))
 	defer api.Close()

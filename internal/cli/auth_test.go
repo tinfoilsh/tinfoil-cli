@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tinfoilsh/tinfoil-cli/internal/auth"
 	"github.com/zalando/go-keyring"
@@ -308,8 +309,8 @@ func testAgent(t *testing.T, keys ...ed25519.PrivateKey) agent.Agent {
 func TestLogoutRemovesSyncedMaterialAndKeepsUserKeys(t *testing.T) {
 	revoked := make(chan string, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		require.Equal(t, "POST /oauth/token/revoke", r.Method+" "+r.URL.Path)
-		require.NoError(t, r.ParseForm())
+		assert.Equal(t, "POST /oauth/token/revoke", r.Method+" "+r.URL.Path)
+		assert.NoError(t, r.ParseForm())
 		revoked <- r.PostForm.Get("token")
 		http.Error(w, "revocation unavailable", http.StatusServiceUnavailable)
 	}))
@@ -403,7 +404,7 @@ func TestClerkCredentialsUseOnlyTheFixedAPIOrigin(t *testing.T) {
 	}))
 	defer other.Close()
 	fixed := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		require.Equal(t, "Bearer access-1", r.Header.Get("Authorization"))
+		assert.Equal(t, "Bearer access-1", r.Header.Get("Authorization"))
 		http.Redirect(w, r, other.URL+r.URL.Path, http.StatusTemporaryRedirect)
 	}))
 	defer fixed.Close()
