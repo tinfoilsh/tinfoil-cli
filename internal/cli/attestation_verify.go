@@ -16,6 +16,7 @@ func newAttestationVerifyCommand(attestationVerifyOpts *attestationVerifyOptions
 		Short: "Verify enclave attestation",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			logger := log.New()
+			logger.SetOutput(commandStreams(cmd).err)
 			if attestationVerifyOpts.jsonFile != "" || attestationVerifyOpts.jsonOutput {
 				logger.SetOutput(io.Discard)
 			}
