@@ -135,7 +135,7 @@ func TestSandboxEnrollDecidesFromMonitorIdentityAndSandboxStatus(t *testing.T) {
 			if test.monitorKnows {
 				m.view.Config.Identities = map[string]struct {
 					Key string `json:"key"`
-				}{"sandbox-work": {Key: agent}}
+				}{"work": {Key: agent}}
 			}
 			m.request = func(method, path string, input, out any) error {
 				data, _ := json.Marshal(input)
@@ -167,7 +167,7 @@ func TestSandboxEnrollDecidesFromMonitorIdentityAndSandboxStatus(t *testing.T) {
 				if test.noLocalKeys {
 					enrolled = monitorIdentity(keys.monitorIdentitySeed)
 				}
-				require.Equal(t, `POST /enroll {"sandbox-work":{"key":"`+enrolled+`"}}`, monitorCalls[0], "only the public agent key goes to Monitor, never restored")
+				require.Equal(t, `POST /enroll {"work":{"key":"`+enrolled+`"}}`, monitorCalls[0], "only the public agent key goes to Monitor, never restored")
 			}
 			if enroll, ok := transport.bodies["/enroll"]; ok {
 				var in struct {
@@ -406,7 +406,7 @@ func TestMonitorRestartRelinksOnlyAuthorizedSandboxes(t *testing.T) {
 		Key string `json:"key"`
 	}{}
 	for _, name := range []string{"a", "b", "nokeys", "unbound", "wrongbinding", "rebooted", "elsewhere"} {
-		m.view.Config.Identities["sandbox-"+name] = struct {
+		m.view.Config.Identities[name] = struct {
 			Key string `json:"key"`
 		}{monitorIdentity(fixtures[name].key.MonitorIdentitySeed)}
 	}
