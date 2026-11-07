@@ -274,7 +274,7 @@ func (s *Sandbox) Enroll(ctx context.Context) error {
 			agent = monitorIdentity(s.keys.monitorIdentitySeed)
 		}
 		s.service.notify(SandboxRegistering, name)
-		if err := s.monitor.enrollAgent(ctx, "sandbox-"+name, agent); err != nil {
+		if err := s.monitor.enrollAgent(ctx, name, agent); err != nil {
 			return err
 		}
 		return s.enrollSandbox(ctx, status.Volume, host)
