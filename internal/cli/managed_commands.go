@@ -23,18 +23,18 @@ import (
 
 const managedKindAnnotation = "managed-kind"
 
-func addManagedCommands(pollingOpts *pollingOptions, newClient authenticatedClientFactory, newScope scopeClientFactory, identityOpts *identityOptions, outputOpts *outputOptions, group *cobra.Command) {
-	if group.Name() == "monitor" {
+func addManagedCommands(pollingOpts *pollingOptions, newClient authenticatedClientFactory, newScope scopeClientFactory, identityOpts *identityOptions, outputOpts *outputOptions, group *cobra.Command, kind string) {
+	if kind == "monitor" {
 		start := newManagedContainerCmd(pollingOpts, newClient, outputOpts, "monitor", "start")
 		start.Short = "Start a stopped or failed Monitor"
 		group.AddCommand(start, newMonitorStopCmd(newScope, outputOpts), newMonitorDeleteCmd(newScope))
 	}
 	group.PersistentFlags().StringVarP(&outputOpts.outputFormat, "output", "o", "table", "Output format: table or json")
 	group.PersistentFlags().StringVar(&identityOpts.attestSSHIdentity, "identity", "", "Owner SSH identity file")
-	update := newManagedContainerCmd(pollingOpts, newClient, outputOpts, group.Name(), "update")
+	update := newManagedContainerCmd(pollingOpts, newClient, outputOpts, kind, "update")
 	update.Long = "Review and apply a release update, switching traffic automatically. The shared update plan and downtime confirmation still apply, including with --no-wait."
-	metrics := newManagedContainerCmd(pollingOpts, newClient, outputOpts, group.Name(), "metrics")
-	group.AddCommand(update, metrics, newManagedCreateCmd(pollingOpts, newScope, identityOpts, outputOpts, &waitOptions{}, group.Name()))
+	metrics := newManagedContainerCmd(pollingOpts, newClient, outputOpts, kind, "metrics")
+	group.AddCommand(update, metrics, newManagedCreateCmd(pollingOpts, newScope, identityOpts, outputOpts, &waitOptions{}, kind))
 }
 
 func newManagedContainerCmd(pollingOpts *pollingOptions, newClient authenticatedClientFactory, outputOpts *outputOptions, kind, name string) *cobra.Command {
@@ -85,7 +85,7 @@ func refuseStandaloneMonitor(row containerView, verb string) error {
 	if checkManagedKind("monitor", row) != nil {
 		return nil
 	}
-	return fmt.Errorf("%s is a Monitor; %s it together with its sandboxes with `tinfoil monitor %s %s`", row.Name, verb, verb, row.Name)
+	return fmt.Errorf("%s is a Monitor; %s it together with its sandboxes with `tinfoil perimeter %s %s`", row.Name, verb, verb, row.Name)
 }
 
 // resolveOwnMonitor returns a Monitor the caller created and the sandboxes
@@ -146,9 +146,9 @@ func newMonitorStopCmd(newScope scopeClientFactory, outputOpts *outputOptions) *
 			if err != nil {
 				return err
 			}
-			restart := fmt.Sprintf("Run \"tinfoil monitor start %s\" to bring it back", monitor.Name)
+			restart := fmt.Sprintf("Run \"tinfoil perimeter start %s\" to bring it back", monitor.Name)
 			if len(sandboxes) > 0 {
-				restart += ", then \"tinfoil sandbox start NAME\" for each sandbox"
+				restart += ", then \"tinfoil bunker start NAME\" for each sandbox"
 			}
 			fmt.Fprintln(cmd.ErrOrStderr(), restart+".")
 			return renderContainer(commandStreams(cmd), outputOpts, *stopped)
@@ -260,7 +260,7 @@ with those, storage keys are created on first open and kept only on that machine
 			fmt.Fprintln(cmd.ErrOrStderr(), "Creating and publishing configuration. Storage remains billable until deleted.")
 			var created containerView
 			if _, err := client.do("POST", "/api/containers", nil, body, &created); err != nil {
-				return fmt.Errorf("%w; inspect `tinfoil %s status` before retrying creation", err, kind)
+				return fmt.Errorf("%w; inspect `tinfoil %s status` before retrying creation", err, managedCommand(kind))
 			}
 			// Provisioning and storage attachment belong to Controlplane. Follow
 			// the returned deployment exactly like an ordinary container.
@@ -291,7 +291,7 @@ func selectCreationMonitor(client *cpClient, identifier, userID string) (*contai
 		})
 		switch len(rows) {
 		case 0:
-			return nil, errors.New("you have no Monitors in this account; create one with `tinfoil monitor create NAME`, since sandboxes cannot use Monitors created by other users")
+			return nil, errors.New("you have no Monitors in this account; create one with `tinfoil perimeter create NAME`, since sandboxes cannot use Monitors created by other users")
 		case 1:
 			identifier = rows[0].ID
 		default:
@@ -303,7 +303,7 @@ func selectCreationMonitor(client *cpClient, identifier, userID string) (*contai
 		err = errors.New("invalid Monitor UUID")
 	}
 	if err == nil && row.ClerkUserID != userID {
-		err = fmt.Errorf("Monitor %s was created by another user, and sandboxes can only use Monitors you created; choose one of yours or create one with `tinfoil monitor create NAME`", row.Name)
+		err = fmt.Errorf("Monitor %s was created by another user, and sandboxes can only use Monitors you created; choose one of yours or create one with `tinfoil perimeter create NAME`", row.Name)
 	}
 	return row, err
 }
@@ -356,6 +356,10 @@ func creationOwnerKey(publicFile, identity string) (string, error) {
 
 func managedRepo(kind string) string {
 	return map[string]string{"monitor": monitorRepo, "sandbox": defaultSandboxRepo}[kind]
+}
+
+func managedCommand(kind string) string {
+	return map[string]string{"monitor": "perimeter", "sandbox": "bunker"}[kind]
 }
 
 func managedRow(client *cpClient, kind, identifier string) (*containerView, error) {

@@ -195,7 +195,7 @@ func newContainerCreateCommand(pollingOpts *pollingOptions, newClient authentica
 					return fmt.Errorf("sandbox aliases require a production deployment")
 				}
 				if vars["NO_MONITOR"] != "1" {
-					return fmt.Errorf("use `tinfoil sandbox create NAME --monitor MONITOR --tag VERSION` to create a monitored sandbox")
+					return fmt.Errorf("use `tinfoil bunker create NAME --monitor MONITOR --tag VERSION` to create a monitored sandbox")
 				}
 			}
 

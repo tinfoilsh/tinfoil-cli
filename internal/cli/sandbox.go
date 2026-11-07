@@ -45,7 +45,7 @@ func workspaceSizeChoices(unit string) string {
 
 func newSandboxCommand(pollingOpts *pollingOptions, newClient authenticatedClientFactory, newScope scopeClientFactory, identityOpts *identityOptions, outputOpts *outputOptions, rootOpts *rootOptions) *cobra.Command {
 	sandboxCmd := &cobra.Command{
-		Use: "sandbox", Aliases: []string{"sandboxes"}, Short: "Manage your confidential sandboxes",
+		Use: "bunker", Short: "Manage your confidential sandboxes",
 	}
 	sandboxCmd.AddCommand(newSandboxStatusCommand(pollingOpts, newClient, outputOpts), newSandboxStartCommand(pollingOpts, newClient, newScope, identityOpts, outputOpts, rootOpts, &sandboxActionOptions{}, &trustOptions{}), newSandboxRestartCommand(pollingOpts, newClient, newScope, identityOpts, outputOpts, rootOpts, &sandboxActionOptions{}, &trustOptions{}), newSandboxStopCommand(pollingOpts, newClient, newScope, identityOpts, outputOpts, rootOpts, &sandboxActionOptions{}, &trustOptions{}), newSandboxDeleteCommand(pollingOpts, newClient, newScope, identityOpts, outputOpts, rootOpts, &sandboxActionOptions{}, &trustOptions{}))
 	return sandboxCmd
@@ -116,7 +116,7 @@ func runSandboxAction(pollingOpts *pollingOptions, newClient authenticatedClient
 				deleted += " and its workspace"
 				fmt.Fprintf(cmd.ErrOrStderr(), "Deleting %s permanently deletes its workspace volume and all of its data. To keep the workspace, stop the sandbox and run `tinfoil volume detach %s` before deleting it.\n", row.Name, workspace)
 			}
-			if err := confirmYes(commandStreams(cmd), sandboxActionOpts.sandboxYes, "sandbox delete"); err != nil {
+			if err := confirmYes(commandStreams(cmd), sandboxActionOpts.sandboxYes, "bunker delete"); err != nil {
 				return err
 			}
 			if _, err := client.do("DELETE", pathf("/api/containers/%s", row.ID), nil, nil, nil); err != nil && !missingContainer(err) {
@@ -162,7 +162,7 @@ func runSandboxAction(pollingOpts *pollingOptions, newClient authenticatedClient
 			return err
 		}
 		if err := s.install(commandStreams(cmd)); err != nil {
-			return fmt.Errorf("%s was enrolled, but its ssh profile was not installed: %w; retry `tinfoil sandbox start %s`", target.Name, err, target.Name)
+			return fmt.Errorf("%s was enrolled, but its ssh profile was not installed: %w; retry `tinfoil bunker start %s`", target.Name, err, target.Name)
 		}
 		return renderContainer(commandStreams(cmd), outputOpts, *row)
 	}
@@ -243,7 +243,7 @@ func connectSandbox(newScope scopeClientFactory, streams commandIO, identityOpts
 		}
 		selected, err := resolveWorkload(streams, rootOpts, trustOpts, *peer, monitorRepo, "")
 		if err != nil {
-			return nil, fmt.Errorf("selected Monitor %s: %w; review its configuration with `tinfoil monitor open %s`", peer.Name, err, peer.Name)
+			return nil, fmt.Errorf("selected Monitor %s: %w; review its configuration with `tinfoil perimeter open %s`", peer.Name, err, peer.Name)
 		}
 		if peer.OwnerKeyMode == "umk" && row.OwnerKeyMode == "tmk" {
 			return nil, fmt.Errorf("a UMK Monitor cannot serve the synced sandbox %s", row.Name)

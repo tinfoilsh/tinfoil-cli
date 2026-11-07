@@ -70,7 +70,7 @@ type monitorView struct {
 }
 
 func (s *Service) ConnectMonitor(ctx context.Context, scope Scope, cp *controlplane.Client, row *Workload, restoreDevice bool, verifier Verifier) (_ *Monitor, err error) {
-	if err := requireRunningConnection("Monitor", row.Container); err != nil {
+	if err := requireRunningConnection("Perimeter", row.Container); err != nil {
 		return nil, err
 	}
 	if row.SSHPort < 1 || row.SSHPort > maxConnectionPort {

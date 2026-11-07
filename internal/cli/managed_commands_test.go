@@ -32,14 +32,14 @@ func TestManagedAliasesRejectWrongKindBeforeMutation(t *testing.T) {
 		require.Equal(t, "GET", r.Method)
 		json.NewEncoder(w).Encode(row)
 	})
-	for _, kind := range []string{"sandbox", "monitor"} {
+	for _, managed := range []struct{ kind, command string }{{"sandbox", "bunker"}, {"monitor", "perimeter"}} {
 		for _, verb := range []string{"start", "stop", "delete", "update", "metrics"} {
 			for _, debug := range []bool{false, true} {
 				row.Repo, row.Debug = "other/repo", debug
 				if debug {
-					row.Repo = managedRepo(kind)
+					row.Repo = managedRepo(managed.kind)
 				}
-				require.Error(t, executeLifecycleCLI(commandState, t, kind, verb, row.ID))
+				require.Error(t, executeLifecycleCLI(commandState, t, managed.command, verb, row.ID))
 			}
 		}
 	}
@@ -63,7 +63,7 @@ func TestManagedMetricsUseTheChosenWindow(t *testing.T) {
 		}
 	})
 	out, err := captureTestStdout(func() error {
-		return executeLifecycleCLI(commandState, t, "sandbox", "metrics", row.ID, "--time", "1h")
+		return executeLifecycleCLI(commandState, t, "bunker", "metrics", row.ID, "--time", "1h")
 	})
 	require.NoError(t, err)
 	require.Equal(t, "1h", window)
@@ -116,9 +116,9 @@ func TestMonitorStopAndDeleteIncludeItsSandboxes(t *testing.T) {
 		return err
 	}
 
-	require.NoError(t, run("monitor", "stop", "mon"))
+	require.NoError(t, run("perimeter", "stop", "mon"))
 	require.Contains(t, stderr.String(), "Stopping Monitor mon and its sandboxes work.")
-	require.NoError(t, run("monitor", "delete", "mon", "--yes"))
+	require.NoError(t, run("perimeter", "delete", "mon", "--yes"))
 	require.Contains(t, stderr.String(), "Deleting Monitor mon and its sandboxes work.")
 	require.Equal(t, []string{"POST /api/monitors/" + monitor.ID + "/stop", "DELETE /api/monitors/" + monitor.ID}, mutations)
 	require.NoFileExists(t, filepath.Join(profiles, "work.conf"))
@@ -126,18 +126,18 @@ func TestMonitorStopAndDeleteIncludeItsSandboxes(t *testing.T) {
 
 	mutations = nil
 	for _, verb := range []string{"stop", "delete"} {
-		require.ErrorContains(t, run("container", verb, "mon"), "`tinfoil monitor "+verb+" mon`")
+		require.ErrorContains(t, run("container", verb, "mon"), "`tinfoil perimeter "+verb+" mon`")
 	}
 	monitor.ClerkUserID = "member"
-	require.ErrorContains(t, run("monitor", "stop", "mon"), "created by another user")
-	require.ErrorContains(t, run("monitor", "delete", "mon", "--yes"), "created by another user")
+	require.ErrorContains(t, run("perimeter", "stop", "mon"), "created by another user")
+	require.ErrorContains(t, run("perimeter", "delete", "mon", "--yes"), "created by another user")
 	require.Empty(t, mutations)
 }
 
 func TestManagedUpdatesUseContainerPlan(t *testing.T) {
 	commandState := newCommandFixture()
 
-	for _, kind := range []string{"sandbox", "monitor"} {
+	for _, managed := range []struct{ kind, command string }{{"sandbox", "bunker"}, {"monitor", "perimeter"}} {
 		calls := []string{}
 		managedTestAPI(commandState, t, func(w http.ResponseWriter, r *http.Request) {
 			if r.Method == "POST" {
@@ -151,10 +151,10 @@ func TestManagedUpdatesUseContainerPlan(t *testing.T) {
 					return
 				}
 			}
-			json.NewEncoder(w).Encode(containerView{ID: testContainerID, Repo: managedRepo(kind), Status: statusRunning})
+			json.NewEncoder(w).Encode(containerView{ID: testContainerID, Repo: managedRepo(managed.kind), Status: statusRunning})
 		})
 		_, err := captureTestStdout(func() error {
-			return executeLifecycleCLI(commandState, t, kind, "update", testContainerID, "--tag", "v2", "--yes", "--no-wait")
+			return executeLifecycleCLI(commandState, t, managed.command, "update", testContainerID, "--tag", "v2", "--yes", "--no-wait")
 		})
 		require.NoError(t, err)
 		path := "/api/containers/" + testContainerID + "/update"
@@ -182,7 +182,7 @@ func TestManagedStatusFiltersAndWatches(t *testing.T) {
 		}
 	})
 	for _, verb := range []string{"status", "get", "list", "ls"} {
-		out, err := captureTestStdout(func() error { return executeLifecycleCLI(commandState, t, "monitor", verb) })
+		out, err := captureTestStdout(func() error { return executeLifecycleCLI(commandState, t, "perimeter", verb) })
 		require.NoError(t, err)
 		var rows []containerView
 		require.NoError(t, json.Unmarshal(out, &rows))
@@ -278,7 +278,8 @@ func TestManagedCreateUsesContainerRecovery(t *testing.T) {
 	t.Cleanup(func() {
 		commandState.identityOpts.attestSSHIdentity, commandState.pollingOpts.followInterval = previousIdentity, previousInterval
 	})
-	for _, kind := range []string{"monitor", "sandbox"} {
+	for _, managed := range []struct{ kind, command string }{{"monitor", "perimeter"}, {"sandbox", "bunker"}} {
+		kind := managed.kind
 		for _, state := range []string{"follow", "no-wait", "json", "uncertain", "attached"} {
 			if kind == "monitor" && state == "attached" {
 				continue
@@ -354,7 +355,7 @@ func TestManagedCreateUsesContainerRecovery(t *testing.T) {
 					require.Zero(t, posts, "attached workspaces must be rejected before creation")
 					return
 				case "uncertain":
-					require.ErrorContains(t, err, "inspect `tinfoil "+kind+" status` before retrying")
+					require.ErrorContains(t, err, "inspect `tinfoil "+managed.command+" status` before retrying")
 				default:
 					require.NoError(t, err)
 				}

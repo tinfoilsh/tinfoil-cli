@@ -98,7 +98,7 @@ func (s *Service) OpenSandbox(ctx context.Context, scope Scope, cp *controlplane
 
 func SandboxBinding(scope Scope, target *Workload) (keybundle.Binding, error) {
 	row, env := target.Container, target.Environment
-	if err := requireRunningConnection("Sandbox", row); err != nil {
+	if err := requireRunningConnection("Bunker", row); err != nil {
 		return mkBinding{}, err
 	}
 	volumeID, instance := row.Volumes[SandboxWorkspaceSlot], env["SANDBOX_INSTANCE_ID"]
@@ -209,7 +209,7 @@ func (service *Service) RelinkSandbox(ctx context.Context, scope Scope, cp *cont
 		return nil, err
 	}
 	if status.MonitorIdentity == nil || *status.MonitorIdentity != monitorIdentity(keys.monitorIdentitySeed) {
-		return nil, fmt.Errorf("its saved Monitor identity is not active; run `tinfoil sandbox start %s`", row.Name)
+		return nil, fmt.Errorf("its saved Monitor identity is not active; run `tinfoil bunker start %s`", row.Name)
 	}
 	if host := authorizedKeyLine(m.hostKey); status.MonitorHostKey == nil || *status.MonitorHostKey != host {
 		service.notify(SandboxRelinking, row.Name)
@@ -312,10 +312,10 @@ func (s *Sandbox) enrollSandbox(ctx context.Context, volume, host string) error 
 	}{s.keys.monitorIdentitySeed, host, s.keys.storageKey, true}
 	var status sandboxStatus
 	if err := s.owner.call(ctx, sandboxEnrollCommand, input, &status); err != nil {
-		return fmt.Errorf("%w; rerun `tinfoil sandbox start %s` to reconcile", err, s.box.Name)
+		return fmt.Errorf("%w; rerun `tinfoil bunker start %s` to reconcile", err, s.box.Name)
 	}
 	if status.Volume != "unlocked" {
-		return fmt.Errorf("sandbox %s workspace is still %s; rerun `tinfoil sandbox start %s`", s.box.Name, status.Volume, s.box.Name)
+		return fmt.Errorf("sandbox %s workspace is still %s; rerun `tinfoil bunker start %s`", s.box.Name, status.Volume, s.box.Name)
 	}
 	s.service.notify(SandboxPrepared, s.box.Name)
 	return nil
@@ -469,7 +469,7 @@ func (s *Sandbox) unlockDirect(ctx context.Context) error {
 	}
 	s.service.notify(SandboxUnlocking, s.box.Name)
 	if _, err := SendCommand(ctx, s.dial, "/usr/local/bin/workspace-unlock --initialize", s.keys.storageKey); err != nil {
-		return fmt.Errorf("unlock workspace: %w; retry with `tinfoil sandbox start %s`", err, s.box.Name)
+		return fmt.Errorf("unlock workspace: %w; retry with `tinfoil bunker start %s`", err, s.box.Name)
 	}
 	return nil
 }

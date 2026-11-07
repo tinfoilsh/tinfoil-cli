@@ -125,7 +125,7 @@ func TestControlplaneErrorsKeepMessageAndHintAtLimits(t *testing.T) {
 
 			client := &cpClient{baseURL: server.URL, http: server.Client()}
 			_, err := client.do(http.MethodPost, "/api/containers", nil, map[string]any{}, nil)
-			err = fmt.Errorf("%w; inspect `tinfoil sandbox status` before retrying creation", err)
+			err = fmt.Errorf("%w; inspect `tinfoil bunker status` before retrying creation", err)
 			if !strings.Contains(err.Error(), message) {
 				t.Fatalf("error = %v, want the server's message %q", err, message)
 			}

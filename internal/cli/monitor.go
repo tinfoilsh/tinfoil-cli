@@ -34,9 +34,8 @@ type monitorProfile = owner.Profile
 
 func newMonitorCommand() *cobra.Command {
 	monitorCmd := &cobra.Command{
-		Use:     "monitor",
-		Aliases: []string{"monitors"},
-		Short:   "Manage the Monitor your sandboxes connect through",
+		Use:   "perimeter",
+		Short: "Manage the Monitor your sandboxes connect through",
 	}
 
 	return monitorCmd
