@@ -1,6 +1,6 @@
 # Tinfoil CLI
 
-A command-line interface for working with Tinfoil enclaves: verify the code they run, make verified HTTP and SSH connections, and manage containers, persistent volumes, and sandboxes.
+A command-line interface for working with Tinfoil enclaves: verify the code they run, make verified HTTP and SSH connections, and manage containers, persistent volumes, and bunkers.
 
 Available on [GitHub Releases](https://github.com/tinfoilsh/tinfoil-cli/releases).
 

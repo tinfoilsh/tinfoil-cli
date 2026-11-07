@@ -24,9 +24,9 @@ import (
 const managedKindAnnotation = "managed-kind"
 
 func addManagedCommands(pollingOpts *pollingOptions, newClient authenticatedClientFactory, newScope scopeClientFactory, identityOpts *identityOptions, outputOpts *outputOptions, group *cobra.Command) {
-	if group.Name() == "monitor" {
-		start := newManagedContainerCmd(pollingOpts, newClient, outputOpts, "monitor", "start")
-		start.Short = "Start a stopped or failed Monitor"
+	if group.Name() == "perimeter" {
+		start := newManagedContainerCmd(pollingOpts, newClient, outputOpts, "perimeter", "start")
+		start.Short = "Start a stopped or failed Perimeter"
 		group.AddCommand(start, newMonitorStopCmd(newScope, outputOpts), newMonitorDeleteCmd(newScope))
 	}
 	group.PersistentFlags().StringVarP(&outputOpts.outputFormat, "output", "o", "table", "Output format: table or json")
@@ -82,21 +82,21 @@ func checkManagedKind(kind string, row containerView) error {
 // Controlplane stops and deletes a Monitor only together with the sandboxes
 // that route through it, since they lose their network without it.
 func refuseStandaloneMonitor(row containerView, verb string) error {
-	if checkManagedKind("monitor", row) != nil {
+	if checkManagedKind("perimeter", row) != nil {
 		return nil
 	}
-	return fmt.Errorf("%s is a Monitor; %s it together with its sandboxes with `tinfoil monitor %s %s`", row.Name, verb, verb, row.Name)
+	return fmt.Errorf("%s is a Perimeter; %s it together with its bunkers with `tinfoil perimeter %s %s`", row.Name, verb, verb, row.Name)
 }
 
 // resolveOwnMonitor returns a Monitor the caller created and the sandboxes
 // that route through it. Only a Monitor's creator can stop or delete it.
 func resolveOwnMonitor(scope accountScope, client *cpClient, identifier string) (*containerView, []containerView, error) {
-	monitor, err := managedRow(client, "monitor", identifier)
+	monitor, err := managedRow(client, "perimeter", identifier)
 	if err != nil {
 		return nil, nil, err
 	}
 	if monitor.ClerkUserID != scope.UserID {
-		return nil, nil, fmt.Errorf("Monitor %s was created by another user; only its creator can stop or delete it", monitor.Name)
+		return nil, nil, fmt.Errorf("Perimeter %s was created by another user; only its creator can stop or delete it", monitor.Name)
 	}
 	var rows []containerView
 	if _, err := client.do("GET", "/api/containers", nil, nil, &rows); err != nil {
@@ -124,7 +124,7 @@ func containerNames(rows []containerView) string {
 
 func newMonitorStopCmd(newScope scopeClientFactory, outputOpts *outputOptions) *cobra.Command {
 	return &cobra.Command{
-		Use: "stop [id|name]", Short: "Stop a Monitor together with its sandboxes", Args: cobra.ExactArgs(1),
+		Use: "stop [id|name]", Short: "Stop a Perimeter together with its bunkers", Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			scope, client, err := newScope(commandStreams(cmd))
 			if err != nil {
@@ -135,9 +135,9 @@ func newMonitorStopCmd(newScope scopeClientFactory, outputOpts *outputOptions) *
 				return err
 			}
 			if len(sandboxes) == 0 {
-				fmt.Fprintf(cmd.ErrOrStderr(), "Stopping Monitor %s.\n", monitor.Name)
+				fmt.Fprintf(cmd.ErrOrStderr(), "Stopping Perimeter %s.\n", monitor.Name)
 			} else {
-				fmt.Fprintf(cmd.ErrOrStderr(), "Stopping Monitor %s and its sandboxes %s. Their workspaces are kept and still billed for storage.\n", monitor.Name, containerNames(sandboxes))
+				fmt.Fprintf(cmd.ErrOrStderr(), "Stopping Perimeter %s and its bunkers %s. Their workspaces are kept and still billed for storage.\n", monitor.Name, containerNames(sandboxes))
 			}
 			if _, err := client.do("POST", pathf("/api/monitors/%s/stop", monitor.ID), nil, nil, nil); err != nil {
 				return err
@@ -146,9 +146,9 @@ func newMonitorStopCmd(newScope scopeClientFactory, outputOpts *outputOptions) *
 			if err != nil {
 				return err
 			}
-			restart := fmt.Sprintf("Run \"tinfoil monitor start %s\" to bring it back", monitor.Name)
+			restart := fmt.Sprintf("Run \"tinfoil perimeter start %s\" to bring it back", monitor.Name)
 			if len(sandboxes) > 0 {
-				restart += ", then \"tinfoil sandbox start NAME\" for each sandbox"
+				restart += ", then \"tinfoil bunker start NAME\" for each bunker"
 			}
 			fmt.Fprintln(cmd.ErrOrStderr(), restart+".")
 			return renderContainer(commandStreams(cmd), outputOpts, *stopped)
@@ -159,7 +159,7 @@ func newMonitorStopCmd(newScope scopeClientFactory, outputOpts *outputOptions) *
 func newMonitorDeleteCmd(newScope scopeClientFactory) *cobra.Command {
 	var yes bool
 	cmd := &cobra.Command{
-		Use: "delete [id|name]", Aliases: []string{"rm", "remove"}, Short: "Delete a Monitor together with its sandboxes and their workspaces", Args: cobra.ExactArgs(1),
+		Use: "delete [id|name]", Aliases: []string{"rm", "remove"}, Short: "Delete a Perimeter together with its bunkers and their workspaces", Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			scope, client, err := newScope(commandStreams(cmd))
 			if err != nil {
@@ -169,15 +169,15 @@ func newMonitorDeleteCmd(newScope scopeClientFactory) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			deleted := "Monitor " + monitor.Name
+			deleted := "Perimeter " + monitor.Name
 			if len(sandboxes) > 0 {
-				deleted += " and its sandboxes " + containerNames(sandboxes)
+				deleted += " and its bunkers " + containerNames(sandboxes)
 			}
 			fmt.Fprintf(cmd.ErrOrStderr(), "Deleting %s.\n", deleted)
 			if len(sandboxes) == 0 {
-				fmt.Fprintln(cmd.ErrOrStderr(), "This permanently deletes the Monitor and all of its data.")
+				fmt.Fprintln(cmd.ErrOrStderr(), "This permanently deletes the Perimeter and all of its data.")
 			} else {
-				fmt.Fprintln(cmd.ErrOrStderr(), "This permanently deletes them, with the sandboxes' workspaces and all of their data.")
+				fmt.Fprintln(cmd.ErrOrStderr(), "This permanently deletes them, with the bunkers' workspaces and all of their data.")
 			}
 			if err := confirmYes(commandStreams(cmd), yes, cmd.CommandPath()); err != nil {
 				return err
@@ -225,13 +225,13 @@ with those, storage keys are created on first open and kept only on that machine
 			variables := map[string]string{}
 			body := map[string]any{"name": strings.TrimSpace(args[0]), "repo": managedRepo(kind), "tag": strings.TrimSpace(tag), "variables": variables}
 			userKeys := publicKey != "" || identityOpts.attestSSHIdentity != ""
-			if kind == "sandbox" {
+			if kind == "bunker" {
 				selected, err := selectCreationMonitor(client, monitor, scope.UserID)
 				if err != nil {
 					return err
 				}
 				if selected.OwnerKeyMode == "umk" && !userKeys {
-					return fmt.Errorf("Monitor %s uses your own keys, so its sandboxes must too; pass --owner-public-key FILE", selected.Name)
+					return fmt.Errorf("Perimeter %s uses your own keys, so its bunkers must too; pass --owner-public-key FILE", selected.Name)
 				}
 				variables["SANDBOX_INSTANCE_ID"] = uuid.NewString()
 				body["network_policy"] = sandboxNetworkPolicy(selected.ID)
@@ -248,7 +248,7 @@ with those, storage keys are created on first open and kept only on that machine
 				if sizeChosen {
 					body["workspace_size_gb"] = workspaceSize
 				}
-				fmt.Fprintf(cmd.ErrOrStderr(), "Monitor: %s (%s). Service access requires it to be running and unlocked.\n", selected.Name, statusLabel(selected.Status))
+				fmt.Fprintf(cmd.ErrOrStderr(), "Perimeter: %s (%s). Service access requires it to be running and unlocked.\n", selected.Name, statusLabel(selected.Status))
 			} else {
 				body["object_storage"] = map[string]any{}
 			}
@@ -270,8 +270,8 @@ with those, storage keys are created on first open and kept only on that machine
 	cmd.Flags().StringVar(&tag, "tag", "", "Published release tag [required]")
 	cmd.Flags().StringVar(&publicKey, "owner-public-key", "", "Use your own Ed25519 public key file instead of synced keys")
 	cmd.Flags().BoolVar(&waitOpts.noWait, "no-wait", false, "Return after creation without following boot progress")
-	if kind == "sandbox" {
-		cmd.Flags().StringVar(&monitor, "monitor", "", "Monitor name or ID (required when more than one exists)")
+	if kind == "bunker" {
+		cmd.Flags().StringVar(&monitor, "perimeter", "", "Perimeter name or ID (required when more than one exists)")
 		cmd.Flags().StringVar(&workspace, "workspace", "", "Reuse an unattached workspace volume by name or ID")
 		cmd.Flags().IntVar(&workspaceSize, "workspace-size", 0, fmt.Sprintf("New workspace volume size in GB: %s (default %d)", workspaceSizeChoices(""), defaultWorkspaceSizeGB))
 	}
@@ -287,23 +287,23 @@ func selectCreationMonitor(client *cpClient, identifier, userID string) (*contai
 			return nil, err
 		}
 		rows = slices.DeleteFunc(rows, func(row containerView) bool {
-			return checkManagedKind("monitor", row) != nil || row.ClerkUserID != userID
+			return checkManagedKind("perimeter", row) != nil || row.ClerkUserID != userID
 		})
 		switch len(rows) {
 		case 0:
-			return nil, errors.New("you have no Monitors in this account; create one with `tinfoil monitor create NAME`, since sandboxes cannot use Monitors created by other users")
+			return nil, errors.New("you have no Perimeters in this account; create one with `tinfoil perimeter create NAME`, since bunkers cannot use Perimeters created by other users")
 		case 1:
 			identifier = rows[0].ID
 		default:
-			return nil, fmt.Errorf("choose one of your Monitors with --monitor: %s", containerNames(rows))
+			return nil, fmt.Errorf("choose one of your Perimeters with --perimeter: %s", containerNames(rows))
 		}
 	}
-	row, err := managedRow(client, "monitor", identifier)
+	row, err := managedRow(client, "perimeter", identifier)
 	if err == nil && !looksLikeUUID(row.ID) {
-		err = errors.New("invalid Monitor UUID")
+		err = errors.New("invalid Perimeter UUID")
 	}
 	if err == nil && row.ClerkUserID != userID {
-		err = fmt.Errorf("Monitor %s was created by another user, and sandboxes can only use Monitors you created; choose one of yours or create one with `tinfoil monitor create NAME`", row.Name)
+		err = fmt.Errorf("Perimeter %s was created by another user, and bunkers can only use Perimeters you created; choose one of yours or create one with `tinfoil perimeter create NAME`", row.Name)
 	}
 	return row, err
 }
@@ -314,7 +314,7 @@ func prepareResourceKeys(streams commandIO, identityOpts *identityOptions, ctx c
 		if err != nil {
 			return "", "", fmt.Errorf("%w, or create it with your own key using --owner-public-key FILE", err)
 		}
-		public, err := service.PrepareResourceKeys(ctx, client.transport(), owner.Scope(scope), kind)
+		public, err := service.PrepareResourceKeys(ctx, client.transport(), owner.Scope(scope), map[string]string{"perimeter": "monitor", "bunker": "sandbox"}[kind])
 		if err != nil {
 			return "", "", humanControlplaneError(err)
 		}
@@ -355,7 +355,7 @@ func creationOwnerKey(publicFile, identity string) (string, error) {
 }
 
 func managedRepo(kind string) string {
-	return map[string]string{"monitor": monitorRepo, "sandbox": defaultSandboxRepo}[kind]
+	return map[string]string{"perimeter": monitorRepo, "bunker": defaultSandboxRepo}[kind]
 }
 
 func managedRow(client *cpClient, kind, identifier string) (*containerView, error) {
@@ -376,8 +376,7 @@ func newManagedStatusCmd(pollingOpts *pollingOptions, newClient authenticatedCli
 		RunE: func(cmd *cobra.Command, args []string) error {
 			client, err := newClient(commandStreams(cmd))
 			if len(args) == 0 && errors.Is(err, errNotLoggedIn) {
-				plural := map[string]string{"monitor": "monitors", "sandbox": "sandboxes"}[kind]
-				fmt.Fprintf(cmd.OutOrStdout(), "No %s are stored on this machine. Run `tinfoil login` to list your account's %s.\n", plural, plural)
+				fmt.Fprintf(cmd.OutOrStdout(), "No %ss are stored on this machine. Run `tinfoil login` to list your account's %ss.\n", kind, kind)
 				return nil
 			}
 			if err != nil {

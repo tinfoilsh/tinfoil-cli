@@ -44,12 +44,12 @@ func SandboxNetworkMatches(row controlplane.Container) bool {
 func ValidateSandboxNetwork(row controlplane.Container, env map[string]string) error {
 	if env["NO_MONITOR"] == "1" {
 		if row.NetworkPolicy != nil {
-			return errors.New("sandbox with NO_MONITOR=1 must have no network policy")
+			return errors.New("bunker with NO_MONITOR=1 must have no network policy")
 		}
 		return nil
 	}
 	if !SandboxNetworkMatches(row) {
-		return errors.New("sandbox requires a private TCP alias for its selected Monitor; update its network policy")
+		return errors.New("bunker requires a private TCP alias for its selected Perimeter; update its network policy")
 	}
 	return nil
 }
@@ -98,24 +98,24 @@ func (s *Service) OpenSandbox(ctx context.Context, scope Scope, cp *controlplane
 
 func SandboxBinding(scope Scope, target *Workload) (keybundle.Binding, error) {
 	row, env := target.Container, target.Environment
-	if err := requireRunningConnection("Sandbox", row); err != nil {
+	if err := requireRunningConnection("Bunker", row); err != nil {
 		return mkBinding{}, err
 	}
 	volumeID, instance := row.Volumes[SandboxWorkspaceSlot], env["SANDBOX_INSTANCE_ID"]
 	if len(row.Volumes) != 1 || !validLowerUUID(volumeID) {
-		return mkBinding{}, errors.New("sandbox has no unique workspace volume binding")
+		return mkBinding{}, errors.New("bunker has no unique workspace volume binding")
 	}
 	if !validLowerUUID(instance) {
-		return mkBinding{}, errors.New("sandbox release lacks a measured instance ID; use compatible templates")
+		return mkBinding{}, errors.New("bunker release lacks a measured instance ID; use compatible templates")
 	}
 	if env[SandboxOwnerEnv] != row.OwnerPublicKey {
-		return mkBinding{}, errors.New("sandbox's measured owner is not its owner key")
+		return mkBinding{}, errors.New("bunker's measured owner is not its owner key")
 	}
 	if err := ValidateSandboxNetwork(row, env); err != nil {
 		return mkBinding{}, err
 	}
 	if env["NO_MONITOR"] == "1" && (row.SSHPort < 1 || row.SSHPort > maxConnectionPort) {
-		return mkBinding{}, errors.New("sandbox has no published SSH port")
+		return mkBinding{}, errors.New("bunker has no published SSH port")
 	}
 	return mkBinding{Account: scope.Account(), ContainerID: row.ID, InstanceID: &instance, VolumeID: &volumeID}, nil
 }
@@ -157,7 +157,7 @@ func (service *Service) openSandbox(ctx context.Context, scope Scope, target *Wo
 	verified, err := s.owner.attest(target.Source, verifier)
 	stop()
 	if err != nil {
-		return nil, fmt.Errorf("sandbox attestation through Monitor: %w", err)
+		return nil, fmt.Errorf("bunker attestation through Perimeter: %w", err)
 	}
 	host, err := connection.EndorsedHostKey(row.Domain, verified)
 	if err != nil {
@@ -209,7 +209,7 @@ func (service *Service) RelinkSandbox(ctx context.Context, scope Scope, cp *cont
 		return nil, err
 	}
 	if status.MonitorIdentity == nil || *status.MonitorIdentity != monitorIdentity(keys.monitorIdentitySeed) {
-		return nil, fmt.Errorf("its saved Monitor identity is not active; run `tinfoil sandbox start %s`", row.Name)
+		return nil, fmt.Errorf("its saved Perimeter identity is not active; run `tinfoil bunker start %s`", row.Name)
 	}
 	if host := authorizedKeyLine(m.hostKey); status.MonitorHostKey == nil || *status.MonitorHostKey != host {
 		service.notify(SandboxRelinking, row.Name)
@@ -248,7 +248,7 @@ type sandboxStatus struct {
 
 func (s *Sandbox) Enroll(ctx context.Context) error {
 	if !time.Now().Before(s.expires) {
-		return errors.New("sandbox attestation expired; verify it again before unlocking")
+		return errors.New("bunker attestation expired; verify it again before unlocking")
 	}
 	if s.noMonitor {
 		return s.unlockDirect(ctx)
@@ -265,7 +265,7 @@ func (s *Sandbox) Enroll(ctx context.Context) error {
 	host := authorizedKeyLine(s.monitor.hostKey)
 	switch {
 	case status.MonitorIdentity != nil && *status.MonitorIdentity != agent:
-		return fmt.Errorf("sandbox %s holds a different Monitor identity than its saved keys", name)
+		return fmt.Errorf("bunker %s holds a different Perimeter identity than its saved keys", name)
 	case status.MonitorIdentity == nil && (agent == "" || !s.monitor.authorizes(agent)):
 		if s.keys.storageKey == nil {
 			if err := s.keys.generateUMKKeys("sandbox", s.box.OwnerPublicKey, s.binding); err != nil {
@@ -279,7 +279,7 @@ func (s *Sandbox) Enroll(ctx context.Context) error {
 		}
 		return s.enrollSandbox(ctx, status.Volume, host)
 	case !s.monitor.authorizes(agent):
-		return fmt.Errorf("Monitor no longer authorizes sandbox %s; restore its identity in the Monitor UI, then retry", name)
+		return fmt.Errorf("Perimeter no longer authorizes bunker %s; restore its identity in the Perimeter UI, then retry", name)
 	case status.MonitorIdentity == nil || status.Volume != "unlocked":
 		return s.enrollSandbox(ctx, status.Volume, host)
 	case status.MonitorHostKey == nil || *status.MonitorHostKey != host:
@@ -295,7 +295,7 @@ func (s *Sandbox) status(ctx context.Context) (sandboxStatus, error) {
 		return status, err
 	}
 	if status.Protocol != sandboxOwnerProtocol || status.InstanceID != s.owner.instance {
-		return status, errors.New("sandbox owner status names another protocol or instance")
+		return status, errors.New("bunker owner status names another protocol or instance")
 	}
 	return status, nil
 }
@@ -312,10 +312,10 @@ func (s *Sandbox) enrollSandbox(ctx context.Context, volume, host string) error 
 	}{s.keys.monitorIdentitySeed, host, s.keys.storageKey, true}
 	var status sandboxStatus
 	if err := s.owner.call(ctx, sandboxEnrollCommand, input, &status); err != nil {
-		return fmt.Errorf("%w; rerun `tinfoil sandbox start %s` to reconcile", err, s.box.Name)
+		return fmt.Errorf("%w; rerun `tinfoil bunker start %s` to reconcile", err, s.box.Name)
 	}
 	if status.Volume != "unlocked" {
-		return fmt.Errorf("sandbox %s workspace is still %s; rerun `tinfoil sandbox start %s`", s.box.Name, status.Volume, s.box.Name)
+		return fmt.Errorf("bunker %s workspace is still %s; rerun `tinfoil bunker start %s`", s.box.Name, status.Volume, s.box.Name)
 	}
 	s.service.notify(SandboxPrepared, s.box.Name)
 	return nil
@@ -358,7 +358,7 @@ func (o *sandboxOwner) attest(source string, verifier Verifier) (connection.Evid
 		return nil, err
 	}
 	if reply.Status != http.StatusOK {
-		return nil, fmt.Errorf("sandbox attestation returned HTTP %d", reply.Status)
+		return nil, fmt.Errorf("bunker attestation returned HTTP %d", reply.Status)
 	}
 	doc, err := keybundle.DecodeBase64URL(reply.Body, -1)
 	if err != nil {
@@ -407,7 +407,7 @@ func (m *Monitor) dialSandbox(ctx context.Context, host ssh.PublicKey) (net.Conn
 
 func (s *Sandbox) dial(ctx context.Context) (*ssh.Client, error) {
 	if !time.Now().Before(s.expires) {
-		return nil, errors.New("sandbox attestation expired; verify it again before unlocking")
+		return nil, errors.New("bunker attestation expired; verify it again before unlocking")
 	}
 	var conn net.Conn
 	var err error
@@ -469,7 +469,7 @@ func (s *Sandbox) unlockDirect(ctx context.Context) error {
 	}
 	s.service.notify(SandboxUnlocking, s.box.Name)
 	if _, err := SendCommand(ctx, s.dial, "/usr/local/bin/workspace-unlock --initialize", s.keys.storageKey); err != nil {
-		return fmt.Errorf("unlock workspace: %w; retry with `tinfoil sandbox start %s`", err, s.box.Name)
+		return fmt.Errorf("unlock workspace: %w; retry with `tinfoil bunker start %s`", err, s.box.Name)
 	}
 	return nil
 }

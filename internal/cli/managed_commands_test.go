@@ -32,7 +32,7 @@ func TestManagedAliasesRejectWrongKindBeforeMutation(t *testing.T) {
 		require.Equal(t, "GET", r.Method)
 		json.NewEncoder(w).Encode(row)
 	})
-	for _, kind := range []string{"sandbox", "monitor"} {
+	for _, kind := range []string{"bunker", "perimeter"} {
 		for _, verb := range []string{"start", "stop", "delete", "update", "metrics"} {
 			for _, debug := range []bool{false, true} {
 				row.Repo, row.Debug = "other/repo", debug
@@ -63,7 +63,7 @@ func TestManagedMetricsUseTheChosenWindow(t *testing.T) {
 		}
 	})
 	out, err := captureTestStdout(func() error {
-		return executeLifecycleCLI(commandState, t, "sandbox", "metrics", row.ID, "--time", "1h")
+		return executeLifecycleCLI(commandState, t, "bunker", "metrics", row.ID, "--time", "1h")
 	})
 	require.NoError(t, err)
 	require.Equal(t, "1h", window)
@@ -116,28 +116,28 @@ func TestMonitorStopAndDeleteIncludeItsSandboxes(t *testing.T) {
 		return err
 	}
 
-	require.NoError(t, run("monitor", "stop", "mon"))
-	require.Contains(t, stderr.String(), "Stopping Monitor mon and its sandboxes work.")
-	require.NoError(t, run("monitor", "delete", "mon", "--yes"))
-	require.Contains(t, stderr.String(), "Deleting Monitor mon and its sandboxes work.")
+	require.NoError(t, run("perimeter", "stop", "mon"))
+	require.Contains(t, stderr.String(), "Stopping Perimeter mon and its bunkers work.")
+	require.NoError(t, run("perimeter", "delete", "mon", "--yes"))
+	require.Contains(t, stderr.String(), "Deleting Perimeter mon and its bunkers work.")
 	require.Equal(t, []string{"POST /api/monitors/" + monitor.ID + "/stop", "DELETE /api/monitors/" + monitor.ID}, mutations)
 	require.NoFileExists(t, filepath.Join(profiles, "work.conf"))
 	require.FileExists(t, filepath.Join(profiles, "other.conf"))
 
 	mutations = nil
 	for _, verb := range []string{"stop", "delete"} {
-		require.ErrorContains(t, run("container", verb, "mon"), "`tinfoil monitor "+verb+" mon`")
+		require.ErrorContains(t, run("container", verb, "mon"), "`tinfoil perimeter "+verb+" mon`")
 	}
 	monitor.ClerkUserID = "member"
-	require.ErrorContains(t, run("monitor", "stop", "mon"), "created by another user")
-	require.ErrorContains(t, run("monitor", "delete", "mon", "--yes"), "created by another user")
+	require.ErrorContains(t, run("perimeter", "stop", "mon"), "created by another user")
+	require.ErrorContains(t, run("perimeter", "delete", "mon", "--yes"), "created by another user")
 	require.Empty(t, mutations)
 }
 
 func TestManagedUpdatesUseContainerPlan(t *testing.T) {
 	commandState := newCommandFixture()
 
-	for _, kind := range []string{"sandbox", "monitor"} {
+	for _, kind := range []string{"bunker", "perimeter"} {
 		calls := []string{}
 		managedTestAPI(commandState, t, func(w http.ResponseWriter, r *http.Request) {
 			if r.Method == "POST" {
@@ -182,7 +182,7 @@ func TestManagedStatusFiltersAndWatches(t *testing.T) {
 		}
 	})
 	for _, verb := range []string{"status", "get", "list", "ls"} {
-		out, err := captureTestStdout(func() error { return executeLifecycleCLI(commandState, t, "monitor", verb) })
+		out, err := captureTestStdout(func() error { return executeLifecycleCLI(commandState, t, "perimeter", verb) })
 		require.NoError(t, err)
 		var rows []containerView
 		require.NoError(t, json.Unmarshal(out, &rows))
@@ -192,7 +192,7 @@ func TestManagedStatusFiltersAndWatches(t *testing.T) {
 	commandState.pollingOpts.followInterval = time.Millisecond
 	t.Cleanup(func() { commandState.pollingOpts.followInterval = previous })
 	commandState.outputOpts.outputFormat = "table"
-	cmd := newManagedStatusCmd(commandState.pollingOpts, testAuthedClient, commandState.outputOpts, "monitor")
+	cmd := newManagedStatusCmd(commandState.pollingOpts, testAuthedClient, commandState.outputOpts, "perimeter")
 	cmd.SetContext(ctx)
 	require.NoError(t, cmd.Flags().Set("watch", "true"))
 	out, err := captureTestStdout(func() error { return cmd.RunE(cmd, []string{row.ID}) })
@@ -220,7 +220,7 @@ func TestSandboxStatusShowsWorkspaceSize(t *testing.T) {
 		}
 	})
 	commandState.outputOpts.outputFormat = "table"
-	cmd := newManagedStatusCmd(commandState.pollingOpts, testAuthedClient, commandState.outputOpts, "sandbox")
+	cmd := newManagedStatusCmd(commandState.pollingOpts, testAuthedClient, commandState.outputOpts, "bunker")
 	out, err := captureTestStdout(func() error { return cmd.RunE(cmd, []string{testContainerID}) })
 	require.NoError(t, err)
 	require.Contains(t, string(out), "Volumes:      workspace ← work-ws (32 GB)\n")
@@ -252,11 +252,11 @@ func TestSandboxCreationOnlySelectsOwnMonitors(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, own.ID, selected.ID, "another member's Monitor must not count toward the default")
 	_, err = selectCreationMonitor(client, other.ID, "user_test")
-	require.ErrorContains(t, err, "Monitor shared was created by another user")
+	require.ErrorContains(t, err, "Perimeter shared was created by another user")
 	_, err = selectCreationMonitor(client, "", "user_without_monitor")
-	require.ErrorContains(t, err, "you have no Monitors in this account; create one")
+	require.ErrorContains(t, err, "you have no Perimeters in this account; create one")
 	_, err = selectCreationMonitor(client, "", "user_second")
-	require.EqualError(t, err, "choose one of your Monitors with --monitor: spare, spare-copy")
+	require.EqualError(t, err, "choose one of your Perimeters with --perimeter: spare, spare-copy")
 }
 
 // testUserKey writes a fresh Ed25519 public key file for UMK creation.
@@ -278,9 +278,9 @@ func TestManagedCreateUsesContainerRecovery(t *testing.T) {
 	t.Cleanup(func() {
 		commandState.identityOpts.attestSSHIdentity, commandState.pollingOpts.followInterval = previousIdentity, previousInterval
 	})
-	for _, kind := range []string{"monitor", "sandbox"} {
+	for _, kind := range []string{"perimeter", "bunker"} {
 		for _, state := range []string{"follow", "no-wait", "json", "uncertain", "attached"} {
-			if kind == "monitor" && state == "attached" {
+			if kind == "perimeter" && state == "attached" {
 				continue
 			}
 			t.Run(kind+"/"+state, func(t *testing.T) {
@@ -311,7 +311,7 @@ func TestManagedCreateUsesContainerRecovery(t *testing.T) {
 						require.NoError(t, json.Unmarshal(body["variables"], &variables))
 						require.NotContains(t, variables, monitorOwnerEnv, "controlplane renders the measured owner key")
 						require.NotContains(t, variables, sandboxOwnerEnv, "controlplane renders the measured owner key")
-						if kind == "sandbox" {
+						if kind == "bunker" {
 							require.True(t, looksLikeUUID(variables["SANDBOX_INSTANCE_ID"]))
 							var policy containerNetworkPolicy
 							require.NoError(t, json.Unmarshal(body["network_policy"], &policy))
@@ -343,8 +343,8 @@ func TestManagedCreateUsesContainerRecovery(t *testing.T) {
 				if state == "no-wait" {
 					args = append(args, "--no-wait")
 				}
-				if kind == "sandbox" {
-					args = append(args, "--monitor", "11111111-1111-4111-8111-111111111111", "--workspace", "22222222-2222-4222-8222-222222222222")
+				if kind == "bunker" {
+					args = append(args, "--perimeter", "11111111-1111-4111-8111-111111111111", "--workspace", "22222222-2222-4222-8222-222222222222")
 				}
 				require.NoError(t, cmd.ParseFlags(args))
 				_, err := captureTestStdout(func() error { return cmd.RunE(cmd, cmd.Flags().Args()) })
@@ -410,16 +410,16 @@ func TestSyncedCreateSavesKeysBeforeAllocation(t *testing.T) {
 	defer server.Close()
 	_, _, dek = testLogin(t, server, keys)
 	commandState.outputOpts.outputFormat = "table"
-	cmd := newManagedCreateCmd(commandState.pollingOpts, testScopeClient, commandState.identityOpts, commandState.outputOpts, commandState.waitOpts, "monitor")
+	cmd := newManagedCreateCmd(commandState.pollingOpts, testScopeClient, commandState.identityOpts, commandState.outputOpts, commandState.waitOpts, "perimeter")
 	cmd.SetContext(t.Context())
 	require.NoError(t, cmd.ParseFlags([]string{"--tag", "v1", "--no-wait", "work"}))
 	_, err := captureTestStdout(func() error { return cmd.RunE(cmd, cmd.Flags().Args()) })
 	require.NoError(t, err)
 	require.Equal(t, []string{"monitor"}, created)
 
-	cmd = newManagedCreateCmd(commandState.pollingOpts, testScopeClient, commandState.identityOpts, commandState.outputOpts, commandState.waitOpts, "sandbox")
+	cmd = newManagedCreateCmd(commandState.pollingOpts, testScopeClient, commandState.identityOpts, commandState.outputOpts, commandState.waitOpts, "bunker")
 	cmd.SetContext(t.Context())
-	require.NoError(t, cmd.ParseFlags([]string{"--tag", "v1", "--no-wait", "--monitor", monitor.ID, "work"}))
+	require.NoError(t, cmd.ParseFlags([]string{"--tag", "v1", "--no-wait", "--perimeter", monitor.ID, "work"}))
 	_, err = captureTestStdout(func() error { return cmd.RunE(cmd, cmd.Flags().Args()) })
 	require.ErrorContains(t, err, "uses your own keys", "a UMK Monitor cannot serve a synced sandbox")
 	monitor.OwnerKeyMode = "tmk"
@@ -474,9 +474,9 @@ func TestSandboxCreateWorkspaceSize(t *testing.T) {
 				}
 			})
 			commandState.outputOpts.outputFormat = "table"
-			cmd := newManagedCreateCmd(commandState.pollingOpts, testScopeClient, commandState.identityOpts, commandState.outputOpts, commandState.waitOpts, "sandbox")
+			cmd := newManagedCreateCmd(commandState.pollingOpts, testScopeClient, commandState.identityOpts, commandState.outputOpts, commandState.waitOpts, "bunker")
 			cmd.SetContext(t.Context())
-			require.NoError(t, cmd.ParseFlags(append([]string{"--tag", "v1", "--monitor", monitorID, "--no-wait", "--owner-public-key", publicFile, "work"}, tt.args...)))
+			require.NoError(t, cmd.ParseFlags(append([]string{"--tag", "v1", "--perimeter", monitorID, "--no-wait", "--owner-public-key", publicFile, "work"}, tt.args...)))
 			_, err := captureTestStdout(func() error { return cmd.RunE(cmd, cmd.Flags().Args()) })
 			if tt.wantErr != "" {
 				require.ErrorContains(t, err, tt.wantErr)
@@ -532,7 +532,7 @@ func TestContainerVolumesIgnoreSandboxWorkspaces(t *testing.T) {
 	require.NoError(t, err, "a sandbox workspace with the same name must not make the container volume ambiguous")
 	require.Equal(t, volumes[1].ID, resolved[0].ID)
 	_, err = resolveVolumeRequests(volumes, []volumeRequest{{identifier: "workspace"}}, nil)
-	require.ErrorContains(t, err, "volume workspace is a sandbox volume")
+	require.ErrorContains(t, err, "volume workspace is a bunker volume")
 
 	for _, sandbox := range []bool{false, true} {
 		target := containerView{ID: testContainerID, Name: "work", Status: statusStopped, VolumeSlots: []volumeSlot{{Name: "workspace"}}}

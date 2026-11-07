@@ -211,6 +211,7 @@ func (s *Service) resolveResourceKeys(ctx context.Context, cp *controlplane.Clie
 		return nil, err
 	}
 	keys := &resourceKeys{service: s, mode: row.OwnerKeyMode}
+	label := map[string]string{"monitor": "Perimeter", "sandbox": "bunker"}[kind]
 	switch row.OwnerKeyMode {
 	case "tmk":
 		mk, err := s.newMKSession(cp, scope)
@@ -221,7 +222,7 @@ func (s *Service) resolveResourceKeys(ctx context.Context, cp *controlplane.Clie
 		_, err = mk.update(ctx, func(p *mkPayload) error {
 			r := findKey(p, func(r *mkResource) bool { return r.OwnerPublicKey == row.OwnerPublicKey })
 			if r == nil || r.Kind != kind {
-				return NoLocalKeys(fmt.Sprintf("your synced keys have no key for %s %s; it was created by another user or its keys were lost", kind, row.Name))
+				return NoLocalKeys(fmt.Sprintf("your synced keys have no key for %s %s; it was created by another user or its keys were lost", label, row.Name))
 			}
 			if r.Binding == nil && !bind {
 				return NoLocalKeys(row.Name + " was never opened")
@@ -253,7 +254,7 @@ func (s *Service) resolveResourceKeys(ctx context.Context, cp *controlplane.Clie
 		var record umkRecord
 		switch err := statefile.ReadJSON(keys.umkPath, &record); {
 		case errors.Is(err, os.ErrNotExist) && !bind:
-			return nil, NoLocalKeys(fmt.Sprintf("%s %s has no storage keys on this machine (expected %s)", kind, row.Name, keys.umkPath))
+			return nil, NoLocalKeys(fmt.Sprintf("%s %s has no storage keys on this machine (expected %s)", label, row.Name, keys.umkPath))
 		case errors.Is(err, os.ErrNotExist):
 		case err != nil:
 			return nil, err
@@ -265,7 +266,7 @@ func (s *Service) resolveResourceKeys(ctx context.Context, cp *controlplane.Clie
 		if err := statefile.PrepareDirectory(dir); err != nil {
 			return nil, err
 		}
-		keys.signer, keys.identity, keys.closeSigner, err = s.userSigner(kind+" "+row.Name, row.OwnerPublicKey, dir)
+		keys.signer, keys.identity, keys.closeSigner, err = s.userSigner(label+" "+row.Name, row.OwnerPublicKey, dir)
 		if err != nil {
 			keys.close()
 			return nil, err

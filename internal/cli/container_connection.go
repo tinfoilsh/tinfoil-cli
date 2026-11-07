@@ -162,7 +162,7 @@ func containerConnectionGuidance(c containerView, review bool) string {
 		case defaultSandboxRepo:
 			return fmt.Sprintf("Connect: tinfoil attest-ssh %s --install && ssh %s\n", shellQuote(c.Name), shellQuote(c.Name))
 		case monitorRepo:
-			return fmt.Sprintf("Open: tinfoil monitor open %s\n", shellQuote(c.Name))
+			return fmt.Sprintf("Open: tinfoil perimeter open %s\n", shellQuote(c.Name))
 		}
 	}
 	label, flag := "Production", ""

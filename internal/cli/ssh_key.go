@@ -25,10 +25,10 @@ func newSshKeyCommand(newClient authenticatedClientFactory, outputOpts *outputOp
 		Use:     "ssh-key",
 		Aliases: []string{"ssh-keys"},
 		Short:   "Manage SSH keys",
-		Long:    "Container keys open debug containers. Sandbox keys (--sandbox, Ed25519) can own sandboxes and Monitors.",
+		Long:    "Container keys open debug containers. Bunker keys (--bunker, Ed25519) can own bunkers and Perimeters.",
 	}
 	sshKeyCmd.PersistentFlags().StringVarP(&outputOpts.outputFormat, "output", "o", "table", "Output format: table or json")
-	sshKeyCmd.PersistentFlags().BoolVar(&sshKeyOpts.sshKeySandbox, "sandbox", false, "Use the sandbox and Monitor key list instead of container debug keys")
+	sshKeyCmd.PersistentFlags().BoolVar(&sshKeyOpts.sshKeySandbox, "bunker", false, "Use the bunker and Perimeter key list instead of container debug keys")
 	sshKeyCmd.AddCommand(newSshKeyListCommand(newClient, outputOpts, sshKeyOpts), newSshKeyCreateCommand(newClient, sshKeyOpts, &sshKeyCreateOptions{}), newSshKeyDeleteCommand(newClient, sshKeyOpts))
 	return sshKeyCmd
 }
@@ -110,7 +110,7 @@ func newSshKeyDeleteCommand(newClient authenticatedClientFactory, sshKeyOpts *ss
 		Use:     "delete [name]",
 		Aliases: []string{"rm", "remove"},
 		Short:   "Delete an SSH key",
-		Long:    "Sandboxes and Monitors that use a deleted sandbox key keep accepting it.",
+		Long:    "Bunkers and Perimeters that use a deleted bunker key keep accepting it.",
 		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			client, err := newClient(commandStreams(cmd))

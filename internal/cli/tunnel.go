@@ -147,7 +147,7 @@ func resolveTunnelTarget(newClient authenticatedClientFactory, streams commandIO
 				return nil, err
 			}
 			if container.ID != id {
-				return nil, errors.New("sandbox resource changed while resolving it")
+				return nil, errors.New("bunker resource changed while resolving it")
 			}
 		}
 		target, err := resolveWorkload(streams, rootOpts, trustOpts, *container, defaultSandboxRepo, rootOpts.repo)

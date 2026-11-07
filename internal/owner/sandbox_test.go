@@ -118,7 +118,7 @@ func TestSandboxEnrollDecidesFromMonitorIdentityAndSandboxStatus(t *testing.T) {
 		{name: "Monitor-only restart", agent: &agent, volume: "unlocked", pinned: &oldHost, monitorKnows: true, calls: []string{"GET /status", "POST /enroll"}, initialize: true},
 		{name: "interrupted unlock", agent: &agent, volume: "locked", pinned: &host, monitorKnows: true, calls: []string{"GET /status", "POST /enroll"}, initialize: true},
 		{name: "already enrolled", agent: &agent, volume: "unlocked", pinned: &host, monitorKnows: true, calls: []string{"GET /status"}},
-		{name: "another identity", agent: &other, volume: "unlocked", monitorKnows: true, calls: []string{"GET /status"}, err: "different Monitor identity"},
+		{name: "another identity", agent: &other, volume: "unlocked", monitorKnows: true, calls: []string{"GET /status"}, err: "different Perimeter identity"},
 		{name: "web-provisioned UMK", volume: "locked", noLocalKeys: true, monitorEnroll: true, calls: []string{"GET /status", "POST /enroll"}, initialize: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -464,7 +464,7 @@ func TestMonitorRestartRelinksOnlyAuthorizedSandboxes(t *testing.T) {
 	all := strings.Join(reported, "\n")
 	require.Contains(t, all, "sandbox wrongbinding:")
 	require.Contains(t, all, "no longer matches")
-	require.Contains(t, all, "sandbox rebooted: its saved Monitor identity is not active")
+	require.Contains(t, all, "sandbox rebooted: its saved Perimeter identity is not active")
 	require.Contains(t, all, "sandbox elsewhere: its inventory changed")
 	host := authorizedKeyLine(newHost)
 	for _, name := range []string{"a", "b"} {
@@ -506,7 +506,7 @@ func TestMonitorRestartRelinksOnlyAuthorizedSandboxes(t *testing.T) {
 		changedCreator   bool
 	}{
 		{name: "changed creator in fresh detail", mode: "tmk", changedCreator: true, want: "inventory changed"},
-		{name: "unsupported custody pairing", mode: "umk", want: "a UMK Monitor cannot serve the synced sandbox"},
+		{name: "unsupported custody pairing", mode: "umk", want: "a UMK Perimeter cannot serve the synced bunker"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			changedCreator.Store(tc.changedCreator)

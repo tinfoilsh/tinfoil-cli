@@ -231,7 +231,7 @@ func TestMonitorUnlockMissingDeviceKey(t *testing.T) {
 	require.NoError(t, writeStorageJSON(filepath.Join(dir, ProfileFile), Profile{Generation: 1}, false))
 	m := &Monitor{dir: dir, keys: &resourceKeys{storageKey: testSeed(t)}}
 	err := m.unlock(true)
-	require.ErrorContains(t, err, "restore Monitor device key")
+	require.ErrorContains(t, err, "restore Perimeter device key")
 	require.ErrorContains(t, err, filepath.Join(dir, MonitorDeviceKeyName))
 	require.NoFileExists(t, filepath.Join(dir, MonitorDeviceKeyName), "restoration must not replace a lost key")
 }
