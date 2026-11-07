@@ -25,10 +25,10 @@ func newSshKeyCommand(newClient authenticatedClientFactory, outputOpts *outputOp
 		Use:     "ssh-key",
 		Aliases: []string{"ssh-keys"},
 		Short:   "Manage SSH keys",
-		Long:    "Container keys open debug containers. Bunker keys (--sandbox, Ed25519) can own bunkers and Perimeters.",
+		Long:    "Container keys open debug containers. Bunker keys (--bunker, Ed25519) can own bunkers and Perimeters.",
 	}
 	sshKeyCmd.PersistentFlags().StringVarP(&outputOpts.outputFormat, "output", "o", "table", "Output format: table or json")
-	sshKeyCmd.PersistentFlags().BoolVar(&sshKeyOpts.sshKeySandbox, "sandbox", false, "Use the bunker and Perimeter key list instead of container debug keys")
+	sshKeyCmd.PersistentFlags().BoolVar(&sshKeyOpts.sshKeySandbox, "bunker", false, "Use the bunker and Perimeter key list instead of container debug keys")
 	sshKeyCmd.AddCommand(newSshKeyListCommand(newClient, outputOpts, sshKeyOpts), newSshKeyCreateCommand(newClient, sshKeyOpts, &sshKeyCreateOptions{}), newSshKeyDeleteCommand(newClient, sshKeyOpts))
 	return sshKeyCmd
 }

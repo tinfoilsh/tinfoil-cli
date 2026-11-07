@@ -271,7 +271,7 @@ with those, storage keys are created on first open and kept only on that machine
 	cmd.Flags().StringVar(&publicKey, "owner-public-key", "", "Use your own Ed25519 public key file instead of synced keys")
 	cmd.Flags().BoolVar(&waitOpts.noWait, "no-wait", false, "Return after creation without following boot progress")
 	if kind == "sandbox" {
-		cmd.Flags().StringVar(&monitor, "monitor", "", "Perimeter name or ID (required when more than one exists)")
+		cmd.Flags().StringVar(&monitor, "perimeter", "", "Perimeter name or ID (required when more than one exists)")
 		cmd.Flags().StringVar(&workspace, "workspace", "", "Reuse an unattached workspace volume by name or ID")
 		cmd.Flags().IntVar(&workspaceSize, "workspace-size", 0, fmt.Sprintf("New workspace volume size in GB: %s (default %d)", workspaceSizeChoices(""), defaultWorkspaceSizeGB))
 	}
@@ -295,7 +295,7 @@ func selectCreationMonitor(client *cpClient, identifier, userID string) (*contai
 		case 1:
 			identifier = rows[0].ID
 		default:
-			return nil, fmt.Errorf("choose one of your Perimeters with --monitor: %s", containerNames(rows))
+			return nil, fmt.Errorf("choose one of your Perimeters with --perimeter: %s", containerNames(rows))
 		}
 	}
 	row, err := managedRow(client, "monitor", identifier)

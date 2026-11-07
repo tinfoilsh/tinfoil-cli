@@ -171,7 +171,7 @@ func newVolumeCreateCommand(newClient authenticatedClientFactory, volumeStore st
 	addStorageArtifactFlags(volumeCreateCmd, false)
 	volumeCreateCmd.Flags().StringVar(&volumeCreateOpts.volumeCreateSize, "size", "", "Volume size, e.g. 16GB or 2TB [required]")
 	volumeCreateCmd.Flags().StringVar(&volumeCreateOpts.volumeCreateHost, "host", "", "Host to store the volume on (see 'tinfoil container hosts')")
-	volumeCreateCmd.Flags().BoolVar(&volumeCreateOpts.volumeCreateSandbox, "sandbox", false, "Create a bunker workspace volume of "+workspaceSizeChoices("GB")+"; personal accounts only have bunker volumes")
+	volumeCreateCmd.Flags().BoolVar(&volumeCreateOpts.volumeCreateSandbox, "bunker", false, "Create a bunker workspace volume of "+workspaceSizeChoices("GB")+"; personal accounts only have bunker volumes")
 	_ = volumeCreateCmd.MarkFlagRequired("size")
 	return volumeCreateCmd
 }

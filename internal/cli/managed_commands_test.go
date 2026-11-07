@@ -256,7 +256,7 @@ func TestSandboxCreationOnlySelectsOwnMonitors(t *testing.T) {
 	_, err = selectCreationMonitor(client, "", "user_without_monitor")
 	require.ErrorContains(t, err, "you have no Perimeters in this account; create one")
 	_, err = selectCreationMonitor(client, "", "user_second")
-	require.EqualError(t, err, "choose one of your Perimeters with --monitor: spare, spare-copy")
+	require.EqualError(t, err, "choose one of your Perimeters with --perimeter: spare, spare-copy")
 }
 
 // testUserKey writes a fresh Ed25519 public key file for UMK creation.
@@ -345,7 +345,7 @@ func TestManagedCreateUsesContainerRecovery(t *testing.T) {
 					args = append(args, "--no-wait")
 				}
 				if kind == "sandbox" {
-					args = append(args, "--monitor", "11111111-1111-4111-8111-111111111111", "--workspace", "22222222-2222-4222-8222-222222222222")
+					args = append(args, "--perimeter", "11111111-1111-4111-8111-111111111111", "--workspace", "22222222-2222-4222-8222-222222222222")
 				}
 				require.NoError(t, cmd.ParseFlags(args))
 				_, err := captureTestStdout(func() error { return cmd.RunE(cmd, cmd.Flags().Args()) })
@@ -420,7 +420,7 @@ func TestSyncedCreateSavesKeysBeforeAllocation(t *testing.T) {
 
 	cmd = newManagedCreateCmd(commandState.pollingOpts, testScopeClient, commandState.identityOpts, commandState.outputOpts, commandState.waitOpts, "sandbox")
 	cmd.SetContext(t.Context())
-	require.NoError(t, cmd.ParseFlags([]string{"--tag", "v1", "--no-wait", "--monitor", monitor.ID, "work"}))
+	require.NoError(t, cmd.ParseFlags([]string{"--tag", "v1", "--no-wait", "--perimeter", monitor.ID, "work"}))
 	_, err = captureTestStdout(func() error { return cmd.RunE(cmd, cmd.Flags().Args()) })
 	require.ErrorContains(t, err, "uses your own keys", "a UMK Monitor cannot serve a synced sandbox")
 	monitor.OwnerKeyMode = "tmk"
@@ -477,7 +477,7 @@ func TestSandboxCreateWorkspaceSize(t *testing.T) {
 			commandState.outputOpts.outputFormat = "table"
 			cmd := newManagedCreateCmd(commandState.pollingOpts, testScopeClient, commandState.identityOpts, commandState.outputOpts, commandState.waitOpts, "sandbox")
 			cmd.SetContext(t.Context())
-			require.NoError(t, cmd.ParseFlags(append([]string{"--tag", "v1", "--monitor", monitorID, "--no-wait", "--owner-public-key", publicFile, "work"}, tt.args...)))
+			require.NoError(t, cmd.ParseFlags(append([]string{"--tag", "v1", "--perimeter", monitorID, "--no-wait", "--owner-public-key", publicFile, "work"}, tt.args...)))
 			_, err := captureTestStdout(func() error { return cmd.RunE(cmd, cmd.Flags().Args()) })
 			if tt.wantErr != "" {
 				require.ErrorContains(t, err, tt.wantErr)

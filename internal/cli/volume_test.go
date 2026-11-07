@@ -506,24 +506,24 @@ func TestVolumeCreateSandbox(t *testing.T) {
 	}{
 		{
 			name:      "Controlplane picks the sandbox host",
-			args:      []string{"--sandbox", "--size", "8GB"},
+			args:      []string{"--bunker", "--size", "8GB"},
 			wantBody:  `{"name":"ws","sandbox":true,"size_bytes":8000000000}`,
 			wantPaths: []string{"POST /api/volumes"},
 		},
 		{
 			name:      "chosen host",
-			args:      []string{"--sandbox", "--size", "8GB", "--host", "inf13"},
+			args:      []string{"--bunker", "--size", "8GB", "--host", "inf13"},
 			wantBody:  `{"host_id":"h1","name":"ws","sandbox":true,"size_bytes":8000000000}`,
 			wantPaths: []string{"GET /api/containers/hosts", "POST /api/volumes"},
 		},
 		{
 			name:    "binary size is not a workspace size",
-			args:    []string{"--sandbox", "--size", "16GiB"},
+			args:    []string{"--bunker", "--size", "16GiB"},
 			wantErr: "--size for a bunker volume must be 2GB, 4GB, 8GB, 16GB, 32GB, or 64GB",
 		},
 		{
 			name:    "auto-unlock is for container volumes",
-			args:    []string{"--sandbox", "--size", "16GB", "--auto-unlock"},
+			args:    []string{"--bunker", "--size", "16GB", "--auto-unlock"},
 			wantErr: "--auto-unlock does not apply to bunker volumes",
 		},
 	} {
