@@ -117,9 +117,9 @@ func TestMonitorStopAndDeleteIncludeItsSandboxes(t *testing.T) {
 	}
 
 	require.NoError(t, run("perimeter", "stop", "mon"))
-	require.Contains(t, stderr.String(), "Stopping Monitor mon and its sandboxes work.")
+	require.Contains(t, stderr.String(), "Stopping Perimeter mon and its bunkers work.")
 	require.NoError(t, run("perimeter", "delete", "mon", "--yes"))
-	require.Contains(t, stderr.String(), "Deleting Monitor mon and its sandboxes work.")
+	require.Contains(t, stderr.String(), "Deleting Perimeter mon and its bunkers work.")
 	require.Equal(t, []string{"POST /api/monitors/" + monitor.ID + "/stop", "DELETE /api/monitors/" + monitor.ID}, mutations)
 	require.NoFileExists(t, filepath.Join(profiles, "work.conf"))
 	require.FileExists(t, filepath.Join(profiles, "other.conf"))
@@ -252,11 +252,11 @@ func TestSandboxCreationOnlySelectsOwnMonitors(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, own.ID, selected.ID, "another member's Monitor must not count toward the default")
 	_, err = selectCreationMonitor(client, other.ID, "user_test")
-	require.ErrorContains(t, err, "Monitor shared was created by another user")
+	require.ErrorContains(t, err, "Perimeter shared was created by another user")
 	_, err = selectCreationMonitor(client, "", "user_without_monitor")
-	require.ErrorContains(t, err, "you have no Monitors in this account; create one")
+	require.ErrorContains(t, err, "you have no Perimeters in this account; create one")
 	_, err = selectCreationMonitor(client, "", "user_second")
-	require.EqualError(t, err, "choose one of your Monitors with --monitor: spare, spare-copy")
+	require.EqualError(t, err, "choose one of your Perimeters with --monitor: spare, spare-copy")
 }
 
 // testUserKey writes a fresh Ed25519 public key file for UMK creation.
@@ -533,7 +533,7 @@ func TestContainerVolumesIgnoreSandboxWorkspaces(t *testing.T) {
 	require.NoError(t, err, "a sandbox workspace with the same name must not make the container volume ambiguous")
 	require.Equal(t, volumes[1].ID, resolved[0].ID)
 	_, err = resolveVolumeRequests(volumes, []volumeRequest{{identifier: "workspace"}}, nil)
-	require.ErrorContains(t, err, "volume workspace is a sandbox volume")
+	require.ErrorContains(t, err, "volume workspace is a bunker volume")
 
 	for _, sandbox := range []bool{false, true} {
 		target := containerView{ID: testContainerID, Name: "work", Status: statusStopped, VolumeSlots: []volumeSlot{{Name: "workspace"}}}

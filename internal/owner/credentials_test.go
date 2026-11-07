@@ -233,10 +233,10 @@ func TestResourceKeysBindOnceAndNeverRegenerate(t *testing.T) {
 	revision := keys.revision
 	row.OwnerPublicKey = ed25519PublicKeyString(testSeed(t))
 	_, err = resolveResourceKeys(t.Context(), cp, scope, row, "sandbox", binding, dir, true)
-	require.ErrorContains(t, err, "no key for sandbox work")
+	require.ErrorContains(t, err, "no key for bunker work")
 	row.OwnerPublicKey = saved.OwnerPublicKey
 	_, err = resolveResourceKeys(t.Context(), cp, scope, row, "monitor", binding, dir, true)
-	require.ErrorContains(t, err, "no key for monitor work")
+	require.ErrorContains(t, err, "no key for Perimeter work")
 	require.Equal(t, revision, keys.revision, "missing keys are never manufactured")
 }
 

@@ -93,6 +93,11 @@ func requireRunningConnection(kind string, row controlplane.Container) error {
 	return fmt.Errorf("%s %s is %s; run `tinfoil %s %s`", kind, row.Name, label, strings.ToLower(kind), next)
 }
 
+// KindLabel names a key bundle resource kind the way people see it.
+func KindLabel(kind string) string {
+	return map[string]string{"monitor": "Perimeter", "sandbox": "bunker"}[kind]
+}
+
 type Verifier interface {
 	MonitorHost(domain, source string) (ssh.PublicKey, error)
 	DirectEvidence(context.Context, string, string) (connection.Evidence, error)

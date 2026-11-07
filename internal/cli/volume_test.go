@@ -519,12 +519,12 @@ func TestVolumeCreateSandbox(t *testing.T) {
 		{
 			name:    "binary size is not a workspace size",
 			args:    []string{"--sandbox", "--size", "16GiB"},
-			wantErr: "--size for a sandbox volume must be 2GB, 4GB, 8GB, 16GB, 32GB, or 64GB",
+			wantErr: "--size for a bunker volume must be 2GB, 4GB, 8GB, 16GB, 32GB, or 64GB",
 		},
 		{
 			name:    "auto-unlock is for container volumes",
 			args:    []string{"--sandbox", "--size", "16GB", "--auto-unlock"},
-			wantErr: "--auto-unlock does not apply to sandbox volumes",
+			wantErr: "--auto-unlock does not apply to bunker volumes",
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -563,8 +563,8 @@ func TestVolumeCreateSandbox(t *testing.T) {
 			if body != tt.wantBody {
 				t.Fatalf("create body = %s, want %s", body, tt.wantBody)
 			}
-			if tt.wantErr == "" && !strings.Contains(string(out), "Kind:         sandbox\nSize:         8 GB\n") {
-				t.Fatalf("output %q does not show an 8 GB sandbox volume", out)
+			if tt.wantErr == "" && !strings.Contains(string(out), "Kind:         bunker\nSize:         8 GB\n") {
+				t.Fatalf("output %q does not show an 8 GB bunker volume", out)
 			}
 		})
 	}
@@ -587,7 +587,7 @@ func TestRenderVolumesShowsKind(t *testing.T) {
 		t.Fatal(err)
 	}
 	lines := strings.Split(string(out), "\n")
-	for i, want := range [][2]string{{"NAME", "KIND"}, {"workspace", "sandbox"}, {"data", "container"}} {
+	for i, want := range [][2]string{{"NAME", "KIND"}, {"workspace", "bunker"}, {"data", "container"}} {
 		if fields := strings.Fields(lines[i]); len(fields) < 2 || fields[0] != want[0] || fields[1] != want[1] {
 			t.Errorf("line %d = %q, want %s then %s", i, lines[i], want[0], want[1])
 		}

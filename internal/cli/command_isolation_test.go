@@ -103,7 +103,7 @@ func TestFreshCommandTreesKeepConfirmationIndependent(t *testing.T) {
 	b.SetArgs([]string{"perimeter", "delete", monitorID})
 	require.Error(t, b.Execute())
 	require.Equal(t, 1, deletions)
-	require.Contains(t, firstOut.String(), "Deleted Monitor mon")
+	require.Contains(t, firstOut.String(), "Deleted Perimeter mon")
 	require.Empty(t, secondOut.String())
 	require.Contains(t, secondErr.String(), "--yes")
 	yes, err := commandAt(t, a, "bunker", "delete").Flags().GetBool("yes")

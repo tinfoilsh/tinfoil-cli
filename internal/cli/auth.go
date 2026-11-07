@@ -25,7 +25,7 @@ func newLoginCommand(accounts *accountAccess, openBrowser func(string) error) *c
 		Example: `  Sign in with your browser
   tinfoil login
 
-  Sign in and sync your sandbox keys to this machine
+  Sign in and sync your bunker keys to this machine
   tinfoil login --sync
 
   Store an admin API key for automation
@@ -98,7 +98,7 @@ func newLoginCommand(accounts *accountAccess, openBrowser func(string) error) *c
 	}
 	loginCmd.Flags().String("url", "", "Controlplane URL for --api-key (default https://api.tinfoil.sh)")
 	loginCmd.Flags().String("api-key", "", "Sign in with an admin API key (admin_...) instead of the browser")
-	loginCmd.Flags().Bool("sync", false, "Sync your sandbox keys to this machine")
+	loginCmd.Flags().Bool("sync", false, "Sync your bunker keys to this machine")
 	return loginCmd
 }
 
@@ -145,7 +145,7 @@ func newWhoamiCommand(accounts *accountAccess) *cobra.Command {
 			if cfg.login != nil {
 				source = "Clerk login"
 				if dek, err := accounts.syncedKey(commandStreams(cmd), cfg.login, identity.UserID); err != nil || dek == nil {
-					source += " (sandbox keys not synced)"
+					source += " (bunker keys not synced)"
 				}
 			}
 			printAuthContext(commandStreams(cmd), "Effective login", cfg, source, identity)
@@ -224,7 +224,7 @@ func (a *accountAccess) clerkLogin(cmd *cobra.Command, syncKeys bool, openBrowse
 	result, err := service.Login(ctx, syncKeys, auth.LoginProgress{
 		Authorize: func(launch string) {
 			if !syncKeys {
-				fmt.Fprintln(cmd.ErrOrStderr(), "Tip: run `tinfoil login --sync` to also sync your sandbox keys.")
+				fmt.Fprintln(cmd.ErrOrStderr(), "Tip: run `tinfoil login --sync` to also sync your bunker keys.")
 			}
 			fmt.Fprintf(cmd.ErrOrStderr(), "Opening Clerk sign-in. If no browser opens, visit:\n\n  %s\n\nWaiting for sign-in (Ctrl-C cancels)...\n", launch)
 			go func() {
@@ -244,7 +244,7 @@ func (a *accountAccess) clerkLogin(cmd *cobra.Command, syncKeys bool, openBrowse
 		return err
 	}
 	if result.KeysSynced {
-		fmt.Fprintln(cmd.OutOrStdout(), "Sandbox keys synced to this machine.")
+		fmt.Fprintln(cmd.OutOrStdout(), "Bunker keys synced to this machine.")
 	}
 	a.offerRegistryEnrollment(cmd)
 	return nil

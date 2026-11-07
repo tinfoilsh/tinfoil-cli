@@ -431,11 +431,11 @@ func TestUnauthenticatedListDoesNotClaimAnEmptyAccount(t *testing.T) {
 	commandState := newCommandFixture()
 
 	useTestClerk(t, "https://api.example")
-	for _, kind := range []string{"sandbox", "monitor"} {
-		cmd := newManagedStatusCmd(commandState.pollingOpts, testAuthedClient, commandState.outputOpts, kind)
+	for _, managed := range []struct{ kind, plural string }{{"sandbox", "bunkers"}, {"monitor", "Perimeters"}} {
+		cmd := newManagedStatusCmd(commandState.pollingOpts, testAuthedClient, commandState.outputOpts, managed.kind)
 		out, err := captureTestStdout(func() error { return cmd.RunE(cmd, nil) })
 		require.NoError(t, err)
-		require.Contains(t, string(out), "stored on this machine")
+		require.Contains(t, string(out), "No "+managed.plural+" are stored on this machine")
 		require.Contains(t, string(out), "tinfoil login")
 		_, err = captureTestStdout(func() error { return cmd.RunE(cmd, []string{"work"}) })
 		require.ErrorIs(t, err, errNotLoggedIn)
