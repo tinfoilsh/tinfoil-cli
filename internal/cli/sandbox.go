@@ -45,21 +45,21 @@ func workspaceSizeChoices(unit string) string {
 
 func newSandboxCommand(pollingOpts *pollingOptions, newClient authenticatedClientFactory, newScope scopeClientFactory, identityOpts *identityOptions, outputOpts *outputOptions, rootOpts *rootOptions) *cobra.Command {
 	sandboxCmd := &cobra.Command{
-		Use: "sandbox", Aliases: []string{"sandboxes"}, Short: "Manage your confidential sandboxes",
+		Use: "bunker", Aliases: []string{"bunkers"}, Short: "Manage your confidential bunkers",
 	}
 	sandboxCmd.AddCommand(newSandboxStatusCommand(pollingOpts, newClient, outputOpts), newSandboxStartCommand(pollingOpts, newClient, newScope, identityOpts, outputOpts, rootOpts, &sandboxActionOptions{}, &trustOptions{}), newSandboxRestartCommand(pollingOpts, newClient, newScope, identityOpts, outputOpts, rootOpts, &sandboxActionOptions{}, &trustOptions{}), newSandboxStopCommand(pollingOpts, newClient, newScope, identityOpts, outputOpts, rootOpts, &sandboxActionOptions{}, &trustOptions{}), newSandboxDeleteCommand(pollingOpts, newClient, newScope, identityOpts, outputOpts, rootOpts, &sandboxActionOptions{}, &trustOptions{}))
 	return sandboxCmd
 }
 
 func newSandboxStatusCommand(pollingOpts *pollingOptions, newClient authenticatedClientFactory, outputOpts *outputOptions) *cobra.Command {
-	sandboxStatusCmd := newManagedStatusCmd(pollingOpts, newClient, outputOpts, "sandbox")
+	sandboxStatusCmd := newManagedStatusCmd(pollingOpts, newClient, outputOpts, "bunker")
 
 	return sandboxStatusCmd
 }
 
 func newSandboxStartCommand(pollingOpts *pollingOptions, newClient authenticatedClientFactory, newScope scopeClientFactory, identityOpts *identityOptions, outputOpts *outputOptions, rootOpts *rootOptions, sandboxActionOpts *sandboxActionOptions, trustOpts *trustOptions) *cobra.Command {
 	sandboxStartCmd := &cobra.Command{
-		Use: "start [id|name]", Short: "Start a sandbox and enroll this machine's keys",
+		Use: "start [id|name]", Short: "Start a bunker and enroll this machine's keys",
 		Args: cobra.ExactArgs(1), RunE: runSandboxAction(pollingOpts, newClient, newScope, identityOpts, outputOpts, rootOpts, sandboxActionOpts, trustOpts, "start"),
 	}
 	addTrustDangerousFlag(trustOpts, sandboxStartCmd)
@@ -68,7 +68,7 @@ func newSandboxStartCommand(pollingOpts *pollingOptions, newClient authenticated
 }
 func newSandboxRestartCommand(pollingOpts *pollingOptions, newClient authenticatedClientFactory, newScope scopeClientFactory, identityOpts *identityOptions, outputOpts *outputOptions, rootOpts *rootOptions, sandboxActionOpts *sandboxActionOptions, trustOpts *trustOptions) *cobra.Command {
 	sandboxRestartCmd := &cobra.Command{
-		Use: "restart [id|name]", Short: "Restart a sandbox and enroll this machine's keys",
+		Use: "restart [id|name]", Short: "Restart a bunker and enroll this machine's keys",
 		Args: cobra.ExactArgs(1), RunE: runSandboxAction(pollingOpts, newClient, newScope, identityOpts, outputOpts, rootOpts, sandboxActionOpts, trustOpts, "restart"),
 	}
 	addTrustDangerousFlag(trustOpts, sandboxRestartCmd)
@@ -77,7 +77,7 @@ func newSandboxRestartCommand(pollingOpts *pollingOptions, newClient authenticat
 }
 func newSandboxStopCommand(pollingOpts *pollingOptions, newClient authenticatedClientFactory, newScope scopeClientFactory, identityOpts *identityOptions, outputOpts *outputOptions, rootOpts *rootOptions, sandboxActionOpts *sandboxActionOptions, trustOpts *trustOptions) *cobra.Command {
 	sandboxStopCmd := &cobra.Command{
-		Use: "stop [id|name]", Short: "Stop a sandbox, keeping its workspace",
+		Use: "stop [id|name]", Short: "Stop a bunker, keeping its workspace",
 		Args: cobra.ExactArgs(1), RunE: runSandboxAction(pollingOpts, newClient, newScope, identityOpts, outputOpts, rootOpts, sandboxActionOpts, trustOpts, "stop"),
 	}
 
@@ -85,7 +85,7 @@ func newSandboxStopCommand(pollingOpts *pollingOptions, newClient authenticatedC
 }
 func newSandboxDeleteCommand(pollingOpts *pollingOptions, newClient authenticatedClientFactory, newScope scopeClientFactory, identityOpts *identityOptions, outputOpts *outputOptions, rootOpts *rootOptions, sandboxActionOpts *sandboxActionOptions, trustOpts *trustOptions) *cobra.Command {
 	sandboxDeleteCmd := &cobra.Command{
-		Use: "delete [id|name]", Short: "Delete a sandbox and its workspace volume",
+		Use: "delete [id|name]", Short: "Delete a bunker and its workspace volume",
 		Args: cobra.ExactArgs(1), RunE: runSandboxAction(pollingOpts, newClient, newScope, identityOpts, outputOpts, rootOpts, sandboxActionOpts, trustOpts, "delete"),
 	}
 	sandboxDeleteCmd.Flags().BoolVar(&sandboxActionOpts.sandboxYes, "yes", false, "Skip the confirmation prompt")
@@ -98,9 +98,9 @@ func runSandboxAction(pollingOpts *pollingOptions, newClient authenticatedClient
 		if err != nil {
 			return err
 		}
-		row, err := managedRow(client, "sandbox", args[0])
+		row, err := managedRow(client, "bunker", args[0])
 		if action == "delete" && missingContainer(err) {
-			fmt.Fprintf(cmd.OutOrStdout(), "Sandbox %s is already deleted. Saved encryption credentials are kept.\n", args[0])
+			fmt.Fprintf(cmd.OutOrStdout(), "Bunker %s is already deleted. Saved encryption credentials are kept.\n", args[0])
 			return nil
 		}
 		if err != nil {
@@ -114,9 +114,9 @@ func runSandboxAction(pollingOpts *pollingOptions, newClient authenticatedClient
 				fmt.Fprintf(cmd.ErrOrStderr(), "Deleting %s. It has no attached workspace volume.\n", row.Name)
 			} else {
 				deleted += " and its workspace"
-				fmt.Fprintf(cmd.ErrOrStderr(), "Deleting %s permanently deletes its workspace volume and all of its data. To keep the workspace, stop the sandbox and run `tinfoil volume detach %s` before deleting it.\n", row.Name, workspace)
+				fmt.Fprintf(cmd.ErrOrStderr(), "Deleting %s permanently deletes its workspace volume and all of its data. To keep the workspace, stop the bunker and run `tinfoil volume detach %s` before deleting it.\n", row.Name, workspace)
 			}
-			if err := confirmYes(commandStreams(cmd), sandboxActionOpts.sandboxYes, "sandbox delete"); err != nil {
+			if err := confirmYes(commandStreams(cmd), sandboxActionOpts.sandboxYes, "bunker delete"); err != nil {
 				return err
 			}
 			if _, err := client.do("DELETE", pathf("/api/containers/%s", row.ID), nil, nil, nil); err != nil && !missingContainer(err) {
@@ -125,7 +125,7 @@ func runSandboxAction(pollingOpts *pollingOptions, newClient authenticatedClient
 			if err := forgetSandbox(commandStreams(cmd), newScope, row.Name, row.ID); err != nil {
 				return fmt.Errorf("%s is deleted, but %w", row.Name, err)
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "Deleted %s. Saved encryption credentials are kept. Remove any access grants in the Monitor UI.\n", deleted)
+			fmt.Fprintf(cmd.OutOrStdout(), "Deleted %s. Saved encryption credentials are kept. Remove any access grants in the Perimeter UI.\n", deleted)
 			return nil
 		case "stop":
 			stopped, err := stopContainer(pollingOpts, client, *row)
@@ -162,7 +162,7 @@ func runSandboxAction(pollingOpts *pollingOptions, newClient authenticatedClient
 			return err
 		}
 		if err := s.install(commandStreams(cmd)); err != nil {
-			return fmt.Errorf("%s was enrolled, but its ssh profile was not installed: %w; retry `tinfoil sandbox start %s`", target.Name, err, target.Name)
+			return fmt.Errorf("%s was enrolled, but its ssh profile was not installed: %w; retry `tinfoil bunker start %s`", target.Name, err, target.Name)
 		}
 		return renderContainer(commandStreams(cmd), outputOpts, *row)
 	}
@@ -236,17 +236,17 @@ func connectSandbox(newScope scopeClientFactory, streams commandIO, identityOpts
 		}
 	}()
 	if target.env["NO_MONITOR"] != "1" {
-		fmt.Fprintln(streams.err, "Checking the selected Monitor for sandbox "+row.Name)
+		fmt.Fprintln(streams.err, "Checking the selected Perimeter for bunker "+row.Name)
 		peer, err := resolveContainerDetail(cp, row.NetworkPolicy.Egress[0].ContainerID)
 		if err != nil {
-			return nil, fmt.Errorf("sandbox %s's Monitor: %w", row.Name, err)
+			return nil, fmt.Errorf("bunker %s's Perimeter: %w", row.Name, err)
 		}
 		selected, err := resolveWorkload(streams, rootOpts, trustOpts, *peer, monitorRepo, "")
 		if err != nil {
-			return nil, fmt.Errorf("selected Monitor %s: %w; review its configuration with `tinfoil monitor open %s`", peer.Name, err, peer.Name)
+			return nil, fmt.Errorf("selected Perimeter %s: %w; review its configuration with `tinfoil perimeter open %s`", peer.Name, err, peer.Name)
 		}
 		if peer.OwnerKeyMode == "umk" && row.OwnerKeyMode == "tmk" {
-			return nil, fmt.Errorf("a UMK Monitor cannot serve the synced sandbox %s", row.Name)
+			return nil, fmt.Errorf("a UMK Perimeter cannot serve the synced bunker %s", row.Name)
 		}
 		if monitor, err = connectMonitorOwner(streams, identityOpts, rootOpts, ctx, scope, cp, selected, true); err != nil {
 			return nil, err
@@ -270,7 +270,7 @@ func connectSandbox(newScope scopeClientFactory, streams commandIO, identityOpts
 func relinkSandboxes(streams commandIO, identityOpts *identityOptions, rootOpts *rootOptions, trustOpts *trustOptions, ctx context.Context, scope accountScope, cp *cpClient, m *monitorSession, monitorID string) []error {
 	var rows []containerView
 	if _, err := cp.doContext(ctx, "GET", "/api/containers", nil, nil, nil, &rows); err != nil {
-		return []error{fmt.Errorf("listing sandboxes to re-link: %w", err)}
+		return []error{fmt.Errorf("listing bunkers to re-link: %w", err)}
 	}
 	var failures []error
 	for _, listed := range rows {
@@ -278,7 +278,7 @@ func relinkSandboxes(streams commandIO, identityOpts *identityOptions, rootOpts 
 			continue
 		}
 		if err := relinkSandbox(streams, identityOpts, rootOpts, trustOpts, ctx, scope, cp, m, monitorID, listed.ID); err != nil && !errors.As(err, new(noLocalKeys)) {
-			failures = append(failures, fmt.Errorf("sandbox %s: %w", listed.Name, err))
+			failures = append(failures, fmt.Errorf("bunker %s: %w", listed.Name, err))
 		}
 	}
 	return failures

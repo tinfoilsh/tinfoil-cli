@@ -70,19 +70,19 @@ type monitorView struct {
 }
 
 func (s *Service) ConnectMonitor(ctx context.Context, scope Scope, cp *controlplane.Client, row *Workload, restoreDevice bool, verifier Verifier) (_ *Monitor, err error) {
-	if err := requireRunningConnection("Monitor", row.Container); err != nil {
+	if err := requireRunningConnection("Perimeter", row.Container); err != nil {
 		return nil, err
 	}
 	if row.SSHPort < 1 || row.SSHPort > maxConnectionPort {
-		return nil, errors.New("Monitor has no published SSH port")
+		return nil, errors.New("Perimeter has no published SSH port")
 	}
 	s.notify(MonitorRunning, row.Name)
 	bucket := row.Environment["TINFOIL_STORAGE_BUCKET"]
 	if len(bucket) > keybundle.MaxBucketChars || !bucketOwnedBy(bucket, scope.Account(), scope.UserID) {
-		return nil, errors.New("Monitor storage does not belong to this account")
+		return nil, errors.New("Perimeter storage does not belong to this account")
 	}
 	if row.Environment[MonitorOwnerEnv] != row.OwnerPublicKey {
-		return nil, errors.New("Monitor's measured owner is not its owner key")
+		return nil, errors.New("Perimeter's measured owner is not its owner key")
 	}
 	dir, err := s.monitorRecord(scope, row)
 	if err != nil {
@@ -149,11 +149,11 @@ func (m *Monitor) open(ctx context.Context, name, owner string, binding mkBindin
 		return err
 	}
 	if health.State != "present" && health.State != "absent" {
-		return fmt.Errorf("Monitor %s does not implement the current owner protocol; update it before opening", name)
+		return fmt.Errorf("Perimeter %s does not implement the current owner protocol; update it before opening", name)
 	}
 	if m.keys.storageKey == nil {
 		if health.State != "absent" {
-			return fmt.Errorf("Monitor %s has saved state, but this machine has no storage key for it; restore its UMK keys file %s", name, m.keys.umkPath)
+			return fmt.Errorf("Perimeter %s has saved state, but this machine has no storage key for it; restore its UMK keys file %s", name, m.keys.umkPath)
 		}
 		if err := m.keys.generateUMKKeys("monitor", owner, binding); err != nil {
 			return err
@@ -161,7 +161,7 @@ func (m *Monitor) open(ctx context.Context, name, owner string, binding mkBindin
 	}
 	m.service.notify(MonitorUnlocking, name)
 	if err := m.unlock(restoreDevice); err != nil {
-		return fmt.Errorf("unlock Monitor: %w", err)
+		return fmt.Errorf("unlock Perimeter: %w", err)
 	}
 	m.checkpoint(ctx)
 	return nil
@@ -189,7 +189,7 @@ func (m *Monitor) unlock(restoreDevice bool) error {
 	if restoreDevice {
 		device, err := loadSSHKey(filepath.Join(m.dir, MonitorDeviceKeyName))
 		if err != nil {
-			return fmt.Errorf("restore Monitor device key: %w", err)
+			return fmt.Errorf("restore Perimeter device key: %w", err)
 		}
 		input.DeviceKey = device
 	}
@@ -199,7 +199,7 @@ func (m *Monitor) unlock(restoreDevice bool) error {
 	}
 	reported, _, _, _, err := ssh.ParseAuthorizedKey([]byte(view.HostKey))
 	if err != nil || !bytes.Equal(reported.Marshal(), m.hostKey.Marshal()) {
-		return errors.New("Monitor reports a host key other than its attested one")
+		return errors.New("Perimeter reports a host key other than its attested one")
 	}
 	m.view = view
 	return nil
@@ -239,7 +239,7 @@ func (m *Monitor) checkpoint(ctx context.Context) {
 		_, err = m.keys.mk.update(ctx, func(p *mkPayload) error {
 			r := findKey(p, func(r *mkResource) bool { return r.KeyID == m.keys.keyID })
 			if r == nil || r.MinGeneration == nil {
-				return errors.New("the Monitor key is no longer in your key bundle")
+				return errors.New("the Perimeter key is no longer in your key bundle")
 			}
 			*r.MinGeneration = max(*r.MinGeneration, profile.Generation)
 			return nil
@@ -262,7 +262,7 @@ func (s *Service) monitorRecord(scope Scope, row *Workload) (string, error) {
 	_, err = UpdateProfile(dir, func(p *Profile) error {
 		if p.Domain != "" && p.Domain != row.Domain || p.ContainerID != "" && p.ContainerID != row.ID ||
 			p.Owner != "" && (p.Owner != row.Environment[MonitorOwnerEnv] || p.Storage != row.Environment["TINFOIL_STORAGE_BUCKET"]) {
-			return errors.New("Monitor identity or storage binding changed")
+			return errors.New("Perimeter identity or storage binding changed")
 		}
 		p.Domain, p.ContainerID, p.Owner, p.Storage = row.Domain, row.ID, row.Environment[MonitorOwnerEnv], row.Environment["TINFOIL_STORAGE_BUCKET"]
 		return nil
@@ -309,10 +309,10 @@ func monitorOwnerRequest(client *ssh.Client, dir, method, path string, input, ou
 		return err
 	}
 	if len(reply) > maxMonitorReplyBytes {
-		return errors.New("Monitor response is too large")
+		return errors.New("Perimeter response is too large")
 	}
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("Monitor: %s: %s", resp.Status, controlplane.ErrorMessage(reply))
+		return fmt.Errorf("Perimeter: %s: %s", resp.Status, controlplane.ErrorMessage(reply))
 	}
 	if out == nil {
 		return nil
@@ -330,7 +330,7 @@ func (m *Monitor) Close() { m.close() }
 
 func (m *Monitor) ValidateSandboxCustody(row controlplane.Container) error {
 	if m.keys.mode == "umk" && row.OwnerKeyMode == "tmk" {
-		return fmt.Errorf("a UMK Monitor cannot serve the synced sandbox %s", row.Name)
+		return fmt.Errorf("a UMK Perimeter cannot serve the synced bunker %s", row.Name)
 	}
 	return nil
 }

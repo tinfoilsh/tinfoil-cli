@@ -63,9 +63,9 @@ func ownerService(streams commandIO, identityOpts *identityOptions, cp *cpClient
 	}
 	s.Notify = func(event owner.Event) { renderOwnerEvent(streams, event) }
 	s.Progress = func(stage owner.Stage, name string) func() {
-		message := "Requesting sandbox attestation through Monitor's relay"
+		message := "Requesting bunker attestation through Perimeter's relay"
 		if stage == owner.SandboxVerifying {
-			message = "Verifying sandbox attestation and SSH host key for " + name
+			message = "Verifying bunker attestation and SSH host key for " + name
 		}
 		return startConnectionProgress(streams.err, message)
 	}
@@ -75,27 +75,27 @@ func ownerService(streams commandIO, identityOpts *identityOptions, cp *cpClient
 func renderOwnerEvent(streams commandIO, event owner.Event) {
 	switch event.Stage {
 	case owner.MonitorRunning:
-		fmt.Fprintf(streams.err, "Monitor %s: running.\n", event.Name)
+		fmt.Fprintf(streams.err, "Perimeter %s: running.\n", event.Name)
 	case owner.MonitorVerified:
-		fmt.Fprintf(streams.err, "Monitor %s attestation verified.\n", event.Name)
+		fmt.Fprintf(streams.err, "Perimeter %s attestation verified.\n", event.Name)
 	case owner.MonitorConnecting:
-		fmt.Fprintln(streams.err, "Connecting to Monitor "+event.Name+" over attested SSH")
+		fmt.Fprintln(streams.err, "Connecting to Perimeter "+event.Name+" over attested SSH")
 	case owner.MonitorUnlocking:
-		fmt.Fprintln(streams.err, "Unlocking Monitor "+event.Name+" encrypted state")
+		fmt.Fprintln(streams.err, "Unlocking Perimeter "+event.Name+" encrypted state")
 	case owner.MonitorUnlocked:
-		fmt.Fprintf(streams.err, "Monitor %s unlocked.\n", event.Name)
+		fmt.Fprintf(streams.err, "Perimeter %s unlocked.\n", event.Name)
 	case owner.MonitorCheckpointFailed:
-		fmt.Fprintf(streams.err, "Warning: Monitor generation %d is saved only on this machine; synchronizing it to your key bundle failed: %v\n", event.Generation, humanControlplaneError(event.Err))
+		fmt.Fprintf(streams.err, "Warning: Perimeter generation %d is saved only on this machine; synchronizing it to your key bundle failed: %v\n", event.Generation, humanControlplaneError(event.Err))
 	case owner.SandboxVerified:
-		fmt.Fprintf(streams.err, "Sandbox %s attestation verified.\n", event.Name)
+		fmt.Fprintf(streams.err, "Bunker %s attestation verified.\n", event.Name)
 	case owner.SandboxDirectVerified:
-		fmt.Fprintf(streams.err, "Sandbox %s attestation verified.\nWarning: sandbox has NO_MONITOR=1; its network traffic is not being tunneled through Monitor.\n", event.Name)
+		fmt.Fprintf(streams.err, "Bunker %s attestation verified.\nWarning: bunker has NO_MONITOR=1; its network traffic is not being tunneled through Perimeter.\n", event.Name)
 	case owner.SandboxRegistering:
-		fmt.Fprintln(streams.err, "Registering sandbox "+event.Name+" with Monitor")
+		fmt.Fprintln(streams.err, "Registering bunker "+event.Name+" with Perimeter")
 	case owner.SandboxRelinking:
-		fmt.Fprintln(streams.err, "Re-linking sandbox "+event.Name+" to the current Monitor boot")
+		fmt.Fprintln(streams.err, "Re-linking bunker "+event.Name+" to the current Perimeter boot")
 	case owner.SandboxUnlocking:
-		fmt.Fprintln(streams.err, "Unlocking sandbox "+event.Name+" encrypted workspace")
+		fmt.Fprintln(streams.err, "Unlocking bunker "+event.Name+" encrypted workspace")
 	case owner.SandboxPrepared:
 		fmt.Fprintf(streams.err, "Prepared %s over attested SSH.\n", event.Name)
 	}

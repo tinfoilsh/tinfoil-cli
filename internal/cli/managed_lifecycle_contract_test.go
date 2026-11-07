@@ -20,7 +20,7 @@ func TestMonitorDeletionPreservesRemoteAndLocalFailureOrdering(t *testing.T) {
 		wantError     string
 	}{
 		{"remote failure", http.StatusServiceUnavailable, false, "temporarily unavailable"},
-		{"local cleanup failure", http.StatusNoContent, true, "deleted Monitor mon and its sandboxes work, but"},
+		{"local cleanup failure", http.StatusNoContent, true, "deleted Perimeter mon and its bunkers work, but"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			monitor := containerView{ID: testContainerID, Name: "mon", Repo: monitorRepo, ClerkUserID: "owner"}
@@ -112,5 +112,5 @@ func TestMonitorDeletionWithoutConfirmationDoesNotMutate(t *testing.T) {
 	require.ErrorContains(t, cmd.RunE(cmd, []string{monitor.ID}), "--yes")
 	require.Zero(t, mutations)
 	require.Empty(t, out.String())
-	require.Contains(t, diagnostic.String(), "permanently deletes the Monitor and all of its data")
+	require.Contains(t, diagnostic.String(), "permanently deletes the Perimeter and all of its data")
 }

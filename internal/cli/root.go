@@ -30,7 +30,7 @@ var commandGroups = []struct {
 	commands []string
 }{
 	{"containers", color.FgCyan, []string{"container", "domain", "model", "project", "registry", "repo", "secret", "ssh-key", "volume"}},
-	{"sandboxes", color.FgMagenta, []string{"monitor", "sandbox"}},
+	{"bunkers", color.FgMagenta, []string{"bunker", "perimeter"}},
 	{"connect", color.FgBlue, []string{"attest-ssh", "forward", "http", "scp", "ssh"}},
 	{"verify", color.FgGreen, []string{"attestation", "trust"}},
 	{"account", color.FgYellow, []string{"login", "logout", "whoami"}},
@@ -41,6 +41,7 @@ var commandGroups = []struct {
 var docsPages = map[string]string{
 	"tinfoil":                    "sdk/cli-sdk",
 	"tinfoil attest-ssh":         "containers/attested-ssh",
+	"tinfoil bunker":             "",
 	"tinfoil container":          "containers/cli",
 	"tinfoil container cancel":   "containers/updates",
 	"tinfoil container connect":  "containers/connecting",
@@ -51,14 +52,13 @@ var docsPages = map[string]string{
 	"tinfoil login":              "containers/cli",
 	"tinfoil logout":             "containers/cli",
 	"tinfoil model":              "containers/models",
-	"tinfoil monitor":            "",
+	"tinfoil perimeter":          "",
 	"tinfoil project":            "containers/projects",
 	"tinfoil project storage":    "containers/volume-auto-unlock",
 	"tinfoil project update":     "containers/updates",
 	"tinfoil registry":           "containers/private-images",
 	"tinfoil repo":               "containers/cli",
 	"tinfoil repo secret":        "containers/secrets-and-env-vars",
-	"tinfoil sandbox":            "",
 	"tinfoil scp":                "containers/connecting",
 	"tinfoil secret":             "containers/secrets-and-env-vars",
 	"tinfoil ssh":                "containers/connecting",
@@ -128,7 +128,7 @@ func newRootCommandWithDependencies(dependencies commandDependencies) *cobra.Com
 	monitorOutput, sandboxOutput := &outputOptions{}, &outputOptions{}
 	monitor, sandbox := newMonitorCommand(), newSandboxCommand(pollingOpts, accounts.authedClient, accounts.currentScope, sandboxIdentity, sandboxOutput, rootOpts)
 	monitor.AddCommand(newMonitorOpenCommand(accounts.currentScope, monitorIdentity, rootOpts, &trustOptions{}, dependencies.browser()))
-	monitor.AddCommand(newManagedStatusCmd(pollingOpts, accounts.authedClient, monitorOutput, "monitor"))
+	monitor.AddCommand(newManagedStatusCmd(pollingOpts, accounts.authedClient, monitorOutput, "perimeter"))
 	addManagedCommands(pollingOpts, accounts.authedClient, accounts.currentScope, monitorIdentity, monitorOutput, monitor)
 	addManagedCommands(pollingOpts, accounts.authedClient, accounts.currentScope, sandboxIdentity, sandboxOutput, sandbox)
 	cmd.AddCommand(monitor, sandbox)
