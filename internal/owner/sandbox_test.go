@@ -118,7 +118,7 @@ func TestSandboxEnrollDecidesFromMonitorIdentityAndSandboxStatus(t *testing.T) {
 		{name: "Monitor-only restart", agent: &agent, volume: "unlocked", pinned: &oldHost, monitorKnows: true, calls: []string{"GET /status", "POST /enroll"}, initialize: true},
 		{name: "interrupted unlock", agent: &agent, volume: "locked", pinned: &host, monitorKnows: true, calls: []string{"GET /status", "POST /enroll"}, initialize: true},
 		{name: "already enrolled", agent: &agent, volume: "unlocked", pinned: &host, monitorKnows: true, calls: []string{"GET /status"}},
-		{name: "another identity", agent: &other, volume: "unlocked", monitorKnows: true, calls: []string{"GET /status"}, err: "different Monitor identity"},
+		{name: "another identity", agent: &other, volume: "unlocked", monitorKnows: true, calls: []string{"GET /status"}, err: "different Perimeter identity"},
 		{name: "web-provisioned UMK", volume: "locked", noLocalKeys: true, monitorEnroll: true, calls: []string{"GET /status", "POST /enroll"}, initialize: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -135,7 +135,7 @@ func TestSandboxEnrollDecidesFromMonitorIdentityAndSandboxStatus(t *testing.T) {
 			if test.monitorKnows {
 				m.view.Config.Identities = map[string]struct {
 					Key string `json:"key"`
-				}{"sandbox-work": {Key: agent}}
+				}{"work": {Key: agent}}
 			}
 			m.request = func(method, path string, input, out any) error {
 				data, _ := json.Marshal(input)
@@ -167,7 +167,7 @@ func TestSandboxEnrollDecidesFromMonitorIdentityAndSandboxStatus(t *testing.T) {
 				if test.noLocalKeys {
 					enrolled = monitorIdentity(keys.monitorIdentitySeed)
 				}
-				require.Equal(t, `POST /enroll {"sandbox-work":{"key":"`+enrolled+`"}}`, monitorCalls[0], "only the public agent key goes to Monitor, never restored")
+				require.Equal(t, `POST /enroll {"work":{"key":"`+enrolled+`"}}`, monitorCalls[0], "only the public agent key goes to Monitor, never restored")
 			}
 			if enroll, ok := transport.bodies["/enroll"]; ok {
 				var in struct {
@@ -406,7 +406,7 @@ func TestMonitorRestartRelinksOnlyAuthorizedSandboxes(t *testing.T) {
 		Key string `json:"key"`
 	}{}
 	for _, name := range []string{"a", "b", "nokeys", "unbound", "wrongbinding", "rebooted", "elsewhere"} {
-		m.view.Config.Identities["sandbox-"+name] = struct {
+		m.view.Config.Identities[name] = struct {
 			Key string `json:"key"`
 		}{monitorIdentity(fixtures[name].key.MonitorIdentitySeed)}
 	}
@@ -450,7 +450,7 @@ func TestMonitorRestartRelinksOnlyAuthorizedSandboxes(t *testing.T) {
 		var failures []error
 		for _, row := range rows {
 			if err := relink(row.ID); err != nil && !errors.As(err, new(NoLocalKeys)) {
-				failures = append(failures, fmt.Errorf("sandbox %s: %w", row.Name, err))
+				failures = append(failures, fmt.Errorf("bunker %s: %w", row.Name, err))
 			}
 		}
 		return failures
@@ -462,10 +462,10 @@ func TestMonitorRestartRelinksOnlyAuthorizedSandboxes(t *testing.T) {
 	}
 	require.Len(t, failures, 3, "%v", reported)
 	all := strings.Join(reported, "\n")
-	require.Contains(t, all, "sandbox wrongbinding:")
+	require.Contains(t, all, "bunker wrongbinding:")
 	require.Contains(t, all, "no longer matches")
-	require.Contains(t, all, "sandbox rebooted: its saved Monitor identity is not active")
-	require.Contains(t, all, "sandbox elsewhere: its inventory changed")
+	require.Contains(t, all, "bunker rebooted: its saved Perimeter identity is not active; run `tinfoil bunker start rebooted`")
+	require.Contains(t, all, "bunker elsewhere: its inventory changed")
 	host := authorizedKeyLine(newHost)
 	for _, name := range []string{"a", "b"} {
 		f := fixtures[name]
@@ -506,7 +506,7 @@ func TestMonitorRestartRelinksOnlyAuthorizedSandboxes(t *testing.T) {
 		changedCreator   bool
 	}{
 		{name: "changed creator in fresh detail", mode: "tmk", changedCreator: true, want: "inventory changed"},
-		{name: "unsupported custody pairing", mode: "umk", want: "a UMK Monitor cannot serve the synced sandbox"},
+		{name: "unsupported custody pairing", mode: "umk", want: "a UMK Perimeter cannot serve the synced bunker"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			changedCreator.Store(tc.changedCreator)

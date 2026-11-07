@@ -50,10 +50,10 @@ A reboot rotates the key, so rerun this after one.`,
 				fmt.Fprintf(cmd.ErrOrStderr(), "%s: %s.\n", target.name, statusLabel(target.container.Status))
 				switch target.container.Repo {
 				case monitorRepo:
-					return fmt.Errorf("Monitor has no interactive shell; use tinfoil monitor open %s", target.name)
+					return fmt.Errorf("Perimeter has no interactive shell; use tinfoil perimeter open %s", target.name)
 				case defaultSandboxRepo:
 					if attestSSHOpts.attestSSHHost != "" || attestSSHOpts.attestSSHPort != 0 {
-						return errors.New("managed sandboxes use their configured SSH endpoint")
+						return errors.New("managed bunkers use their configured SSH endpoint")
 					}
 					if attestSSHOpts.attestSSHName != "" && !sshProfileNamePattern.MatchString(attestSSHOpts.attestSSHName) {
 						return errors.New("invalid SSH profile name")

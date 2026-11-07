@@ -40,4 +40,4 @@ GOWORK=off go test -count=1 -run '^TestLoadConfig' ./internal/config
 ## Optional integration tests
 
 - Live attestation: set `RUN_TINFOIL_INTEGRATION=true` to enable the test against `inference.tinfoil.sh`.
-- Monitor integration: set `TINFOIL_MONITOR_TEST_SOURCE` to the absolute path of a Monitor checkout. The test builds and starts a local Monitor and requires the OpenSSH client.
+- Perimeter integration: set `TINFOIL_MONITOR_TEST_SOURCE` to the absolute path of a Perimeter checkout. The test builds and starts a local Perimeter and requires the OpenSSH client.

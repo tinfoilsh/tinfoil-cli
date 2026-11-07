@@ -34,9 +34,8 @@ type monitorProfile = owner.Profile
 
 func newMonitorCommand() *cobra.Command {
 	monitorCmd := &cobra.Command{
-		Use:     "monitor",
-		Aliases: []string{"monitors"},
-		Short:   "Manage the Monitor your sandboxes connect through",
+		Use:   "perimeter",
+		Short: "Manage the Perimeter your bunkers connect through",
 	}
 
 	return monitorCmd
@@ -90,11 +89,11 @@ func openOwnerChannel(client *ssh.Client, dir, host, token string) (ssh.Channel,
 
 func newMonitorOpenCommand(newScope scopeClientFactory, identityOpts *identityOptions, rootOpts *rootOptions, trustOpts *trustOptions, openBrowser func(string) error) *cobra.Command {
 	command := &cobra.Command{
-		Use: "open [id|name]", Short: "Unlock and forward the Monitor UI over attested SSH", Args: cobra.ExactArgs(1),
-		Long: "Also restores this device's sandbox connectivity.",
+		Use: "open [id|name]", Short: "Unlock and forward the Perimeter UI over attested SSH", Args: cobra.ExactArgs(1),
+		Long: "Also restores this device's bunker connectivity.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
-			fmt.Fprintln(cmd.ErrOrStderr(), "Looking up Monitor "+name)
+			fmt.Fprintln(cmd.ErrOrStderr(), "Looking up Perimeter "+name)
 			scope, cp, err := newScope(commandStreams(cmd))
 			if err != nil {
 				return err
@@ -135,21 +134,21 @@ func serveMonitorPanel(cmd *cobra.Command, monitor *monitorSession, address stri
 	session := panelToken()
 	// Probe the channel contract before printing a URL. A stale generation or
 	// incompatible CAM must fail here, without any HTTP fallback.
-	fmt.Fprintln(cmd.ErrOrStderr(), "Opening the local Monitor panel")
+	fmt.Fprintln(cmd.ErrOrStderr(), "Opening the local Perimeter panel")
 	probe, err := monitor.OpenChannel(listener.Addr().String(), session)
 	if err != nil {
 		return err
 	}
 	probe.Close()
 	url := fmt.Sprintf("http://%s/app/#session=%s", listener.Addr(), session)
-	fmt.Fprintf(cmd.OutOrStdout(), "Local Monitor panel: %s\n", url)
+	fmt.Fprintf(cmd.OutOrStdout(), "Local Perimeter panel: %s\n", url)
 	fmt.Fprintln(cmd.ErrOrStderr(), "Keep this command running. Ctrl-C closes the SSH connection. Owner credentials stay out of the browser.")
 	if input, ok := cmd.InOrStdin().(*os.File); ok && term.IsTerminal(int(input.Fd())) {
-		fmt.Fprintln(cmd.ErrOrStderr(), "Press Enter to open the Monitor in your browser.")
+		fmt.Fprintln(cmd.ErrOrStderr(), "Press Enter to open the Perimeter in your browser.")
 		// Input must not block forwarding or shutdown of the SSH connection.
 		go func() {
 			if err := openMonitorBrowserOnEnter(ctx, input, url, openBrowser); err != nil && ctx.Err() == nil {
-				fmt.Fprintf(cmd.ErrOrStderr(), "Could not open your browser: %v. Open the Local Monitor panel URL above manually.\n", err)
+				fmt.Fprintf(cmd.ErrOrStderr(), "Could not open your browser: %v. Open the Local Perimeter panel URL above manually.\n", err)
 			}
 		}()
 	}

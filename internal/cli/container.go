@@ -192,10 +192,10 @@ func newContainerCreateCommand(pollingOpts *pollingOptions, newClient authentica
 
 			if containerCreateOpts.createSource == containerSourceGitHub && containerCreateOpts.createRepo == defaultSandboxRepo {
 				if containerCreateOpts.createDebug || containerCreateOpts.createDisableCC {
-					return fmt.Errorf("sandbox aliases require a production deployment")
+					return fmt.Errorf("bunker aliases require a production deployment")
 				}
 				if vars["NO_MONITOR"] != "1" {
-					return fmt.Errorf("use `tinfoil sandbox create NAME --monitor MONITOR --tag VERSION` to create a monitored sandbox")
+					return fmt.Errorf("use `tinfoil bunker create NAME --perimeter PERIMETER --tag VERSION` to create a bunker that connects through a Perimeter")
 				}
 			}
 

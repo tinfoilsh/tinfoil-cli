@@ -127,7 +127,7 @@ func TestMonitorPanelAndNativeTransportAgainstRealMonitor(t *testing.T) {
 	defer api.Close()
 	commandState := newCommandFixture()
 	err = relinkSandbox(testStreams(), commandState.identityOpts, commandState.rootOpts, commandState.trustOpts, t.Context(), accountScope(scope), testCPClient(cliConfig{ControlplaneURL: api.URL}), &monitorSession{session}, row.ID, synced.ID)
-	require.ErrorContains(t, err, "a UMK Monitor cannot serve the synced sandbox", "custody must be checked before reviewing the missing workload configuration")
+	require.ErrorContains(t, err, "a UMK Perimeter cannot serve the synced bunker", "custody must be checked before reviewing the missing workload configuration")
 	dir := fixtureResourceDirectory(service.ConfigPath, accountScope(scope), row.ID, row.Name)
 	nativeSandboxTransport(t, sshAddress, hostSigner.PublicKey(), dir)
 	ownerProfile := sshProfile{name: "personal", hostName: host, port: number, user: "owner", identityFile: identity, hostKey: hostSigner.PublicKey(), hostKeyAlias: "monitor.example"}
@@ -169,7 +169,7 @@ func TestMonitorPanelAndNativeTransportAgainstRealMonitor(t *testing.T) {
 	}()
 	line, err := bufio.NewReader(reader).ReadString('\n')
 	require.NoError(t, err)
-	panelURL := strings.TrimSpace(strings.TrimPrefix(line, "Local Monitor panel: "))
+	panelURL := strings.TrimSpace(strings.TrimPrefix(line, "Local Perimeter panel: "))
 	response, err := http.Get(panelURL)
 	require.NoError(t, err)
 	response.Body.Close()

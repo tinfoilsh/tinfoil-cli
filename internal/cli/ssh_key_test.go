@@ -25,7 +25,7 @@ func TestSSHKeyCommandsSelectTheSandboxListWithFlag(t *testing.T) {
 		var flags []string
 		query := ""
 		if sandbox {
-			flags, query = []string{"--sandbox"}, "?sandbox=true"
+			flags, query = []string{"--bunker"}, "?sandbox=true"
 		}
 		for _, args := range [][]string{{"list"}, {"create", "laptop", "--public-key", "ssh-ed25519 AAAA"}, {"delete", "laptop"}} {
 			_, err := captureTestStdout(func() error {

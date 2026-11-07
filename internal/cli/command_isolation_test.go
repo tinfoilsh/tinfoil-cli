@@ -60,15 +60,15 @@ func TestFreshCommandTreesKeepManagedMetricsAndStreamsIndependent(t *testing.T) 
 	var first, second bytes.Buffer
 	a := newRootCommandWithDependencies(commandDependencies{out: &first, err: io.Discard})
 	b := newRootCommandWithDependencies(commandDependencies{out: &second, err: io.Discard})
-	monitor := commandAt(t, a, "monitor", "metrics")
+	monitor := commandAt(t, a, "perimeter", "metrics")
 	require.NoError(t, monitor.Flags().Set("time", "1h"))
 	require.NoError(t, commandAt(t, a, "container", "metrics").Flags().Set("time", "7d"))
-	require.False(t, commandAt(t, b, "monitor", "metrics").Flags().Changed("time"))
-	a.SetArgs([]string{"monitor", "metrics", monitorID})
+	require.False(t, commandAt(t, b, "perimeter", "metrics").Flags().Changed("time"))
+	a.SetArgs([]string{"perimeter", "metrics", monitorID})
 	require.NoError(t, a.Execute())
-	b.SetArgs([]string{"monitor", "metrics", monitorID})
+	b.SetArgs([]string{"perimeter", "metrics", monitorID})
 	require.NoError(t, b.Execute())
-	a.SetArgs([]string{"sandbox", "metrics", sandboxID})
+	a.SetArgs([]string{"bunker", "metrics", sandboxID})
 	require.NoError(t, a.Execute())
 	require.Equal(t, []string{"1h", "24h", "24h"}, windows)
 	require.Contains(t, first.String(), `"window": "1h"`)
@@ -98,15 +98,15 @@ func TestFreshCommandTreesKeepConfirmationIndependent(t *testing.T) {
 	var firstOut, firstErr, secondOut, secondErr bytes.Buffer
 	a := newRootCommandWithDependencies(commandDependencies{in: strings.NewReader(""), out: &firstOut, err: &firstErr})
 	b := newRootCommandWithDependencies(commandDependencies{in: strings.NewReader(""), out: &secondOut, err: &secondErr})
-	a.SetArgs([]string{"monitor", "delete", monitorID, "--yes"})
+	a.SetArgs([]string{"perimeter", "delete", monitorID, "--yes"})
 	require.NoError(t, a.Execute())
-	b.SetArgs([]string{"monitor", "delete", monitorID})
+	b.SetArgs([]string{"perimeter", "delete", monitorID})
 	require.Error(t, b.Execute())
 	require.Equal(t, 1, deletions)
-	require.Contains(t, firstOut.String(), "Deleted Monitor mon")
+	require.Contains(t, firstOut.String(), "Deleted Perimeter mon")
 	require.Empty(t, secondOut.String())
 	require.Contains(t, secondErr.String(), "--yes")
-	yes, err := commandAt(t, a, "sandbox", "delete").Flags().GetBool("yes")
+	yes, err := commandAt(t, a, "bunker", "delete").Flags().GetBool("yes")
 	require.NoError(t, err)
 	require.False(t, yes)
 }
@@ -157,7 +157,7 @@ func TestFreshCommandTreesPreserveHelpAndVersion(t *testing.T) {
 		root.SetArgs([]string{"--version"})
 		require.NoError(t, root.Execute())
 		require.Equal(t, "tinfoil version "+version+"\n", out.String())
-		for _, path := range [][]string{{"ct", "rm"}, {"monitors", "metrics"}, {"sandboxes", "delete"}, {"repo", "secret", "set"}, {"project", "storage"}, {"volume", "auto-unlock"}, {"http", "post"}, {"attestation", "verify"}, {"proxy"}, {"update"}} {
+		for _, path := range [][]string{{"ct", "rm"}, {"perimeter", "metrics"}, {"bunker", "delete"}, {"repo", "secret", "set"}, {"project", "storage"}, {"volume", "auto-unlock"}, {"http", "post"}, {"attestation", "verify"}, {"proxy"}, {"update"}} {
 			require.NotNil(t, commandAt(t, root, path...))
 		}
 		out.Reset()
@@ -166,6 +166,14 @@ func TestFreshCommandTreesPreserveHelpAndVersion(t *testing.T) {
 		require.Contains(t, out.String(), "Available Commands:")
 		require.Contains(t, out.String(), "Docs: "+docsBase+"sdk/cli-sdk")
 		require.NotContains(t, out.String(), "Run a local HTTP proxy")
+	}
+}
+
+func TestOldBunkerAndPerimeterCommandNamesAreGone(t *testing.T) {
+	root := newRootCommandWithDependencies(commandDependencies{out: io.Discard, err: io.Discard})
+	for _, name := range []string{"sandbox", "sandboxes", "monitor", "monitors", "bunkers", "perimeters"} {
+		_, _, err := root.Find([]string{name, "status"})
+		require.ErrorContains(t, err, "unknown command", name)
 	}
 }
 
@@ -307,7 +315,7 @@ func TestCommandPollingSettingsAreInvocationOwned(t *testing.T) {
 	defer cancelSlow()
 	slow.SetContext(slowContext)
 	for _, root := range []*cobra.Command{slow, fast} {
-		root.SetArgs([]string{"monitor", "status", id, "--watch"})
+		root.SetArgs([]string{"perimeter", "status", id, "--watch"})
 	}
 	require.ErrorIs(t, slow.Execute(), context.DeadlineExceeded)
 	fastContext, cancel := context.WithTimeout(t.Context(), deadline)

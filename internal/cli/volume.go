@@ -48,7 +48,7 @@ func newVolumeCommand(newClient authenticatedClientFactory, volumeStore storageS
 	volumeCmd := &cobra.Command{
 		Use:     "volume",
 		Aliases: []string{"volumes"},
-		Short:   "Manage persistent volumes for containers and sandboxes",
+		Short:   "Manage persistent volumes for containers and bunkers",
 	}
 	volumeCmd.AddCommand(newVolumeAutoUnlockCommand(newClient, outputOpts, volumeStore))
 	volumeCmd.PersistentFlags().StringVarP(&outputOpts.outputFormat, "output", "o", "table", "Output format: table or json")
@@ -115,7 +115,7 @@ func newVolumeCreateCommand(newClient authenticatedClientFactory, volumeStore st
 		RunE: func(cmd *cobra.Command, args []string) error {
 			autoUnlock, _ := cmd.Flags().GetBool("auto-unlock")
 			if autoUnlock && volumeCreateOpts.volumeCreateSandbox {
-				return errors.New("--auto-unlock does not apply to sandbox volumes, which are unlocked with their owner's credentials")
+				return errors.New("--auto-unlock does not apply to bunker volumes, which are unlocked with their owner's credentials")
 			}
 			if autoUnlock {
 				return runAutoUnlockVolumeCreate(newClient, outputOpts, volumeCreateOpts, cmd, args[0], volumeStore)
@@ -130,7 +130,7 @@ func newVolumeCreateCommand(newClient authenticatedClientFactory, volumeStore st
 				return fmt.Errorf("--size: %w", err)
 			}
 			if volumeCreateOpts.volumeCreateSandbox && !isWorkspaceSize(size) {
-				return fmt.Errorf("--size for a sandbox volume must be %s", workspaceSizeChoices("GB"))
+				return fmt.Errorf("--size for a bunker volume must be %s", workspaceSizeChoices("GB"))
 			}
 			client, err := newClient(commandStreams(cmd))
 			if err != nil {
@@ -171,7 +171,7 @@ func newVolumeCreateCommand(newClient authenticatedClientFactory, volumeStore st
 	addStorageArtifactFlags(volumeCreateCmd, false)
 	volumeCreateCmd.Flags().StringVar(&volumeCreateOpts.volumeCreateSize, "size", "", "Volume size, e.g. 16GB or 2TB [required]")
 	volumeCreateCmd.Flags().StringVar(&volumeCreateOpts.volumeCreateHost, "host", "", "Host to store the volume on (see 'tinfoil container hosts')")
-	volumeCreateCmd.Flags().BoolVar(&volumeCreateOpts.volumeCreateSandbox, "sandbox", false, "Create a sandbox workspace volume of "+workspaceSizeChoices("GB")+"; personal accounts only have sandbox volumes")
+	volumeCreateCmd.Flags().BoolVar(&volumeCreateOpts.volumeCreateSandbox, "bunker", false, "Create a bunker workspace volume of "+workspaceSizeChoices("GB")+"; personal accounts only have bunker volumes")
 	_ = volumeCreateCmd.MarkFlagRequired("size")
 	return volumeCreateCmd
 }
@@ -359,9 +359,9 @@ func resolveVolumeOfKind(volumes []volumeView, identifier string, sandbox bool) 
 	case otherErr != nil:
 		return nil, err
 	case sandbox:
-		return nil, fmt.Errorf("volume %s is a container volume; sandboxes can only use sandbox volumes (see `tinfoil volume list`)", other.Name)
+		return nil, fmt.Errorf("volume %s is a container volume; bunkers can only use bunker volumes (see `tinfoil volume list`)", other.Name)
 	default:
-		return nil, fmt.Errorf("volume %s is a sandbox volume; containers can only use container volumes (see `tinfoil volume list`)", other.Name)
+		return nil, fmt.Errorf("volume %s is a bunker volume; containers can only use container volumes (see `tinfoil volume list`)", other.Name)
 	}
 }
 
@@ -827,7 +827,7 @@ func renderVolumes(streams commandIO, list volumeList) error {
 // each kind attaches only to its own workloads.
 func volumeKind(v volumeView) string {
 	if v.Sandbox {
-		return "sandbox"
+		return "bunker"
 	}
 	return "container"
 }
