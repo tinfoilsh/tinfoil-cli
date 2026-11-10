@@ -220,13 +220,12 @@ func (a *accountAccess) clerkLogin(cmd *cobra.Command, syncKeys bool, openBrowse
 		return err
 	}
 	ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
-	defer cancel()
 	result, err := service.Login(ctx, syncKeys, auth.LoginProgress{
 		Authorize: func(launch string) {
 			if !syncKeys {
-				fmt.Fprintln(cmd.ErrOrStderr(), "Tip: run `tinfoil login --sync` to also sync your bunker keys.")
+				fmt.Fprintln(cmd.ErrOrStderr(), dimText("Tip: run `tinfoil login --sync` to also sync your bunker keys."))
 			}
-			fmt.Fprintf(cmd.ErrOrStderr(), "Opening Clerk sign-in. If no browser opens, visit:\n\n  %s\n\nWaiting for sign-in (Ctrl-C cancels)...\n", launch)
+			fmt.Fprintf(cmd.ErrOrStderr(), "Opening Clerk sign-in. If no browser opens, visit:\n\n  %s\n\n%s\n", valueText(launch), dimText("Waiting for sign-in (Ctrl-C cancels)..."))
 			go func() {
 				if err := openBrowser(launch); err != nil {
 					fmt.Fprintf(cmd.ErrOrStderr(), "Could not open your browser: %v\n", err)
@@ -234,17 +233,18 @@ func (a *accountAccess) clerkLogin(cmd *cobra.Command, syncKeys bool, openBrowse
 			}()
 		},
 		SignedIn: func(userID, account string) {
-			fmt.Fprintf(cmd.OutOrStdout(), "Signed in as %s (account %s).\n", userID, account)
+			fmt.Fprintf(cmd.OutOrStdout(), "%s %s\n", okText("Signed in as"), dimText(fmt.Sprintf("%s (account %s).", userID, account)))
 		},
 		SyncCode: func(code string) {
-			fmt.Fprintf(cmd.ErrOrStderr(), "\nEnter this code in the browser tab that just opened:\n\n    %s\n\nCtrl-C skips key sync and keeps your login.\n", code)
+			fmt.Fprintf(cmd.ErrOrStderr(), "\nEnter this code in the browser tab that just opened:\n\n    %s\n\n%s\n", valueText(code), dimText("Ctrl-C skips key sync and keeps your login."))
 		},
 	})
+	cancel()
 	if err != nil {
 		return err
 	}
 	if result.KeysSynced {
-		fmt.Fprintln(cmd.OutOrStdout(), "Bunker keys synced to this machine.")
+		fmt.Fprintln(cmd.OutOrStdout(), okText("Bunker keys synced to this machine."))
 	}
 	a.offerRegistryEnrollment(cmd)
 	return nil

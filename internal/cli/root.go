@@ -37,6 +37,14 @@ var commandGroups = []struct {
 	{cliGroup, color.FgWhite, []string{"update"}},
 }
 
+var (
+	// 256-color gray: some themes render color.Faint at full brightness.
+	dimText   = color.New(38, 5, 244).SprintFunc()
+	valueText = color.New(color.FgCyan).SprintFunc()
+	okText    = color.New(color.FgGreen).SprintFunc()
+	askText   = color.New(color.FgYellow, color.Bold).SprintFunc()
+)
+
 // Subcommands inherit their nearest mapped parent's page; "" means none is published.
 var docsPages = map[string]string{
 	"tinfoil":                    "sdk/cli-sdk",
