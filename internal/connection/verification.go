@@ -30,7 +30,7 @@ func (v Verification) Options() (*tinfoil.EnclaveOptions, error) {
 	} else if v.Reference == "" {
 		return nil, fmt.Errorf("v3 verification requires an expected workload; pass --repo owner/name[@tag][@sha256:digest] or --config FILE")
 	} else if !v.PublicRegistry && len(v.RegistryIDs) != 0 {
-		policy = append(policy, verify.WithConfigRegistryIDs(v.RegistryIDs...))
+		policy = append(policy, verify.WithAdditionalConfigRegistryIDs(v.RegistryIDs...))
 	}
 	if v.RTMR3 != "" {
 		pins, err := measurement.ParseExpectedTDX("", "", "", "", v.RTMR3)

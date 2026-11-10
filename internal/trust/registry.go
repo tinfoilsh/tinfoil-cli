@@ -1,6 +1,7 @@
 package trust
 
 import (
+	"encoding/json/jsontext"
 	"fmt"
 	"slices"
 	"strings"
@@ -15,7 +16,14 @@ type Enrollment struct {
 	AccountID       string   `json:"account_id"`
 	Namespaces      []string `json:"namespaces"`
 	RegistryID      string   `json:"registry_id"`
+
+	LegacyLabel droppedMember `json:"label,omitzero"`
 }
+
+// droppedMember accepts a member older trust files wrote and never writes it back.
+type droppedMember struct{}
+
+func (*droppedMember) UnmarshalJSONFrom(dec *jsontext.Decoder) error { return dec.SkipValue() }
 
 func registryAccountMatches(entry Enrollment, account string) bool {
 	return account != "" && (entry.AccountID == account || slices.Contains(entry.Namespaces, "/"+strings.TrimPrefix(account, "/")))
