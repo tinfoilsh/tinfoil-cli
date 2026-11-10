@@ -43,6 +43,7 @@ var (
 	valueText = color.New(color.FgCyan).SprintFunc()
 	okText    = color.New(color.FgGreen).SprintFunc()
 	askText   = color.New(color.FgYellow, color.Bold).SprintFunc()
+	errText   = color.New(color.FgRed, color.Bold).SprintFunc()
 )
 
 // Subcommands inherit their nearest mapped parent's page; "" means none is published.
@@ -257,7 +258,7 @@ func runCommand(rootCmd *cobra.Command, args []string, updateTransport http.Roun
 	err := executeCommand(rootCmd, args)
 	var exited *processExit
 	if err != nil && !errors.As(err, &exited) {
-		fmt.Fprintln(rootCmd.ErrOrStderr(), "Error:", err)
+		fmt.Fprintln(rootCmd.ErrOrStderr(), errText("Error:"), err)
 		if command, _, lookupErr := rootCmd.Find(args); lookupErr != nil {
 			fmt.Fprintf(rootCmd.ErrOrStderr(), "Run '%s --help' for usage.\n", command.CommandPath())
 		}

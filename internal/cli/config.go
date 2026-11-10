@@ -67,7 +67,7 @@ func loadConfig(streams commandIO) (cliConfig, string, error) {
 		return cliConfig{}, "", err
 	}
 	if result.Diagnostic != nil {
-		fmt.Fprintf(streams.err, "warning: %v\n", result.Diagnostic)
+		fmt.Fprintf(streams.err, "%s %v\n", askText("warning:"), result.Diagnostic)
 	}
 	return cliConfig{ControlplaneURL: result.Config.ControlplaneURL, APIKey: result.Config.APIKey}, result.Path, nil
 }

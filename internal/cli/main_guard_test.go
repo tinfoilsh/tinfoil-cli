@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/fatih/color"
 	"github.com/zalando/go-keyring"
 )
 
@@ -13,6 +14,7 @@ import (
 // tests override the same variable with t.Setenv for their own fixtures. The
 // in-memory keyring keeps tests away from the OS credential service.
 func TestMain(m *testing.M) {
+	color.NoColor = true
 	keyring.MockInit()
 	os.Unsetenv(envTrust)
 	dir, err := os.MkdirTemp("", "tinfoil-cli-tests-*")

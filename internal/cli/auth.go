@@ -85,7 +85,7 @@ func newLoginCommand(accounts *accountAccess, openBrowser func(string) error) *c
 				return err
 			}
 			if credentialEnvSource() != "" || effective.ControlplaneURL != cfg.ControlplaneURL {
-				fmt.Fprintln(commandStreams(cmd).err, "WARNING: environment overrides remain active; the saved credential is not necessarily the effective login.")
+				fmt.Fprintln(commandStreams(cmd).err, askText("WARNING:"), "environment overrides remain active; the saved credential is not necessarily the effective login.")
 				identity, err = accounts.authenticatedContext(commandStreams(cmd), effective)
 				if err != nil {
 					return fmt.Errorf("credentials saved, but effective environment login could not be verified: %w", err)
@@ -118,7 +118,7 @@ func newLogoutCommand(accounts *accountAccess) *cobra.Command {
 				fmt.Fprintf(commandStreams(cmd).out, "Removed %s\n", path)
 			}
 			if source := credentialEnvSource(); source != "" {
-				fmt.Fprintf(commandStreams(cmd).err, "WARNING: %s is still active; logout removes only the saved file. Unset %s and any admin key in %s to stop using environment credentials.\n", source, envAdminKey, envAPIKey)
+				fmt.Fprintf(commandStreams(cmd).err, "%s %s is still active; logout removes only the saved file. Unset %s and any admin key in %s to stop using environment credentials.\n", askText("WARNING:"), source, envAdminKey, envAPIKey)
 			}
 			return errors.Join(clerkErr, err)
 		},
@@ -223,7 +223,7 @@ func (a *accountAccess) clerkLogin(cmd *cobra.Command, syncKeys bool, openBrowse
 	result, err := service.Login(ctx, syncKeys, auth.LoginProgress{
 		Authorize: func(launch string) {
 			if !syncKeys {
-				fmt.Fprintln(cmd.ErrOrStderr(), dimText("Tip: run `tinfoil login --sync` to also sync your bunker keys."))
+				fmt.Fprintln(cmd.ErrOrStderr(), "Tip: run `tinfoil login --sync` to also sync your bunker keys.")
 			}
 			fmt.Fprintf(cmd.ErrOrStderr(), "Opening Clerk sign-in. If no browser opens, visit:\n\n  %s\n\n%s\n", valueText(launch), dimText("Waiting for sign-in (Ctrl-C cancels)..."))
 			go func() {

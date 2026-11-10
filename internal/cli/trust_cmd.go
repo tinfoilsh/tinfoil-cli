@@ -98,7 +98,7 @@ func offerPrune(trustSetOpts *trustSetOptions, cmd *cobra.Command, policy *conne
 		for _, entry := range broader {
 			fmt.Fprintf(out, "  %s\n", entry)
 		}
-		fmt.Fprintf(out, "Remove them so %s is the only pass? [y/N] ", policy.Record)
+		fmt.Fprintf(out, "%s ", askText(fmt.Sprintf("Remove them so %s is the only pass? [y/N]", policy.Record)))
 		scanner := bufio.NewScanner(cmd.InOrStdin())
 		if scanner.Scan() {
 			answer := strings.ToLower(strings.TrimSpace(scanner.Text()))
