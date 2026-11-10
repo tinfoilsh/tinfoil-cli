@@ -126,7 +126,7 @@ const (
 	TMKOwnerKeyName      = "owner_tmk_ed25519"
 	SandboxLoginUser     = "sandbox"
 	MonitorSSHUser       = "device"
-	MonitorJumpSuffix    = ".monitor"
+	MonitorJumpSuffix    = ".perimeter"
 	defaultSSHPort       = 22
 	maxConnectionPort    = 65535
 )

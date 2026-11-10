@@ -283,12 +283,12 @@ func monitorOwnerRequest(client *ssh.Client, dir, method, path string, input, ou
 	timer := time.AfterFunc(monitorRequestTimeout, func() { client.Close() })
 	defer timer.Stop()
 	token := panelToken()
-	ch, err := OpenChannel(client, dir, "owner.monitor", token)
+	ch, err := OpenChannel(client, dir, "owner.perimeter", token)
 	if err != nil {
 		return err
 	}
 	defer ch.Close()
-	req, err := http.NewRequest(method, "http://owner.monitor/api"+path, bytes.NewReader(data))
+	req, err := http.NewRequest(method, "http://owner.perimeter/api"+path, bytes.NewReader(data))
 	if err != nil {
 		return err
 	}
