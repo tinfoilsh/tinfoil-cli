@@ -311,7 +311,7 @@ func sshIncludeLine() string {
 }
 
 func promptAddSSHInclude(in io.Reader, out io.Writer) (bool, error) {
-	fmt.Fprintf(out, "For your SSH client to use this profile, ~/.ssh/config needs this line before any Host or Match block:\n\n%s\n\nAdd it now? [y/N] ", sshIncludeLine())
+	fmt.Fprintf(out, "For your SSH client to use this profile, ~/.ssh/config needs this line before any Host or Match block:\n\n%s\n\n%s ", valueText(sshIncludeLine()), askText("Add it now? [y/N]"))
 	scanner := bufio.NewScanner(in)
 	if !scanner.Scan() {
 		fmt.Fprintln(out)

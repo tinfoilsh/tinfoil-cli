@@ -76,5 +76,5 @@ func updateCheckEnabled(streams commandIO, currentVersion string) bool {
 }
 
 func printUpdateNotice(streams commandIO, currentVersion, latest string) {
-	fmt.Fprintf(streams.err, "\nwarning: a new version of tinfoil is available (%s -> %s)\nupdate with: %s\n", currentVersion, latest, updateCommand)
+	fmt.Fprintf(streams.err, "\n%s\n%s %s\n", dimText(fmt.Sprintf("warning: a new version of tinfoil is available (%s -> %s)", currentVersion, latest)), dimText("update with:"), valueText(updateCommand))
 }

@@ -173,7 +173,7 @@ func renderDomain(streams commandIO, outputOpts *outputOptions, d domainView, ve
 		fmt.Fprintf(streams.out, "Wildcard CNAME currently observed: %v\n", *d.WildcardCNAMEConfigured)
 	}
 	if len(d.WildcardTLSMissing) > 0 {
-		fmt.Fprintf(streams.out, "\nWarning: these containers do not request a wildcard certificate, so their\nsubdomains fail TLS: %s\n", strings.Join(d.WildcardTLSMissing, ", "))
+		fmt.Fprintf(streams.out, "\n%s these containers do not request a wildcard certificate, so their\nsubdomains fail TLS: %s\n", askText("Warning:"), strings.Join(d.WildcardTLSMissing, ", "))
 	}
 	if !d.Verified {
 		fmt.Fprintf(streams.out, "\nRun `tinfoil domain verify %s` after the %s CNAME propagates.\n", d.Domain, d.ACMEChallengeHost)

@@ -261,7 +261,7 @@ func renderUpdatePlan(out io.Writer, plan updatePlan) {
 	}
 	fmt.Fprintf(out, "  Mark GitHub latest: %t\n", plan.MarkLatestRelease)
 	if plan.MarkLatestRelease {
-		fmt.Fprintln(out, "  WARNING: marking latest affects the repository-wide latest release and other consumers, even when selecting an earlier release. Use --mark-latest=false to leave it unchanged.")
+		fmt.Fprintf(out, "  %s marking latest affects the repository-wide latest release and other consumers, even when selecting an earlier release. Use --mark-latest=false to leave it unchanged.\n", askText("WARNING:"))
 	}
 	reason := plan.CostEstimate.Reason
 	if reason == "" {

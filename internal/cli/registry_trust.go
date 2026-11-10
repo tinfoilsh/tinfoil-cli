@@ -125,11 +125,15 @@ func acceptRegistry(in io.Reader, out io.Writer, entry registryEnrollment, expli
 			return nil
 		}
 		if previous.ControlplaneURL == entry.ControlplaneURL && previous.AccountID == entry.AccountID && previous.RegistryID != entry.RegistryID {
-			fmt.Fprintln(out, "Private registry identity changed since you last trusted it.")
+			fmt.Fprintln(out, askText("Private registry identity changed since you last trusted it."))
 		}
 	}
 	if !explicit {
-		fmt.Fprintf(out, "Trust %s? [y/N] ", scope)
+		fmt.Fprintf(out, "\nYour account has a private config registry:\n\n  Namespaces:   %s\n  Controlplane: %s\n\n%s\n%s %s\n%s ",
+			valueText(strings.Join(entry.Namespaces, ", ")), valueText(entry.ControlplaneURL),
+			dimText("Trusting it lets tinfoil verify enclaves running configs from these namespaces."),
+			dimText("Undo later with"), valueText("tinfoil trust remove <namespace>"),
+			askText("Trust this registry? [y/N]"))
 		scanner := bufio.NewScanner(in)
 		if !scanner.Scan() {
 			return scanner.Err()
@@ -146,7 +150,7 @@ func acceptRegistry(in io.Reader, out io.Writer, entry registryEnrollment, expli
 	if err := policy.AcceptRegistry(entry); err != nil {
 		return err
 	}
-	fmt.Fprintf(out, "Trusted %s.\n", scope)
+	fmt.Fprintln(out, okText("Trusted "+scope+"."))
 	return nil
 }
 

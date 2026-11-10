@@ -862,7 +862,7 @@ func confirmNonCCMode(streams commandIO, containerCreateOpts *containerCreateOpt
 	fmt.Fprintln(streams.err, "It will not provide CC guarantees and is not suitable for production")
 	fmt.Fprintln(streams.err, "workloads. Intended for benchmarking against non-CC baselines.")
 	fmt.Fprintln(streams.err)
-	fmt.Fprintln(streams.err, "WARNING: This container will deploy without confidential computing")
+	fmt.Fprintln(streams.err, errText("WARNING:"), "This container will deploy without confidential computing")
 	fmt.Fprintln(streams.err, "protections. The host operator can read memory and observe execution.")
 	fmt.Fprintln(streams.err)
 	return confirmYes(streams, containerCreateOpts.createYes, "--disable-cc-mode")
@@ -876,7 +876,7 @@ func confirmYes(streams commandIO, skip bool, what string) error {
 	if !term.IsTerminal(int(streamFD(streams.in))) {
 		return fmt.Errorf("%s requires interactive confirmation; pass --yes to skip the prompt", what)
 	}
-	fmt.Fprint(streams.err, "Type \"yes\" to proceed: ")
+	fmt.Fprint(streams.err, askText(`Type "yes" to proceed:`), " ")
 	scanner := bufio.NewScanner(streams.in)
 	if !scanner.Scan() {
 		return fmt.Errorf("aborted")

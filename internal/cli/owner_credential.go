@@ -85,11 +85,11 @@ func renderOwnerEvent(streams commandIO, event owner.Event) {
 	case owner.MonitorUnlocked:
 		fmt.Fprintf(streams.err, "Perimeter %s unlocked.\n", event.Name)
 	case owner.MonitorCheckpointFailed:
-		fmt.Fprintf(streams.err, "Warning: Perimeter generation %d is saved only on this machine; synchronizing it to your key bundle failed: %v\n", event.Generation, humanControlplaneError(event.Err))
+		fmt.Fprintf(streams.err, "%s Perimeter generation %d is saved only on this machine; synchronizing it to your key bundle failed: %v\n", askText("Warning:"), event.Generation, humanControlplaneError(event.Err))
 	case owner.SandboxVerified:
 		fmt.Fprintf(streams.err, "Bunker %s attestation verified.\n", event.Name)
 	case owner.SandboxDirectVerified:
-		fmt.Fprintf(streams.err, "Bunker %s attestation verified.\nWarning: bunker has NO_MONITOR=1; its network traffic is not being tunneled through Perimeter.\n", event.Name)
+		fmt.Fprintf(streams.err, "Bunker %s attestation verified.\n%s bunker has NO_MONITOR=1; its network traffic is not being tunneled through Perimeter.\n", event.Name, errText("Warning:"))
 	case owner.SandboxRegistering:
 		fmt.Fprintln(streams.err, "Registering bunker "+event.Name+" with Perimeter")
 	case owner.SandboxRelinking:

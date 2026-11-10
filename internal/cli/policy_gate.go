@@ -40,7 +40,7 @@ func trustConnectionSource(streams commandIO, trustOpts *trustOptions, source, a
 func gateConnectionPolicy(source string, in io.Reader, out io.Writer, interactive, dangerous bool) error {
 	source = strings.TrimSpace(source)
 	if dangerous {
-		fmt.Fprintf(out, "DANGEROUS: accepting controlplane-chosen config %s without checking known-configs; nothing recorded\n", source)
+		fmt.Fprintf(out, "%s accepting controlplane-chosen config %s without checking known-configs; nothing recorded\n", errText("DANGEROUS:"), source)
 		return nil
 	}
 
@@ -95,7 +95,7 @@ func journalPin(policy *connectionPolicy, source string, out io.Writer) {
 	}
 	fresh, err := policy.RecordPin(source)
 	if err != nil {
-		fmt.Fprintf(out, "warning: could not journal %s: %v\n", source, err)
+		fmt.Fprintf(out, "%s could not journal %s: %v\n", askText("warning:"), source, err)
 		return
 	}
 	if fresh {
@@ -118,7 +118,7 @@ func seedTrustFromCreate(streams commandIO, repoRef, revision string) {
 		source += "@" + rev
 	}
 	if err := assertTrustedSource(streams, assertion, source); err != nil {
-		fmt.Fprintf(streams.err, "warning: not recording %s: %v\n", source, err)
+		fmt.Fprintf(streams.err, "%s not recording %s: %v\n", askText("warning:"), source, err)
 	}
 }
 
@@ -147,7 +147,7 @@ func assertTrustedSource(streams commandIO, assertion, resolvedSource string) er
 	// makes this a no-op when everything is already present.
 	changed, err := policy.RecordTrustAt(recordSource, level)
 	if err != nil {
-		fmt.Fprintf(streams.err, "warning: could not record %s in known-configs: %v\n", resolvedSource, err)
+		fmt.Fprintf(streams.err, "%s could not record %s in known-configs: %v\n", askText("warning:"), resolvedSource, err)
 		return nil
 	}
 	if changed {
@@ -166,7 +166,7 @@ func promptTrustConfig(in io.Reader, out io.Writer, source, level string) (bool,
 
 It is not in your known configs. The reference comes from Tinfoil;
 cross-check it against your own build or deploy records if unsure.
-Trust it and record as %q? [y/N] `, source, level)
+%s `, valueText(source), askText(fmt.Sprintf("Trust it and record as %q? [y/N]", level)))
 	scanner := bufio.NewScanner(in)
 	if !scanner.Scan() {
 		fmt.Fprintln(out)
