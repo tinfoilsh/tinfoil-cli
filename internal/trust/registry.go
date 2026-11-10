@@ -13,13 +13,12 @@ import (
 type Enrollment struct {
 	ControlplaneURL string   `json:"controlplane_url"`
 	AccountID       string   `json:"account_id"`
-	Label           string   `json:"label,omitempty"`
 	Namespaces      []string `json:"namespaces"`
 	RegistryID      string   `json:"registry_id"`
 }
 
 func registryAccountMatches(entry Enrollment, account string) bool {
-	return account != "" && (entry.AccountID == account || strings.EqualFold(entry.Label, account) || slices.Contains(entry.Namespaces, "/"+strings.TrimPrefix(account, "/")))
+	return account != "" && (entry.AccountID == account || slices.Contains(entry.Namespaces, "/"+strings.TrimPrefix(account, "/")))
 }
 
 func (e Enrollment) Validate() error {
@@ -87,9 +86,6 @@ func (p *Policy) RemoveRegistry(controlplaneURL, account string) error {
 	if accountID == "" {
 		for _, entry := range p.Registries {
 			if entry.ControlplaneURL == controlplaneURL && registryAccountMatches(entry, account) {
-				if accountID != "" {
-					return fmt.Errorf("multiple private registries match %s; use the account ID shown by tinfoil trust", account)
-				}
 				accountID = entry.AccountID
 			}
 		}

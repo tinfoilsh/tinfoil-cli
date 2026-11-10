@@ -25,7 +25,7 @@ func enrollmentFixture(t *testing.T) registryEnrollment {
 	t.Setenv(envKnownConfigs, filepath.Join(t.TempDir(), "trust.json"))
 	t.Setenv(envConfigPath, filepath.Join(t.TempDir(), "config.json"))
 	t.Setenv(envCPURL, defaultControlplaneURL)
-	return registryEnrollment{ControlplaneURL: defaultControlplaneURL, AccountID: "org_acme", Label: "Acme", Namespaces: []string{"/acme"}, RegistryID: configendorsement.RegistryIDPrefix + "9c4a7f21e0b836d56a13c8fe42d907ab"}
+	return registryEnrollment{ControlplaneURL: defaultControlplaneURL, AccountID: "org_acme", Namespaces: []string{"/acme"}, RegistryID: configendorsement.RegistryIDPrefix + "9c4a7f21e0b836d56a13c8fe42d907ab"}
 }
 
 func TestRegistryEnrollmentRequiresExplicitAcceptanceAndReplacement(t *testing.T) {
@@ -36,7 +36,7 @@ func TestRegistryEnrollmentRequiresExplicitAcceptanceAndReplacement(t *testing.T
 	require.NoError(t, err)
 	require.Empty(t, policy.Registries)
 	require.NoError(t, acceptRegistry(strings.NewReader("yes\n"), &output, entry, false))
-	require.Contains(t, output.String(), "Registry ID: "+entry.RegistryID)
+	require.NotContains(t, output.String(), entry.RegistryID)
 	policy, err = loadConnectionPolicy()
 	require.NoError(t, err)
 	require.Equal(t, []registryEnrollment{entry}, policy.Registries)
@@ -58,7 +58,7 @@ func TestRegistryCommandsKeepPersonalAndOrganizationApprovalsSeparate(t *testing
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/auth/context":
-			json.NewEncoder(w).Encode(map[string]any{"context_type": "organization", "user_id": "user_owner", "organization": map[string]string{"id": entry.AccountID, "name": entry.Label}})
+			json.NewEncoder(w).Encode(map[string]any{"context_type": "organization", "user_id": "user_owner", "organization": map[string]string{"id": entry.AccountID}})
 		case registryEnrollmentPath:
 			json.NewEncoder(w).Encode(registryAccount{OwnerKind: "organization", Namespaces: entry.Namespaces, RegistryID: entry.RegistryID})
 		default:
@@ -78,33 +78,15 @@ func TestRegistryCommandsKeepPersonalAndOrganizationApprovalsSeparate(t *testing
 	require.Len(t, policy.Registries, 2)
 	output, err := captureTestStdout(func() error { return executeLifecycleCLI(newCommandFixture(), t, "trust") })
 	require.NoError(t, err)
-	require.Contains(t, string(output), "Private registry: Acme")
+	require.Contains(t, string(output), "Private registry for projects under /acme")
 	require.NotContains(t, string(output), entry.RegistryID)
 	output, err = captureTestStdout(func() error { return executeLifecycleCLI(newCommandFixture(), t, "trust", "--json") })
 	require.NoError(t, err)
 	require.Contains(t, string(output), `"registry_id":"`+entry.RegistryID+`"`)
-	require.NoError(t, executeLifecycleCLI(newCommandFixture(), t, "trust", "remove", entry.Label))
+	require.NoError(t, executeLifecycleCLI(newCommandFixture(), t, "trust", "remove", entry.Namespaces[0]))
 	policy, err = loadConnectionPolicy()
 	require.NoError(t, err)
 	require.Equal(t, []registryEnrollment{personal}, policy.Registries)
-}
-
-func TestRegistryRemovalRejectsAmbiguousNames(t *testing.T) {
-	entry := enrollmentFixture(t)
-	require.NoError(t, acceptRegistry(strings.NewReader(""), &bytes.Buffer{}, entry, true))
-	other := entry
-	other.AccountID, other.Namespaces, other.RegistryID = "org_other", []string{"/other"}, configendorsement.RegistryIDPrefix+strings.Repeat("e", 32)
-	require.NoError(t, acceptRegistry(strings.NewReader(""), &bytes.Buffer{}, other, true))
-	require.ErrorContains(t, executeLifecycleCLI(newCommandFixture(), t, "trust", "remove", entry.Label), "multiple private registries")
-	policy, err := loadConnectionPolicy()
-	require.NoError(t, err)
-	require.Len(t, policy.Registries, 2)
-	other.Label = entry.AccountID
-	require.NoError(t, policy.AcceptRegistry(other))
-	require.NoError(t, executeLifecycleCLI(newCommandFixture(), t, "trust", "remove", entry.AccountID))
-	policy, err = loadConnectionPolicy()
-	require.NoError(t, err)
-	require.Equal(t, []registryEnrollment{other}, policy.Registries)
 }
 
 func TestPublicRegistryPolicySurvivesSSHProxyCommand(t *testing.T) {

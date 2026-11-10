@@ -45,7 +45,7 @@ func newTrustEnrollCommand(accounts *accountAccess, trustEnrollOpts *trustEnroll
 
 func newTrustRemoveCommand(accounts *accountAccess) *cobra.Command {
 	trustRemoveCmd := &cobra.Command{
-		Use:   "remove <account>",
+		Use:   "remove <namespace>",
 		Short: "Stop trusting an account's private registry",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -66,7 +66,7 @@ func newTrustRemoveCommand(accounts *accountAccess) *cobra.Command {
 
 func printRegistries(out io.Writer, entries []registryEnrollment) {
 	for _, entry := range entries {
-		fmt.Fprintf(out, "Private registry: %s (%s)\n  Control plane: %s\n  Projects under: %s\n", entry.Label, entry.AccountID, entry.ControlplaneURL, strings.Join(entry.Namespaces, ", "))
+		fmt.Fprintf(out, "Private registry for projects under %s\n  Control plane: %s\n", strings.Join(entry.Namespaces, ", "), entry.ControlplaneURL)
 	}
 }
 
@@ -98,20 +98,11 @@ func (a *accountAccess) enrollRegistry(cmd *cobra.Command, cfg cliConfig, identi
 	if expectedRegistryID != "" && expectedRegistryID != account.RegistryID {
 		return fmt.Errorf("private registry ID does not match the expected registry ID")
 	}
-	entry := registryEnrollment{ControlplaneURL: cfg.ControlplaneURL, AccountID: identity.UserID, Label: identity.UserID, Namespaces: account.Namespaces, RegistryID: account.RegistryID}
-	if identity.ContextType == "personal" {
-		entry.Label = "Personal"
-		if identity.UserName != "" {
-			entry.Label = identity.UserName
-		}
-	}
+	entry := registryEnrollment{ControlplaneURL: cfg.ControlplaneURL, AccountID: identity.UserID, Namespaces: account.Namespaces, RegistryID: account.RegistryID}
 	ownerKind := "user"
 	if identity.Organization != nil {
 		ownerKind = "organization"
-		entry.AccountID, entry.Label = identity.Organization.ID, identity.Organization.Name
-		if entry.Label == "" {
-			entry.Label = entry.AccountID
-		}
+		entry.AccountID = identity.Organization.ID
 	}
 	if ownerKind != account.OwnerKind {
 		return fmt.Errorf("registry account does not match the logged-in context")
@@ -129,17 +120,16 @@ func acceptRegistry(in io.Reader, out io.Writer, entry registryEnrollment, expli
 	}
 	for _, previous := range policy.Registries {
 		if previous.ControlplaneURL == entry.ControlplaneURL && previous.AccountID == entry.AccountID && slices.Equal(previous.Namespaces, entry.Namespaces) && previous.RegistryID == entry.RegistryID {
-			fmt.Fprintf(out, "Private registry %s is already trusted.\nRegistry ID: %s\n", entry.Label, entry.RegistryID)
+			fmt.Fprintf(out, "Private registry for projects under %s is already trusted.\n", strings.Join(entry.Namespaces, ", "))
 			return nil
 		}
 		if previous.ControlplaneURL == entry.ControlplaneURL && previous.AccountID == entry.AccountID && previous.RegistryID != entry.RegistryID {
-			fmt.Fprintf(out, "Private registry identity changed.\nPrevious registry ID: %s\n", previous.RegistryID)
+			fmt.Fprintln(out, "Private registry identity changed since you last trusted it.")
 		}
 	}
 	printRegistries(out, []registryEnrollment{entry})
-	fmt.Fprintf(out, "Registry ID: %s\n", entry.RegistryID)
 	if !explicit {
-		fmt.Fprint(out, "Trust configs from this private registry? Existing project and config restrictions still apply. [y/N] ")
+		fmt.Fprint(out, "Trust configs from this registry? [y/N] ")
 		scanner := bufio.NewScanner(in)
 		if !scanner.Scan() {
 			return scanner.Err()
@@ -156,7 +146,7 @@ func acceptRegistry(in io.Reader, out io.Writer, entry registryEnrollment, expli
 	if err := policy.AcceptRegistry(entry); err != nil {
 		return err
 	}
-	fmt.Fprintf(out, "Trusted private registry: %s.\n", entry.Label)
+	fmt.Fprintln(out, "Trusted this private registry.")
 	return nil
 }
 
