@@ -36,7 +36,6 @@ func TestRegistryEnrollmentRequiresExplicitAcceptanceAndReplacement(t *testing.T
 	require.NoError(t, err)
 	require.Empty(t, policy.Registries)
 	require.NoError(t, acceptRegistry(strings.NewReader("yes\n"), &output, entry, false))
-	require.NotContains(t, output.String(), entry.RegistryID)
 	policy, err = loadConnectionPolicy()
 	require.NoError(t, err)
 	require.Equal(t, []registryEnrollment{entry}, policy.Registries)
@@ -51,6 +50,8 @@ func TestRegistryEnrollmentRequiresExplicitAcceptanceAndReplacement(t *testing.T
 	require.NoError(t, err)
 	require.Equal(t, changed.RegistryID, policy.Registries[0].RegistryID)
 	require.Len(t, policy.Registries, 1)
+	require.NotContains(t, output.String(), entry.RegistryID)
+	require.NotContains(t, output.String(), changed.RegistryID)
 }
 
 func TestRegistryCommandsKeepPersonalAndOrganizationApprovalsSeparate(t *testing.T) {
