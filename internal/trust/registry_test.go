@@ -10,7 +10,7 @@ import (
 )
 
 func enrollmentFixture() Enrollment {
-	return Enrollment{ControlplaneURL: "https://api.example.com", AccountID: "org_acme", Label: "Acme", Namespaces: []string{"/acme"}, RegistryID: configendorsement.RegistryIDPrefix + "9c4a7f21e0b836d56a13c8fe42d907ab"}
+	return Enrollment{ControlplaneURL: "https://api.example.com", AccountID: "org_acme", Namespaces: []string{"/acme"}, RegistryID: configendorsement.RegistryIDPrefix + "9c4a7f21e0b836d56a13c8fe42d907ab"}
 }
 
 func TestRegistryEnrollmentRejectsMalformedAndConflictingPolicies(t *testing.T) {
@@ -56,7 +56,7 @@ func TestRegistrySelectionAndRemovalRemainOriginScoped(t *testing.T) {
 		require.Equal(t, tc.want, ids)
 	}
 	require.False(t, policy.Matches("acme/app@v1"), "registry enrollment does not grant project trust")
-	require.NoError(t, policy.RemoveRegistry(entry.ControlplaneURL, entry.Label))
+	require.NoError(t, policy.RemoveRegistry(entry.ControlplaneURL, entry.Namespaces[0]))
 	policy, err = Load(path)
 	require.NoError(t, err)
 	require.Equal(t, []Enrollment{other}, policy.Registries)
