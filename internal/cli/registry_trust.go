@@ -66,7 +66,7 @@ func newTrustRemoveCommand(accounts *accountAccess) *cobra.Command {
 
 func printRegistries(out io.Writer, entries []registryEnrollment) {
 	for _, entry := range entries {
-		fmt.Fprintf(out, "Private registry for projects under %s\n  Control plane: %s\n", strings.Join(entry.Namespaces, ", "), entry.ControlplaneURL)
+		fmt.Fprintf(out, "Trusted project configs under %s from %s\n", strings.Join(entry.Namespaces, ", "), entry.ControlplaneURL)
 	}
 }
 
@@ -118,18 +118,18 @@ func acceptRegistry(in io.Reader, out io.Writer, entry registryEnrollment, expli
 	if err != nil {
 		return err
 	}
+	scope := fmt.Sprintf("project configs under %s from %s", strings.Join(entry.Namespaces, ", "), entry.ControlplaneURL)
 	for _, previous := range policy.Registries {
 		if previous.ControlplaneURL == entry.ControlplaneURL && previous.AccountID == entry.AccountID && slices.Equal(previous.Namespaces, entry.Namespaces) && previous.RegistryID == entry.RegistryID {
-			fmt.Fprintf(out, "Private registry for projects under %s is already trusted.\n", strings.Join(entry.Namespaces, ", "))
+			fmt.Fprintf(out, "Already trusting %s.\n", scope)
 			return nil
 		}
 		if previous.ControlplaneURL == entry.ControlplaneURL && previous.AccountID == entry.AccountID && previous.RegistryID != entry.RegistryID {
 			fmt.Fprintln(out, "Private registry identity changed since you last trusted it.")
 		}
 	}
-	printRegistries(out, []registryEnrollment{entry})
 	if !explicit {
-		fmt.Fprint(out, "Trust configs from this registry? [y/N] ")
+		fmt.Fprintf(out, "Trust %s? [y/N] ", scope)
 		scanner := bufio.NewScanner(in)
 		if !scanner.Scan() {
 			return scanner.Err()
@@ -146,7 +146,7 @@ func acceptRegistry(in io.Reader, out io.Writer, entry registryEnrollment, expli
 	if err := policy.AcceptRegistry(entry); err != nil {
 		return err
 	}
-	fmt.Fprintln(out, "Trusted this private registry.")
+	fmt.Fprintf(out, "Trusted %s.\n", scope)
 	return nil
 }
 

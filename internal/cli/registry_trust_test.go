@@ -78,7 +78,7 @@ func TestRegistryCommandsKeepPersonalAndOrganizationApprovalsSeparate(t *testing
 	require.Len(t, policy.Registries, 2)
 	output, err := captureTestStdout(func() error { return executeLifecycleCLI(newCommandFixture(), t, "trust") })
 	require.NoError(t, err)
-	require.Contains(t, string(output), "Private registry for projects under /acme")
+	require.Contains(t, string(output), "Trusted project configs under /acme from "+server.URL)
 	require.NotContains(t, string(output), entry.RegistryID)
 	output, err = captureTestStdout(func() error { return executeLifecycleCLI(newCommandFixture(), t, "trust", "--json") })
 	require.NoError(t, err)
