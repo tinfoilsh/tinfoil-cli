@@ -489,7 +489,7 @@ func TestMonitorRestartRelinksOnlyAuthorizedSandboxes(t *testing.T) {
 	require.Len(t, connections, 2)
 	require.Equal(t, newHost.Marshal(), connections["a"].Jump.HostKey.Marshal())
 	require.Equal(t, "monitor.example", connections["a"].Jump.HostKeyAlias)
-	require.Equal(t, "a.monitor", connections["a"].Jump.Name)
+	require.Equal(t, "a.perimeter", connections["a"].Jump.Name)
 	require.Equal(t, routeName(fixtures["a"].host.PublicKey()), connections["a"].HostName)
 
 	// A second open finds every pin current and changes nothing.

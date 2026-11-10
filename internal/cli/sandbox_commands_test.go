@@ -182,8 +182,8 @@ func TestContainedProfileJumpsThroughMonitorAndKeepsItsAlias(t *testing.T) {
 	require.NoError(t, installSandboxAlias(testStreams(), profile, home), "a new boot replaces this sandbox's own profile")
 	path := filepath.Join(dir, "work.conf")
 	for host, expected := range map[string][]string{
-		"work":         {"hostname " + strings.ToLower(routeName(rebooted)), "proxyjump work.monitor", "hostkeyalias work.acme.sandboxes.tinfoil.dev", "user sandbox", "stricthostkeychecking true"},
-		"work.monitor": {"hostname 203.0.113.8", "port 22042", "hostkeyalias personal.acme.monitors.tinfoil.dev", "identityfile /keys/personal/device_ed25519", "identityagent none"},
+		"work":           {"hostname " + strings.ToLower(routeName(rebooted)), "proxyjump work.perimeter", "hostkeyalias work.acme.sandboxes.tinfoil.dev", "user sandbox", "stricthostkeychecking true"},
+		"work.perimeter": {"hostname 203.0.113.8", "port 22042", "hostkeyalias personal.acme.monitors.tinfoil.dev", "identityfile /keys/personal/device_ed25519", "identityagent none"},
 	} {
 		data, err := exec.Command(program, "-G", "-F", path, host).Output()
 		require.NoError(t, err)
@@ -220,7 +220,7 @@ func TestRepinSandboxKeepsAliasesAndOtherResources(t *testing.T) {
 	config, err := os.ReadFile(alias)
 	require.NoError(t, err)
 	require.Contains(t, string(config), "Host saved-alias\n")
-	require.Contains(t, string(config), "ProxyJump saved-alias.monitor\n")
+	require.Contains(t, string(config), "ProxyJump saved-alias.perimeter\n")
 	pins, err := knownhosts.New(filepath.Join(dir, "saved-alias.known_hosts"))
 	require.NoError(t, err)
 	remote := &net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: defaultSSHPort}
