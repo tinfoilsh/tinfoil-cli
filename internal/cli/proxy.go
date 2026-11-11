@@ -34,7 +34,7 @@ func newProxyCommand(proxyOpts *proxyOptions, rootOpts *rootOptions) *cobra.Comm
 	proxyCmd := &cobra.Command{
 		Use:        "proxy",
 		Short:      "Run a local HTTP proxy",
-		Deprecated: "the proxy has moved to github.com/tinfoilsh/tinfoil-proxy. Install the Tinfoil Tray app for a menu-bar UI, or run `go install github.com/tinfoilsh/tinfoil-proxy@latest` for the standalone `tinfoil-proxy` binary.",
+		Deprecated: "the proxy has moved to github.com/tinfoilsh/tinfoil-proxy. Install the Tinfoil Proxy app for a menu-bar UI, or run `go install github.com/tinfoilsh/tinfoil-proxy@latest` for the standalone `tinfoil-proxy` binary.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runProxy(proxyOpts, rootOpts, cmd, args)
 		},
