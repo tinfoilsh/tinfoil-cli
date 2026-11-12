@@ -5,9 +5,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,12 +13,10 @@ import (
 	"net"
 	"net/http"
 	"path/filepath"
-	"regexp"
 	"strconv"
 	"time"
 
 	"github.com/tinfoilsh/tinfoil-cli/internal/controlplane"
-	"github.com/tinfoilsh/tinfoil-cli/internal/keybundle"
 	"github.com/tinfoilsh/tinfoil-cli/internal/statefile"
 	"golang.org/x/crypto/ssh"
 )
@@ -34,18 +30,6 @@ const (
 
 	monitorRequestTimeout = time.Minute
 )
-
-var monitorBucketPattern = regexp.MustCompile(`^s3://[a-z0-9.-]+\?prefix=containers%2F([0-9a-f]{64})%2F[A-Za-z0-9-]+%2F&region=[a-z0-9-]+$`)
-
-func bucketOwnedBy(bucket, account, user string) bool {
-	owner := "org:" + account
-	if account == "personal" {
-		owner = "user:" + user
-	}
-	match := monitorBucketPattern.FindStringSubmatch(bucket)
-	digest := sha256.Sum256([]byte(owner))
-	return match != nil && match[1] == hex.EncodeToString(digest[:])
-}
 
 type Monitor struct {
 	service *Service
@@ -77,10 +61,6 @@ func (s *Service) ConnectMonitor(ctx context.Context, scope Scope, cp *controlpl
 		return nil, errors.New("Perimeter has no published SSH port")
 	}
 	s.notify(MonitorRunning, row.Name)
-	bucket := row.Environment["TINFOIL_STORAGE_BUCKET"]
-	if len(bucket) > keybundle.MaxBucketChars || !bucketOwnedBy(bucket, scope.Account(), scope.UserID) {
-		return nil, errors.New("Perimeter storage does not belong to this account")
-	}
 	if row.Environment[MonitorOwnerEnv] != row.OwnerPublicKey {
 		return nil, errors.New("Perimeter's measured owner is not its owner key")
 	}
@@ -94,7 +74,7 @@ func (s *Service) ConnectMonitor(ctx context.Context, scope Scope, cp *controlpl
 			m.close()
 		}
 	}()
-	binding := mkBinding{Account: scope.Account(), ContainerID: row.ID, Bucket: &bucket}
+	binding := mkBinding{Account: scope.Account(), ContainerID: row.ID}
 	if m.keys, err = s.resolveResourceKeys(ctx, cp, scope, row.Container, "monitor", binding, dir, true); err != nil {
 		return nil, err
 	}
@@ -261,10 +241,10 @@ func (s *Service) monitorRecord(scope Scope, row *Workload) (string, error) {
 	}
 	_, err = UpdateProfile(dir, func(p *Profile) error {
 		if p.Domain != "" && p.Domain != row.Domain || p.ContainerID != "" && p.ContainerID != row.ID ||
-			p.Owner != "" && (p.Owner != row.Environment[MonitorOwnerEnv] || p.Storage != row.Environment["TINFOIL_STORAGE_BUCKET"]) {
-			return errors.New("Perimeter identity or storage binding changed")
+			p.Owner != "" && p.Owner != row.Environment[MonitorOwnerEnv] {
+			return errors.New("Perimeter identity changed")
 		}
-		p.Domain, p.ContainerID, p.Owner, p.Storage = row.Domain, row.ID, row.Environment[MonitorOwnerEnv], row.Environment["TINFOIL_STORAGE_BUCKET"]
+		p.Domain, p.ContainerID, p.Owner = row.Domain, row.ID, row.Environment[MonitorOwnerEnv]
 		return nil
 	})
 	return dir, err

@@ -57,6 +57,9 @@ func measuredEnvironment(raw string) (map[string]string, error) {
 	values := map[string]string{}
 	for _, container := range config.Containers {
 		for _, entry := range container.Env {
+			if entry.Kind == yaml.ScalarNode {
+				continue
+			}
 			if entry.Kind != yaml.MappingNode || len(entry.Content) != 2 || entry.Content[1].Tag != "!!str" {
 				return nil, errors.New("workload requires explicit measured environment mappings")
 			}

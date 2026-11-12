@@ -160,7 +160,7 @@ func (r *Resource) validate() error {
 		if sandbox {
 			valid = valid && b.InstanceID != nil && validLowerUUID(*b.InstanceID) && b.VolumeID != nil && validLowerUUID(*b.VolumeID) && b.Bucket == nil
 		} else {
-			valid = valid && b.InstanceID == nil && b.VolumeID == nil && b.Bucket != nil && len(*b.Bucket) <= MaxBucketChars && printableASCII(*b.Bucket)
+			valid = valid && b.InstanceID == nil && b.VolumeID == nil && (b.Bucket == nil || len(*b.Bucket) <= MaxBucketChars && printableASCII(*b.Bucket))
 		}
 		if !valid {
 			return fmt.Errorf("key %q has an invalid resource binding", r.KeyID)

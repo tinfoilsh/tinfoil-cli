@@ -51,7 +51,7 @@ func TestManagedTrustPrecedesCredentials(t *testing.T) {
 		_, err = resolveWorkload(testStreams(), commandState.rootOpts, commandState.trustOpts, row, row.Repo, target.source)
 		require.ErrorContains(t, err, "does not match --repo")
 	}
-	for _, env := range []string{"[OWNER]", "[{OWNER: null}]", "[{}]", "[{OWNER: a}, {OWNER: b}]"} {
+	for _, env := range []string{"[{OWNER: null}]", "[{}]", "[{OWNER: a}, {OWNER: b}]"} {
 		_, err := measuredEnvironment("containers: [{env: " + env + "}]")
 		require.Error(t, err)
 	}
@@ -112,7 +112,7 @@ func TestMonitorPanelAndNativeTransportAgainstRealMonitor(t *testing.T) {
 	number, err := strconv.Atoi(port)
 	require.NoError(t, err)
 	scope := owner.Scope{ControlplaneURL: "https://cp.example", UserID: "user_owner"}
-	row := owner.Workload{Container: containerView{ID: "11111111-1111-4111-8111-111111111111", Name: "monitor", Domain: host, SSHPort: number, Status: statusRunning, OwnerKeyMode: "umk", OwnerPublicKey: ed25519PublicKeyString(seed)}, Environment: map[string]string{monitorOwnerEnv: ed25519PublicKeyString(seed), "TINFOIL_STORAGE_BUCKET": "s3://bucket?prefix=containers%2F" + storageHash([]byte("user:user_owner")) + "%2Fresource%2F&region=us-east-1"}}
+	row := owner.Workload{Container: containerView{ID: "11111111-1111-4111-8111-111111111111", Name: "monitor", Domain: host, SSHPort: number, Status: statusRunning, OwnerKeyMode: "umk", OwnerPublicKey: ed25519PublicKeyString(seed)}, Environment: map[string]string{monitorOwnerEnv: ed25519PublicKeyString(seed)}}
 	service := &owner.Service{ConfigPath: filepath.Join(home, "config.json"), Home: func() (string, error) { return home, nil }, IdentityFile: identity}
 	session, err := service.ConnectMonitor(t.Context(), scope, nil, &row, true, monitorTestVerifier{host: hostSigner.PublicKey()})
 	require.NoError(t, err)

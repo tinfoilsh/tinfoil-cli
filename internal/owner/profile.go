@@ -22,7 +22,6 @@ type Profile struct {
 	Address     string `json:"address,omitempty"`
 	ContainerID string `json:"container_id,omitempty"`
 	Owner       string `json:"owner_public_key,omitempty"`
-	Storage     string `json:"storage,omitempty"`
 	HostKey     string `json:"host_key,omitempty"`
 	Generation  uint64 `json:"generation"`
 	Custody     string `json:"custody,omitempty"`
