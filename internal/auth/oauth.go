@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/tinfoilsh/tinfoil-cli/internal/keybundle"
 )
@@ -25,7 +26,7 @@ const (
 func (s *Service) authorizationURL(state, verifier string, scopes []string) string {
 	challenge := sha256.Sum256([]byte(verifier))
 	query := url.Values{"response_type": {"code"}, "client_id": {s.settings.ClientID}, "redirect_uri": {oauthCallback},
-		"scope": {strings.Join(scopes, " ")}, "state": {state}, "code_challenge_method": {"S256"},
+		"scope": {strings.Join(scopes, " ") + " " + clerkEmailScope}, "state": {state}, "code_challenge_method": {"S256"},
 		"code_challenge": {base64.RawURLEncoding.EncodeToString(challenge[:])}, "resource": {s.settings.APIOrigin}}
 	return s.settings.Issuer + "/oauth/authorize?" + query.Encode()
 }
@@ -89,31 +90,36 @@ func (s *Service) clerkToken(ctx context.Context, form url.Values, scopes []stri
 	return &tokens, nil
 }
 
-func (s *Service) clerkIdentity(ctx context.Context, accessToken string) (userID, account string, err error) {
+func (s *Service) clerkIdentity(ctx context.Context, accessToken string) (userID, account, email, orgName string, err error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.settings.Issuer+"/oauth/userinfo", nil)
 	if err != nil {
-		return "", "", err
+		return "", "", "", "", err
 	}
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 	reply, err := s.clerkRequest(req)
 	if err != nil {
-		return "", "", err
+		return "", "", "", "", err
 	}
 	var identity struct {
 		Subject        string `json:"sub"`
 		UserID         string `json:"user_id"`
 		OrganizationID string `json:"org_id"`
+		Email          string `json:"email"`
+		OrgName        string `json:"org_name"`
 	}
 	if err := json.Unmarshal(reply, &identity); err != nil || !keybundle.ValidUserID(identity.Subject) ||
 		(identity.UserID != "" && identity.UserID != identity.Subject) ||
 		(identity.OrganizationID != "" && (!strings.HasPrefix(identity.OrganizationID, "org_") || !keybundle.ValidAccount(identity.OrganizationID))) {
-		return "", "", errors.New("Clerk returned an invalid login identity")
+		return "", "", "", "", errors.New("Clerk returned an invalid login identity")
 	}
 	account = identity.OrganizationID
 	if account == "" {
 		account = "personal"
 	}
-	return identity.Subject, account, nil
+	if strings.ContainsFunc(identity.Email+identity.OrgName, unicode.IsControl) {
+		identity.Email, identity.OrgName = "", ""
+	}
+	return identity.Subject, account, identity.Email, identity.OrgName, nil
 }
 
 func (s *Service) clerkPost(ctx context.Context, path string, form url.Values) ([]byte, error) {

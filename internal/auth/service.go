@@ -24,6 +24,8 @@ const (
 	keySyncCallback  = "http://localhost:49152/callback"
 	loginRecordName  = "login"
 	accessTokenSlack = 60
+	// Display-only: requested but not required, so grants issued without it still renew.
+	clerkEmailScope = "email"
 )
 
 var (
@@ -200,7 +202,7 @@ func (s *Service) accessToken(ctx context.Context, g *Grant) (string, error) {
 		if err != nil {
 			return fmt.Errorf("renewing your login failed; run `tinfoil login`: %w", err)
 		}
-		userID, account, err := s.clerkIdentity(ctx, tokens.AccessToken)
+		userID, account, _, _, err := s.clerkIdentity(ctx, tokens.AccessToken)
 		if err != nil {
 			return fmt.Errorf("checking the renewed login: %w", err)
 		}

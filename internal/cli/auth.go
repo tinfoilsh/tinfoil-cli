@@ -232,8 +232,8 @@ func (a *accountAccess) clerkLogin(cmd *cobra.Command, syncKeys bool, openBrowse
 				}
 			}()
 		},
-		SignedIn: func(userID, account string) {
-			fmt.Fprintf(cmd.OutOrStdout(), "%s %s\n", okText("Signed in as"), dimText(fmt.Sprintf("%s (account %s).", userID, account)))
+		SignedIn: func(name, account string) {
+			fmt.Fprintf(cmd.OutOrStdout(), "%s %s\n", okText("Signed in as"), dimText(fmt.Sprintf("%s (%s account).", name, account)))
 		},
 		SyncCode: func(code string) {
 			fmt.Fprintf(cmd.ErrOrStderr(), "\nEnter this code in the browser tab that just opened:\n\n    %s\n\n%s\n", valueText(code), dimText("Ctrl-C skips key sync and keeps your login."))

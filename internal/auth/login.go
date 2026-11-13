@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"cmp"
 	"context"
 	"crypto/ecdh"
 	"crypto/rand"
@@ -32,7 +33,7 @@ const (
 
 type LoginProgress struct {
 	Authorize func(string)
-	SignedIn  func(userID, account string)
+	SignedIn  func(name, account string)
 	SyncCode  func(string)
 }
 
@@ -56,6 +57,7 @@ type loginCeremony struct {
 	authErr    error
 	private    *ecdh.PrivateKey
 	request    keybundle.SyncRequest
+	email, org string
 
 	mu            sync.Mutex
 	oauthConsumed bool
@@ -110,7 +112,7 @@ func (s *Service) Login(ctx context.Context, syncKeys bool, progress LoginProgre
 	if ceremony.authErr == nil {
 		result.Grant = ceremony.grant
 		if progress.SignedIn != nil {
-			progress.SignedIn(ceremony.grant.UserID, ceremony.grant.Account)
+			progress.SignedIn(cmp.Or(ceremony.email, ceremony.grant.UserID), cmp.Or(ceremony.org, ceremony.grant.Account))
 		}
 		if syncKeys && ceremony.private != nil && progress.SyncCode != nil {
 			progress.SyncCode(keybundle.ConfirmationCode(keybundle.CanonicalRequest(ceremony.request, targets)))
@@ -322,10 +324,11 @@ func (c *loginCeremony) redeem(code string) (*Grant, error) {
 	if tokens.RefreshToken == "" {
 		return nil, errors.New("Clerk granted no refresh token")
 	}
-	userID, account, err := c.service.clerkIdentity(c.ctx, tokens.AccessToken)
+	userID, account, email, orgName, err := c.service.clerkIdentity(c.ctx, tokens.AccessToken)
 	if err != nil {
 		return nil, fmt.Errorf("checking the new login: %w", err)
 	}
+	c.email, c.org = email, orgName
 	grant := &Grant{Version: 1, Grant: randomB64U(16), Issuer: c.service.settings.Issuer, ClientID: c.service.settings.ClientID,
 		UserID: userID, Account: account, AccessToken: tokens.AccessToken, RefreshToken: tokens.RefreshToken,
 		ExpiresAt: time.Now().Unix() + tokens.ExpiresIn}
