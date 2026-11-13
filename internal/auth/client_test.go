@@ -32,7 +32,7 @@ func TestInjectedClientAndVersionReachClerkAndKeySync(t *testing.T) {
 	defer server.Close()
 	fixture := testService(t, server.URL)
 	service := New(fixture.settings, fixture.store, server.Client(), "auth-test", Lifecycle{})
-	user, account, err := service.clerkIdentity(t.Context(), "access-fixture")
+	user, account, _, _, err := service.clerkIdentity(t.Context(), "access-fixture")
 	require.NoError(t, err)
 	require.Equal(t, "user_owner", user)
 	require.Equal(t, "personal", account)
@@ -68,7 +68,7 @@ func TestInjectedRedirectPolicyCannotForwardCredentials(t *testing.T) {
 	client := server.Client()
 	client.CheckRedirect = func(*http.Request, []*http.Request) error { return nil }
 	service := New(fixture.settings, fixture.store, client, "auth-test", Lifecycle{})
-	_, _, err := service.clerkIdentity(t.Context(), "access-fixture")
+	_, _, _, _, err := service.clerkIdentity(t.Context(), "access-fixture")
 	require.ErrorContains(t, err, "307")
 	grant := fixtureGrant(service, "user_owner")
 	require.NoError(t, service.commitLogin(t.Context(), grant))

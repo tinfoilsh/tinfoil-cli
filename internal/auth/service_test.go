@@ -290,7 +290,7 @@ func TestClerkIdentity(t *testing.T) {
 			}))
 			defer server.Close()
 			service := testService(t, server.URL)
-			user, account, err := service.clerkIdentity(t.Context(), "access-1")
+			user, account, _, _, err := service.clerkIdentity(t.Context(), "access-1")
 			if tc.account == "" {
 				require.Error(t, err)
 				require.Empty(t, user)
@@ -542,7 +542,7 @@ func TestClerkLoginCeremony(t *testing.T) {
 		require.Nil(t, synced)
 		query := <-browser.authorization
 		require.Equal(t, "fixture-client", query.Get("client_id"))
-		require.Equal(t, "offline_access user:org:read api:full", query.Get("scope"))
+		require.Equal(t, "offline_access user:org:read api:full email", query.Get("scope"))
 		clerk.mu.Lock()
 		form := clerk.forms[len(clerk.forms)-1]
 		clerk.mu.Unlock()
