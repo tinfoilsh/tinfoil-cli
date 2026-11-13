@@ -3,6 +3,7 @@ package cli
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -142,7 +143,13 @@ func serveMonitorPanel(cmd *cobra.Command, monitor *monitorSession, address stri
 	}
 	probe.Close()
 	url := fmt.Sprintf("http://%s/app/#session=%s", listener.Addr(), session)
-	fmt.Fprintf(cmd.OutOrStdout(), "Local Perimeter panel: %s\n", url)
+	if format := cmd.Flag("output"); format != nil && format.Value.String() == "json" {
+		if err := json.NewEncoder(cmd.OutOrStdout()).Encode(map[string]string{"panel": "http://" + listener.Addr().String(), "session": session, "ssh": monitor.Address()}); err != nil {
+			return err
+		}
+	} else {
+		fmt.Fprintf(cmd.OutOrStdout(), "Local Perimeter panel: %s\n", url)
+	}
 	fmt.Fprintln(cmd.ErrOrStderr(), "Keep this command running. Ctrl-C closes the SSH connection. Owner credentials stay out of the browser.")
 	if input, ok := cmd.InOrStdin().(*os.File); ok && term.IsTerminal(int(input.Fd())) {
 		fmt.Fprintln(cmd.ErrOrStderr(), "Press Enter to open the Perimeter in your browser.")

@@ -308,6 +308,9 @@ func panelToken() string {
 
 func (m *Monitor) Close() { m.close() }
 
+// Address is the Perimeter's SSH endpoint.
+func (m *Monitor) Address() string { return m.address }
+
 func (m *Monitor) ValidateSandboxCustody(row controlplane.Container) error {
 	if m.keys.mode == "umk" && row.OwnerKeyMode == "tmk" {
 		return fmt.Errorf("a UMK Perimeter cannot serve the synced bunker %s", row.Name)
