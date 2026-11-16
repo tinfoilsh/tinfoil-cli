@@ -22,10 +22,6 @@ const (
 	releaseImageRegistry    = "ghcr.io/"
 	templateEnvPath         = "containers.env."
 	templateVolumeSizePath  = "volumes.size"
-	templateTLSModePath     = "shim.tls-mode"
-	// Controlplane renders these into a bunker with NO_MONITOR=1.
-	directNetworkConfig = "\ncvm-network:\n  inbound-ports: [22]\n"
-	directTLSMode       = "cert-proxy"
 )
 
 // Keep the checked configuration and its measured bindings together through
@@ -62,7 +58,7 @@ func resolveWorkload(streams commandIO, rootOpts *rootOptions, trustOpts *trustO
 		if verify == nil {
 			verify = verifyRelease
 		}
-		if err := verify(row, env["NO_MONITOR"] == "1"); err != nil {
+		if err := verify(row); err != nil {
 			return nil, fmt.Errorf("verifying %s as release %s of %s: %w; --dangerous skips this check", row.Name, row.CurrentTag, repository, err)
 		}
 	}
@@ -72,21 +68,18 @@ func resolveWorkload(streams commandIO, rootOpts *rootOptions, trustOpts *trustO
 	return &workloadTarget{containerView: row, source: target.source, env: env}, nil
 }
 
-func verifyRelease(row containerView, direct bool) error {
+func verifyRelease(row containerView) error {
 	ctx := context.Background()
 	template, err := selfupdate.ReleaseAsset(ctx, row.Repo, row.CurrentTag, releaseTemplateName, releaseTemplateWorkflow, configendorsement.MaxConfigSize)
 	if err != nil {
 		return err
-	}
-	if direct {
-		template = append(template, directNetworkConfig...)
 	}
 	var want, got yaml.Node
 	var release struct{ Containers []struct{ Image string } }
 	if err := errors.Join(yaml.Unmarshal(template, &want), yaml.Unmarshal(template, &release), yaml.Unmarshal([]byte(row.Config), &got)); err != nil {
 		return err
 	}
-	if !rendered(&want, &got, "", direct) {
+	if !rendered(&want, &got, "") {
 		return errors.New("its config differs from the release template")
 	}
 	// A tag can be cut from any commit, so the image must also be built from main.
@@ -103,12 +96,11 @@ func verifyRelease(row containerView, direct bool) error {
 }
 
 // rendered reports whether got is the template want with only its parameters bound.
-func rendered(want, got *yaml.Node, path string, direct bool) bool {
+func rendered(want, got *yaml.Node, path string) bool {
 	if want.Kind != got.Kind || want.Tag != got.Tag || len(want.Content) != len(got.Content) {
 		return false
 	}
-	parameter := want.Value == "" && strings.HasPrefix(path, templateEnvPath) || path == templateVolumeSizePath ||
-		direct && path == templateTLSModePath && got.Value == directTLSMode
+	parameter := want.Value == "" && strings.HasPrefix(path, templateEnvPath) || path == templateVolumeSizePath
 	if want.Value != got.Value && !parameter {
 		return false
 	}
@@ -117,7 +109,7 @@ func rendered(want, got *yaml.Node, path string, direct bool) bool {
 		if want.Kind == yaml.MappingNode && i%2 == 1 {
 			at = strings.TrimPrefix(path+"."+want.Content[i-1].Value, ".")
 		}
-		if !rendered(child, got.Content[i], at, direct) {
+		if !rendered(child, got.Content[i], at) {
 			return false
 		}
 	}
