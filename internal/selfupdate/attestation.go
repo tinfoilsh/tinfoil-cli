@@ -76,7 +76,10 @@ func ReleaseAsset(ctx context.Context, repo, tag, name, workflow string, limit i
 	if err != nil {
 		return nil, fmt.Errorf("fetching %s: %w", name, err)
 	}
-	return data, VerifyProvenance(ctx, repo, workflow, "refs/tags/"+regexp.QuoteMeta(tag), sha256.Sum256(data))
+	if err := VerifyProvenance(ctx, repo, workflow, "refs/tags/"+regexp.QuoteMeta(tag), sha256.Sum256(data)); err != nil {
+		return nil, err
+	}
+	return data, nil
 }
 
 // VerifyProvenance requires a Sigstore attestation of digest from repo's workflow, run at a ref matching the pattern ref.
