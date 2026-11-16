@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strings"
 
@@ -37,6 +38,12 @@ const (
 	attestationOIDC     = "https://token.actions.githubusercontent.com"
 )
 
+const (
+	attestationsURLFormat = "https://api.github.com/repos/%s/attestations"
+	releaseAssetURLFormat = "https://github.com/%s/releases/download/%s/%s"
+	workflowSANFormat     = `^https://github\.com/%s/\.github/workflows/%s@%s$`
+)
+
 //go:embed trusted_root_sigstore.json
 var updateTrustedRoot []byte
 
@@ -56,7 +63,29 @@ type attestationEnvelope struct {
 // checksum-only updates. The attestations endpoint is normally the GitHub
 // API; callers pass it so tests can serve their own listing.
 func verifyUpdateAttestation(ctx context.Context, client *http.Client, archive []byte, tag, endpointBase, current string) error {
-	digest := sha256.Sum256(archive)
+	// The signer workflow must be this repository's release workflow, run
+	// from the tag being installed — not a draft, another repository, or a
+	// branch push.
+	expectedSAN := fmt.Sprintf(`^https://github\.com/tinfoilsh/tinfoil-cli/\.github/workflows/release\.yml@refs/tags/%s$`, regexp.QuoteMeta(tag))
+	return verifyAttestation(ctx, client, sha256.Sum256(archive), endpointBase, expectedSAN, current)
+}
+
+// ReleaseAsset downloads a GitHub release asset and requires its provenance from that tag's run of workflow.
+func ReleaseAsset(ctx context.Context, repo, tag, name, workflow string, limit int64) ([]byte, error) {
+	data, err := fetchUpdateData(ctx, updateHTTPClient(updateTimeout), fmt.Sprintf(releaseAssetURLFormat, repo, url.PathEscape(tag), name), "", limit)
+	if err != nil {
+		return nil, fmt.Errorf("fetching %s: %w", name, err)
+	}
+	return data, VerifyProvenance(ctx, repo, workflow, "refs/tags/"+regexp.QuoteMeta(tag), sha256.Sum256(data))
+}
+
+// VerifyProvenance requires a Sigstore attestation of digest from repo's workflow, run at a ref matching the pattern ref.
+func VerifyProvenance(ctx context.Context, repo, workflow, ref string, digest [sha256.Size]byte) error {
+	expectedSAN := fmt.Sprintf(workflowSANFormat, regexp.QuoteMeta(repo), regexp.QuoteMeta(workflow), ref)
+	return verifyAttestation(ctx, updateHTTPClient(updateTimeout), digest, fmt.Sprintf(attestationsURLFormat, repo), expectedSAN, "")
+}
+
+func verifyAttestation(ctx context.Context, client *http.Client, digest [sha256.Size]byte, endpointBase, expectedSAN, current string) error {
 	endpoint := endpointBase + "/sha256:" + hex.EncodeToString(digest[:])
 	data, err := fetchUpdateData(ctx, client, endpoint, current, attestationsLimit)
 	if err != nil {
@@ -67,13 +96,9 @@ func verifyUpdateAttestation(ctx context.Context, client *http.Client, archive [
 		return fmt.Errorf("decoding attestation list: %w", err)
 	}
 	if len(envelope.Attestations) == 0 {
-		return errors.New("release has no attestations; refusing to install")
+		return errors.New("release has no attestations")
 	}
 
-	// The signer workflow must be this repository's release workflow, run
-	// from the tag being installed — not a draft, another repository, or a
-	// branch push.
-	expectedSAN := fmt.Sprintf(`^https://github\.com/tinfoilsh/tinfoil-cli/\.github/workflows/release\.yml@refs/tags/%s$`, regexp.QuoteMeta(tag))
 	var lastErr error
 	for _, att := range envelope.Attestations {
 		ok, err := verifyOneAttestation(ctx, client, att.BundleURL, digest, expectedSAN, current)
@@ -86,9 +111,9 @@ func verifyUpdateAttestation(ctx context.Context, client *http.Client, archive [
 		}
 	}
 	if lastErr != nil {
-		return fmt.Errorf("verifying update attestations: %w", lastErr)
+		return fmt.Errorf("verifying attestations: %w", lastErr)
 	}
-	return errors.New("no valid attestation matches this archive; refusing to install")
+	return errors.New("no valid attestation matches")
 }
 
 // verifyOneAttestation fetches one bundle and verifies it end to end. It

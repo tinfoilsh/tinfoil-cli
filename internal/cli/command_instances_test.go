@@ -236,7 +236,7 @@ func newCommandFixture() *commandFixture {
 		repoBuildStatusOpts:   &repoBuildStatusOptions{},
 		repoConfigGetOpts:     &repoConfigGetOptions{},
 		repoConfigPROpts:      &repoConfigPROptions{},
-		rootOpts:              &rootOptions{registryOrigin: func() (string, error) { return testAccounts().registryControlplaneURL(testStreams()) }},
+		rootOpts:              &rootOptions{registryOrigin: func() (string, error) { return testAccounts().registryControlplaneURL(testStreams()) }, connections: connectionDependencies{verifyRelease: func(containerView, bool) error { return nil }}},
 		sandboxActionOpts:     &sandboxActionOptions{},
 		secretValueOpts:       &secretValueOptions{},
 		sshOpts:               &sshOptions{},
