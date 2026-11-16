@@ -191,6 +191,7 @@ type connectionDependencies struct {
 	proxyClient           func(context.Context, string, string) (*http.Client, error)
 	serveProxy            func(string, http.Handler) error
 	verifySandboxEvidence sandboxEvidenceVerifier
+	verifyRelease         func(row containerView) error
 }
 
 type commandDependencies struct {
