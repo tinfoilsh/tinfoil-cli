@@ -24,13 +24,14 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tinfoilsh/tinfoil-cli/internal/connection"
 	"github.com/tinfoilsh/tinfoil-cli/internal/controlplane"
+	"github.com/tinfoilsh/tinfoil-go/verify"
 	"github.com/tinfoilsh/tinfoil-go/verify/document"
 	"golang.org/x/crypto/ssh"
 )
 
 func TestSandboxAttestationRelayUsesCurrentSchema(t *testing.T) {
 	const instance = "22222222-2222-4222-8222-222222222222"
-	const source = "acme/sandbox@v1"
+	source := verify.Pin{Project: "acme/sandbox@v1"}
 	doc := []byte("attestation document")
 	challenges := make(chan []byte, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -59,7 +60,7 @@ func TestSandboxAttestationRelayUsesCurrentSchema(t *testing.T) {
 		return err
 	}}
 	verificationError := errors.New("verification stopped")
-	verifier := relayVerifier(func(reference string, raw, nonce []byte) (connection.Evidence, error) {
+	verifier := relayVerifier(func(reference verify.Pin, raw, nonce []byte) (connection.Evidence, error) {
 		require.Equal(t, doc, raw)
 		require.Equal(t, <-challenges, nonce)
 		require.Equal(t, source, reference)
@@ -387,9 +388,9 @@ func TestMonitorRestartRelinksOnlyAuthorizedSandboxes(t *testing.T) {
 	require.NoError(t, err)
 	revision := keys.revision
 
-	verifier := relayVerifier(func(source string, doc, _ []byte) (connection.Evidence, error) {
+	verifier := relayVerifier(func(pin verify.Pin, doc, _ []byte) (connection.Evidence, error) {
 		for _, f := range fixtures {
-			if strings.Contains(string(doc), f.instance) && strings.Contains(source, storageHash(doc)) {
+			if strings.Contains(string(doc), f.instance) && strings.Contains(pin.Project, storageHash(doc)) {
 				return hostEvidence{host: f.host.PublicKey(), expires: time.Now().Add(time.Hour)}, nil
 			}
 		}
@@ -439,7 +440,7 @@ func TestMonitorRestartRelinksOnlyAuthorizedSandboxes(t *testing.T) {
 			return err
 		}
 		f := fixtures[row.Name]
-		target := &Workload{Container: row, Source: row.ConfigName, Environment: map[string]string{SandboxOwnerEnv: f.key.OwnerPublicKey, "SANDBOX_INSTANCE_ID": f.instance}}
+		target := &Workload{Container: row, Pin: verify.Pin{Project: row.ConfigName}, Environment: map[string]string{SandboxOwnerEnv: f.key.OwnerPublicKey, "SANDBOX_INSTANCE_ID": f.instance}}
 		info, err := cp.service.RelinkSandbox(t.Context(), scope, cp.Client, m, monitorID, id, target, verifier)
 		if info != nil {
 			connections[row.Name] = info

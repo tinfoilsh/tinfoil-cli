@@ -146,7 +146,7 @@ func TestMatches(t *testing.T) {
 		{"evil/api@r1@" + testDigestA, false},
 		{"", false},
 	} {
-		if got := policy.Matches(tc.source); got != tc.want {
+		if got := policy.Matches(projectPin(tc.source)); got != tc.want {
 			t.Errorf("matches(%q) = %v, want %v", tc.source, got, tc.want)
 		}
 	}
@@ -154,7 +154,7 @@ func TestMatches(t *testing.T) {
 
 func TestMatchesEmptyStoreMatchesNothing(t *testing.T) {
 	policy := Policy{}
-	if policy.Matches("acme/api@r1@" + testDigestA) {
+	if policy.Matches(projectPin("acme/api@r1@" + testDigestA)) {
 		t.Fatal("empty store must not match")
 	}
 }
@@ -203,21 +203,21 @@ func TestRecordTrustWritesAtConfiguredLevel(t *testing.T) {
 				t.Fatal(err)
 			}
 			policy.Record = level
-			if err := policy.RecordTrust(source); err != nil {
+			if err := policy.RecordTrust(projectPin(source)); err != nil {
 				t.Fatal(err)
 			}
 			reloaded, err := Load(path)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !reloaded.Matches(wantMatch) {
+			if !reloaded.Matches(projectPin(wantMatch)) {
 				t.Fatalf("level %s should cover %q: %+v", level, wantMatch, reloaded)
 			}
 			// And nothing broader than the recorded level may pass.
-			if level != RecordOrg && reloaded.Matches("acme/other@r1@"+testDigestB) {
+			if level != RecordOrg && reloaded.Matches(projectPin("acme/other@r1@"+testDigestB)) {
 				t.Fatalf("level %s must not cover sibling projects: %+v", level, reloaded)
 			}
-			if level == RecordPin && reloaded.Matches("acme/api@r12@"+testDigestB) {
+			if level == RecordPin && reloaded.Matches(projectPin("acme/api@r12@"+testDigestB)) {
 				t.Fatalf("pin must not cover the same revision with another digest: %+v", reloaded)
 			}
 		})
@@ -232,7 +232,7 @@ func TestRecordTrustIsInclusiveGoingDown(t *testing.T) {
 	}
 	policy.Record = RecordOrg
 	source := "acme/api@r12@" + testDigestA
-	if err := policy.RecordTrust(source); err != nil {
+	if err := policy.RecordTrust(projectPin(source)); err != nil {
 		t.Fatal(err)
 	}
 	reloaded, err := Load(path)
@@ -241,16 +241,16 @@ func TestRecordTrustIsInclusiveGoingDown(t *testing.T) {
 	}
 	if !containsEntry(reloaded.Allow.Orgs, "acme") ||
 		!containsEntry(reloaded.Allow.Projects, "acme/api") ||
-		!reloaded.HasPin(source) {
+		!reloaded.HasPin(projectPin(source)) {
 		t.Fatalf("org-yes should record all narrower levels: %+v", reloaded)
 	}
 
 	// Tightening: delete the broad lines; the narrower buckets carry you.
 	reloaded.Allow.Orgs, reloaded.Allow.Projects = nil, nil
-	if !reloaded.Matches(source) {
+	if !reloaded.Matches(projectPin(source)) {
 		t.Fatal("pin should carry trust after tightening")
 	}
-	if reloaded.Matches("acme/api@r99@" + testDigestB) {
+	if reloaded.Matches(projectPin("acme/api@r99@" + testDigestB)) {
 		t.Fatal("tightened store must not cover unseen revisions")
 	}
 }
@@ -267,7 +267,7 @@ func TestRecordTrustDedupes(t *testing.T) {
 		"acme/api@r12@" + testDigestA, // same again
 		"acme/api@r13@" + testDigestB, // same org+project, new pin
 	} {
-		if err := policy.RecordTrust(source); err != nil {
+		if err := policy.RecordTrust(projectPin(source)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -287,14 +287,14 @@ func TestRecordPinJournalsAndDedupes(t *testing.T) {
 		t.Fatal(err)
 	}
 	source := "acme/api@r12@" + testDigestA
-	fresh, err := policy.RecordPin(source)
+	fresh, err := policy.RecordPin(projectPin(source))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !fresh {
 		t.Fatal("first record should report new")
 	}
-	again, err := policy.RecordPin(source)
+	again, err := policy.RecordPin(projectPin(source))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -309,7 +309,7 @@ func TestRecordPinJournalsAndDedupes(t *testing.T) {
 		t.Fatalf("expected one journaled pin: %v", reloaded.Allow.Pins)
 	}
 	// Journaling a pin must not widen policy.
-	if reloaded.Matches("acme/api@r13@" + testDigestB) {
+	if reloaded.Matches(projectPin("acme/api@r13@" + testDigestB)) {
 		t.Fatal("journal pin must not cover other revisions")
 	}
 }
@@ -325,7 +325,7 @@ func TestRecordPinSortsIntoProjectGroups(t *testing.T) {
 		"acme/api@r1@" + testDigestA,
 		"widgets/batch@r1@" + testDigestA,
 	} {
-		if _, err := policy.RecordPin(pin); err != nil {
+		if _, err := policy.RecordPin(projectPin(pin)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -347,7 +347,7 @@ func TestRecordPinSortsIntoProjectGroups(t *testing.T) {
 
 func TestRecordPinRejectsUnpinned(t *testing.T) {
 	policy := Policy{path: filepath.Join(t.TempDir(), "known-configs.json")}
-	if _, err := policy.RecordPin("acme/api"); err == nil {
+	if _, err := policy.RecordPin(projectPin("acme/api")); err == nil {
 		t.Fatal("expected error for unpinned reference")
 	}
 }
@@ -358,13 +358,13 @@ func TestRecordTrustRejectsUnknownGranularity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := policy.RecordTrustAt("acme/api@r1@"+testDigestA, "unknown"); err == nil {
+	if _, err := policy.RecordTrustAt(projectPin("acme/api@r1@"+testDigestA), "unknown"); err == nil {
 		t.Fatal("unknown granularity must not grant org-wide trust")
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Fatal("invalid granularity must not write the store")
 	}
-	if policy.Matches("acme/api@r1@" + testDigestA) {
+	if policy.Matches(projectPin("acme/api@r1@" + testDigestA)) {
 		t.Fatal("invalid granularity must not change in-memory trust")
 	}
 }
@@ -375,7 +375,7 @@ func TestSetDefaultsPreservesAllowList(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := policy.RecordPin("widgets/batch@r12@" + testDigestA); err != nil {
+	if _, err := policy.RecordPin(projectPin("widgets/batch@r12@" + testDigestA)); err != nil {
 		t.Fatal(err)
 	}
 	if err := policy.SetDefaults(ModeFrozen, RecordPin); err != nil {
@@ -386,7 +386,7 @@ func TestSetDefaultsPreservesAllowList(t *testing.T) {
 		t.Fatal(err)
 	}
 	if reloaded.Mode != ModeFrozen || reloaded.Record != RecordPin ||
-		!reloaded.Matches("acme/api@r99@"+testDigestB) || !reloaded.HasPin("widgets/batch@r12@"+testDigestA) {
+		!reloaded.Matches(projectPin("acme/api@r99@"+testDigestB)) || !reloaded.HasPin(projectPin("widgets/batch@r12@"+testDigestA)) {
 		t.Fatalf("defaults or allow list lost: %+v", reloaded)
 	}
 }
@@ -405,14 +405,14 @@ func TestAppendIntoEmptyBuckets(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err := policy.RecordPin("acme/api@r1@" + testDigestA); err != nil {
+			if _, err := policy.RecordPin(projectPin("acme/api@r1@" + testDigestA)); err != nil {
 				t.Fatal(err)
 			}
 			reloaded, err := Load(path)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !reloaded.HasPin("acme/api@r1@" + testDigestA) {
+			if !reloaded.HasPin(projectPin("acme/api@r1@" + testDigestA)) {
 				t.Fatalf("pin not journaled: %+v", reloaded)
 			}
 		})
@@ -425,7 +425,7 @@ func TestAppendCreatesFileWithDefaultsExplicit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := policy.RecordTrust("acme/api@r1@" + testDigestA); err != nil {
+	if err := policy.RecordTrust(projectPin("acme/api@r1@" + testDigestA)); err != nil {
 		t.Fatal(err)
 	}
 	data, err := os.ReadFile(path)
@@ -453,7 +453,7 @@ func TestAppendCreatesFileWithDefaultsExplicit(t *testing.T) {
 	if reloaded.Mode != ModePrompt || reloaded.Record != RecordProject {
 		t.Fatalf("fresh file should make defaults explicit: %+v", reloaded)
 	}
-	if !reloaded.Matches("acme/api@r2@" + testDigestB) {
+	if !reloaded.Matches(projectPin("acme/api@r2@" + testDigestB)) {
 		t.Fatalf("project trust not recorded: %+v", reloaded)
 	}
 }
@@ -477,10 +477,10 @@ func TestPruneBroaderThan(t *testing.T) {
 		if len(reloaded.Allow.Orgs)+len(reloaded.Allow.Projects) != 0 || len(reloaded.Allow.Pins) != 1 {
 			t.Fatalf("prune wrong: %+v", reloaded)
 		}
-		if reloaded.Matches("acme/other@r1@" + testDigestB) {
+		if reloaded.Matches(projectPin("acme/other@r1@" + testDigestB)) {
 			t.Fatal("org grant must be gone")
 		}
-		if !reloaded.Matches("acme/api@r1@" + testDigestA) {
+		if !reloaded.Matches(projectPin("acme/api@r1@" + testDigestA)) {
 			t.Fatal("pin must survive")
 		}
 	})
@@ -563,7 +563,7 @@ func TestConnectionPolicyDoesNotIgnoreYAMLStore(t *testing.T) {
 		t.Fatal(err)
 	}
 	policy, err = location.Load()
-	if err != nil || policy.Mode != ModeFrozen || !policy.Matches("acme/api@v2") || policy.path != path {
+	if err != nil || policy.Mode != ModeFrozen || !policy.Matches(projectPin("acme/api@v2")) || policy.path != path {
 		t.Fatalf("released JSON policy was not preserved: %+v, %v", policy, err)
 	}
 	if err := policy.save(); err != nil {

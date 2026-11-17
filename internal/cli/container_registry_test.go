@@ -10,6 +10,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tinfoilsh/tinfoil-go/verify"
 )
 
 const registryConfigDigest = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
@@ -17,8 +18,16 @@ const registryConfigDigest = "0123456789abcdef0123456789abcdef0123456789abcdef01
 func TestCreateRegistryRevision(t *testing.T) {
 	commandState := newCommandFixture()
 
-	for _, revision := range []string{"v1.2.3", "sha256:" + registryConfigDigest} {
+	for _, test := range []struct {
+		revision string
+		source   []string
+	}{
+		{"v1.2.3", []string{"--source", "registry", "--project", "acme/app"}},
+		{"sha256:" + registryConfigDigest, []string{"--project", "acme/app"}},
+	} {
+		revision, source := test.revision, test.source
 		t.Run(revision, func(t *testing.T) {
+			trustPath := gateEnv(t, "")
 			var paths []string
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				paths = append(paths, r.Method+" "+r.URL.Path)
@@ -36,9 +45,13 @@ func TestCreateRegistryRevision(t *testing.T) {
 			configureContainerPromotionTest(commandState, t, server.URL)
 			commandState.containerCreateOpts.createTag = ""
 			output, err := captureTestStdout(func() error {
-				return executeLifecycleCLI(commandState, t, "container", "create", "app", "--source", "registry", "--repo", "acme/app", "--revision", revision, "--no-wait")
+				return executeLifecycleCLI(commandState, t, append([]string{"container", "create", "app", "--revision", revision, "--no-wait"}, source...)...)
 			})
 			require.NoError(t, err)
+			policy, err := loadConnectionPolicyFrom(trustPath)
+			require.NoError(t, err)
+			require.Equal(t, []string{"acme/app"}, policy.Allow.Projects)
+			require.Empty(t, policy.GitHub)
 			require.Equal(t, []string{"POST /api/containers"}, paths)
 			require.Contains(t, string(output), `"config_name": "/acme/app/v1.2.3"`)
 		})
@@ -86,6 +99,7 @@ func TestCreateRejectsInvalidSourceSelection(t *testing.T) {
 		{[]string{"--source", "registry", "--tag", "v1"}, "use --revision"},
 		{[]string{"--source", "registry", "--revision", "v1", "--replace", testContainerID}, "registry configs do not support --replace"},
 		{[]string{"--source", "registry"}, "at least one of the flags"},
+		{[]string{"--source", "registry", "--revision", "v1"}, "use --project instead of --repo"},
 		{[]string{"--tag", "v1", "--revision", "v2"}, "none of the others can be"},
 	} {
 		t.Run(test.message, func(t *testing.T) {
@@ -132,7 +146,7 @@ func TestRegistryConnectionPinsNameAndDigest(t *testing.T) {
 	expected := "acme/app@v1.2.3@sha256:" + registryConfigDigest
 	target, err := parseConnectionDescriptor(descriptor)
 	require.NoError(t, err)
-	require.Equal(t, expected, target.source)
+	require.Equal(t, projectPin(expected), target.source)
 
 	for _, invalid := range []connectionDescriptor{
 		{URL: descriptor.URL, ConfigName: "/acme/app", ConfigDigest: registryConfigDigest},
@@ -152,27 +166,35 @@ func TestRegistryConnectionPinsNameAndDigest(t *testing.T) {
 	defer server.Close()
 	configureContainerPromotionTest(commandState, t, server.URL)
 	gateEnv(t, `{"allow":{"pins":["acme/app@sha256:`+registryConfigDigest+`"]}}`)
-	previousRepo := commandState.rootOpts.repo
-	commandState.rootOpts.repo = ""
-	t.Cleanup(func() { commandState.rootOpts.repo = previousRepo })
+	previous := *commandState.rootOpts
+	commandState.rootOpts.repo, commandState.rootOpts.project = "", ""
+	t.Cleanup(func() { *commandState.rootOpts = previous })
 	tunnel, err := resolveTunnelTarget(testAuthedClient, testStreams(), commandState.forwardOpts, commandState.rootOpts, commandState.trustOpts, testContainerID)
 	require.NoError(t, err)
-	require.Equal(t, expected, tunnel.repo)
+	require.Equal(t, projectPin(expected), tunnel.pin)
 	require.Equal(t, target.host, tunnel.host)
-	require.Contains(t, containerConnectionGuidance(c, false), "--repo "+expected)
+	require.Contains(t, containerConnectionGuidance(c, false), "--project "+expected)
 
 	descriptor.ConfigDigest = strings.TrimPrefix(testDigestB, "sha256:")
 	_, err = resolveTunnelTarget(testAuthedClient, testStreams(), commandState.forwardOpts, commandState.rootOpts, commandState.trustOpts, testContainerID)
 	require.ErrorContains(t, err, "not in your known configs")
 	descriptor.ConfigDigest = registryConfigDigest
 
-	commandState.rootOpts.repo = "acme/app@sha256:" + strings.Repeat("a", len(registryConfigDigest))
+	commandState.rootOpts.repo = "acme/app"
+	_, err = resolveTunnelTarget(testAuthedClient, testStreams(), commandState.forwardOpts, commandState.rootOpts, commandState.trustOpts, testContainerID)
+	require.ErrorContains(t, err, "is a registry project; state it with --project instead of --repo")
+	commandState.rootOpts.repo = "acme"
+	_, err = resolveTunnelTarget(testAuthedClient, testStreams(), commandState.forwardOpts, commandState.rootOpts, commandState.trustOpts, testContainerID)
+	require.ErrorContains(t, err, "state it with --project instead of --repo")
+
+	commandState.rootOpts.repo, commandState.rootOpts.project = "", "acme/app@sha256:"+strings.Repeat("a", len(registryConfigDigest))
 	tunnel, err = resolveTunnelTarget(testAuthedClient, testStreams(), commandState.forwardOpts, commandState.rootOpts, commandState.trustOpts, testContainerID)
 	require.NoError(t, err)
-	require.Equal(t, commandState.rootOpts.repo, tunnel.repo)
+	require.Equal(t, commandState.rootOpts.pin(), tunnel.pin)
 	policy, err := loadConnectionPolicy()
 	require.NoError(t, err)
-	require.True(t, policy.HasPin(commandState.rootOpts.repo), "explicit hash pin must be recorded")
+	require.True(t, policy.HasPin(commandState.rootOpts.pin()), "explicit hash pin must be recorded")
+	require.Empty(t, policy.GitHub)
 
 	for _, name := range []string{"", "/acme/other/v1.2.3"} {
 		invalid := descriptor
@@ -181,7 +203,39 @@ func TestRegistryConnectionPinsNameAndDigest(t *testing.T) {
 			invalid.Repo, invalid.Tag, invalid.ConfigDigest = "acme/app", "v1.2.3", ""
 		}
 		c.Connections.Production = &invalid
-		_, err := containerConnection(c, false, "")
+		_, err := containerConnection(c, false, verify.Pin{})
 		require.ErrorContains(t, err, "connection config does not match")
 	}
+}
+
+func TestTunnelTargetTakesNamespaceFromContainerSource(t *testing.T) {
+	commandState := newCommandFixture()
+
+	c := containerView{ID: testContainerID, Name: "app", Repo: "acme/app", Domain: "app.example.com"}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { json.NewEncoder(w).Encode(c) }))
+	defer server.Close()
+	configureContainerPromotionTest(commandState, t, server.URL)
+	gateEnv(t, `{"allow":{"projects":["acme/app"]}}`)
+	previous := *commandState.rootOpts
+	commandState.rootOpts.repo, commandState.rootOpts.project = "", ""
+	t.Cleanup(func() { *commandState.rootOpts = previous })
+	resolve := func() (*tunnelTarget, error) {
+		return resolveTunnelTarget(testAuthedClient, testStreams(), commandState.forwardOpts, commandState.rootOpts, commandState.trustOpts, testContainerID)
+	}
+
+	_, err := resolve()
+	require.ErrorContains(t, err, "Pass --repo acme/app", "a registry project entry must not cover the GitHub repository")
+	commandState.rootOpts.project = "acme/app"
+	_, err = resolve()
+	require.ErrorContains(t, err, "is a GitHub repository; state it with --repo instead of --project")
+	commandState.rootOpts.repo = "acme/app@v1"
+	tunnel, err := resolve()
+	require.NoError(t, err)
+	require.Equal(t, repoPin("acme/app@v1"), tunnel.pin)
+
+	c.Source = containerSourceRegistry
+	commandState.rootOpts.repo, commandState.rootOpts.project = "", ""
+	tunnel, err = resolve()
+	require.NoError(t, err)
+	require.Equal(t, projectPin("acme/app"), tunnel.pin)
 }

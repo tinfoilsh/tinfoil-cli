@@ -13,6 +13,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/tinfoilsh/tinfoil-cli/internal/keybundle"
 	"github.com/tinfoilsh/tinfoil-cli/internal/owner"
+	"github.com/tinfoilsh/tinfoil-go/verify"
 )
 
 const (
@@ -149,7 +150,7 @@ func runSandboxAction(pollingOpts *pollingOptions, newClient authenticatedClient
 				}
 			}
 		}
-		target, err := resolveWorkload(commandStreams(cmd), rootOpts, trustOpts, *row, defaultSandboxRepo, rootOpts.repo)
+		target, err := resolveWorkload(commandStreams(cmd), rootOpts, trustOpts, *row, defaultSandboxRepo, rootOpts.pin())
 		if err != nil {
 			return err
 		}
@@ -241,7 +242,7 @@ func connectSandbox(newScope scopeClientFactory, streams commandIO, identityOpts
 		if err != nil {
 			return nil, fmt.Errorf("bunker %s's Perimeter: %w", row.Name, err)
 		}
-		selected, err := resolveWorkload(streams, rootOpts, trustOpts, *peer, monitorRepo, "")
+		selected, err := resolveWorkload(streams, rootOpts, trustOpts, *peer, monitorRepo, verify.Pin{})
 		if err != nil {
 			return nil, fmt.Errorf("selected Perimeter %s: %w; review its configuration with `tinfoil perimeter open %s`", peer.Name, err, peer.Name)
 		}
@@ -295,7 +296,7 @@ func relinkSandbox(streams commandIO, identityOpts *identityOptions, rootOpts *r
 	if err := m.ValidateSandboxCustody(*row); err != nil {
 		return err
 	}
-	target, err := resolveWorkload(streams, rootOpts, trustOpts, *row, defaultSandboxRepo, "")
+	target, err := resolveWorkload(streams, rootOpts, trustOpts, *row, defaultSandboxRepo, verify.Pin{})
 	if err != nil {
 		return err
 	}

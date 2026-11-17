@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/tinfoilsh/tinfoil-cli/internal/auth"
+	"github.com/tinfoilsh/tinfoil-go/verify"
 )
 
 type attestSSHOptions struct {
@@ -40,6 +41,7 @@ type containerCreateOptions struct {
 	createDisplayOrder      int32
 	createHost              string
 	createMarkLatestRelease string
+	createProject           string
 	createReplaceID         string
 	createRepo              string
 	createRevision          string
@@ -179,16 +181,22 @@ type rootOptions struct {
 	enclaveHost      string
 	localConfigBytes []byte
 	localConfigFile  string
+	project          string
 	publicRegistry   bool
 	repo             string
 	trace            bool
 	verbose          bool
 }
 
-type sandboxEvidenceVerifier func(doc, nonce []byte, source string) (attestedEvidence, error)
+// pin is the workload the caller named with --repo and --project.
+func (o *rootOptions) pin() verify.Pin {
+	return verify.Pin{Repo: o.repo, Project: o.project}
+}
+
+type sandboxEvidenceVerifier func(doc, nonce []byte, pin verify.Pin) (attestedEvidence, error)
 
 type connectionDependencies struct {
-	proxyClient           func(context.Context, string, string) (*http.Client, error)
+	proxyClient           func(context.Context, string, verify.Pin) (*http.Client, error)
 	serveProxy            func(string, http.Handler) error
 	verifySandboxEvidence sandboxEvidenceVerifier
 	verifyRelease         func(row containerView) error
@@ -205,7 +213,7 @@ type commandDependencies struct {
 	in                    io.Reader
 	out                   io.Writer
 	err                   io.Writer
-	proxyClient           func(context.Context, string, string) (*http.Client, error)
+	proxyClient           func(context.Context, string, verify.Pin) (*http.Client, error)
 	serveProxy            func(string, http.Handler) error
 	openBrowser           func(string) error
 	verifySandboxEvidence sandboxEvidenceVerifier

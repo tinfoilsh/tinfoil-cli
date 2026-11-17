@@ -13,7 +13,7 @@ import (
 )
 
 func secureClient(rootOpts *rootOptions) (*tinfoil.EnclaveHTTPClient, error) {
-	return newVerifiedClient(rootOpts, rootOpts.enclaveHost, rootOpts.repo, "")
+	return newVerifiedClient(rootOpts, rootOpts.enclaveHost, rootOpts.pin(), "")
 }
 
 func requestWithHeaders(sc *tinfoil.EnclaveHTTPClient, method, url string, headers map[string]string, body []byte) (*http.Response, error) {
@@ -40,8 +40,8 @@ func newHttpCommand(headersOpts *headersOptions, rootOpts *rootOptions) *cobra.C
 		Use:   "http",
 		Short: "Make verified HTTP requests",
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
-			if rootOpts.enclaveHost == "" || rootOpts.repo == "" && rootOpts.localConfigFile == "" {
-				return fmt.Errorf("--enclave and either --repo or --config are required for verified HTTP requests")
+			if rootOpts.enclaveHost == "" || rootOpts.pin() == (tinfoil.Pin{}) && rootOpts.localConfigFile == "" {
+				return fmt.Errorf("--enclave and one of --repo, --project or --config are required for verified HTTP requests")
 			}
 			return nil
 		},

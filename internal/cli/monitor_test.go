@@ -30,6 +30,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tinfoilsh/tinfoil-cli/internal/connection"
 	"github.com/tinfoilsh/tinfoil-cli/internal/owner"
+	"github.com/tinfoilsh/tinfoil-go/verify"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -40,16 +41,16 @@ func TestManagedTrustPrecedesCredentials(t *testing.T) {
 		require.NoError(t, os.WriteFile(os.Getenv(envKnownConfigs), []byte(`{"mode":"frozen","allow":{}}`), 0600))
 		row := containerView{Repo: managedRepo(test.kind), Domain: "work.example", Config: "containers: [{env: [{OWNER: owner}]}]"}
 		row.ConfigName = test.prefix + "/" + storageHash([]byte(row.Config))
-		_, err := resolveWorkload(testStreams(), commandState.rootOpts, commandState.trustOpts, row, row.Repo, "")
+		_, err := resolveWorkload(testStreams(), commandState.rootOpts, commandState.trustOpts, row, row.Repo, verify.Pin{})
 		require.ErrorContains(t, err, "mode: frozen")
-		target, err := resolveWorkload(testStreams(), commandState.rootOpts, commandState.trustOpts, row, row.Repo, strings.TrimPrefix(test.prefix, "/"))
+		target, err := resolveWorkload(testStreams(), commandState.rootOpts, commandState.trustOpts, row, row.Repo, projectPin(strings.TrimPrefix(test.prefix, "/")))
 		require.NoError(t, err)
 		row.Config += "\n# changed"
 		_, err = resolveWorkload(testStreams(), commandState.rootOpts, commandState.trustOpts, row, row.Repo, target.source)
 		require.ErrorContains(t, err, "digest")
 		row.ConfigName = test.prefix + "/" + storageHash([]byte(row.Config))
 		_, err = resolveWorkload(testStreams(), commandState.rootOpts, commandState.trustOpts, row, row.Repo, target.source)
-		require.ErrorContains(t, err, "does not match --repo")
+		require.ErrorContains(t, err, "does not match --project")
 	}
 	for _, env := range []string{"[{OWNER: null}]", "[{}]", "[{OWNER: a}, {OWNER: b}]"} {
 		_, err := measuredEnvironment("containers: [{env: " + env + "}]")
@@ -59,11 +60,13 @@ func TestManagedTrustPrecedesCredentials(t *testing.T) {
 
 type monitorTestVerifier struct{ host ssh.PublicKey }
 
-func (v monitorTestVerifier) MonitorHost(string, string) (ssh.PublicKey, error) { return v.host, nil }
-func (v monitorTestVerifier) DirectEvidence(context.Context, string, string) (connection.Evidence, error) {
+func (v monitorTestVerifier) MonitorHost(string, verify.Pin) (ssh.PublicKey, error) {
+	return v.host, nil
+}
+func (v monitorTestVerifier) DirectEvidence(context.Context, string, verify.Pin) (connection.Evidence, error) {
 	panic("unexpected sandbox verification")
 }
-func (v monitorTestVerifier) RelayEvidence(string, []byte, []byte) (connection.Evidence, error) {
+func (v monitorTestVerifier) RelayEvidence(verify.Pin, []byte, []byte) (connection.Evidence, error) {
 	panic("unexpected sandbox verification")
 }
 

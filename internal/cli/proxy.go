@@ -48,8 +48,8 @@ func newProxyCommand(proxyOpts *proxyOptions, rootOpts *rootOptions) *cobra.Comm
 func runProxy(proxyOpts *proxyOptions, rootOpts *rootOptions, cmd *cobra.Command, args []string) error {
 	options := *rootOpts
 	rootOpts = &options
-	if (rootOpts.enclaveHost == "") != (rootOpts.repo == "" && rootOpts.localConfigFile == "") {
-		return fmt.Errorf("--enclave and either --repo or --config must be supplied together for a custom proxy target")
+	if (rootOpts.enclaveHost == "") != (rootOpts.pin() == (tinfoil.Pin{}) && rootOpts.localConfigFile == "") {
+		return fmt.Errorf("--enclave and one of --repo, --project or --config must be supplied together for a custom proxy target")
 	}
 	verbose, _ := cmd.Flags().GetBool("verbose")
 	trace, _ := cmd.Flags().GetBool("trace")
@@ -58,27 +58,27 @@ func runProxy(proxyOpts *proxyOptions, rootOpts *rootOptions, cmd *cobra.Command
 	logger.WithFields(log.Fields{
 		"enclave_host": rootOpts.enclaveHost,
 		"repo":         rootOpts.repo,
+		"project":      rootOpts.project,
 	}).Info("initializing secure client")
 
 	var httpClient *http.Client
 	var err error
-	if rootOpts.enclaveHost == "" && rootOpts.repo == "" {
+	if rootOpts.enclaveHost == "" && rootOpts.pin() == (tinfoil.Pin{}) {
 		var router *tinfoil.RouterHTTPClient
 		router, err = tinfoil.NewRouterHTTPClient(cmd.Context(), nil)
 		if err == nil {
 			rootOpts.enclaveHost = router.Enclave()
-			rootOpts.repo = router.Repo()
 			httpClient = router.Client
 		}
 	} else if client := rootOpts.connections.proxyClient; client != nil {
-		httpClient, err = client(cmd.Context(), rootOpts.enclaveHost, rootOpts.repo)
+		httpClient, err = client(cmd.Context(), rootOpts.enclaveHost, rootOpts.pin())
 	} else {
-		opts, parseErr := verificationOptions(rootOpts, rootOpts.repo, "")
+		opts, parseErr := verificationOptions(rootOpts, rootOpts.pin(), "")
 		if parseErr != nil {
 			return parseErr
 		}
 		var enclave *tinfoil.EnclaveHTTPClient
-		enclave, err = tinfoil.NewEnclaveHTTPClient(cmd.Context(), rootOpts.enclaveHost, rootOpts.repo, opts)
+		enclave, err = tinfoil.NewEnclaveHTTPClient(cmd.Context(), rootOpts.enclaveHost, rootOpts.pin(), opts)
 		if err == nil {
 			httpClient = enclave.Client
 		}

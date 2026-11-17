@@ -104,7 +104,7 @@ func newMonitorOpenCommand(newScope scopeClientFactory, identityOpts *identityOp
 			if err != nil {
 				return err
 			}
-			target, err := resolveWorkload(commandStreams(cmd), rootOpts, trustOpts, *row, monitorRepo, rootOpts.repo)
+			target, err := resolveWorkload(commandStreams(cmd), rootOpts, trustOpts, *row, monitorRepo, rootOpts.pin())
 			if err != nil {
 				return err
 			}

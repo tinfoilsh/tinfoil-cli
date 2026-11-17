@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/tinfoilsh/tinfoil-cli/internal/controlplane"
+	"github.com/tinfoilsh/tinfoil-cli/internal/trust"
 	configendorsement "github.com/tinfoilsh/tinfoil-go/endorsement/config"
 	"github.com/tinfoilsh/tinfoil-go/verify"
 )
@@ -28,10 +29,10 @@ type containerConnections = controlplane.Connections
 type verifiedConnection struct {
 	connectionDescriptor
 	host   string
-	source string
+	source verify.Pin
 }
 
-func containerConnection(c containerView, review bool, sourceOverride string) (verifiedConnection, error) {
+func containerConnection(c containerView, review bool, sourceOverride verify.Pin) (verifiedConnection, error) {
 	label := "production"
 	var descriptor *connectionDescriptor
 	if c.Connections != nil {
@@ -56,24 +57,30 @@ func containerConnection(c containerView, review bool, sourceOverride string) (v
 	if err != nil {
 		return target, fmt.Errorf("invalid %s connection for %s: %w", label, c.Name, err)
 	}
-	if (c.Source == containerSourceLocal) != (target.source == "") {
+	if (c.Source == containerSourceLocal) != (target.source == (verify.Pin{})) {
 		return target, fmt.Errorf("connection source does not match container %s", c.Name)
 	}
-	if c.Source == containerSourceLocal && sourceOverride != "" {
-		return target, fmt.Errorf("local containers require --config instead of --repo")
+	if c.Source == containerSourceLocal && sourceOverride != (verify.Pin{}) {
+		return target, fmt.Errorf("local containers require --config instead of --repo or --project")
 	}
 	if review && descriptor.Tag != c.UpdateTag {
 		return target, fmt.Errorf("review release does not match the current candidate; refresh with: tinfoil container get %s", shellQuote(c.ID))
 	}
-	if sourceOverride != "" {
-		ownerRepo, tag, _, err := verify.ParseReference(sourceOverride)
+	if sourceOverride != (verify.Pin{}) {
+		override, err := overridePin(sourceOverride, target.source)
 		if err != nil {
-			return target, fmt.Errorf("--repo: %w", err)
+			return target, err
 		}
-		if review && (ownerRepo != descriptor.Repo || tag != descriptor.Tag) {
-			return target, fmt.Errorf("--review requires --repo %s@%s (optionally with @sha256:digest); refusing a different or unpinned release", descriptor.Repo, descriptor.Tag)
+		flag := trust.Flag(override)
+		name, tag, _, err := verify.ParseReference(pinText(override))
+		if err != nil {
+			return target, fmt.Errorf("%s: %w", flag, err)
 		}
-		target.source = sourceOverride
+		expectedName, expectedTag, _, _ := verify.ParseReference(pinText(target.source))
+		if review && (name != expectedName || tag != expectedTag) {
+			return target, fmt.Errorf("--review requires %s %s@%s (optionally with @sha256:digest); refusing a different or unpinned release", flag, expectedName, expectedTag)
+		}
+		target.source = override
 	}
 	return target, nil
 }
@@ -107,16 +114,16 @@ func parseConnectionDescriptor(descriptor connectionDescriptor) (verifiedConnect
 		if err != nil || descriptor.Repo != "" || descriptor.ConfigDigest == "" {
 			return target, fmt.Errorf("invalid registry config reference %q", descriptor.ConfigName)
 		}
-		target.source = strings.TrimPrefix(identity, "/") + "@" + revision + "@sha256:" + descriptor.ConfigDigest
-		if _, _, _, err := verify.ParseReference(target.source); err != nil {
+		target.source = verify.Pin{Project: strings.TrimPrefix(identity, "/") + "@" + revision + "@sha256:" + descriptor.ConfigDigest}
+		if _, _, _, err := verify.ParseReference(target.source.Project); err != nil {
 			return target, fmt.Errorf("invalid registry config reference: %w", err)
 		}
 		return target, nil
 	}
-	target.source = descriptor.Repo + "@" + descriptor.Tag
-	parsedRepo, parsedTag, digest, err := verify.ParseReference(target.source)
+	target.source = verify.Pin{Repo: descriptor.Repo + "@" + descriptor.Tag}
+	parsedRepo, parsedTag, digest, err := verify.ParseReference(target.source.Repo)
 	if err != nil || parsedRepo != descriptor.Repo || parsedTag != descriptor.Tag || parsedTag == "" || digest != "" {
-		return target, fmt.Errorf("invalid expected repository/tag %q", target.source)
+		return target, fmt.Errorf("invalid expected repository/tag %q", target.source.Repo)
 	}
 	return target, nil
 }
@@ -169,7 +176,7 @@ func containerConnectionGuidance(c containerView, review bool) string {
 	if review {
 		label, flag = "Review", " --review"
 	}
-	target, err := containerConnection(c, review, "")
+	target, err := containerConnection(c, review, verify.Pin{})
 	if err != nil {
 		if c.Connections != nil && (review && c.Connections.Review != nil || !review && c.Connections.Production != nil) || review && heldCandidateReady(c) {
 			return fmt.Sprintf("%s unavailable: %s\n", label, err)
@@ -183,8 +190,8 @@ func containerConnectionGuidance(c containerView, review bool) string {
 		fmt.Fprintf(&out, "Verified proxy: tinfoil container connect %s --config <FILE>\n", shellQuote(c.ID))
 		return out.String()
 	}
-	fmt.Fprintf(&out, "%s URL: %s\nExpected config: %s\n", label, target.URL, target.source)
-	fmt.Fprintf(&out, "Verified request: tinfoil http get %s --enclave %s --repo %s\n", shellQuote(target.URL), shellQuote(target.host), shellQuote(target.source))
+	fmt.Fprintf(&out, "%s URL: %s\nExpected config: %s\n", label, target.URL, pinText(target.source))
+	fmt.Fprintf(&out, "Verified request: tinfoil http get %s --enclave %s %s %s\n", shellQuote(target.URL), shellQuote(target.host), trust.Flag(target.source), shellQuote(pinText(target.source)))
 	fmt.Fprintf(&out, "Verified proxy: tinfoil container connect %s%s\n", shellQuote(c.ID), flag)
 	return out.String()
 }

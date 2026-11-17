@@ -9,6 +9,7 @@ import (
 	"github.com/tinfoilsh/tinfoil-cli/internal/connection"
 	"github.com/tinfoilsh/tinfoil-cli/internal/controlplane"
 	"github.com/tinfoilsh/tinfoil-cli/internal/keybundle"
+	"github.com/tinfoilsh/tinfoil-go/verify"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -94,16 +95,16 @@ func requireRunningConnection(kind string, row controlplane.Container) error {
 }
 
 type Verifier interface {
-	MonitorHost(domain, source string) (ssh.PublicKey, error)
-	DirectEvidence(context.Context, string, string) (connection.Evidence, error)
-	RelayEvidence(source string, document, nonce []byte) (connection.Evidence, error)
+	MonitorHost(domain string, pin verify.Pin) (ssh.PublicKey, error)
+	DirectEvidence(ctx context.Context, domain string, pin verify.Pin) (connection.Evidence, error)
+	RelayEvidence(pin verify.Pin, document, nonce []byte) (connection.Evidence, error)
 }
 
 // Workload keeps the reviewed configuration reference and measured environment
 // with the exact API resource selected by the command.
 type Workload struct {
 	controlplane.Container
-	Source      string
+	Pin         verify.Pin
 	Environment map[string]string
 }
 

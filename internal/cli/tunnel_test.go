@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/tinfoilsh/tinfoil-go/verify"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/knownhosts"
 )
@@ -35,11 +36,11 @@ func TestSplitSSHArgs(t *testing.T) {
 }
 
 func TestProxyCommandNamesResolvedHost(t *testing.T) {
-	withRepo, err := proxyCommand(&rootOptions{}, &tunnelOptions{}, &tunnelTarget{name: "box", host: "box.example.com", repo: "org/repo"}, 22)
+	withRepo, err := proxyCommand(&rootOptions{}, &tunnelOptions{}, &tunnelTarget{name: "box", host: "box.example.com", pin: verify.Pin{Repo: "org/repo", Project: "org/project"}}, 22)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasSuffix(withRepo, "'forward' '--stdio' '22' '--enclave' 'box.example.com' '--repo' 'org/repo'") {
+	if !strings.HasSuffix(withRepo, "'forward' '--stdio' '22' '--enclave' 'box.example.com' '--repo' 'org/repo' '--project' 'org/project'") {
 		t.Errorf("proxy command = %q", withRepo)
 	}
 
@@ -67,16 +68,21 @@ func TestResolveTunnelTargetTakesHostnamesWithoutControlplane(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolveTunnelTarget(%q): %v", host, err)
 	}
-	if target.host != host || target.repo != "" || target.sshPort != 0 {
+	if target.host != host || target.pin != (verify.Pin{}) || target.sshPort != 0 {
 		t.Errorf("target = %+v", target)
 	}
 
 	rootOpts.repo = "org/repo"
-	if target, err = resolve(host); err != nil || target.repo != "org/repo" {
+	if target, err = resolve(host); err != nil || target.pin != repoPin("org/repo") {
 		t.Errorf("--repo not carried onto a hostname target: %+v, %v", target, err)
 	}
 
-	rootOpts.repo = ""
+	rootOpts.repo, rootOpts.project = "", "org/project"
+	if target, err = resolve(host); err != nil || target.pin != projectPin("org/project") {
+		t.Errorf("--project not carried onto a hostname target: %+v, %v", target, err)
+	}
+
+	rootOpts.project = ""
 	rootOpts.enclaveHost = host
 	if target, err = resolve(""); err != nil || target.host != host {
 		t.Errorf("--host not used when no target is named: %+v, %v", target, err)

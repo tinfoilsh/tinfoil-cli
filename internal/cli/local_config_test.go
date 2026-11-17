@@ -17,6 +17,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tinfoilsh/tinfoil-go/verify"
 )
 
 func localConfigFixture(t *testing.T) (string, []byte, string) {
@@ -116,31 +117,31 @@ func TestLocalConnectionRequiresTrustedFile(t *testing.T) {
 	require.ErrorContains(t, checkLocalConfigDigest(commandState.rootOpts, registryConfigDigest), "does not match")
 	target, err := resolveTunnelTarget(testAuthedClient, testStreams(), commandState.forwardOpts, commandState.rootOpts, commandState.trustOpts, testContainerID)
 	require.NoError(t, err)
-	require.Empty(t, target.repo)
+	require.Empty(t, target.pin)
 	require.Equal(t, "app.example.com", target.host)
 	require.NoError(t, checkLocalConfigDigest(commandState.rootOpts, digest))
 
 	// Replacing the file after checking the descriptor cannot change trust bytes.
 	require.NoError(t, os.WriteFile(path, []byte("different config"), 0600))
-	opts, err := verificationOptions(commandState.rootOpts, target.repo, "")
+	opts, err := verificationOptions(commandState.rootOpts, target.pin, "")
 	require.NoError(t, err)
 	require.True(t, opts.Verifier.CallerAuthorizesConfig())
 	cached, err := readLocalConfig(commandState.rootOpts)
 	require.NoError(t, err)
 	require.Equal(t, data, cached)
 	require.ErrorContains(t, func() error {
-		_, err := newVerifiedClient(commandState.rootOpts, target.host, "acme/app", "")
+		_, err := newVerifiedClient(commandState.rootOpts, target.host, repoPin("acme/app"), "")
 		return err
-	}(), "cannot be used together")
+	}(), "--config cannot be used with")
 
 	guidance := containerConnectionGuidance(c, false)
 	require.Contains(t, guidance, "--config <FILE>")
 	require.Contains(t, guidance, "sha256:"+digest)
 	require.NotContains(t, guidance, "--repo")
-	_, err = containerConnection(c, false, "acme/app")
+	_, err = containerConnection(c, false, repoPin("acme/app"))
 	require.ErrorContains(t, err, "require --config instead")
 	c.Source = containerSourceGitHub
-	_, err = containerConnection(c, false, "")
+	_, err = containerConnection(c, false, verify.Pin{})
 	require.ErrorContains(t, err, "source does not match")
 }
 

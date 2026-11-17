@@ -10,7 +10,7 @@ import (
 )
 
 type Verification struct {
-	Reference      string
+	Pin            verify.Pin
 	Config         *Config
 	RegistryIDs    []string
 	PublicRegistry bool
@@ -23,12 +23,12 @@ func (v Verification) Options() (*tinfoil.EnclaveOptions, error) {
 		if v.PublicRegistry {
 			return nil, fmt.Errorf("--public-registry and --config cannot be used together")
 		}
-		if v.Reference != "" {
-			return nil, fmt.Errorf("--config and --repo cannot be used together")
+		if v.Pin != (verify.Pin{}) {
+			return nil, fmt.Errorf("--config cannot be used with --repo or --project")
 		}
 		policy = append(policy, verify.WithEmbeddedReferences(verify.EmbeddedReferences{Config: &verify.EmbeddedConfig{Bytes: v.Config.Bytes()}}))
-	} else if v.Reference == "" {
-		return nil, fmt.Errorf("v3 verification requires an expected workload; pass --repo owner/name[@tag][@sha256:digest] or --config FILE")
+	} else if v.Pin == (verify.Pin{}) {
+		return nil, fmt.Errorf("v3 verification requires an expected workload; pass --repo owner/name[@tag][@sha256:digest], --project org/project[@revision][@sha256:digest] or --config FILE")
 	} else if !v.PublicRegistry && len(v.RegistryIDs) != 0 {
 		policy = append(policy, verify.WithAdditionalConfigRegistryIDs(v.RegistryIDs...))
 	}
@@ -54,5 +54,5 @@ func NewClient(ctx context.Context, host string, verification Verification) (*ti
 	if err != nil {
 		return nil, err
 	}
-	return tinfoil.NewEnclaveHTTPClient(ctx, host, verification.Reference, opts)
+	return tinfoil.NewEnclaveHTTPClient(ctx, host, verification.Pin, opts)
 }

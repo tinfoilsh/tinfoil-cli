@@ -7,23 +7,35 @@ import (
 	"github.com/tinfoilsh/tinfoil-go/verify"
 )
 
-func AssertionRecord(assertion, resolvedSource string) (reference, level string, err error) {
-	assertion = strings.TrimSpace(assertion)
-	resolvedSource = strings.TrimSpace(resolvedSource)
-	if assertion == "" || resolvedSource == "" {
-		return "", "", fmt.Errorf("empty reference")
+// AssertionRecord checks a resolved config against the caller's assertion in
+// the same namespace and returns what to record for it.
+func AssertionRecord(asserted, resolved verify.Pin) (record verify.Pin, level string, err error) {
+	resolvedSource, err := Reference(resolved)
+	if err != nil {
+		return verify.Pin{}, "", err
+	}
+	flag := Flag(resolved)
+	assertion := strings.TrimSpace(asserted.Project)
+	if resolved.Repo != "" {
+		assertion = strings.TrimSpace(asserted.Repo)
+	}
+	if assertion == "" {
+		if asserted == (verify.Pin{}) {
+			return verify.Pin{}, "", fmt.Errorf("empty reference")
+		}
+		return verify.Pin{}, "", fmt.Errorf("resolved config %s is asserted with %s, not %s", resolvedSource, flag, Flag(asserted))
 	}
 	if !referenceMatches(assertion, resolvedSource) {
-		return "", "", fmt.Errorf("resolved config %s does not match --repo %s", resolvedSource, assertion)
+		return verify.Pin{}, "", fmt.Errorf("resolved config %s does not match %s %s", resolvedSource, flag, assertion)
 	}
 	level, err = referenceGranularity(assertion)
 	if err != nil {
-		return "", "", fmt.Errorf("--repo: %w", err)
+		return verify.Pin{}, "", fmt.Errorf("%s: %w", flag, err)
 	}
 	if level == RecordPin {
-		return assertion, level, nil
+		return withReference(resolved, assertion), level, nil
 	}
-	return resolvedSource, level, nil
+	return withReference(resolved, resolvedSource), level, nil
 }
 
 // referenceGranularity classifies a caller-stated reference: a bare name is

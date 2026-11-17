@@ -55,7 +55,7 @@ func TestRegistrySelectionAndRemovalRemainOriginScoped(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, tc.want, ids)
 	}
-	require.False(t, policy.Matches("acme/app@v1"), "registry enrollment does not grant project trust")
+	require.False(t, policy.Matches(projectPin("acme/app@v1")), "registry enrollment does not grant project trust")
 	require.NoError(t, policy.RemoveRegistry(entry.ControlplaneURL, entry.Namespaces[0]))
 	policy, err = Load(path)
 	require.NoError(t, err)

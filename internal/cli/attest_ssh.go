@@ -18,6 +18,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/tinfoilsh/tinfoil-cli/internal/connection"
 	"github.com/tinfoilsh/tinfoil-cli/internal/statefile"
+	"github.com/tinfoilsh/tinfoil-go/verify"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/knownhosts"
 	"golang.org/x/term"
@@ -92,7 +93,7 @@ A reboot rotates the key, so rerun this after one.`,
 			if profile.port > 65535 {
 				return fmt.Errorf("--ssh-port must be at most 65535 (got %d)", profile.port)
 			}
-			if profile.hostKey, err = attestedHostKey(commandStreams(cmd), rootOpts, target.host, target.repo, target.sealedTo); err != nil {
+			if profile.hostKey, err = attestedHostKey(commandStreams(cmd), rootOpts, target.host, target.pin, target.sealedTo); err != nil {
 				return err
 			}
 			fmt.Fprintln(commandStreams(cmd).err, "Attestation successful.")
@@ -147,7 +148,7 @@ func nativeSSHHost(target *tunnelTarget, override string) string {
 
 // attestedHostKey verifies host against source and returns the endorsed
 // host-ssh key, so a failed verification never falls back to unverified acceptance.
-func attestedHostKey(streams commandIO, rootOpts *rootOptions, host, source, sealedTo string) (ssh.PublicKey, error) {
+func attestedHostKey(streams commandIO, rootOpts *rootOptions, host string, source verify.Pin, sealedTo string) (ssh.PublicKey, error) {
 	defer startConnectionProgress(streams.err, "Verifying attestation and SSH host key for "+host)()
 	input, err := verificationInput(rootOpts, source, sealedTo)
 	if err != nil {
