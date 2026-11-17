@@ -17,6 +17,7 @@ import (
 	"github.com/tinfoilsh/tinfoil-cli/internal/controlplane"
 	"github.com/tinfoilsh/tinfoil-cli/internal/keybundle"
 	"github.com/tinfoilsh/tinfoil-cli/internal/statefile"
+	"github.com/tinfoilsh/tinfoil-go/verify"
 	"github.com/tinfoilsh/tinfoil-go/verify/document"
 	"golang.org/x/crypto/ssh"
 )
@@ -57,15 +58,15 @@ func connectOwnerSigner(conn net.Conn, host string, hostKey ssh.PublicKey, signe
 	return Connect(conn, host, hostKey, signer, user)
 }
 
-type relayVerifier func(source string, doc, nonce []byte) (connection.Evidence, error)
+type relayVerifier func(pin verify.Pin, doc, nonce []byte) (connection.Evidence, error)
 
-func (f relayVerifier) RelayEvidence(source string, doc, nonce []byte) (connection.Evidence, error) {
-	return f(source, doc, nonce)
+func (f relayVerifier) RelayEvidence(pin verify.Pin, doc, nonce []byte) (connection.Evidence, error) {
+	return f(pin, doc, nonce)
 }
-func (f relayVerifier) MonitorHost(string, string) (ssh.PublicKey, error) {
+func (f relayVerifier) MonitorHost(string, verify.Pin) (ssh.PublicKey, error) {
 	panic("unexpected Monitor verification")
 }
-func (f relayVerifier) DirectEvidence(context.Context, string, string) (connection.Evidence, error) {
+func (f relayVerifier) DirectEvidence(context.Context, string, verify.Pin) (connection.Evidence, error) {
 	panic("unexpected direct verification")
 }
 
@@ -85,7 +86,7 @@ func (e hostEvidence) CryptoMaterialData(id, format string) (string, bool) {
 
 type workloadTarget struct {
 	containerView
-	source string
+	source verify.Pin
 	env    map[string]string
 }
 type cpClient struct {
@@ -116,7 +117,7 @@ func umkRecordPath(scope Scope, id string) (string, error) {
 	return umkPath(os.Getenv(envConfigPath), scope, id)
 }
 func monitorRecord(scope Scope, row *workloadTarget) (string, error) {
-	return testService().monitorRecord(scope, &Workload{Container: row.containerView, Source: row.source, Environment: row.env})
+	return testService().monitorRecord(scope, &Workload{Container: row.containerView, Pin: row.source, Environment: row.env})
 }
 func userSigner(name, owner, dir string) (ssh.Signer, string, func(), error) {
 	return testService().userSigner(name, owner, dir)

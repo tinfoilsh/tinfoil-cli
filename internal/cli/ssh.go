@@ -155,8 +155,11 @@ func proxyCommand(rootOpts *rootOptions, tunnelOpts *tunnelOptions, target *tunn
 	}
 
 	argv := []string{self, "forward", "--stdio", strconv.Itoa(port), "--enclave", target.host}
-	if target.repo != "" {
-		argv = append(argv, "--repo", target.repo)
+	if target.pin.Repo != "" {
+		argv = append(argv, "--repo", target.pin.Repo)
+	}
+	if target.pin.Project != "" {
+		argv = append(argv, "--project", target.pin.Project)
 	}
 	if rootOpts.publicRegistry {
 		argv = append(argv, "--public-registry")

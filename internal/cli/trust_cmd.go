@@ -162,17 +162,20 @@ func printTrustStore(out io.Writer, policy connectionPolicy) {
 			fmt.Fprintf(out, "    … %d more (see the file)\n", rest)
 		}
 	}
-	if len(policy.Allow.Orgs)+len(policy.Allow.Projects)+len(policy.Allow.Pins) == 0 {
+	if len(policy.Allow.Orgs)+len(policy.Allow.Projects)+len(policy.Allow.Pins)+len(policy.GitHub.Orgs)+len(policy.GitHub.Projects)+len(policy.GitHub.Pins) == 0 {
 		if policy.Mode == policyModeFrozen {
-			fmt.Fprint(out, "\nNothing trusted yet: mode frozen refuses unknown configs — add entries to the file by hand, or connect with an explicit --repo.\n")
+			fmt.Fprint(out, "\nNothing trusted yet: mode frozen refuses unknown configs — add entries to the file by hand, or connect with an explicit --repo or --project.\n")
 		} else {
-			fmt.Fprint(out, "\nNothing trusted yet: the first interactive connect will prompt; scripts must state an expectation with --repo.\n")
+			fmt.Fprint(out, "\nNothing trusted yet: the first interactive connect will prompt; scripts must state an expectation with --repo or --project.\n")
 		}
 	} else {
 		fmt.Fprint(out, "\nTrusted:\n")
 		section("Orgs (any project)", policy.Allow.Orgs, 0)
 		section("Projects (any config)", policy.Allow.Projects, 0)
 		section("Pinned configs", policy.Allow.Pins, pinDisplayLimit)
+		section("GitHub owners (any repository)", policy.GitHub.Orgs, 0)
+		section("GitHub repositories (any release)", policy.GitHub.Projects, 0)
+		section("Pinned GitHub releases", policy.GitHub.Pins, pinDisplayLimit)
 	}
 	if broader := policy.BroaderThan(policy.Record); len(broader) > 0 {
 		// Record controls what a yes records, never how existing entries

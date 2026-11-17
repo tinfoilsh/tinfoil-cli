@@ -17,6 +17,7 @@ import (
 // The known-configs store holds the caller's side of connection verification:
 // which registry references this user has chosen to trust, at the granularity
 // they wrote them down — whole orgs, projects (any revision), or exact pins.
+// GitHub repositories are a separate namespace with their own allow list.
 //
 // The pins bucket doubles as a journal: every successful connect records the
 // exact reference it resolved to (deduplicated, never on --dangerous). A pin
@@ -25,6 +26,10 @@ const (
 	connectionPolicyFileName       = "trust.json"
 	legacyJSONPolicyFileName       = "known-configs.json"
 	legacyConnectionPolicyFileName = "known-configs.yml"
+
+	// Trust file members holding the allow list of each namespace.
+	allowSection  = "allow"
+	gitHubSection = "github"
 
 	// mode: what happens when a descriptor matches no allow entry.
 	ModePrompt = "prompt" // ask yes/no; yes records at the configured granularity
@@ -40,13 +45,57 @@ type Policy struct {
 	Mode       string       `json:"mode"`
 	Record     string       `json:"record"`
 	Registries []Enrollment `json:"registries,omitempty"`
-	Allow      struct {
-		Orgs     []string `json:"orgs,omitempty"`
-		Projects []string `json:"projects,omitempty"`
-		Pins     []string `json:"pins,omitempty"`
-	} `json:"allow"`
+	// Allow holds config registry projects and GitHub holds GitHub
+	// repositories; an entry in one never matches a name in the other.
+	Allow  AllowList `json:"allow"`
+	GitHub AllowList `json:"github,omitzero"`
 
 	path string
+}
+
+type AllowList struct {
+	Orgs     []string `json:"orgs,omitempty"`
+	Projects []string `json:"projects,omitempty"`
+	Pins     []string `json:"pins,omitempty"`
+}
+
+// Reference returns the reference of a pin that names exactly one namespace.
+func Reference(pin verify.Pin) (string, error) {
+	repo, project := strings.TrimSpace(pin.Repo), strings.TrimSpace(pin.Project)
+	if (repo == "") == (project == "") {
+		return "", fmt.Errorf("expected either a GitHub repository or a registry project")
+	}
+	return repo + project, nil
+}
+
+// Flag names the command-line flag that states pin.
+func Flag(pin verify.Pin) string {
+	if pin.Repo != "" {
+		return "--repo"
+	}
+	return "--project"
+}
+
+// Section names the trust file member that holds allow entries for pin.
+func Section(pin verify.Pin) string {
+	if pin.Repo != "" {
+		return gitHubSection
+	}
+	return allowSection
+}
+
+func withReference(pin verify.Pin, reference string) verify.Pin {
+	if pin.Repo != "" {
+		return verify.Pin{Repo: reference}
+	}
+	return verify.Pin{Project: reference}
+}
+
+func (p *Policy) allowList(pin verify.Pin) *AllowList {
+	if pin.Repo != "" {
+		return &p.GitHub
+	}
+	return &p.Allow
 }
 
 type Location struct {
@@ -146,17 +195,22 @@ func Load(path string) (Policy, error) {
 		return p, fmt.Errorf("%s: %w", path, err)
 	}
 
-	p.Allow.Orgs, err = cleanBucket(p.Allow.Orgs, RecordOrg)
-	if err != nil {
-		return p, fmt.Errorf("%s: allow.orgs: %w", path, err)
-	}
-	p.Allow.Projects, err = cleanBucket(p.Allow.Projects, RecordProject)
-	if err != nil {
-		return p, fmt.Errorf("%s: allow.projects: %w", path, err)
-	}
-	p.Allow.Pins, err = cleanBucket(p.Allow.Pins, RecordPin)
-	if err != nil {
-		return p, fmt.Errorf("%s: allow.pins: %w", path, err)
+	for _, section := range []struct {
+		name string
+		list *AllowList
+	}{{allowSection, &p.Allow}, {gitHubSection, &p.GitHub}} {
+		section.list.Orgs, err = cleanBucket(section.list.Orgs, RecordOrg)
+		if err != nil {
+			return p, fmt.Errorf("%s: %s.orgs: %w", path, section.name, err)
+		}
+		section.list.Projects, err = cleanBucket(section.list.Projects, RecordProject)
+		if err != nil {
+			return p, fmt.Errorf("%s: %s.projects: %w", path, section.name, err)
+		}
+		section.list.Pins, err = cleanBucket(section.list.Pins, RecordPin)
+		if err != nil {
+			return p, fmt.Errorf("%s: %s.pins: %w", path, section.name, err)
+		}
 	}
 	if err := validateRegistryEnrollments(p.Registries); err != nil {
 		return p, fmt.Errorf("%s: registries: %w", path, err)
@@ -217,9 +271,13 @@ func validateEntry(entry, level string) error {
 // specified revision and digest to match. Strictness is the
 // granularity written down; the record setting never reinterprets existing
 // entries.
-func (p Policy) Matches(source string) bool {
-	source = strings.TrimSpace(source)
-	for _, bucket := range [][]string{p.Allow.Orgs, p.Allow.Projects, p.Allow.Pins} {
+func (p Policy) Matches(pin verify.Pin) bool {
+	source, err := Reference(pin)
+	if err != nil {
+		return false
+	}
+	allow := p.allowList(pin)
+	for _, bucket := range [][]string{allow.Orgs, allow.Projects, allow.Pins} {
 		for _, entry := range bucket {
 			if referenceMatches(entry, source) {
 				return true
@@ -245,18 +303,19 @@ func referenceMatches(expected, source string) bool {
 }
 
 // HasPin reports whether the exact reference is already journaled.
-func (p Policy) HasPin(source string) bool {
-	return containsEntry(p.Allow.Pins, source)
+func (p Policy) HasPin(pin verify.Pin) bool {
+	source, err := Reference(pin)
+	return err == nil && containsEntry(p.allowList(pin).Pins, source)
 }
 
-func (p Policy) hasEntry(level, value string) bool {
+func (a AllowList) hasEntry(level, value string) bool {
 	switch level {
 	case RecordOrg:
-		return containsEntry(p.Allow.Orgs, value)
+		return containsEntry(a.Orgs, value)
 	case RecordProject:
-		return containsEntry(p.Allow.Projects, value)
+		return containsEntry(a.Projects, value)
 	case RecordPin:
-		return containsEntry(p.Allow.Pins, value)
+		return containsEntry(a.Pins, value)
 	}
 	return false
 }
@@ -301,19 +360,24 @@ func entryForLevel(source, level string) (string, error) {
 // project and the exact pin). Trust is inclusive going down, so tightening
 // later starts from everything already used instead of re-prompting for it.
 // Deduplicated per bucket; one atomic write for the whole cascade.
-func (p *Policy) RecordTrust(source string) error {
-	_, err := p.RecordTrustAt(source, p.Record)
+func (p *Policy) RecordTrust(pin verify.Pin) error {
+	_, err := p.RecordTrustAt(pin, p.Record)
 	return err
 }
 
 // RecordTrustAt records at an explicit granularity (a --repo assertion's own
 // level) without touching the store's configured record default. It reports
 // whether anything new was written.
-func (p *Policy) RecordTrustAt(source, fromLevel string) (bool, error) {
+func (p *Policy) RecordTrustAt(pin verify.Pin, fromLevel string) (bool, error) {
 	if err := validateRecordLevel(fromLevel); err != nil {
 		return false, err
 	}
-	_, tag, digest, err := verify.ParseReference(strings.TrimSpace(source))
+	source, err := Reference(pin)
+	if err != nil {
+		return false, err
+	}
+	allow := p.allowList(pin)
+	_, tag, digest, err := verify.ParseReference(source)
 	if err != nil {
 		return false, fmt.Errorf("invalid reference %q: %w", source, err)
 	}
@@ -334,10 +398,10 @@ func (p *Policy) RecordTrustAt(source, fromLevel string) (bool, error) {
 		if err != nil {
 			return false, err
 		}
-		if p.hasEntry(level, entry) {
+		if allow.hasEntry(level, entry) {
 			continue
 		}
-		if err := p.appendEntry(level, entry); err != nil {
+		if err := allow.appendEntry(level, entry); err != nil {
 			return false, err
 		}
 		changed = true
@@ -351,15 +415,18 @@ func (p *Policy) RecordTrustAt(source, fromLevel string) (bool, error) {
 // RecordPin journals the exact reference a successful connect resolved to
 // and reports whether it was new. Deduplicated; callers skip it entirely for
 // --dangerous connects — a bypass must never become standing trust.
-func (p *Policy) RecordPin(source string) (bool, error) {
-	source = strings.TrimSpace(source)
+func (p *Policy) RecordPin(pin verify.Pin) (bool, error) {
+	source, err := Reference(pin)
+	if err != nil {
+		return false, err
+	}
 	if err := validateEntry(source, RecordPin); err != nil {
 		return false, err
 	}
-	if p.HasPin(source) {
+	if p.HasPin(pin) {
 		return false, nil
 	}
-	if err := p.appendEntry(RecordPin, source); err != nil {
+	if err := p.allowList(pin).appendEntry(RecordPin, source); err != nil {
 		return false, err
 	}
 	return true, p.save()
@@ -388,19 +455,19 @@ func (p *Policy) SetDefaults(mode, level string) error {
 // in-memory store only — callers persist with save, so a cascade of appends
 // is one atomic write. Pins insert at their sorted position so a project's
 // history groups together.
-func (p *Policy) appendEntry(level, value string) error {
+func (a *AllowList) appendEntry(level, value string) error {
 	value = strings.TrimSpace(value)
 	if err := validateEntry(value, level); err != nil {
 		return err
 	}
 	switch level {
 	case RecordOrg:
-		p.Allow.Orgs = append(p.Allow.Orgs, value)
+		a.Orgs = append(a.Orgs, value)
 	case RecordProject:
-		p.Allow.Projects = append(p.Allow.Projects, value)
+		a.Projects = append(a.Projects, value)
 	case RecordPin:
-		p.Allow.Pins = append(p.Allow.Pins, value)
-		sort.Strings(p.Allow.Pins)
+		a.Pins = append(a.Pins, value)
+		sort.Strings(a.Pins)
 	}
 	return nil
 }
@@ -429,9 +496,9 @@ func (p *Policy) save() error {
 func (p Policy) BroaderThan(level string) []string {
 	switch level {
 	case RecordProject:
-		return append([]string(nil), p.Allow.Orgs...)
+		return append(append([]string(nil), p.Allow.Orgs...), p.GitHub.Orgs...)
 	case RecordPin:
-		return append(append([]string(nil), p.Allow.Orgs...), p.Allow.Projects...)
+		return append(append(append(append([]string(nil), p.Allow.Orgs...), p.Allow.Projects...), p.GitHub.Orgs...), p.GitHub.Projects...)
 	default:
 		return nil
 	}
@@ -444,9 +511,9 @@ func (p *Policy) PruneBroaderThan(level string) error {
 	if len(p.BroaderThan(level)) == 0 {
 		return nil
 	}
-	p.Allow.Orgs = nil
+	p.Allow.Orgs, p.GitHub.Orgs = nil, nil
 	if level == RecordPin {
-		p.Allow.Projects = nil
+		p.Allow.Projects, p.GitHub.Projects = nil, nil
 	}
 	return p.save()
 }

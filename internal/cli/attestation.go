@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"cmp"
 	"context"
 	"crypto/tls"
 	"fmt"
@@ -35,22 +36,22 @@ func tlsConnection(enclaveHost string) (*tls.ConnectionState, error) {
 	return &cs, nil
 }
 
-func verificationOptions(rootOpts *rootOptions, source, sealedTo string) (*tinfoil.EnclaveOptions, error) {
-	input, err := verificationInput(rootOpts, source, sealedTo)
+func verificationOptions(rootOpts *rootOptions, pin verify.Pin, sealedTo string) (*tinfoil.EnclaveOptions, error) {
+	input, err := verificationInput(rootOpts, pin, sealedTo)
 	if err != nil {
 		return nil, err
 	}
 	return input.Options()
 }
 
-func verificationInput(rootOpts *rootOptions, source, sealedTo string) (connection.Verification, error) {
-	input := connection.Verification{Reference: source, RTMR3: sealedTo, PublicRegistry: rootOpts.publicRegistry}
+func verificationInput(rootOpts *rootOptions, pin verify.Pin, sealedTo string) (connection.Verification, error) {
+	input := connection.Verification{Pin: pin, RTMR3: sealedTo, PublicRegistry: rootOpts.publicRegistry}
 	if rootOpts.localConfigFile != "" {
 		if rootOpts.publicRegistry {
 			return input, fmt.Errorf("--public-registry and --config cannot be used together")
 		}
-		if source != "" {
-			return input, fmt.Errorf("--config and --repo cannot be used together")
+		if pin != (verify.Pin{}) {
+			return input, fmt.Errorf("--config cannot be used with --repo or --project")
 		}
 		data, err := readLocalConfig(rootOpts)
 		if err != nil {
@@ -60,11 +61,11 @@ func verificationInput(rootOpts *rootOptions, source, sealedTo string) (connecti
 		if err != nil {
 			return input, err
 		}
-	} else if source == "" {
-		return input, fmt.Errorf("v3 verification requires an expected workload; pass --repo owner/name[@tag][@sha256:digest] or --config FILE")
-	} else {
+	} else if pin == (verify.Pin{}) {
+		return input, fmt.Errorf("v3 verification requires an expected workload; pass --repo owner/name[@tag][@sha256:digest], --project org/project[@revision][@sha256:digest] or --config FILE")
+	} else if pin.Project != "" {
 		var err error
-		input.RegistryIDs, err = registryIDs(rootOpts, source)
+		input.RegistryIDs, err = registryIDs(rootOpts, pin.Project)
 		if err != nil {
 			return input, err
 		}
@@ -72,15 +73,23 @@ func verificationInput(rootOpts *rootOptions, source, sealedTo string) (connecti
 	return input, nil
 }
 
-func newVerifiedClient(rootOpts *rootOptions, host, source, sealedTo string) (*tinfoil.EnclaveHTTPClient, error) {
+func newVerifiedClient(rootOpts *rootOptions, host string, pin verify.Pin, sealedTo string) (*tinfoil.EnclaveHTTPClient, error) {
 	if host == "" {
 		return nil, fmt.Errorf("--enclave is required")
 	}
-	input, err := verificationInput(rootOpts, source, sealedTo)
+	input, err := verificationInput(rootOpts, pin, sealedTo)
 	if err != nil {
 		return nil, err
 	}
 	return connection.NewClient(context.Background(), host, input)
+}
+
+// pinText names the pinned repository and project for display.
+func pinText(pin verify.Pin) string {
+	if pin.Repo == "" || pin.Project == "" || pin.Repo == pin.Project {
+		return cmp.Or(pin.Repo, pin.Project)
+	}
+	return "repository " + pin.Repo + " or project " + pin.Project
 }
 
 type auditRecord struct {
@@ -88,6 +97,7 @@ type auditRecord struct {
 
 	Enclave string `json:"enclave"`
 	Repo    string `json:"repo,omitempty"`
+	Project string `json:"project,omitempty"`
 	Digest  string `json:"digest,omitempty"`
 
 	Measurements struct {
@@ -145,7 +155,7 @@ func (r *auditRecord) verificationError() error {
 }
 
 func verifyAttestation(rootOpts *rootOptions, l *log.Logger) (*auditRecord, error) {
-	host, source := rootOpts.enclaveHost, rootOpts.repo
+	host, pin := rootOpts.enclaveHost, rootOpts.pin()
 	if host == "" && rootOpts.localConfigFile != "" {
 		return nil, fmt.Errorf("--enclave is required with --config")
 	}
@@ -155,12 +165,12 @@ func verifyAttestation(rootOpts *rootOptions, l *log.Logger) (*auditRecord, erro
 			return nil, fmt.Errorf("getting router: %w", err)
 		}
 		host = router.Enclave()
-		if source == "" {
-			source = router.Repo()
+		if pin == (verify.Pin{}) {
+			pin = router.Pin()
 		}
 		l.Printf("Using auto selected router: %s", host)
 	}
-	secure, err := newVerifiedClient(rootOpts, host, source, "")
+	secure, err := newVerifiedClient(rootOpts, host, pin, "")
 	if err != nil {
 		return nil, err
 	}
@@ -170,7 +180,7 @@ func verifyAttestation(rootOpts *rootOptions, l *log.Logger) (*auditRecord, erro
 	}
 
 	record := &auditRecord{
-		Timestamp: time.Now().UTC().Format(time.RFC3339), Enclave: host, Repo: source, Digest: verified.CodeDigest(),
+		Timestamp: time.Now().UTC().Format(time.RFC3339), Enclave: host, Repo: pin.Repo, Project: pin.Project, Digest: verified.CodeDigest(),
 		CryptoMaterial: verified.CryptoMaterial(), FreshnessExpiresAt: verified.FreshnessExpiresAt(),
 	}
 	record.Measurements.Sigstore = measurementRecord(verified.CodeMeasurement())
@@ -186,7 +196,10 @@ func verifyAttestation(rootOpts *rootOptions, l *log.Logger) (*auditRecord, erro
 	if err != nil {
 		return nil, fmt.Errorf("fetching remote public key fingerprint: %w", err)
 	}
-	record.Keys.Connection, err = verify.ConnectionCertFP(*cs)
+	if len(cs.PeerCertificates) == 0 {
+		return nil, fmt.Errorf("fetching remote public key fingerprint: no peer certificates")
+	}
+	record.Keys.Connection, err = verify.CertPubkeyFP(cs.PeerCertificates[0])
 	if err != nil {
 		return nil, fmt.Errorf("fetching remote public key fingerprint: %w", err)
 	}
@@ -195,7 +208,7 @@ func verifyAttestation(rootOpts *rootOptions, l *log.Logger) (*auditRecord, erro
 		record.Status, record.Error = "fail", "remote public key does not match the endorsed TLS key"
 	} else {
 		record.Status = "ok"
-		l.Printf("Verified %s at %s; TLS key %s", source, verified.CodeDigest(), record.Keys.Enclave)
+		l.Printf("Verified %s at %s; TLS key %s", pinText(pin), verified.CodeDigest(), record.Keys.Enclave)
 	}
 	return record, nil
 }

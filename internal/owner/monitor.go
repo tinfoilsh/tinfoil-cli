@@ -93,7 +93,7 @@ func (s *Service) ConnectMonitor(ctx context.Context, scope Scope, cp *controlpl
 	if err != nil {
 		return nil, err
 	}
-	if m.hostKey, err = verifier.MonitorHost(row.Domain, row.Source); err != nil {
+	if m.hostKey, err = verifier.MonitorHost(row.Domain, row.Pin); err != nil {
 		return nil, err
 	}
 	if _, err := UpdateProfile(dir, func(p *Profile) error {

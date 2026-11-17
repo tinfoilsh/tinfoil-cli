@@ -46,11 +46,12 @@ func TestVerificationRejectsMissingOrConflictingExpectations(t *testing.T) {
 	require.NoError(t, err)
 	for _, input := range []Verification{
 		{},
-		{Config: config, Reference: "acme/app"},
+		{Config: config, Pin: verify.Pin{Repo: "acme/app"}},
+		{Config: config, Pin: verify.Pin{Project: "acme/app"}},
 		{Config: config, PublicRegistry: true},
 		{Config: &Config{}},
-		{Reference: "acme/app", RTMR3: "invalid"},
-		{Reference: "acme/app", RegistryIDs: []string{"invalid"}},
+		{Pin: verify.Pin{Repo: "acme/app"}, RTMR3: "invalid"},
+		{Pin: verify.Pin{Project: "acme/app"}, RegistryIDs: []string{"invalid"}},
 	} {
 		_, err := input.Options()
 		require.Error(t, err)
@@ -59,7 +60,7 @@ func TestVerificationRejectsMissingOrConflictingExpectations(t *testing.T) {
 	require.ErrorContains(t, err, "config must contain")
 	_, err = NewConfig(make([]byte, configendorsement.MaxConfigSize+1))
 	require.ErrorContains(t, err, "config must contain")
-	_, err = NewClient(t.Context(), "", Verification{Reference: "acme/app"})
+	_, err = NewClient(t.Context(), "", Verification{Pin: verify.Pin{Repo: "acme/app"}})
 	require.ErrorContains(t, err, "--enclave is required")
 }
 
@@ -71,9 +72,9 @@ func TestVerificationKeepsRegistryTrustExplicit(t *testing.T) {
 	})
 	require.NoError(t, err)
 	for _, public := range []bool{false, true} {
-		options, err := (Verification{Reference: "acme/app", RegistryIDs: []string{registryID}, PublicRegistry: public}).Options()
+		options, err := (Verification{Pin: verify.Pin{Project: "acme/app"}, RegistryIDs: []string{registryID}, PublicRegistry: public}).Options()
 		require.NoError(t, err)
-		_, err = options.Verifier.VerifyV3(doc, nonce, "acme/app")
+		_, err = options.Verifier.VerifyV3(doc, nonce, verify.Pin{Project: "acme/app"})
 		require.Error(t, err)
 		if public {
 			require.NotContains(t, err.Error(), "configured trust requires")

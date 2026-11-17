@@ -91,7 +91,7 @@ func TestRegistryCommandsKeepPersonalAndOrganizationApprovalsSeparate(t *testing
 }
 
 func TestPublicRegistryPolicySurvivesSSHProxyCommand(t *testing.T) {
-	command, err := proxyCommand(&rootOptions{publicRegistry: true}, &tunnelOptions{}, &tunnelTarget{host: "app.example.com", repo: "acme/app"}, defaultSSHPort)
+	command, err := proxyCommand(&rootOptions{publicRegistry: true}, &tunnelOptions{}, &tunnelTarget{host: "app.example.com", pin: projectPin("acme/app")}, defaultSSHPort)
 	require.NoError(t, err)
 	require.Contains(t, command, "'--public-registry'")
 }
@@ -121,7 +121,7 @@ func TestRegistryEnrollmentSelectsOnlyItsNamespacesAndControlPlane(t *testing.T)
 	nonce := make([]byte, document.NonceSize)
 	doc, err := document.Build(document.BuildInput{Nonce: nonce, CollateralFormat: collateral.FormatV2}, func([64]byte) (string, []byte, error) { return document.SEVSNPReportV1Format, []byte("quote"), nil })
 	require.NoError(t, err)
-	_, err = v.VerifyV3(doc, nonce, "acme/app")
+	_, err = v.VerifyV3(doc, nonce, projectPin("acme/app"))
 	require.ErrorContains(t, err, "configured trust requires")
 	options, err = registryIDs(rootOpts, "other/app")
 	require.NoError(t, err)

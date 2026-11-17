@@ -142,7 +142,7 @@ func newRootCommandWithDependencies(dependencies commandDependencies) *cobra.Com
 	addManagedCommands(pollingOpts, accounts.authedClient, accounts.currentScope, sandboxIdentity, sandboxOutput, sandbox)
 	cmd.AddCommand(monitor, sandbox)
 	create, _, _ := cmd.Find([]string{"container", "create"})
-	create.MarkFlagsMutuallyExclusive("config", "repo")
+	create.MarkFlagsMutuallyExclusive("config", "repo", "project")
 	create.MarkFlagsMutuallyExclusive("config", "tag", "revision")
 	create.MarkFlagsOneRequired("config", "tag", "revision")
 	for _, g := range commandGroups {
@@ -162,7 +162,8 @@ var helpTemplatesOnce sync.Once
 
 func configureRootCommand(rootOpts *rootOptions, rootCmd *cobra.Command) {
 	rootCmd.PersistentFlags().StringVarP(&rootOpts.enclaveHost, "enclave", "e", "", "Enclave hostname (for example inference.tinfoil.sh)")
-	rootCmd.PersistentFlags().StringVarP(&rootOpts.repo, "repo", "r", "", "Expected config source: owner/name[@tag][@sha256:digest]")
+	rootCmd.PersistentFlags().StringVarP(&rootOpts.repo, "repo", "r", "", "Expected GitHub repository: owner/name[@tag][@sha256:digest]")
+	rootCmd.PersistentFlags().StringVar(&rootOpts.project, "project", "", "Expected registry project: org/project[@revision][@sha256:digest]")
 	rootCmd.PersistentFlags().BoolVarP(&rootOpts.verbose, "verbose", "v", false, "Verbose output")
 	rootCmd.PersistentFlags().BoolVarP(&rootOpts.trace, "trace", "t", false, "Trace output")
 	rootCmd.PersistentFlags().BoolP("help", "h", false, "Show help")

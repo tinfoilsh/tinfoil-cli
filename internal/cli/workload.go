@@ -11,6 +11,7 @@ import (
 
 	"github.com/tinfoilsh/tinfoil-cli/internal/selfupdate"
 	configendorsement "github.com/tinfoilsh/tinfoil-go/endorsement/config"
+	"github.com/tinfoilsh/tinfoil-go/verify"
 	"go.yaml.in/yaml/v3"
 )
 
@@ -28,15 +29,15 @@ const (
 // attestation and credential delivery. Never rebuild the source after approval.
 type workloadTarget struct {
 	containerView
-	source string
+	source verify.Pin
 	env    map[string]string
 }
 
 // The controlplane supplies the config; tinfoil-go verifies its endorsement and
 // measured digest before a connection can carry owner credentials.
-func resolveWorkload(streams commandIO, rootOpts *rootOptions, trustOpts *trustOptions, row containerView, repository, assertion string) (*workloadTarget, error) {
+func resolveWorkload(streams commandIO, rootOpts *rootOptions, trustOpts *trustOptions, row containerView, repository string, assertion verify.Pin) (*workloadTarget, error) {
 	if rootOpts.localConfigFile != "" {
-		return nil, errors.New("managed workloads use their published configuration; pin it with --repo instead of --config")
+		return nil, errors.New("managed workloads use their published configuration; pin it with --project instead of --config")
 	}
 	if row.Repo != repository || row.Debug || row.Config == "" {
 		return nil, errors.New("unexpected workload configuration")
@@ -54,11 +55,11 @@ func resolveWorkload(streams commandIO, rootOpts *rootOptions, trustOpts *trustO
 		return nil, err
 	}
 	if !trustOpts.trustDangerous {
-		verify := rootOpts.connections.verifyRelease
-		if verify == nil {
-			verify = verifyRelease
+		check := rootOpts.connections.verifyRelease
+		if check == nil {
+			check = verifyRelease
 		}
-		if err := verify(row); err != nil {
+		if err := check(row); err != nil {
 			return nil, fmt.Errorf("verifying %s as release %s of %s: %w; --dangerous skips this check", row.Name, row.CurrentTag, repository, err)
 		}
 	}

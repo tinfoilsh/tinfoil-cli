@@ -19,6 +19,7 @@ import (
 	"github.com/tinfoilsh/tinfoil-cli/internal/connection"
 	"github.com/tinfoilsh/tinfoil-cli/internal/controlplane"
 	"github.com/tinfoilsh/tinfoil-cli/internal/keybundle"
+	"github.com/tinfoilsh/tinfoil-go/verify"
 	"github.com/tinfoilsh/tinfoil-go/verify/document"
 	"golang.org/x/crypto/ssh"
 )
@@ -138,7 +139,7 @@ func (service *Service) openSandbox(ctx context.Context, scope Scope, target *Wo
 	resourceID := scope.ControlplaneURL + "/" + scope.OrgID + "/" + scope.UserID + "/" + row.ID
 	if noMonitor {
 		defer service.progress(SandboxVerifying, row.Domain)()
-		verified, err := verifier.DirectEvidence(ctx, row.Domain, target.Source)
+		verified, err := verifier.DirectEvidence(ctx, row.Domain, target.Pin)
 		if err != nil {
 			return nil, err
 		}
@@ -154,7 +155,7 @@ func (service *Service) openSandbox(ctx context.Context, scope Scope, target *Wo
 	}
 	s.owner = &sandboxOwner{request: monitor.request, instance: *binding.InstanceID, dial: s.dial}
 	stop := service.progress(SandboxRelayVerifying, row.Name)
-	verified, err := s.owner.attest(target.Source, verifier)
+	verified, err := s.owner.attest(target.Pin, verifier)
 	stop()
 	if err != nil {
 		return nil, fmt.Errorf("bunker attestation through Perimeter: %w", err)
@@ -344,7 +345,7 @@ type relayReply struct {
 	Body   string `json:"body"`
 }
 
-func (o *sandboxOwner) attest(source string, verifier Verifier) (connection.Evidence, error) {
+func (o *sandboxOwner) attest(pin verify.Pin, verifier Verifier) (connection.Evidence, error) {
 	nonce, err := document.RandomNonce()
 	if err != nil {
 		return nil, err
@@ -364,7 +365,7 @@ func (o *sandboxOwner) attest(source string, verifier Verifier) (connection.Evid
 	if err != nil {
 		return nil, err
 	}
-	verified, err := verifier.RelayEvidence(source, doc, nonce)
+	verified, err := verifier.RelayEvidence(pin, doc, nonce)
 	if err != nil {
 		return nil, err
 	}

@@ -8,6 +8,7 @@ import (
 	"github.com/tinfoilsh/tinfoil-cli/internal/connection"
 	"github.com/tinfoilsh/tinfoil-cli/internal/keybundle"
 	"github.com/tinfoilsh/tinfoil-cli/internal/owner"
+	"github.com/tinfoilsh/tinfoil-go/verify"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/term"
 )
@@ -102,7 +103,7 @@ func renderOwnerEvent(streams commandIO, event owner.Event) {
 }
 
 func ownerWorkload(target *workloadTarget) *owner.Workload {
-	return &owner.Workload{Container: target.containerView, Source: target.source, Environment: target.env}
+	return &owner.Workload{Container: target.containerView, Pin: target.source, Environment: target.env}
 }
 
 type ownerVerifier struct {
@@ -110,11 +111,11 @@ type ownerVerifier struct {
 	rootOpts *rootOptions
 }
 
-func (v ownerVerifier) MonitorHost(domain, source string) (ssh.PublicKey, error) {
-	return attestedHostKey(v.streams, v.rootOpts, domain, source, "")
+func (v ownerVerifier) MonitorHost(domain string, pin verify.Pin) (ssh.PublicKey, error) {
+	return attestedHostKey(v.streams, v.rootOpts, domain, pin, "")
 }
-func (v ownerVerifier) DirectEvidence(ctx context.Context, domain, source string) (connection.Evidence, error) {
-	secure, err := newVerifiedClient(v.rootOpts, domain, source, "")
+func (v ownerVerifier) DirectEvidence(ctx context.Context, domain string, pin verify.Pin) (connection.Evidence, error) {
+	secure, err := newVerifiedClient(v.rootOpts, domain, pin, "")
 	if err != nil {
 		return nil, err
 	}
@@ -124,13 +125,13 @@ func (v ownerVerifier) DirectEvidence(ctx context.Context, domain, source string
 	}
 	return verified, nil
 }
-func (v ownerVerifier) RelayEvidence(source string, doc, nonce []byte) (connection.Evidence, error) {
-	if verify := v.rootOpts.connections.verifySandboxEvidence; verify != nil {
-		return verify(doc, nonce, source)
+func (v ownerVerifier) RelayEvidence(pin verify.Pin, doc, nonce []byte) (connection.Evidence, error) {
+	if verifyEvidence := v.rootOpts.connections.verifySandboxEvidence; verifyEvidence != nil {
+		return verifyEvidence(doc, nonce, pin)
 	}
-	options, err := verificationOptions(v.rootOpts, source, "")
+	options, err := verificationOptions(v.rootOpts, pin, "")
 	if err != nil {
 		return nil, err
 	}
-	return options.Verifier.VerifyV3(doc, nonce, source)
+	return options.Verifier.VerifyV3(doc, nonce, pin)
 }

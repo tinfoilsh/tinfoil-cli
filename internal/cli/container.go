@@ -12,6 +12,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/tinfoilsh/tinfoil-cli/internal/controlplane"
+	"github.com/tinfoilsh/tinfoil-go/verify"
 	"golang.org/x/term"
 )
 
@@ -123,7 +124,7 @@ func newContainerCreateCommand(pollingOpts *pollingOptions, newClient authentica
   tinfoil container create app --repo org/repo --tag v1.2.3
 
   From a registry config
-  tinfoil container create app --source registry --repo org/project --revision v1.2.3
+  tinfoil container create app --project org/project --revision v1.2.3
 
   From a local config file
   tinfoil container create app --config tinfoil-config.yml`,
@@ -134,6 +135,12 @@ func newContainerCreateCommand(pollingOpts *pollingOptions, newClient authentica
 					return fmt.Errorf("--config requires --source local")
 				}
 				containerCreateOpts.createSource = containerSourceLocal
+			}
+			if containerCreateOpts.createProject != "" {
+				if cmd.Flags().Changed("source") && containerCreateOpts.createSource != containerSourceRegistry {
+					return fmt.Errorf("--project requires --source registry")
+				}
+				containerCreateOpts.createSource, containerCreateOpts.createRepo = containerSourceRegistry, containerCreateOpts.createProject
 			}
 			if containerCreateOpts.createSource != containerSourceGitHub && containerCreateOpts.createSource != containerSourceRegistry && containerCreateOpts.createSource != containerSourceLocal {
 				return fmt.Errorf("--source must be github, registry, or local")
@@ -151,7 +158,7 @@ func newContainerCreateCommand(pollingOpts *pollingOptions, newClient authentica
 			body := map[string]any{"name": args[0]}
 			if containerCreateOpts.createSource == containerSourceLocal {
 				if containerCreateOpts.createRepo != "" || revision != "" {
-					return fmt.Errorf("local configs cannot use --repo, --tag, or --revision")
+					return fmt.Errorf("local configs cannot use --repo, --project, --tag, or --revision")
 				}
 				data, err := readLocalConfig(rootOpts)
 				if err != nil {
@@ -160,6 +167,9 @@ func newContainerCreateCommand(pollingOpts *pollingOptions, newClient authentica
 				body["source"], body["config"] = containerSourceLocal, data
 			} else {
 				if containerCreateOpts.createRepo == "" {
+					if containerCreateOpts.createSource == containerSourceRegistry {
+						return fmt.Errorf("--project is required for registry configs")
+					}
 					return fmt.Errorf("--repo is required for %s configs", containerCreateOpts.createSource)
 				}
 				body["repo"] = containerCreateOpts.createRepo
@@ -302,7 +312,7 @@ func newContainerCreateCommand(pollingOpts *pollingOptions, newClient authentica
 			}
 			// The caller just told us exactly what they intend to run: seed the
 			// trust store now so the first connect needs no prompt.
-			seedTrustFromCreate(commandStreams(cmd), containerCreateOpts.createRepo, revision)
+			seedTrustFromCreate(commandStreams(cmd), containerCreateOpts.createSource, containerCreateOpts.createRepo, revision)
 			deployBody := map[string]any{}
 			if value, ok := body["mark_latest_release"].(bool); ok {
 				deployBody["mark_latest_release"] = value
@@ -333,9 +343,10 @@ func newContainerCreateCommand(pollingOpts *pollingOptions, newClient authentica
 		},
 	}
 	containerCreateCmd.Flags().BoolVar(&waitOpts.noWait, "no-wait", false, "Return once the request is accepted")
-	containerCreateCmd.Flags().StringVar(&containerCreateOpts.createRepo, "repo", "", "GitHub repository or registry project (org/project)")
+	containerCreateCmd.Flags().StringVar(&containerCreateOpts.createRepo, "repo", "", "GitHub repository (owner/name)")
+	containerCreateCmd.Flags().StringVar(&containerCreateOpts.createProject, "project", "", "Registry project (org/project); implies --source registry")
 	containerCreateCmd.Flags().StringVar(&containerCreateOpts.createTag, "tag", "", "GitHub release tag (alias for --revision with --source github)")
-	containerCreateCmd.Flags().StringVar(&containerCreateOpts.createSource, "source", containerSourceGitHub, "Config source: github, registry, or local (implied by --config)")
+	containerCreateCmd.Flags().StringVar(&containerCreateOpts.createSource, "source", containerSourceGitHub, "Config source: github, registry (implied by --project), or local (implied by --config)")
 	containerCreateCmd.Flags().StringVar(&containerCreateOpts.createRevision, "revision", "", "GitHub release tag, or registry version or sha256:<config digest>")
 	containerCreateCmd.Flags().BoolVar(&containerCreateOpts.createDebug, "debug", false, "Enable debug mode (allows SSH into the enclave)")
 	containerCreateCmd.Flags().StringVar(&containerCreateOpts.createMarkLatestRelease, "mark-latest", "", "Mark the tag as the repo's latest GitHub release once running (default true)")
@@ -624,23 +635,11 @@ func newContainerConnectCommand(newClient authenticatedClientFactory, containerC
 			if err != nil {
 				return err
 			}
-			sourceOverride := rootOpts.repo
-			if rootOpts.repo != "" && !strings.Contains(rootOpts.repo, "/") {
-				// A bare org is a valid assertion here but not a verifier pin:
-				// tinfoil-go's reference grammar requires owner/name — it has no
-				// org-prefix match, even though the endorsed name it compares
-				// against would support one. Until the SDK grows that,
-				// assertTrustedSource checks the org against the resolved name
-				// (which the verifier then proves via the signed name→digest
-				// endorsement, backstopping the string check), and the verifier
-				// pins the resolved reference.
-				sourceOverride = ""
-			}
-			target, err := containerConnection(*c, containerConnectOpts.connectReview, sourceOverride)
+			target, err := containerConnection(*c, containerConnectOpts.connectReview, rootOpts.pin())
 			if err != nil {
 				return err
 			}
-			expected := target.source
+			expected := pinText(target.source)
 			if c.Source == containerSourceLocal {
 				// A local config is a caller-held expectation: the file's digest is
 				// the trust decision, so the connection policy does not apply.
@@ -648,19 +647,19 @@ func newContainerConnectCommand(newClient authenticatedClientFactory, containerC
 					return err
 				}
 				expected = "sha256:" + target.ConfigDigest
-			} else if rootOpts.repo == "" {
+			} else if rootOpts.pin() == (verify.Pin{}) {
 				// The expectation came from the controlplane response, not the
 				// caller: check it against the connection policy before trusting it.
 				if err := enforceConnectionPolicy(commandStreams(cmd), trustOpts, target.source); err != nil {
 					return err
 				}
-			} else if err := assertTrustedSource(commandStreams(cmd), rootOpts.repo, target.source); err != nil {
+			} else if err := assertTrustedSource(commandStreams(cmd), rootOpts.pin(), target.source); err != nil {
 				return err
 			}
 			fmt.Fprintf(commandStreams(cmd).out, "Connecting verified proxy to %s: %s (expected %s)\n", c.Name, target.URL, expected)
 
 			connection := *rootOpts
-			connection.enclaveHost, connection.repo = target.host, target.source
+			connection.enclaveHost, connection.repo, connection.project = target.host, target.source.Repo, target.source.Project
 			proxy := *proxyOpts
 			proxy.listenAddr, proxy.listenPort = containerConnectOpts.connectBindAddr, containerConnectOpts.connectPort
 			return runProxy(&proxy, &connection, cmd, nil)

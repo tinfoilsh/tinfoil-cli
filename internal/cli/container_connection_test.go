@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/tinfoilsh/tinfoil-go/verify"
 )
 
 const reviewContainerFixture = `{"id":"61bd4a3e-5b48-4320-9215-0c7a7f974979","name":"app","repo":"acme/app","status":"running","current_tag":"v1","domain":"production.example.com","update_tag":"v2","update_status":"ready","update_type":"blue_green","update_deployment_id":"candidate-1","update_config":{"hold":true},"connections":{"production":{"url":"https://production.example.com","repo":"acme/app","tag":"v1"},"review":{"url":"https://review.example.com:4443","repo":"acme/app","tag":"v2"}}}`
@@ -55,7 +57,7 @@ func TestReviewConnectInvalidHostFailsBeforeProxy(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { json.NewEncoder(w).Encode(c) }))
 	defer server.Close()
 	configureContainerPromotionTest(commandState, t, server.URL)
-	commandState.dependencies.proxyClient = func(context.Context, string, string) (*http.Client, error) {
+	commandState.dependencies.proxyClient = func(context.Context, string, verify.Pin) (*http.Client, error) {
 		t.Fatal("invalid descriptor reached proxy initialization")
 		return nil, nil
 	}
@@ -109,7 +111,7 @@ func TestCreateRunningPrintsVerifiedNextStep(t *testing.T) {
 func TestReviewConnectionPinsCandidate(t *testing.T) {
 	c := reviewContainer(t)
 	for _, review := range []bool{false, true} {
-		target, err := containerConnection(c, review, "")
+		target, err := containerConnection(c, review, verify.Pin{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -117,21 +119,27 @@ func TestReviewConnectionPinsCandidate(t *testing.T) {
 		if review {
 			wantHost, wantSource = "review.example.com:4443", "acme/app@v2"
 		}
-		if target.host != wantHost || target.source != wantSource {
+		if target.host != wantHost || target.source != repoPin(wantSource) {
 			t.Fatalf("wrong target: %+v", target)
 		}
 	}
-	for _, source := range []string{"acme/app", "acme/app@v1", "other/app@v2", "bad reference"} {
-		if _, err := containerConnection(c, true, source); err == nil {
+	for _, source := range []string{"acme/app", "acme/app@v1", "other/app@v2", "acme/bad reference"} {
+		if _, err := containerConnection(c, true, repoPin(source)); err == nil {
 			t.Fatalf("review accepted override %q", source)
 		}
 	}
 	digestPin := "acme/app@v2@sha256:" + strings.Repeat("a", 64)
-	if target, err := containerConnection(c, true, digestPin); err != nil || target.source != digestPin {
+	if target, err := containerConnection(c, true, repoPin(digestPin)); err != nil || target.source != repoPin(digestPin) {
 		t.Fatalf("digest override: %+v %v", target, err)
 	}
-	if target, err := containerConnection(c, false, "acme/other@release"); err != nil || target.source != "acme/other@release" {
+	if target, err := containerConnection(c, false, repoPin("acme/other@release")); err != nil || target.source != repoPin("acme/other@release") {
 		t.Fatalf("explicit production --repo ignored: %+v %v", target, err)
+	}
+	if target, err := containerConnection(c, false, verify.Pin{Repo: "acme/other@release", Project: "acme/app"}); err != nil || target.source != repoPin("acme/other@release") {
+		t.Fatalf("explicit production --repo ignored: %+v %v", target, err)
+	}
+	if _, err := containerConnection(c, false, projectPin("acme/app@v1")); err == nil || !strings.Contains(err.Error(), "--repo instead of --project") {
+		t.Fatalf("a GitHub release accepted a registry project override: %v", err)
 	}
 }
 
@@ -156,7 +164,7 @@ func TestReviewRejectsUnavailableCandidate(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			c := reviewContainer(t)
 			tc.change(&c)
-			if _, err := containerConnection(c, true, ""); err == nil {
+			if _, err := containerConnection(c, true, verify.Pin{}); err == nil {
 				t.Fatal("fell back to production or accepted unavailable review")
 			}
 		})
@@ -168,7 +176,7 @@ func TestConnectionRejectsInvalidHostAndSource(t *testing.T) {
 		t.Run(raw, func(t *testing.T) {
 			c := reviewContainer(t)
 			c.Connections.Review.URL = raw
-			if _, err := containerConnection(c, true, ""); err == nil || !strings.Contains(err.Error(), "invalid") {
+			if _, err := containerConnection(c, true, verify.Pin{}); err == nil || !strings.Contains(err.Error(), "invalid") {
 				t.Fatalf("invalid host accepted: %v", err)
 			}
 		})
@@ -199,9 +207,9 @@ func TestReviewConnectCommandUsesActualDescriptor(t *testing.T) {
 	}))
 	defer server.Close()
 	configureContainerPromotionTest(commandState, t, server.URL)
-	gateEnv(t, `{"allow":{"projects":["acme/app"]}}`) // the gate is not under test here
-	commandState.dependencies.proxyClient = func(_ context.Context, host, source string) (*http.Client, error) {
-		if host != strings.TrimPrefix(upstream.URL, "https://") || source != "acme/app@v2" {
+	gateEnv(t, `{"github":{"projects":["acme/app"]}}`) // the gate is not under test here
+	commandState.dependencies.proxyClient = func(_ context.Context, host string, source verify.Pin) (*http.Client, error) {
+		if host != strings.TrimPrefix(upstream.URL, "https://") || source != repoPin("acme/app@v2") {
 			t.Fatalf("proxy target %s %s", host, source)
 		}
 		return upstream.Client(), nil
@@ -256,7 +264,7 @@ func TestConnectCommandFailsClosedWithoutTrustStore(t *testing.T) {
 	defer server.Close()
 	configureContainerPromotionTest(commandState, t, server.URL)
 	gateEnv(t, "") // empty store, nothing allowed
-	commandState.dependencies.proxyClient = func(context.Context, string, string) (*http.Client, error) {
+	commandState.dependencies.proxyClient = func(context.Context, string, verify.Pin) (*http.Client, error) {
 		t.Fatal("untrusted config reached proxy initialization")
 		return nil, nil
 	}
