@@ -68,9 +68,14 @@ func Reference(pin verify.Pin) (string, error) {
 	return repo + project, nil
 }
 
+// namesRepository reports whether pin names a GitHub repository, as Reference reads it.
+func namesRepository(pin verify.Pin) bool {
+	return strings.TrimSpace(pin.Repo) != ""
+}
+
 // Flag names the command-line flag that states pin.
 func Flag(pin verify.Pin) string {
-	if pin.Repo != "" {
+	if namesRepository(pin) {
 		return "--repo"
 	}
 	return "--project"
@@ -78,21 +83,21 @@ func Flag(pin verify.Pin) string {
 
 // Section names the trust file member that holds allow entries for pin.
 func Section(pin verify.Pin) string {
-	if pin.Repo != "" {
+	if namesRepository(pin) {
 		return gitHubSection
 	}
 	return allowSection
 }
 
 func withReference(pin verify.Pin, reference string) verify.Pin {
-	if pin.Repo != "" {
+	if namesRepository(pin) {
 		return verify.Pin{Repo: reference}
 	}
 	return verify.Pin{Project: reference}
 }
 
 func (p *Policy) allowList(pin verify.Pin) *AllowList {
-	if pin.Repo != "" {
+	if namesRepository(pin) {
 		return &p.GitHub
 	}
 	return &p.Allow

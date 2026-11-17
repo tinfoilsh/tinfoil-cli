@@ -22,7 +22,7 @@ func TestCreateRegistryRevision(t *testing.T) {
 		revision string
 		source   []string
 	}{
-		{"v1.2.3", []string{"--source", "registry", "--repo", "acme/app"}},
+		{"v1.2.3", []string{"--source", "registry", "--project", "acme/app"}},
 		{"sha256:" + registryConfigDigest, []string{"--project", "acme/app"}},
 	} {
 		revision, source := test.revision, test.source
@@ -99,6 +99,7 @@ func TestCreateRejectsInvalidSourceSelection(t *testing.T) {
 		{[]string{"--source", "registry", "--tag", "v1"}, "use --revision"},
 		{[]string{"--source", "registry", "--revision", "v1", "--replace", testContainerID}, "registry configs do not support --replace"},
 		{[]string{"--source", "registry"}, "at least one of the flags"},
+		{[]string{"--source", "registry", "--revision", "v1"}, "use --project instead of --repo"},
 		{[]string{"--tag", "v1", "--revision", "v2"}, "none of the others can be"},
 	} {
 		t.Run(test.message, func(t *testing.T) {

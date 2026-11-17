@@ -210,7 +210,7 @@ func TestReviewConnectCommandUsesActualDescriptor(t *testing.T) {
 	gateEnv(t, `{"github":{"projects":["acme/app"]}}`) // the gate is not under test here
 	commandState.dependencies.proxyClient = func(_ context.Context, host string, source verify.Pin) (*http.Client, error) {
 		if host != strings.TrimPrefix(upstream.URL, "https://") || source != repoPin("acme/app@v2") {
-			t.Fatalf("proxy target %s %s", host, source)
+			t.Fatalf("proxy target %s %+v", host, source)
 		}
 		return upstream.Client(), nil
 	}

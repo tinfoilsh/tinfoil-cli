@@ -151,6 +151,9 @@ func newContainerCreateCommand(pollingOpts *pollingOptions, newClient authentica
 			if containerCreateOpts.createSource != containerSourceGitHub && containerCreateOpts.createReplaceID != "" {
 				return fmt.Errorf("%s configs do not support --replace; create a new container before removing the old one", containerCreateOpts.createSource)
 			}
+			if containerCreateOpts.createSource == containerSourceRegistry && cmd.Flags().Changed("repo") {
+				return fmt.Errorf("use --project instead of --repo for registry configs")
+			}
 			revision := containerCreateOpts.createRevision
 			if revision == "" {
 				revision = containerCreateOpts.createTag
