@@ -1216,6 +1216,9 @@ func runContainerUpdate(pollingOpts *pollingOptions, newClient authenticatedClie
 		if err := review.render(commandStreams(cmd), outputOpts); err != nil {
 			return err
 		}
+		if err := checkPlannedHold(review.plans); err != nil {
+			return err
+		}
 		if outputOpts.outputFormat != "json" {
 			fmt.Fprintf(commandStreams(cmd).err, "Dry run: no update was sent for %s.\n", c.Name)
 		}

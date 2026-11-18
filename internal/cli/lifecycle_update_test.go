@@ -477,42 +477,56 @@ func TestUpdateHostMovesRunningContainerOnItsOwn(t *testing.T) {
 }
 
 func TestUpdateDryRunShowsThePlanWithoutUpdating(t *testing.T) {
-	commandState := newCommandFixture()
-	plans, others := 0, 0
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.Method == http.MethodGet:
-			io.WriteString(w, `{"id":"`+testContainerID+`","name":"app","status":"running","host_name":"host-a","update_strategy":"blue_green"}`)
-		case strings.HasSuffix(r.URL.Path, "/update/plan"):
-			plans++
-			writeTestUpdatePlan(t, w, r, testContainerID, "", updateStrategyBlueGreen)
-		default:
-			others++
-			t.Errorf("a dry run must not send %s %s", r.Method, r.URL.Path)
-		}
-	}))
-	defer server.Close()
-	configureContainerPromotionTest(commandState, t, server.URL)
-	commandState.outputOpts.outputFormat = "table"
-	commandState.containerUpdateOpts.updateDryRun = true
-	t.Cleanup(func() { commandState.containerUpdateOpts.updateDryRun = false })
-	commandState.containerUpdateOpts.updateTag = "v2"
-	commandState.containerUpdateCmd.Flags().Lookup("tag").Changed = true
-	stderr, err := captureTestStderr(func() error {
-		_, err := captureTestStdout(func() error {
-			return commandState.containerUpdateCmd.RunE(commandState.containerUpdateCmd, []string{testContainerID})
+	for _, tt := range []struct {
+		name, strategy string
+		hold           bool
+		wantErr        string
+	}{
+		{name: "plan that would run", strategy: updateStrategyBlueGreen},
+		{name: "plan the real update would refuse", strategy: updateStrategyReplace, hold: true, wantErr: "holding for review is not available"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			commandState := newCommandFixture()
+			plans := 0
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch {
+				case r.Method == http.MethodGet:
+					io.WriteString(w, `{"id":"`+testContainerID+`","name":"app","status":"running","host_name":"host-a","update_strategy":"`+tt.strategy+`"}`)
+				case strings.HasSuffix(r.URL.Path, "/update/plan"):
+					plans++
+					writeTestUpdatePlan(t, w, r, testContainerID, "", tt.strategy)
+				default:
+					t.Errorf("a dry run must not send %s %s", r.Method, r.URL.Path)
+				}
+			}))
+			defer server.Close()
+			configureContainerPromotionTest(commandState, t, server.URL)
+			commandState.outputOpts.outputFormat = "table"
+			commandState.containerUpdateOpts.updateDryRun = true
+			commandState.containerUpdateOpts.updateTag = "v2"
+			commandState.containerUpdateCmd.Flags().Lookup("tag").Changed = true
+			if tt.hold {
+				commandState.containerUpdateOpts.updateHold = "true"
+				commandState.containerUpdateCmd.Flags().Lookup("hold").Changed = true
+			}
+			stderr, err := captureTestStderr(func() error {
+				_, err := captureTestStdout(func() error {
+					return commandState.containerUpdateCmd.RunE(commandState.containerUpdateCmd, []string{testContainerID})
+				})
+				return err
+			})
+			if tt.wantErr == "" && err != nil || tt.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tt.wantErr)) {
+				t.Fatalf("error = %v, want %q", err, tt.wantErr)
+			}
+			if plans != 1 {
+				t.Fatalf("plans = %d, want 1", plans)
+			}
+			if !strings.Contains(string(stderr), "Tag: v1 -> v2") {
+				t.Fatalf("output lacks the plan: %s", stderr)
+			}
+			if sent := strings.Contains(string(stderr), "Dry run: no update was sent for app."); sent != (tt.wantErr == "") {
+				t.Fatalf("dry-run notice shown = %v: %s", sent, stderr)
+			}
 		})
-		return err
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if plans != 1 || others != 0 {
-		t.Fatalf("plans/other requests = %d/%d, want 1/0", plans, others)
-	}
-	for _, want := range []string{"Tag: v1 -> v2", "Dry run: no update was sent for app."} {
-		if !strings.Contains(string(stderr), want) {
-			t.Fatalf("output lacks %q: %s", want, stderr)
-		}
 	}
 }
