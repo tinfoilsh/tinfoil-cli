@@ -953,9 +953,6 @@ func renderContainerDetail(streams commandIO, outputOpts *outputOptions, c conta
 	if c.HostName != "" {
 		fmt.Fprintf(streams.out, "Host:         %s (cpu=%s gpu=%s)\n", c.HostName, c.HostCpuType, c.HostGpuType)
 	}
-	if c.UpdateHostName != "" {
-		fmt.Fprintf(streams.out, "Moving to:    %s\n", c.UpdateHostName)
-	}
 	fmt.Fprintf(streams.out, "Resources:    cpus=%d gpus=%d mem=%dMB\n", c.CPUs, c.GPUs, c.MemoryMB)
 	if c.MarkLatestRelease != nil {
 		fmt.Fprintf(streams.out, "Mark latest:  %t\n", *c.MarkLatestRelease)
@@ -1002,7 +999,9 @@ func renderContainerDetail(streams commandIO, outputOpts *outputOptions, c conta
 		label = strings.Repeat(" ", len(label))
 	}
 	printVolumeUnlockGuidance(streams.out, c.VolumeSlots)
-	if c.UpdateTag != "" {
+	if c.UpdateHostName != "" {
+		fmt.Fprintf(streams.out, "Moving to:    %s (%s)\n", c.UpdateHostName, updateLabel(c))
+	} else if c.UpdateTag != "" {
 		fmt.Fprintf(streams.out, "Updating to:  %s (%s)\n", c.UpdateTag, updateLabel(c))
 	}
 	if message := containerFailureMessage(c); message != "" {

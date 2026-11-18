@@ -378,6 +378,29 @@ func TestKnownReplaceConfirmationDoesNotRetryAgain(t *testing.T) {
 }
 
 func TestUpdateHostMovesRunningContainerOnItsOwn(t *testing.T) {
+	// A move is an update candidate like any other, so it is followed until
+	// the candidate takes over rather than reported as finished at once.
+	moveInFlight := `{"id":"` + testContainerID + `","name":"app","status":"running","current_tag":"v1","tinfoild_deployment_id":"old","host_name":"host-a",` +
+		`"update_host_name":"host-b","update_deployment_id":"moved","update_tag":"v1","update_status":"deploying","update_type":"blue_green"}`
+	var inFlight containerView
+	if err := json.Unmarshal([]byte(moveInFlight), &inFlight); err != nil {
+		t.Fatal(err)
+	}
+	if isTerminal(inFlight) {
+		t.Fatal("a move in flight must be followed, not treated as finished")
+	}
+	if line := progressLine(inFlight); !strings.HasPrefix(line, "Move to host-b: ") {
+		t.Fatalf("progress line = %q, want the move target", line)
+	}
+	done, err := followedDeploymentState(inFlight, "moved")
+	if done || err != nil {
+		t.Fatalf("move in flight done/err = %v/%v, want still following", done, err)
+	}
+	inFlight.TinfoildDeploymentID, inFlight.HostName = "moved", "host-b"
+	inFlight.UpdateDeploymentID, inFlight.UpdateTag, inFlight.UpdateStatus, inFlight.UpdateHostName = "", "", "", ""
+	if done, err := followedDeploymentState(inFlight, "moved"); !done || err != nil {
+		t.Fatalf("finished move done/err = %v/%v, want done", done, err)
+	}
 	for _, tt := range []struct {
 		name        string
 		host        string
@@ -412,7 +435,7 @@ func TestUpdateHostMovesRunningContainerOnItsOwn(t *testing.T) {
 						t.Error(err)
 					}
 					updates = append(updates, body)
-					io.WriteString(w, `{"id":"`+testContainerID+`","name":"app","status":"running","host_name":"host-a","update_host_name":"host-b"}`)
+					io.WriteString(w, moveInFlight)
 				default:
 					t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
 				}
@@ -445,7 +468,7 @@ func TestUpdateHostMovesRunningContainerOnItsOwn(t *testing.T) {
 				if len(updates[0]) != 1 || updates[0]["host_name"] != "host-b" {
 					t.Fatalf("move sent %v, want only the host", updates[0])
 				}
-				if !strings.Contains(string(stdout), "Moving to:    host-b") {
+				if !strings.Contains(string(stdout), "Moving to:    host-b (") {
 					t.Fatalf("output does not show the move: %s", stdout)
 				}
 			}
