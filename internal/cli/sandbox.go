@@ -126,7 +126,10 @@ func runSandboxAction(pollingOpts *pollingOptions, newClient authenticatedClient
 			if err := forgetSandbox(commandStreams(cmd), newScope, row.Name, row.ID); err != nil {
 				return fmt.Errorf("%s is deleted, but %w", row.Name, err)
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "Deleted %s. Saved encryption credentials are kept. Remove any access grants in the Perimeter UI.\n", deleted)
+			fmt.Fprintf(cmd.OutOrStdout(), "Deleted %s. Saved encryption credentials are kept.\n", deleted)
+			if sandboxNetworkMatches(*row) {
+				fmt.Fprintln(cmd.OutOrStdout(), "Remove any access grants in the Perimeter UI.")
+			}
 			return nil
 		case "stop":
 			stopped, err := stopContainer(pollingOpts, client, *row)
