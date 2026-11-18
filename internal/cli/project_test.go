@@ -254,8 +254,8 @@ func TestLifecycleCommandSurface(t *testing.T) {
 			t.Fatalf("container %s is not a top-level command", name)
 		}
 	}
-	if commandState.containerUpdateCmd.Flags().Lookup("host") != nil {
-		t.Fatal("container update has --host; hosts change through stop and deploy")
+	if commandState.containerUpdateCmd.Flags().Lookup("host") == nil {
+		t.Fatal("container update is missing --host for moving a running container")
 	}
 	if commandState.containerUpdateCmd.Flags().Lookup("yes") == nil || commandState.projectUpdateCmd.Flags().Lookup("yes") == nil {
 		t.Fatal("update commands are missing --yes for downtime confirmation")

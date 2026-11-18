@@ -37,6 +37,9 @@ func writeTestUpdatePlan(t *testing.T, w http.ResponseWriter, r *http.Request, i
 	if latest, ok := body["mark_latest_release"].(bool); ok {
 		plan.MarkLatestRelease = latest
 	}
+	if host, ok := body["host_name"].(string); ok {
+		plan.TargetHostName = host
+	}
 	var response any = plan
 	if projectID != "" {
 		response = map[string]any{"read_only": true, "project_id": projectID, "latest_release_tag": "v1", "eligible_count": 1, "skipped_count": 0, "failed_count": 0, "results": []any{map[string]any{"instance_id": id, "name": "app", "status": "planned", "plan": plan, "error": nil}}}

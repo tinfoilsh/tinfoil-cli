@@ -376,3 +376,79 @@ func TestKnownReplaceConfirmationDoesNotRetryAgain(t *testing.T) {
 		})
 	}
 }
+
+func TestUpdateHostMovesRunningContainerOnItsOwn(t *testing.T) {
+	for _, tt := range []struct {
+		name        string
+		host        string
+		withTag     bool
+		planLacks   bool
+		wantErr     string
+		wantPlans   int
+		wantUpdates int
+	}{
+		{name: "moves with nothing but the host", host: "host-b", wantPlans: 2, wantUpdates: 1},
+		{name: "refuses another change in the same command", host: "host-b", withTag: true, wantErr: "cannot be combined with --tag"},
+		{name: "refuses the host it is already on", host: "host-a", wantErr: "already on host host-a"},
+		{name: "refuses a plan that does not move it", host: "host-b", planLacks: true, wantErr: "does not move the container to host-b", wantPlans: 1},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			commandState := newCommandFixture()
+			plans := 0
+			var updates []map[string]any
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch {
+				case r.Method == http.MethodGet:
+					io.WriteString(w, `{"id":"`+testContainerID+`","name":"app","status":"running","host_name":"host-a","update_strategy":"blue_green"}`)
+				case strings.HasSuffix(r.URL.Path, "/update/plan"):
+					plans++
+					if tt.planLacks {
+						r.Body = io.NopCloser(strings.NewReader(`{}`))
+					}
+					writeTestUpdatePlan(t, w, r, testContainerID, "", updateStrategyBlueGreen)
+				case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/update"):
+					var body map[string]any
+					if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+						t.Error(err)
+					}
+					updates = append(updates, body)
+					io.WriteString(w, `{"id":"`+testContainerID+`","name":"app","status":"running","host_name":"host-a","update_host_name":"host-b"}`)
+				default:
+					t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+				}
+			}))
+			defer server.Close()
+			configureContainerPromotionTest(commandState, t, server.URL)
+			commandState.containerUpdateOpts.updateYes, commandState.waitOpts.noWait = true, true
+			commandState.outputOpts.outputFormat = "table"
+			commandState.containerUpdateOpts.updateHost = tt.host
+			commandState.containerUpdateCmd.Flags().Lookup("host").Changed = true
+			if tt.withTag {
+				commandState.containerUpdateOpts.updateTag = "v2"
+				commandState.containerUpdateCmd.Flags().Lookup("tag").Changed = true
+			}
+			var stdout []byte
+			_, err := captureTestStderr(func() error {
+				var err error
+				stdout, err = captureTestStdout(func() error {
+					return commandState.containerUpdateCmd.RunE(commandState.containerUpdateCmd, []string{testContainerID})
+				})
+				return err
+			})
+			if tt.wantErr == "" && err != nil || tt.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tt.wantErr)) {
+				t.Fatalf("error = %v, want %q", err, tt.wantErr)
+			}
+			if plans != tt.wantPlans || len(updates) != tt.wantUpdates {
+				t.Fatalf("plans/updates = %d/%d, want %d/%d", plans, len(updates), tt.wantPlans, tt.wantUpdates)
+			}
+			if tt.wantUpdates == 1 {
+				if len(updates[0]) != 1 || updates[0]["host_name"] != "host-b" {
+					t.Fatalf("move sent %v, want only the host", updates[0])
+				}
+				if !strings.Contains(string(stdout), "Moving to:    host-b") {
+					t.Fatalf("output does not show the move: %s", stdout)
+				}
+			}
+		})
+	}
+}
