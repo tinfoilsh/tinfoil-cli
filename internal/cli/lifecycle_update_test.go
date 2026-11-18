@@ -475,3 +475,44 @@ func TestUpdateHostMovesRunningContainerOnItsOwn(t *testing.T) {
 		})
 	}
 }
+
+func TestUpdateDryRunShowsThePlanWithoutUpdating(t *testing.T) {
+	commandState := newCommandFixture()
+	plans, others := 0, 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet:
+			io.WriteString(w, `{"id":"`+testContainerID+`","name":"app","status":"running","host_name":"host-a","update_strategy":"blue_green"}`)
+		case strings.HasSuffix(r.URL.Path, "/update/plan"):
+			plans++
+			writeTestUpdatePlan(t, w, r, testContainerID, "", updateStrategyBlueGreen)
+		default:
+			others++
+			t.Errorf("a dry run must not send %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+	configureContainerPromotionTest(commandState, t, server.URL)
+	commandState.outputOpts.outputFormat = "table"
+	commandState.containerUpdateOpts.updateDryRun = true
+	t.Cleanup(func() { commandState.containerUpdateOpts.updateDryRun = false })
+	commandState.containerUpdateOpts.updateTag = "v2"
+	commandState.containerUpdateCmd.Flags().Lookup("tag").Changed = true
+	stderr, err := captureTestStderr(func() error {
+		_, err := captureTestStdout(func() error {
+			return commandState.containerUpdateCmd.RunE(commandState.containerUpdateCmd, []string{testContainerID})
+		})
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plans != 1 || others != 0 {
+		t.Fatalf("plans/other requests = %d/%d, want 1/0", plans, others)
+	}
+	for _, want := range []string{"Tag: v1 -> v2", "Dry run: no update was sent for app."} {
+		if !strings.Contains(string(stderr), want) {
+			t.Fatalf("output lacks %q: %s", want, stderr)
+		}
+	}
+}

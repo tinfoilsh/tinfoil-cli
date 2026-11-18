@@ -478,7 +478,8 @@ func newContainerUpdateCommand(pollingOpts *pollingOptions, newClient authentica
 		Use:   "update [id|name]",
 		Short: "Update a running container to a new tag or configuration",
 		Long: `Multi-GPU containers and those with persistent volumes stop first, so their
-update has downtime.
+update has downtime. An update without downtime starts as soon as its plan is
+shown; pass --dry-run to see the plan only.
 
 With --host the container moves to another host without downtime and nothing
 else changes. Containers that update with downtime cannot move this way: stop
@@ -500,6 +501,7 @@ them, then run "tinfoil container deploy --host".`,
 	containerUpdateCmd.Flags().StringVar(&containerUpdateOpts.updateCustomDomain, "custom-domain", "", "Replace the custom domain (empty string clears it)")
 	containerUpdateCmd.Flags().StringVar(&containerUpdateOpts.updateHost, "host", "", "Move the running container to another host without downtime; cannot be combined with other changes (see 'tinfoil container hosts')")
 	containerUpdateCmd.Flags().BoolVar(&containerUpdateOpts.updateYes, "yes", false, "Approve the update plan, including any downtime")
+	containerUpdateCmd.Flags().BoolVar(&containerUpdateOpts.updateDryRun, "dry-run", false, "Show the update plan and stop without changing anything")
 	return containerUpdateCmd
 }
 
@@ -1205,6 +1207,19 @@ func runContainerUpdate(pollingOpts *pollingOptions, newClient authenticatedClie
 	// restart the container in place instead of moving it.
 	if moving && c.HostName == containerUpdateOpts.updateHost {
 		return fmt.Errorf("%s is already on host %s", c.Name, c.HostName)
+	}
+	if containerUpdateOpts.updateDryRun {
+		review, err := planContainerUpdate(client, c.ID, body)
+		if err != nil {
+			return err
+		}
+		if err := review.render(commandStreams(cmd), outputOpts); err != nil {
+			return err
+		}
+		if outputOpts.outputFormat != "json" {
+			fmt.Fprintf(commandStreams(cmd).err, "Dry run: no update was sent for %s.\n", c.Name)
+		}
+		return nil
 	}
 	var updated containerView
 	if err := postLifecycleUpdate(commandStreams(cmd), outputOpts, client, pathf("/api/containers/%s/update", c.ID), body, &updated, containerUpdateOpts.updateYes, cmd.CommandPath(), func() (updateReview, error) {
