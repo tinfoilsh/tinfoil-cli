@@ -203,6 +203,7 @@ func newMonitorDeleteCmd(newScope scopeClientFactory) *cobra.Command {
 func newManagedCreateCmd(pollingOpts *pollingOptions, newScope scopeClientFactory, identityOpts *identityOptions, outputOpts *outputOptions, waitOpts *waitOptions, kind string) *cobra.Command {
 	var tag, publicKey, monitor, workspace string
 	var workspaceSize int
+	var noPerimeter bool
 	cmd := &cobra.Command{
 		Use: "create NAME", Short: "Create a confidential " + kind + " and follow its deployment", Args: cobra.ExactArgs(1),
 		Long: `Needs "tinfoil login --sync" unless --owner-public-key or --identity is set;
@@ -226,15 +227,20 @@ with those, storage keys are created on first open and kept only on that machine
 			body := map[string]any{"name": strings.TrimSpace(args[0]), "repo": managedRepo(kind), "tag": strings.TrimSpace(tag), "variables": variables}
 			userKeys := publicKey != "" || identityOpts.attestSSHIdentity != ""
 			if kind == "bunker" {
-				selected, err := selectCreationMonitor(client, monitor, scope.UserID)
-				if err != nil {
-					return err
-				}
-				if selected.OwnerKeyMode == "umk" && !userKeys {
-					return fmt.Errorf("Perimeter %s uses your own keys, so its bunkers must too; pass --owner-public-key FILE", selected.Name)
+				if noPerimeter {
+					variables["NO_MONITOR"] = "1"
+				} else {
+					selected, err := selectCreationMonitor(client, monitor, scope.UserID)
+					if err != nil {
+						return err
+					}
+					if selected.OwnerKeyMode == "umk" && !userKeys {
+						return fmt.Errorf("Perimeter %s uses your own keys, so its bunkers must too; pass --owner-public-key FILE", selected.Name)
+					}
+					body["network_policy"] = sandboxNetworkPolicy(selected.ID)
+					fmt.Fprintf(cmd.ErrOrStderr(), "Perimeter: %s (%s). Service access requires it to be running and unlocked.\n", selected.Name, statusLabel(selected.Status))
 				}
 				variables["SANDBOX_INSTANCE_ID"] = uuid.NewString()
-				body["network_policy"] = sandboxNetworkPolicy(selected.ID)
 				if workspace != "" {
 					volume, err := lookupSandboxWorkspace(client, workspace)
 					if err != nil {
@@ -248,7 +254,6 @@ with those, storage keys are created on first open and kept only on that machine
 				if sizeChosen {
 					body["workspace_size_gb"] = workspaceSize
 				}
-				fmt.Fprintf(cmd.ErrOrStderr(), "Perimeter: %s (%s). Service access requires it to be running and unlocked.\n", selected.Name, statusLabel(selected.Status))
 			} else {
 				body["object_storage"] = map[string]any{}
 			}
@@ -272,6 +277,8 @@ with those, storage keys are created on first open and kept only on that machine
 	cmd.Flags().BoolVar(&waitOpts.noWait, "no-wait", false, "Return after creation without following boot progress")
 	if kind == "bunker" {
 		cmd.Flags().StringVar(&monitor, "perimeter", "", "Perimeter name or ID (required when more than one exists)")
+		cmd.Flags().BoolVar(&noPerimeter, "no-perimeter", false, "Create without a Perimeter; its traffic is not tunneled and Perimeter services are unavailable")
+		cmd.MarkFlagsMutuallyExclusive("perimeter", "no-perimeter")
 		cmd.Flags().StringVar(&workspace, "workspace", "", "Reuse an unattached workspace volume by name or ID")
 		cmd.Flags().IntVar(&workspaceSize, "workspace-size", 0, fmt.Sprintf("New workspace volume size in GB: %s (default %d)", workspaceSizeChoices(""), defaultWorkspaceSizeGB))
 	}
