@@ -77,6 +77,7 @@ type containerMetricsOptions struct {
 type containerUpdateOptions struct {
 	updateCustomDomain      string
 	updateDebug             string
+	updateDryRun            bool
 	updateHold              string
 	updateHost              string
 	updateMarkLatestRelease string

@@ -226,7 +226,7 @@ func configureContainerPromotionTest(commandState *commandFixture, t *testing.T,
 	for command, names := range map[*cobra.Command][]string{
 		commandState.containerCreateCmd: {"display-order", "mark-latest", "volume"},
 		commandState.containerDeployCmd: {"tag", "variable", "secret", "ssh-key", "debug", "mark-latest", "custom-domain", "host", "volume", "no-wait"},
-		commandState.containerUpdateCmd: {"tag", "variable", "secret", "ssh-key", "debug", "hold", "mark-latest", "custom-domain", "host", "yes", "no-wait"},
+		commandState.containerUpdateCmd: {"tag", "variable", "secret", "ssh-key", "debug", "hold", "mark-latest", "custom-domain", "host", "yes", "dry-run", "no-wait"},
 	} {
 		for _, name := range names {
 			flag := command.Flags().Lookup(name)

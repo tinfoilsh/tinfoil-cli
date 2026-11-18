@@ -293,12 +293,22 @@ func plannedMemory(memory *int) string {
 	return fmt.Sprint(*memory)
 }
 
-func confirmUpdatePlans(streams commandIO, plans []updatePlan, yes bool, action string, changed bool) error {
-	var downtime []string
+// checkPlannedHold rejects a plan that holds an update the instance cannot hold.
+func checkPlannedHold(plans []updatePlan) error {
 	for _, plan := range plans {
 		if plan.Hold && !plan.HoldAvailable {
 			return fmt.Errorf("holding for review is not available for %s (strategy: %s; hold source: %s); pass --hold=false or select other instances", plan.Name, plan.UpdateStrategy, plan.HoldSource)
 		}
+	}
+	return nil
+}
+
+func confirmUpdatePlans(streams commandIO, plans []updatePlan, yes bool, action string, changed bool) error {
+	if err := checkPlannedHold(plans); err != nil {
+		return err
+	}
+	var downtime []string
+	for _, plan := range plans {
 		if plan.DowntimeRequired {
 			downtime = append(downtime, plan.Name)
 		}
