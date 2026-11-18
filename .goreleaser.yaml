@@ -13,21 +13,6 @@ builds:
       - linux
       - darwin
 
-dockers_v2:
-  - images:
-      - "ghcr.io/tinfoilsh/tinfoil-cli"
-    tags:
-      - "{{ .Version }}"
-      - "{{ if not .Prerelease }}latest{{ end }}"
-    platforms:
-      - linux/amd64
-      - linux/arm64
-    labels:
-      "org.opencontainers.image.created": "{{ .Date }}"
-      "org.opencontainers.image.title": "{{ .ProjectName }}"
-      "org.opencontainers.image.revision": "{{ .FullCommit }}"
-      "org.opencontainers.image.version": "{{ .Version }}"
-
 changelog:
   sort: asc
   filters:
