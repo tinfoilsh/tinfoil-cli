@@ -478,7 +478,11 @@ func newContainerUpdateCommand(pollingOpts *pollingOptions, newClient authentica
 		Use:   "update [id|name]",
 		Short: "Update a running container to a new tag or configuration",
 		Long: `Multi-GPU containers and those with persistent volumes stop first, so their
-update has downtime.`,
+update has downtime.
+
+With --host the container moves to another host without downtime and nothing
+else changes. Containers that update with downtime cannot move this way: stop
+them, then run "tinfoil container deploy --host".`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runContainerUpdate(pollingOpts, newClient, containerUpdateOpts, outputOpts, waitOpts, cmd, args)
@@ -494,6 +498,7 @@ update has downtime.`,
 	containerUpdateCmd.Flags().Lookup("hold").NoOptDefVal = "true"
 	containerUpdateCmd.Flags().StringVar(&containerUpdateOpts.updateMarkLatestRelease, "mark-latest", "", "Mark the tag as the repo's latest GitHub release once running (default true)")
 	containerUpdateCmd.Flags().StringVar(&containerUpdateOpts.updateCustomDomain, "custom-domain", "", "Replace the custom domain (empty string clears it)")
+	containerUpdateCmd.Flags().StringVar(&containerUpdateOpts.updateHost, "host", "", "Move the running container to another host without downtime; cannot be combined with other changes (see 'tinfoil container hosts')")
 	containerUpdateCmd.Flags().BoolVar(&containerUpdateOpts.updateYes, "yes", false, "Approve the update plan, including any downtime")
 	return containerUpdateCmd
 }
@@ -785,6 +790,10 @@ func parseKeyValues(in []string) (map[string]string, error) {
 	return out, nil
 }
 
+// moveExclusiveFlags are the update flags a host move cannot be combined
+// with: the controlplane accepts a move only as the sole change.
+var moveExclusiveFlags = []string{"tag", "variable", "secret", "ssh-key", "debug", "hold", "mark-latest", "custom-domain"}
+
 // buildLifecycleBody assembles the request body shared by /deploy and
 // /update. Only fields whose flag was set on the command line are included
 // so the controlplane keeps the existing values for the rest.
@@ -990,7 +999,9 @@ func renderContainerDetail(streams commandIO, outputOpts *outputOptions, c conta
 		label = strings.Repeat(" ", len(label))
 	}
 	printVolumeUnlockGuidance(streams.out, c.VolumeSlots)
-	if c.UpdateTag != "" {
+	if c.UpdateHostName != "" {
+		fmt.Fprintf(streams.out, "Moving to:    %s (%s)\n", c.UpdateHostName, updateLabel(c))
+	} else if c.UpdateTag != "" {
 		fmt.Fprintf(streams.out, "Updating to:  %s (%s)\n", c.UpdateTag, updateLabel(c))
 	}
 	if message := containerFailureMessage(c); message != "" {
@@ -1153,10 +1164,21 @@ func runContainerDeploy(pollingOpts *pollingOptions, newClient authenticatedClie
 func runContainerUpdate(pollingOpts *pollingOptions, newClient authenticatedClientFactory, containerUpdateOpts *containerUpdateOptions, outputOpts *outputOptions, waitOpts *waitOptions, cmd *cobra.Command, args []string) error {
 	body, err := buildLifecycleBody(cmd,
 		containerUpdateOpts.updateTag, containerUpdateOpts.updateVariables, containerUpdateOpts.updateSecrets, containerUpdateOpts.updateSSHKeys,
-		containerUpdateOpts.updateDebug, containerUpdateOpts.updateMarkLatestRelease, containerUpdateOpts.updateCustomDomain, "",
+		containerUpdateOpts.updateDebug, containerUpdateOpts.updateMarkLatestRelease, containerUpdateOpts.updateCustomDomain, containerUpdateOpts.updateHost,
 	)
 	if err != nil {
 		return err
+	}
+	moving := cmd.Flags().Changed("host")
+	if moving {
+		if containerUpdateOpts.updateHost == "" {
+			return fmt.Errorf("--host needs a host name (see 'tinfoil container hosts')")
+		}
+		for _, name := range moveExclusiveFlags {
+			if cmd.Flags().Changed(name) {
+				return fmt.Errorf("--host moves the container on its own and cannot be combined with --%s; move it first, then update it", name)
+			}
+		}
 	}
 	if cmd.Flags().Changed("hold") {
 		hold, err := parseTriBool(containerUpdateOpts.updateHold)
@@ -1178,6 +1200,11 @@ func runContainerUpdate(pollingOpts *pollingOptions, newClient authenticatedClie
 	}
 	if err := checkManagedKind(cmd.Annotations[managedKindAnnotation], *c); err != nil {
 		return err
+	}
+	// The controlplane treats the current host as no host change, which would
+	// restart the container in place instead of moving it.
+	if moving && c.HostName == containerUpdateOpts.updateHost {
+		return fmt.Errorf("%s is already on host %s", c.Name, c.HostName)
 	}
 	var updated containerView
 	if err := postLifecycleUpdate(commandStreams(cmd), outputOpts, client, pathf("/api/containers/%s/update", c.ID), body, &updated, containerUpdateOpts.updateYes, cmd.CommandPath(), func() (updateReview, error) {

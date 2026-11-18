@@ -78,6 +78,7 @@ type containerUpdateOptions struct {
 	updateCustomDomain      string
 	updateDebug             string
 	updateHold              string
+	updateHost              string
 	updateMarkLatestRelease string
 	updateSSHKeys           []string
 	updateSecrets           []string

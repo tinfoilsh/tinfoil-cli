@@ -49,6 +49,8 @@ type updatePlan struct {
 	} `json:"configuration_changes"`
 	SecretDelivery *plannedSecretDelivery `json:"secret_delivery,omitempty"`
 	VolumeData     string                 `json:"volume_data"`
+	// TargetHostName is set when the update moves the instance to another host.
+	TargetHostName string `json:"target_host_name,omitempty"`
 	CostEstimate   struct {
 		Available bool   `json:"available"`
 		Reason    string `json:"reason"`
@@ -93,6 +95,10 @@ func planContainerUpdate(client *cpClient, id string, body map[string]any) (upda
 	var plan updatePlan
 	if _, err := client.do("POST", pathf("/api/containers/%s/update/plan", id), nil, body, &plan); err != nil {
 		return updateReview{}, fmt.Errorf("could not plan update; no update was sent: %w", err)
+	}
+	// A controlplane that predates moves would plan an in-place update.
+	if host, moving := body["host_name"].(string); moving && plan.TargetHostName != host {
+		return updateReview{}, fmt.Errorf("the update plan does not move the container to %s; no update was sent", host)
 	}
 	if err := plan.validate(id); err != nil {
 		return updateReview{}, err
@@ -239,6 +245,9 @@ func renderUpdatePlan(out io.Writer, plan updatePlan) {
 	fmt.Fprintf(out, "Update plan (read-only): %s (%s)\n", plan.Name, plan.InstanceID)
 	fmt.Fprintf(out, "  Tag: %s -> %s\n  CPU: %d -> %d; RAM (MB): %s -> %s; GPU: %d -> %d\n", plan.Current.Tag, plan.Target.Tag, plan.Current.CPUs, plan.Target.CPUs, plannedMemory(plan.Current.MemoryMB), plannedMemory(plan.Target.MemoryMB), plan.Current.GPUs, plan.Target.GPUs)
 	fmt.Fprintf(out, "  Strategy: %s; downtime: %t\n  Hold: %t (source: %s; available: %t)\n  Volume data: %s\n", plan.UpdateStrategy, plan.DowntimeRequired, plan.Hold, plan.HoldSource, plan.HoldAvailable, plan.VolumeData)
+	if plan.TargetHostName != "" {
+		fmt.Fprintf(out, "  Host: moves to %s; nothing else changes\n", plan.TargetHostName)
+	}
 	if plan.SecretDelivery != nil && plan.SecretDelivery.Mode == secretDeliveryPrivateKeyserver {
 		fmt.Fprintln(out, "  Uses current settings, not a historical snapshot; private secret values are fetched by the guest and are not displayed.")
 	} else {

@@ -42,6 +42,7 @@ type Container struct {
 	Domain               string           `json:"domain"`
 	InternalDomain       string           `json:"internal_domain"`
 	HostName             string           `json:"host_name"`
+	UpdateHostName       string           `json:"update_host_name,omitempty"`
 	HostGpuType          string           `json:"host_gpu_type"`
 	HostCpuType          string           `json:"host_cpu_type"`
 	CPUs                 int              `json:"cpus"`

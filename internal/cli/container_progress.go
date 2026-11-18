@@ -338,6 +338,9 @@ func containerFailureMessage(c containerView) string {
 
 // progressLine is the single line shown while following a container.
 func progressLine(c containerView) string {
+	if c.UpdateHostName != "" {
+		return fmt.Sprintf("Move to %s: %s", c.UpdateHostName, updateLabel(c))
+	}
 	if c.UpdateTag != "" {
 		return fmt.Sprintf("Update to %s: %s", c.UpdateTag, updateLabel(c))
 	}
