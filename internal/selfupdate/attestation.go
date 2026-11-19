@@ -39,7 +39,7 @@ const (
 )
 
 const (
-	attestationsURLFormat = "https://api.github.com/repos/%s/attestations"
+	attestationsURLFormat = "https://github-proxy.tinfoil.sh/repos/%s/attestations"
 	releaseAssetURLFormat = "https://github.com/%s/releases/download/%s/%s"
 	workflowSANFormat     = `^https://github\.com/%s/\.github/workflows/%s@%s$`
 )
