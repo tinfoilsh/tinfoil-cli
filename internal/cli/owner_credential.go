@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"context"
 	"fmt"
 	"os"
 
@@ -113,17 +112,6 @@ type ownerVerifier struct {
 
 func (v ownerVerifier) MonitorHost(domain string, pin verify.Pin) (ssh.PublicKey, error) {
 	return attestedHostKey(v.streams, v.rootOpts, domain, pin, "")
-}
-func (v ownerVerifier) DirectEvidence(ctx context.Context, domain string, pin verify.Pin) (connection.Evidence, error) {
-	secure, err := newVerifiedClient(v.rootOpts, domain, pin, "")
-	if err != nil {
-		return nil, err
-	}
-	verified, err := secure.EnsureVerified(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("verifying %s: %w", domain, err)
-	}
-	return verified, nil
 }
 func (v ownerVerifier) RelayEvidence(pin verify.Pin, doc, nonce []byte) (connection.Evidence, error) {
 	if verifyEvidence := v.rootOpts.connections.verifySandboxEvidence; verifyEvidence != nil {

@@ -66,9 +66,6 @@ func (f relayVerifier) RelayEvidence(pin verify.Pin, doc, nonce []byte) (connect
 func (f relayVerifier) MonitorHost(string, verify.Pin) (ssh.PublicKey, error) {
 	panic("unexpected Monitor verification")
 }
-func (f relayVerifier) DirectEvidence(context.Context, string, verify.Pin) (connection.Evidence, error) {
-	panic("unexpected direct verification")
-}
 
 type hostEvidence struct {
 	host    ssh.PublicKey

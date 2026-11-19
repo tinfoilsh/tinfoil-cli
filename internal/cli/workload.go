@@ -21,7 +21,8 @@ const (
 	releaseImageWorkflow    = "tinfoil-release.yml"
 	releaseImageRef         = "refs/heads/main"
 	releaseImageRegistry    = "ghcr.io/"
-	releaseDirectSettings   = "{shim: {tls-mode: cert-proxy}, cvm-network: {inbound-ports: [22]}}"
+	releaseDirectSettings   = "{cvm-network: {inbound-ports: [22]}}"
+	releaseCertProxyTLS     = "{shim: {tls-mode: cert-proxy}}"
 	templateEnvPath         = "containers.env."
 	templateVolumeSizePath  = "volumes.size"
 )
@@ -77,13 +78,17 @@ func verifyRelease(row containerView) error {
 		return err
 	}
 	env, err := measuredEnvironment(row.Config)
-	var want, got, direct yaml.Node
+	var want, got, direct, certProxy yaml.Node
 	var release struct{ Containers []struct{ Image string } }
-	if err := errors.Join(err, yaml.Unmarshal(template, &want), yaml.Unmarshal(template, &release), yaml.Unmarshal([]byte(row.Config), &got), yaml.Unmarshal([]byte(releaseDirectSettings), &direct)); err != nil {
+	if err := errors.Join(err, yaml.Unmarshal(template, &want), yaml.Unmarshal(template, &release), yaml.Unmarshal([]byte(row.Config), &got), yaml.Unmarshal([]byte(releaseDirectSettings), &direct), yaml.Unmarshal([]byte(releaseCertProxyTLS), &certProxy)); err != nil {
 		return err
 	}
 	if row.Repo == defaultSandboxRepo && env["NO_MONITOR"] == "1" && len(want.Content) == 1 {
 		overlay(want.Content[0], direct.Content[0])
+		// Bunkers created before the owner relay still carry cert-proxy.
+		if !rendered(&want, &got, "") {
+			overlay(want.Content[0], certProxy.Content[0])
+		}
 	}
 	if !rendered(&want, &got, "") {
 		return errors.New("its config differs from the release template")
