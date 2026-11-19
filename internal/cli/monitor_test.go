@@ -63,9 +63,6 @@ type monitorTestVerifier struct{ host ssh.PublicKey }
 func (v monitorTestVerifier) MonitorHost(string, verify.Pin) (ssh.PublicKey, error) {
 	return v.host, nil
 }
-func (v monitorTestVerifier) DirectEvidence(context.Context, string, verify.Pin) (connection.Evidence, error) {
-	panic("unexpected sandbox verification")
-}
 func (v monitorTestVerifier) RelayEvidence(verify.Pin, []byte, []byte) (connection.Evidence, error) {
 	panic("unexpected sandbox verification")
 }

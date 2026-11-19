@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -60,6 +61,7 @@ const (
 	sandboxOwnerRequest  = "sudo -n -- curl -sS --fail-with-body --unix-socket /run/workspace/owner.sock http://sandbox"
 	sandboxStatusCommand = sandboxOwnerRequest + "/status"
 	sandboxEnrollCommand = sandboxOwnerRequest + "/enroll --data-binary @-"
+	sandboxAttestPath    = "/api/containers/%s/owner/attestation"
 
 	// Monitor routes to a sandbox boot by a name derived from its SSH host key.
 	sandboxRouteSuffix = ".sandbox.invalid"
@@ -94,7 +96,7 @@ func (s *Service) OpenSandbox(ctx context.Context, scope Scope, cp *controlplane
 	if err != nil {
 		return nil, err
 	}
-	return s.openSandbox(ctx, scope, target, binding, monitor, keys, dir, verifier)
+	return s.openSandbox(ctx, scope, cp, target, binding, monitor, keys, dir, verifier)
 }
 
 func SandboxBinding(scope Scope, target *Workload) (keybundle.Binding, error) {
@@ -121,7 +123,7 @@ func SandboxBinding(scope Scope, target *Workload) (keybundle.Binding, error) {
 	return mkBinding{Account: scope.Account(), ContainerID: row.ID, InstanceID: &instance, VolumeID: &volumeID}, nil
 }
 
-func (service *Service) openSandbox(ctx context.Context, scope Scope, target *Workload, binding mkBinding, monitor *Monitor, keys *resourceKeys, dir string, verifier Verifier) (_ *Sandbox, err error) {
+func (service *Service) openSandbox(ctx context.Context, scope Scope, cp *controlplane.Client, target *Workload, binding mkBinding, monitor *Monitor, keys *resourceKeys, dir string, verifier Verifier) (_ *Sandbox, err error) {
 	row := target.Container
 	noMonitor := monitor == nil
 	s := &Sandbox{service: service, box: row, noMonitor: noMonitor, binding: binding, keys: keys, monitor: monitor}
@@ -139,7 +141,15 @@ func (service *Service) openSandbox(ctx context.Context, scope Scope, target *Wo
 	resourceID := scope.ControlplaneURL + "/" + scope.OrgID + "/" + scope.UserID + "/" + row.ID
 	if noMonitor {
 		defer service.progress(SandboxVerifying, row.Domain)()
-		verified, err := verifier.DirectEvidence(ctx, row.Domain, target.Pin)
+		nonce, err := document.RandomNonce()
+		if err != nil {
+			return nil, err
+		}
+		var doc json.RawMessage
+		if _, err := cp.Do(ctx, http.MethodGet, controlplane.Pathf(sandboxAttestPath, row.ID), url.Values{"nonce": {hex.EncodeToString(nonce)}}, nil, nil, &doc); err != nil {
+			return nil, err
+		}
+		verified, err := verifier.RelayEvidence(target.Pin, doc, nonce)
 		if err != nil {
 			return nil, err
 		}
@@ -200,7 +210,7 @@ func (service *Service) RelinkSandbox(ctx context.Context, scope Scope, cp *cont
 		keys.close()
 		return nil, nil
 	}
-	s, err := service.openSandbox(ctx, scope, target, binding, m, keys, dir, verifier)
+	s, err := service.openSandbox(ctx, scope, cp, target, binding, m, keys, dir, verifier)
 	if err != nil {
 		return nil, err
 	}

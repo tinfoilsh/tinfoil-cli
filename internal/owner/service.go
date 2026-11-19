@@ -1,7 +1,6 @@
 package owner
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -96,7 +95,6 @@ func requireRunningConnection(kind string, row controlplane.Container) error {
 
 type Verifier interface {
 	MonitorHost(domain string, pin verify.Pin) (ssh.PublicKey, error)
-	DirectEvidence(ctx context.Context, domain string, pin verify.Pin) (connection.Evidence, error)
 	RelayEvidence(pin verify.Pin, document, nonce []byte) (connection.Evidence, error)
 }
 
