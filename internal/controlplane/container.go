@@ -10,6 +10,15 @@ type NetworkPolicy struct {
 	Public     bool   `json:"public"`
 	EgressMode string `json:"egress_mode"`
 	Egress     []Peer `json:"egress"`
+
+	Destinations []Destination `json:"destinations,omitempty"`
+}
+
+type Destination struct {
+	Name     string `json:"name,omitempty"`
+	CIDR     string `json:"cidr"`
+	Protocol string `json:"protocol"`
+	Port     int    `json:"port"`
 }
 
 type Peer struct {

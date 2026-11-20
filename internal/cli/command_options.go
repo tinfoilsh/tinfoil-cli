@@ -52,6 +52,13 @@ type containerCreateOptions struct {
 	createVariables         []string
 	createVolumes           []string
 	createYes               bool
+	createNetwork           networkPolicyOptions
+}
+
+type networkPolicyOptions struct {
+	public, private                                  bool
+	egress                                           string
+	allow, allowContainers, remove, removeContainers []string
 }
 
 type containerDeleteOptions struct {

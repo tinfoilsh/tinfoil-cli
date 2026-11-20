@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"sort"
 	"strings"
 
@@ -56,6 +57,7 @@ func newContainerCommand(pollingOpts *pollingOptions, newClient authenticatedCli
 	containerCmd.AddCommand(newContainerMetricsCommand(newClient, &containerMetricsOptions{}))
 	containerCmd.AddCommand(newContainerHostsCommand(newClient, outputOpts))
 	containerCmd.AddCommand(newContainerConnectCommand(newClient, &containerConnectOptions{}, &proxyOptions{}, rootOpts, &trustOptions{}))
+	containerCmd.AddCommand(newContainerNetworkCommand(newClient, outputOpts))
 	return containerCmd
 }
 
@@ -297,6 +299,13 @@ func newContainerCreateCommand(pollingOpts *pollingOptions, newClient authentica
 			if containerCreateOpts.createCustomDomain != "" {
 				body["custom_domain"] = containerCreateOpts.createCustomDomain
 			}
+			if slices.ContainsFunc(networkPolicyFlags, cmd.Flags().Changed) {
+				policy := containerNetworkPolicy{Public: true, EgressMode: networkEgressUnrestricted}
+				if err := containerCreateOpts.createNetwork.apply(client, &policy); err != nil {
+					return err
+				}
+				body["network_policy"] = policy
+			}
 			if containerCreateOpts.createHost != "" && len(requests) == 0 {
 				body["host_name"] = containerCreateOpts.createHost
 			}
@@ -358,6 +367,7 @@ func newContainerCreateCommand(pollingOpts *pollingOptions, newClient authentica
 	containerCreateCmd.Flags().StringArrayVar(&containerCreateOpts.createSSHKeys, "ssh-key", nil, "Org SSH key name (debug only); may be repeated")
 	containerCreateCmd.Flags().StringArrayVar(&containerCreateOpts.createVolumes, "volume", nil, "Volume to attach before the first deploy, as <id|name>[:<mount name>]; may be repeated")
 	containerCreateCmd.Flags().Int32Var(&containerCreateOpts.createDisplayOrder, "display-order", 0, "Sort order of this instance within its project")
+	addNetworkPolicyFlags(containerCreateCmd, &containerCreateOpts.createNetwork)
 	return containerCreateCmd
 }
 
