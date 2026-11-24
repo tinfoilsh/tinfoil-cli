@@ -386,7 +386,8 @@ func TestSSHReportsATranslatedConfigOnce(t *testing.T) {
 		require.Error(t, err)
 		return string(stderr)
 	}
-	require.NotContains(t, forward("--stdio", "22"), "Translated")
+	require.NotContains(t, forward("--stdio", "22", "--"+configReportedFlag), "Translated")
+	require.Contains(t, forward("--stdio", "22"), translationNotice(path, config))
 	require.Contains(t, forward("--local", "8022:22"), translationNotice(path, config))
 }
 
