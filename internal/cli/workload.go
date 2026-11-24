@@ -77,10 +77,29 @@ func verifyRelease(row containerView) error {
 	if err != nil {
 		return err
 	}
+	var release struct{ Containers []struct{ Image string } }
+	if err := errors.Join(renderedRelease(template, row), yaml.Unmarshal(template, &release)); err != nil {
+		return err
+	}
+	// A tag can be cut from any commit, so the image must also be built from main.
+	for _, container := range release.Containers {
+		digest, err := hex.DecodeString(strings.TrimPrefix(container.Image, releaseImageRegistry+row.Repo+"@sha256:"))
+		if err != nil || len(digest) != sha256.Size {
+			return fmt.Errorf("unexpected image %s", container.Image)
+		}
+		if err := selfupdate.VerifyProvenance(ctx, row.Repo, releaseImageWorkflow, releaseImageRef, [sha256.Size]byte(digest)); err != nil {
+			return fmt.Errorf("image %s: %w", container.Image, err)
+		}
+	}
+	return nil
+}
+
+// renderedRelease reports an error unless row's config is the release template
+// with only its parameters bound.
+func renderedRelease(template []byte, row containerView) error {
 	env, err := measuredEnvironment(row.Config)
 	var want, got, direct, certProxy yaml.Node
-	var release struct{ Containers []struct{ Image string } }
-	if err := errors.Join(err, yaml.Unmarshal(template, &want), yaml.Unmarshal(template, &release), yaml.Unmarshal([]byte(row.Config), &got), yaml.Unmarshal([]byte(releaseDirectSettings), &direct), yaml.Unmarshal([]byte(releaseCertProxyTLS), &certProxy)); err != nil {
+	if err := errors.Join(err, yaml.Unmarshal(template, &want), yaml.Unmarshal([]byte(row.Config), &got), yaml.Unmarshal([]byte(releaseDirectSettings), &direct), yaml.Unmarshal([]byte(releaseCertProxyTLS), &certProxy)); err != nil {
 		return err
 	}
 	if row.Repo == defaultSandboxRepo && env["NO_MONITOR"] == "1" && len(want.Content) == 1 {
@@ -92,16 +111,6 @@ func verifyRelease(row containerView) error {
 	}
 	if !rendered(&want, &got, "") {
 		return errors.New("its config differs from the release template")
-	}
-	// A tag can be cut from any commit, so the image must also be built from main.
-	for _, container := range release.Containers {
-		digest, err := hex.DecodeString(strings.TrimPrefix(container.Image, releaseImageRegistry+row.Repo+"@sha256:"))
-		if err != nil || len(digest) != sha256.Size {
-			return fmt.Errorf("unexpected image %s", container.Image)
-		}
-		if err := selfupdate.VerifyProvenance(ctx, row.Repo, releaseImageWorkflow, releaseImageRef, [sha256.Size]byte(digest)); err != nil {
-			return fmt.Errorf("image %s: %w", container.Image, err)
-		}
 	}
 	return nil
 }
