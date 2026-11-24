@@ -6,6 +6,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 	tinfoilconfig "github.com/tinfoilsh/tinfoil-config"
+	"github.com/tinfoilsh/tinfoil-config/yamlconfig"
 )
 
 const (
@@ -94,7 +95,7 @@ var releaseCases = []struct {
 // pins a cvm-version whose config is JSON.
 func storedJSONConfig(t *testing.T, rendered string) string {
 	t.Helper()
-	stored, err := tinfoilconfig.Normalize([]byte(rendered), tinfoilconfig.Options{})
+	stored, err := yamlconfig.Normalize([]byte(rendered), tinfoilconfig.Options{})
 	require.NoError(t, err)
 	require.NoError(t, tinfoilconfig.CheckJSONForm(stored))
 	return string(stored)
@@ -185,6 +186,6 @@ func TestJSONReleaseConfigIsComparedByValue(t *testing.T) {
 	})
 	t.Run("template for an earlier version", func(t *testing.T) {
 		earlier := changedRelease(t, template, releaseChange{jsonConfigVersion, earlierConfigVersion})
-		require.ErrorContains(t, renderedRelease([]byte(earlier), containerView{Repo: defaultSandboxRepo, Config: stored}), "differs")
+		require.ErrorContains(t, renderedRelease([]byte(earlier), containerView{Repo: defaultSandboxRepo, Config: stored}), "translating the release template")
 	})
 }

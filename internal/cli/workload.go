@@ -13,6 +13,7 @@ import (
 
 	"github.com/tinfoilsh/tinfoil-cli/internal/selfupdate"
 	tinfoilconfig "github.com/tinfoilsh/tinfoil-config"
+	"github.com/tinfoilsh/tinfoil-config/yamlconfig"
 	configendorsement "github.com/tinfoilsh/tinfoil-go/endorsement/config"
 	"github.com/tinfoilsh/tinfoil-go/verify"
 	"go.yaml.in/yaml/v3"
@@ -124,7 +125,7 @@ func renderedRelease(template []byte, row containerView) error {
 // renderedJSONRelease is renderedRelease for a row whose config is JSON. The
 // release template is YAML, so its translation is what the config must match.
 func renderedJSONRelease(template []byte, row containerView, env map[string]string) error {
-	translated, err := tinfoilconfig.ToJSON(template, tinfoilconfig.Options{})
+	translated, err := yamlconfig.ToJSON(template, tinfoilconfig.Options{})
 	if err != nil {
 		return fmt.Errorf("translating the release template: %w", err)
 	}

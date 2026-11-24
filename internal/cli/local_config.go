@@ -8,6 +8,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/tinfoilsh/tinfoil-cli/internal/connection"
 	tinfoilconfig "github.com/tinfoilsh/tinfoil-config"
+	"github.com/tinfoilsh/tinfoil-config/yamlconfig"
 	"go.yaml.in/yaml/v3"
 	"golang.org/x/term"
 )
@@ -98,7 +99,7 @@ func jsonConfig(data []byte) ([]byte, bool, error) {
 			return nil, false, nil
 		}
 	}
-	translated, err := tinfoilconfig.Normalize(data, tinfoilconfig.Options{})
+	translated, err := yamlconfig.Normalize(data, tinfoilconfig.Options{})
 	if err != nil {
 		return nil, false, err
 	}
