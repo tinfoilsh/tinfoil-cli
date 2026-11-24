@@ -288,6 +288,7 @@ func TestLocalConfigRejectsWhatHasNoJSONConfig(t *testing.T) {
 	source, config := yamlConfigFixture(jsonConfigVersion), jsonConfigFixture(jsonConfigVersion)
 	for name, file := range map[string]string{
 		"unknown field":      source + "unknown: 1\n",
+		"malformed YAML":     source + "containers: [\n",
 		"ambiguous value":    strings.Replace(source, "PORT: 8080", "PORT: 0x50", 1),
 		"JSON fraction":      strings.Replace(config, `"cpus":2`, `"cpus":2.5`, 1),
 		"JSON null":          strings.Replace(config, `"memory":2048`, `"memory":null`, 1),

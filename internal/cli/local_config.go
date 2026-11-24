@@ -95,7 +95,10 @@ func jsonConfig(data []byte) ([]byte, bool, error) {
 		var pin struct {
 			Version string `yaml:"cvm-version"`
 		}
-		if yaml.Unmarshal(data, &pin) != nil || !tinfoilconfig.RequiresJSON(pin.Version) {
+		if err := yaml.Unmarshal(data, &pin); err != nil {
+			return nil, false, err
+		}
+		if !tinfoilconfig.RequiresJSON(pin.Version) {
 			return nil, false, nil
 		}
 	}
