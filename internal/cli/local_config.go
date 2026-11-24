@@ -5,10 +5,47 @@ import (
 	"encoding/json/v2"
 	"fmt"
 
+	"github.com/spf13/cobra"
 	"github.com/tinfoilsh/tinfoil-cli/internal/connection"
 	tinfoilconfig "github.com/tinfoilsh/tinfoil-config"
 	"go.yaml.in/yaml/v3"
+	"golang.org/x/term"
 )
+
+func newContainerConfigCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "config [file]",
+		Short: "Print the JSON config for a config file and its SHA-256 digest",
+		Long: "A config that pins cvm-version " + tinfoilconfig.JSONConfigMinVersion + ` or later is stored and measured as JSON.
+The JSON config goes to standard output and its digest to standard error.`,
+		Example: `  Save the JSON config of a YAML config
+  tinfoil container config tinfoil-config.yml > tinfoil-config.json`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			config, err := connection.ReadConfig(args[0])
+			if err != nil {
+				return err
+			}
+			translated, ok, err := jsonConfig(config.Bytes())
+			if err != nil {
+				return fmt.Errorf("invalid config %s: %w", args[0], err)
+			}
+			if !ok {
+				return fmt.Errorf("%s does not pin cvm-version %s or later, so it has no JSON config", args[0], tinfoilconfig.JSONConfigMinVersion)
+			}
+			streams := commandStreams(cmd)
+			if _, err := streams.out.Write(translated); err != nil {
+				return err
+			}
+			// Redirected output is the config's exact bytes; a terminal gets a line break.
+			if term.IsTerminal(streamFD(streams.out)) {
+				fmt.Fprintln(streams.out)
+			}
+			fmt.Fprintf(streams.err, "sha256:%s\n", storageHash(translated))
+			return nil
+		},
+	}
+}
 
 func readLocalConfig(rootOpts *rootOptions) ([]byte, error) {
 	if rootOpts.localConfigFile == "" {

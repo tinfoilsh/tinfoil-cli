@@ -388,3 +388,41 @@ func TestSSHReportsATranslatedConfigOnce(t *testing.T) {
 	require.NotContains(t, forward("--stdio", "22"), "Translated")
 	require.Contains(t, forward("--local", "8022:22"), translationNotice(path, config))
 }
+
+func TestContainerConfigPrintsTheJSONConfig(t *testing.T) {
+	commandState := newCommandFixture()
+
+	want := jsonConfigFixture(jsonConfigVersion)
+	run := func(t *testing.T, file string) (stdout, stderr string, err error) {
+		path := writeLocalConfig(t, file)
+		diagnostics, err := captureTestStderr(func() error {
+			output, err := captureTestStdout(func() error { return executeLifecycleCLI(commandState, t, "container", "config", path) })
+			stdout = string(output)
+			return err
+		})
+		return stdout, string(diagnostics), err
+	}
+	for name, file := range map[string]string{
+		"YAML at the first JSON version": yamlConfigFixture(jsonConfigVersion),
+		"JSON config":                    want,
+		"JSON in another form":           indentedConfigFixture(jsonConfigVersion),
+	} {
+		t.Run(name, func(t *testing.T) {
+			stdout, stderr, err := run(t, file)
+			require.NoError(t, err)
+			require.Equal(t, want, stdout)
+			require.Equal(t, "sha256:"+storageHash([]byte(want))+"\n", stderr)
+		})
+	}
+	for name, test := range map[string]struct{ file, message string }{
+		"YAML before the first JSON version": {yamlConfigFixture(earlierConfigVersion), "has no JSON config"},
+		"JSON before the first JSON version": {jsonConfigFixture(earlierConfigVersion), "has no JSON config"},
+		"YAML with no JSON form":             {yamlConfigFixture(jsonConfigVersion) + "unknown: 1\n", "invalid config"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			stdout, _, err := run(t, test.file)
+			require.ErrorContains(t, err, test.message)
+			require.Empty(t, stdout)
+		})
+	}
+}
