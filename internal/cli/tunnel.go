@@ -72,6 +72,10 @@ A hostname target needs --repo, --project or --config to select the expected wor
 			if len(args) == 1 {
 				identifier = args[0]
 			}
+			if forwardOpts.forwardStdio != 0 {
+				// ssh and scp report a translated config before they start this proxy.
+				rootOpts.notices = nil
+			}
 			target, err := resolveTunnelTarget(newClient, commandStreams(cmd), forwardOpts, rootOpts, trustOpts, identifier)
 			if err != nil {
 				return err

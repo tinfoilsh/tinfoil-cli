@@ -183,6 +183,7 @@ type rootOptions struct {
 	enclaveHost      string
 	localConfigBytes []byte
 	localConfigFile  string
+	notices          func() io.Writer
 	project          string
 	publicRegistry   bool
 	repo             string

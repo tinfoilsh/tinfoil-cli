@@ -165,6 +165,10 @@ func proxyCommand(rootOpts *rootOptions, tunnelOpts *tunnelOptions, target *tunn
 		argv = append(argv, "--public-registry")
 	}
 	if rootOpts.localConfigFile != "" {
+		// The proxy stays silent about a config it translates, so read it here.
+		if _, err := readLocalConfig(rootOpts); err != nil {
+			return "", err
+		}
 		path, err := filepath.Abs(rootOpts.localConfigFile)
 		if err != nil {
 			return "", fmt.Errorf("locating local config: %w", err)

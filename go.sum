@@ -79,6 +79,8 @@ github.com/coder/websocket v1.8.15/go.mod h1:NX3SzP+inril6yawo5CQXx8+fk145lPDC6p
 github.com/coreos/go-oidc/v3 v3.17.0 h1:hWBGaQfbi0iVviX4ibC7bk8OKT5qNr4klBaCHVNvehc=
 github.com/coreos/go-oidc/v3 v3.17.0/go.mod h1:wqPbKFrVnE90vty060SB40FCJ8fTHTxSwyXJqZH+sI8=
 github.com/cpuguy83/go-md2man/v2 v2.0.6/go.mod h1:oOW0eioCTA6cOiMLiUPZOpcVxMig6NIQQ7OS05n1F4g=
+github.com/creasty/defaults v1.8.0 h1:z27FJxCAa0JKt3utc0sCImAEb+spPucmKoOdLHvHYKk=
+github.com/creasty/defaults v1.8.0/go.mod h1:iGzKe6pbEHnpMPtfDXZEr0NVxWnPTjb1bbDy08fPzYM=
 github.com/cyberphone/json-canonicalization v0.0.0-20241213102144-19d51d7fe467 h1:uX1JmpONuD549D73r6cgnxyUu18Zb7yHAy5AYU0Pm4Q=
 github.com/cyberphone/json-canonicalization v0.0.0-20241213102144-19d51d7fe467/go.mod h1:uzvlm1mxhHkdfqitSA92i7Se+S9ksOn3a3qmv/kyOCw=
 github.com/danieljoos/wincred v1.2.3 h1:v7dZC2x32Ut3nEfRH+vhoZGvN72+dQ/snVXo/vMFLdQ=
@@ -90,6 +92,8 @@ github.com/digitorus/pkcs7 v0.0.0-20250730155240-ffadbf3f398c h1:g349iS+CtAvba7i
 github.com/digitorus/pkcs7 v0.0.0-20250730155240-ffadbf3f398c/go.mod h1:mCGGmWkOQvEuLdIRfPIpXViBfpWto4AhwtJlAvo62SQ=
 github.com/digitorus/timestamp v0.0.0-20250524132541-c45532741eea h1:ALRwvjsSP53QmnN3Bcj0NpR8SsFLnskny/EIMebAk1c=
 github.com/digitorus/timestamp v0.0.0-20250524132541-c45532741eea/go.mod h1:GvWntX9qiTlOud0WkQ6ewFm0LPy5JUR1Xo0Ngbd1w6Y=
+github.com/distribution/reference v0.6.0 h1:0IXCQ5g4/QMHHkarYzh5l+u8T3t73zM5QvfrDyIgxBk=
+github.com/distribution/reference v0.6.0/go.mod h1:BbU0aIcezP1/5jX/8MP0YiH4SdvB5Y4f/wlDRiLyi3E=
 github.com/fatih/color v1.18.0 h1:S8gINlzdQ840/4pfAwic/ZE0djQEH3wM94VfqLTZcOM=
 github.com/fatih/color v1.18.0/go.mod h1:4FelSpRwEGDpQ12mAdzqdOukCy4u8WUtOY6lkT/6HfU=
 github.com/felixge/httpsnoop v1.0.4 h1:NFTV2Zj1bL4mc9sqWACXbQFVBBg2W3GPvqp8/ESS2Wg=
@@ -319,6 +323,8 @@ github.com/tinfoilsh/encrypted-http-body-protocol v0.6.0 h1:ZuCt56AHK1bF8oJStkeF
 github.com/tinfoilsh/encrypted-http-body-protocol v0.6.0/go.mod h1:zF6e0gesDXC8AkrVWs7BxiRZV2xF5jgqH2rljdaGOk8=
 github.com/tinfoilsh/go-sev-guest v0.0.0-20260818055935-bec7bdb637fd h1:qprAQDbhLiW9wxztGqgZgxUlKTnN6jJZx/FQl9HyLH8=
 github.com/tinfoilsh/go-sev-guest v0.0.0-20260818055935-bec7bdb637fd/go.mod h1:2L/TPoX4xeq44MkhftLSU6JBpdwzLPIsFvijrGKKe1s=
+github.com/tinfoilsh/tinfoil-config v0.1.26-0.20261124033616-c5dd3637a43f h1:t0lh2Y4/itIUfmRI94H3OqQ4UevtAnGVJAORb7fB1w4=
+github.com/tinfoilsh/tinfoil-config v0.1.26-0.20261124033616-c5dd3637a43f/go.mod h1:eS6S8oGMRPPA8r+smJBPx2gAJWJS8YAFOdD0qAZHM5I=
 github.com/tinfoilsh/tinfoil-go v0.17.0-rc.11 h1:fNmMvM7IyoQv8xYF2an2if7BMAXFEB4BV35JB50SvOk=
 github.com/tinfoilsh/tinfoil-go v0.17.0-rc.11/go.mod h1:weKYwaLwHKpPu8Z6Rs9E/YqQRrcJBZqey+vH0IAOqvA=
 github.com/tink-crypto/tink-go-awskms/v3 v3.0.0 h1:XSohRhCkXAVI0iaCnWB/GS05TEmpnKurQmzaY1jzt3Y=
