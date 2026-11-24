@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	tinfoilconfig "github.com/tinfoilsh/tinfoil-config"
 )
 
 const (
@@ -89,30 +90,101 @@ var releaseCases = []struct {
 	{name: "repeated parameter", repo: defaultSandboxRepo, changes: []releaseChange{{"      - HOME\n", "      - HOME\n      - NO_MONITOR: \"1\"\n"}}, message: "ambiguous"},
 }
 
+// storedJSONConfig is what the control plane keeps for a rendered config that
+// pins a cvm-version whose config is JSON.
+func storedJSONConfig(t *testing.T, rendered string) string {
+	t.Helper()
+	stored, err := tinfoilconfig.Normalize([]byte(rendered), tinfoilconfig.Options{})
+	require.NoError(t, err)
+	require.NoError(t, tinfoilconfig.CheckJSONForm(stored))
+	return string(stored)
+}
+
 func TestReleaseTemplateBindsOnlyParameters(t *testing.T) {
-	template := releaseTemplate("0.15.3")
-	for _, test := range releaseCases {
-		t.Run(test.name, func(t *testing.T) {
-			config := changedRelease(t, template, test.changes...)
-			if test.direct {
-				config += releaseDirectNetwork
-			}
-			err := renderedRelease([]byte(template), containerView{Repo: test.repo, Config: config})
-			if test.message == "" {
-				require.NoError(t, err)
-			} else {
-				require.ErrorContains(t, err, test.message)
-			}
-		})
+	for _, form := range []struct {
+		name    string
+		version string
+		stored  func(*testing.T, string) string
+	}{
+		{"YAML", earlierConfigVersion, func(_ *testing.T, rendered string) string { return rendered }},
+		{"JSON", jsonConfigVersion, storedJSONConfig},
+	} {
+		template := releaseTemplate(form.version)
+		for _, test := range releaseCases {
+			t.Run(form.name+"/"+test.name, func(t *testing.T) {
+				config := changedRelease(t, template, test.changes...)
+				if test.direct {
+					config += releaseDirectNetwork
+				}
+				err := renderedRelease([]byte(template), containerView{Repo: test.repo, Config: form.stored(t, config)})
+				if test.message == "" {
+					require.NoError(t, err)
+				} else {
+					require.ErrorContains(t, err, test.message)
+				}
+			})
+		}
 	}
+}
+
+func TestYAMLReleaseParametersAreStrings(t *testing.T) {
+	template := releaseTemplate(earlierConfigVersion)
 	for name, change := range map[string]releaseChange{
 		"number":  {releaseOwnerParameter, "SANDBOX_OWNER_PUBLIC_KEY: 123"},
 		"null":    {releaseOwnerParameter, "SANDBOX_OWNER_PUBLIC_KEY:"},
 		"boolean": {releaseDirectParameter, "NO_MONITOR: true"},
 	} {
-		t.Run("parameter bound to a "+name, func(t *testing.T) {
+		t.Run(name, func(t *testing.T) {
 			config := changedRelease(t, template, change)
 			require.ErrorContains(t, renderedRelease([]byte(template), containerView{Repo: defaultSandboxRepo, Config: config}), "explicit measured environment")
 		})
 	}
+}
+
+func TestJSONReleaseConfigIsComparedByValue(t *testing.T) {
+	// A literal the template writes as a YAML number is text in the JSON config.
+	template := changedRelease(t, releaseTemplate(jsonConfigVersion), releaseChange{"      - HOME\n", "      - HOME\n      - PORT: 8080\n"})
+	stored := storedJSONConfig(t, changedRelease(t, template, releaseOwnerBound, releaseSizeBound))
+	require.Contains(t, stored, `{"PORT":"8080"}`)
+	require.Contains(t, stored, `"cpus":"1.5"`)
+	require.NoError(t, renderedRelease([]byte(template), containerView{Repo: defaultSandboxRepo, Config: stored}))
+	env, err := measuredEnvironment(stored)
+	require.NoError(t, err)
+	require.Equal(t, map[string]string{"SANDBOX_OWNER_PUBLIC_KEY": "owner-key", "NO_MONITOR": "", "PORT": "8080"}, env)
+
+	for _, test := range []struct {
+		name    string
+		change  releaseChange
+		message string
+	}{
+		{"changed literal", releaseChange{`{"PORT":"8080"}`, `{"PORT":"8081"}`}, "differs"},
+		{"changed decimal", releaseChange{`"cpus":"1.5"`, `"cpus":"2.5"`}, "differs"},
+		{"changed duration", releaseChange{`"drain_timeout":"5m"`, `"drain_timeout":"6m"`}, "differs"},
+		{"changed integer", releaseChange{`"memory":8192`, `"memory":8193`}, "differs"},
+		{"integer as text", releaseChange{`"memory":8192`, `"memory":"8192"`}, "differs"},
+		{"added member", releaseChange{`"memory":8192`, `"gpus":1,"memory":8192`}, "differs"},
+		{"removed member", releaseChange{`"drain_timeout":"5m",`, ``}, "differs"},
+		{"runtime variable for a literal", releaseChange{`{"PORT":"8080"}`, `"PORT"`}, "differs"},
+		{"parameter bound to a number", releaseChange{`"SANDBOX_OWNER_PUBLIC_KEY":"owner-key"`, `"SANDBOX_OWNER_PUBLIC_KEY":123`}, "explicit measured environment"},
+		{"volume size bound to a number", releaseChange{`"size":"64GB"`, `"size":64`}, "differs"},
+		{"environment entry with two names", releaseChange{`{"PORT":"8080"}`, `{"A":"1","PORT":"8080"}`}, "explicit measured environment"},
+		{"members out of order", releaseChange{`"name":"workspace","size":"64GB"`, `"size":"64GB","name":"workspace"`}, "canonical form"},
+		{"indented", releaseChange{`{"containers":`, "{\n  \"containers\":"}, "canonical form"},
+		{"null member", releaseChange{`"memory":8192`, `"memory":null`}, "null"},
+		{"repeated member", releaseChange{`"memory":8192`, `"memory":8192,"memory":8192`}, `"memory"`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			config := changedRelease(t, stored, test.change)
+			require.ErrorContains(t, renderedRelease([]byte(template), containerView{Repo: defaultSandboxRepo, Config: config}), test.message)
+		})
+	}
+
+	t.Run("template that has no JSON config", func(t *testing.T) {
+		ambiguous := changedRelease(t, template, releaseChange{"PORT: 8080", "PORT: 0x50"})
+		require.ErrorContains(t, renderedRelease([]byte(ambiguous), containerView{Repo: defaultSandboxRepo, Config: stored}), "translating the release template")
+	})
+	t.Run("template for an earlier version", func(t *testing.T) {
+		earlier := changedRelease(t, template, releaseChange{jsonConfigVersion, earlierConfigVersion})
+		require.ErrorContains(t, renderedRelease([]byte(earlier), containerView{Repo: defaultSandboxRepo, Config: stored}), "differs")
+	})
 }

@@ -4,12 +4,15 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"net/http"
 	"strings"
 
 	"github.com/tinfoilsh/tinfoil-cli/internal/selfupdate"
+	tinfoilconfig "github.com/tinfoilsh/tinfoil-config"
 	configendorsement "github.com/tinfoilsh/tinfoil-go/endorsement/config"
 	"github.com/tinfoilsh/tinfoil-go/verify"
 	"go.yaml.in/yaml/v3"
@@ -21,8 +24,8 @@ const (
 	releaseImageWorkflow    = "tinfoil-release.yml"
 	releaseImageRef         = "refs/heads/main"
 	releaseImageRegistry    = "ghcr.io/"
-	releaseDirectSettings   = "{cvm-network: {inbound-ports: [22]}}"
-	releaseCertProxyTLS     = "{shim: {tls-mode: cert-proxy}}"
+	releaseDirectSettings   = `{"cvm-network": {"inbound-ports": [22]}}`
+	releaseCertProxyTLS     = `{"shim": {"tls-mode": "cert-proxy"}}`
 	templateEnvPath         = "containers.env."
 	templateVolumeSizePath  = "volumes.size"
 )
@@ -98,6 +101,9 @@ func verifyRelease(row containerView) error {
 // with only its parameters bound.
 func renderedRelease(template []byte, row containerView) error {
 	env, err := measuredEnvironment(row.Config)
+	if err == nil && isJSONConfig([]byte(row.Config)) {
+		return renderedJSONRelease(template, row, env)
+	}
 	var want, got, direct, certProxy yaml.Node
 	if err := errors.Join(err, yaml.Unmarshal(template, &want), yaml.Unmarshal([]byte(row.Config), &got), yaml.Unmarshal([]byte(releaseDirectSettings), &direct), yaml.Unmarshal([]byte(releaseCertProxyTLS), &certProxy)); err != nil {
 		return err
@@ -113,6 +119,39 @@ func renderedRelease(template []byte, row containerView) error {
 		return errors.New("its config differs from the release template")
 	}
 	return nil
+}
+
+// renderedJSONRelease is renderedRelease for a row whose config is JSON. The
+// release template is YAML, so its translation is what the config must match.
+func renderedJSONRelease(template []byte, row containerView, env map[string]string) error {
+	translated, err := tinfoilconfig.ToJSON(template, tinfoilconfig.Options{})
+	if err != nil {
+		return fmt.Errorf("translating the release template: %w", err)
+	}
+	var want, got, direct, certProxy map[string]any
+	if err := errors.Join(json.Unmarshal(translated, &want), readJSONConfig(row.Config, &got), json.Unmarshal([]byte(releaseDirectSettings), &direct), json.Unmarshal([]byte(releaseCertProxyTLS), &certProxy)); err != nil {
+		return err
+	}
+	if row.Repo == defaultSandboxRepo && env["NO_MONITOR"] == "1" {
+		overlayJSON(want, direct)
+		// Bunkers created before the owner relay still carry cert-proxy.
+		if !renderedJSON(want, got, "") {
+			overlayJSON(want, certProxy)
+		}
+	}
+	if !renderedJSON(want, got, "") {
+		return errors.New("its config differs from the release template")
+	}
+	return nil
+}
+
+// readJSONConfig decodes a JSON config, which must be in its one byte form so
+// that no other reader takes its bytes differently.
+func readJSONConfig(raw string, out any) error {
+	if err := tinfoilconfig.CheckJSONForm([]byte(raw)); err != nil {
+		return fmt.Errorf("reading config: %w", err)
+	}
+	return json.Unmarshal([]byte(raw), out)
 }
 
 // rendered reports whether got is the template want with only its parameters bound.
@@ -136,6 +175,41 @@ func rendered(want, got *yaml.Node, path string) bool {
 	return true
 }
 
+// renderedJSON is rendered for the values of two JSON configs. Members are
+// matched by name, and a parameter is bound to a string.
+func renderedJSON(want, got any, path string) bool {
+	switch want := want.(type) {
+	case map[string]any:
+		got, ok := got.(map[string]any)
+		if !ok || len(want) != len(got) {
+			return false
+		}
+		for name, value := range want {
+			member, ok := got[name]
+			if !ok || !renderedJSON(value, member, strings.TrimPrefix(path+"."+name, ".")) {
+				return false
+			}
+		}
+		return true
+	case []any:
+		got, ok := got.([]any)
+		if !ok || len(want) != len(got) {
+			return false
+		}
+		for i, item := range want {
+			if !renderedJSON(item, got[i], path) {
+				return false
+			}
+		}
+		return true
+	case string:
+		got, ok := got.(string)
+		parameter := want == "" && strings.HasPrefix(path, templateEnvPath) || path == templateVolumeSizePath
+		return ok && (want == got || parameter)
+	}
+	return want == got
+}
+
 func overlay(node, patch *yaml.Node) {
 	if node.Kind != yaml.MappingNode || patch.Kind != yaml.MappingNode {
 		*node = *patch
@@ -154,12 +228,28 @@ func overlay(node, patch *yaml.Node) {
 	}
 }
 
+// overlayJSON is overlay for the values of JSON configs.
+func overlayJSON(node, patch map[string]any) {
+	for name, value := range patch {
+		existing, mapping := node[name].(map[string]any)
+		members, merge := value.(map[string]any)
+		if mapping && merge {
+			overlayJSON(existing, members)
+		} else {
+			node[name] = value
+		}
+	}
+}
+
 func missingContainer(err error) bool {
 	var missing *cpError
 	return errors.As(err, &missing) && missing.Status == http.StatusNotFound
 }
 
 func measuredEnvironment(raw string) (map[string]string, error) {
+	if isJSONConfig([]byte(raw)) {
+		return measuredJSONEnvironment(raw)
+	}
 	var config struct{ Containers []struct{ Env []yaml.Node } }
 	if err := yaml.Unmarshal([]byte(raw), &config); err != nil {
 		return nil, err
@@ -178,6 +268,38 @@ func measuredEnvironment(raw string) (map[string]string, error) {
 				return nil, fmt.Errorf("workload environment %s is ambiguous", name)
 			}
 			values[name] = value
+		}
+	}
+	return values, nil
+}
+
+// measuredJSONEnvironment is measuredEnvironment for a JSON config, whose
+// literal values are the text a container receives.
+func measuredJSONEnvironment(raw string) (map[string]string, error) {
+	var config struct {
+		Containers []struct {
+			Env []jsontext.Value `json:"env"`
+		} `json:"containers"`
+	}
+	if err := readJSONConfig(raw, &config); err != nil {
+		return nil, err
+	}
+	values := map[string]string{}
+	for _, container := range config.Containers {
+		for _, entry := range container.Env {
+			if entry.Kind() == jsontext.KindString {
+				continue
+			}
+			var mapping map[string]string
+			if json.Unmarshal(entry, &mapping) != nil || len(mapping) != 1 {
+				return nil, errors.New("workload requires explicit measured environment mappings")
+			}
+			for name, value := range mapping {
+				if _, seen := values[name]; seen {
+					return nil, fmt.Errorf("workload environment %s is ambiguous", name)
+				}
+				values[name] = value
+			}
 		}
 	}
 	return values, nil
