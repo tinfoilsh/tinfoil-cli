@@ -25,6 +25,8 @@ const (
 	monitorJumpSuffix  = owner.MonitorJumpSuffix
 	// Controlplane gives a new sandbox this workspace size when none is chosen.
 	defaultWorkspaceSizeGB = 16
+	// mbPerGB converts a bunker's memory in GB to the MB Controlplane measures.
+	mbPerGB = 1024
 	// sandboxWorkspaceSlot is the volume mount that holds a sandbox's workspace.
 	sandboxWorkspaceSlot = owner.SandboxWorkspaceSlot
 )

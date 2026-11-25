@@ -202,7 +202,7 @@ func newMonitorDeleteCmd(newScope scopeClientFactory) *cobra.Command {
 
 func newManagedCreateCmd(pollingOpts *pollingOptions, newScope scopeClientFactory, identityOpts *identityOptions, outputOpts *outputOptions, waitOpts *waitOptions, kind string) *cobra.Command {
 	var tag, publicKey, monitor, workspace string
-	var workspaceSize int
+	var workspaceSize, cpus, memoryGB int
 	var noPerimeter bool
 	cmd := &cobra.Command{
 		Use: "create NAME", Short: "Create a confidential " + kind + " and follow its deployment", Args: cobra.ExactArgs(1),
@@ -254,6 +254,12 @@ with those, storage keys are created on first open and kept only on that machine
 				if sizeChosen {
 					body["workspace_size_gb"] = workspaceSize
 				}
+				if cmd.Flags().Changed("cpus") {
+					body["cpus"] = cpus
+				}
+				if cmd.Flags().Changed("memory") {
+					body["memory_mb"] = memoryGB * mbPerGB
+				}
 			} else {
 				body["object_storage"] = map[string]any{}
 			}
@@ -281,6 +287,8 @@ with those, storage keys are created on first open and kept only on that machine
 		cmd.MarkFlagsMutuallyExclusive("perimeter", "no-perimeter")
 		cmd.Flags().StringVar(&workspace, "workspace", "", "Reuse an unattached workspace volume by name or ID")
 		cmd.Flags().IntVar(&workspaceSize, "workspace-size", 0, fmt.Sprintf("New workspace volume size in GB: %s (default %d)", workspaceSizeChoices(""), defaultWorkspaceSizeGB))
+		cmd.Flags().IntVar(&cpus, "cpus", 0, "vCPUs, from the sizes Tinfoil allows (default: the release's)")
+		cmd.Flags().IntVar(&memoryGB, "memory", 0, "Memory in GB, from the sizes Tinfoil allows (default: the release's)")
 	}
 	return cmd
 }
