@@ -19,6 +19,10 @@ import (
 // when no container record names a port.
 const defaultSSHPort = 22
 
+// configReportedFlag is the hidden forward flag that ssh and scp pass to their
+// proxy after they have reported a translated config themselves.
+const configReportedFlag = "config-reported"
+
 // Well inside the shim's tunnel idle timeout, and how a dead path gets noticed.
 const sshServerAliveInterval = 60 * time.Second
 
@@ -165,11 +169,15 @@ func proxyCommand(rootOpts *rootOptions, tunnelOpts *tunnelOptions, target *tunn
 		argv = append(argv, "--public-registry")
 	}
 	if rootOpts.localConfigFile != "" {
+		// The proxy stays silent about a config it translates, so read it here.
+		if _, err := readLocalConfig(rootOpts); err != nil {
+			return "", err
+		}
 		path, err := filepath.Abs(rootOpts.localConfigFile)
 		if err != nil {
 			return "", fmt.Errorf("locating local config: %w", err)
 		}
-		argv = append(argv, "--config", path)
+		argv = append(argv, "--config", path, "--"+configReportedFlag)
 	}
 	if target.sealedTo != "" {
 		argv = append(argv, "--sealed-to", target.sealedTo)

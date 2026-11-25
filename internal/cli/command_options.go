@@ -92,6 +92,9 @@ type forwardOptions struct {
 	forwardPorts    []string
 	forwardSealedTo string
 	forwardStdio    uint
+	// configReported is set by ssh and scp, which report a translated config
+	// before they start this command as their proxy.
+	configReported bool
 }
 
 type headersOptions struct {
@@ -183,6 +186,7 @@ type rootOptions struct {
 	enclaveHost      string
 	localConfigBytes []byte
 	localConfigFile  string
+	notices          func() io.Writer
 	project          string
 	publicRegistry   bool
 	repo             string

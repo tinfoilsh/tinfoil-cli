@@ -123,6 +123,7 @@ func newRootCommandWithDependencies(dependencies commandDependencies) *cobra.Com
 	}
 	cmd.SetErr(dependencies.err)
 	rootOpts.registryOrigin = func() (string, error) { return accounts.registryControlplaneURL(commandStreams(cmd)) }
+	rootOpts.notices = cmd.ErrOrStderr
 	cmd.PersistentFlags().StringVar(&rootOpts.localConfigFile, "config", "", "Local config file to launch or trust for verification")
 	cmd.PersistentFlags().BoolVar(&rootOpts.publicRegistry, "public-registry", false, "Require public configs, even when a private registry is trusted")
 	cmd.MarkFlagsMutuallyExclusive("config", "public-registry")

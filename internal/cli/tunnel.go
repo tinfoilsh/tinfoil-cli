@@ -72,6 +72,9 @@ A hostname target needs --repo, --project or --config to select the expected wor
 			if len(args) == 1 {
 				identifier = args[0]
 			}
+			if forwardOpts.configReported {
+				rootOpts.notices = nil
+			}
 			target, err := resolveTunnelTarget(newClient, commandStreams(cmd), forwardOpts, rootOpts, trustOpts, identifier)
 			if err != nil {
 				return err
@@ -100,6 +103,8 @@ A hostname target needs --repo, --project or --config to select the expected wor
 	forwardCmd.Flags().UintVar(&forwardOpts.forwardStdio, "stdio", 0, "Pipe a single stream to <enclave-port> over stdin/stdout instead of listening")
 	forwardCmd.Flags().StringVar(&forwardOpts.forwardSealedTo, "sealed-to", "", "RTMR3 the enclave must carry")
 	forwardCmd.Flags().MarkHidden("sealed-to")
+	forwardCmd.Flags().BoolVar(&forwardOpts.configReported, configReportedFlag, false, "The caller has reported the translated config")
+	forwardCmd.Flags().MarkHidden(configReportedFlag)
 	addTunnelFlags(trustOpts, tunnelOpts, forwardCmd)
 	return forwardCmd
 }

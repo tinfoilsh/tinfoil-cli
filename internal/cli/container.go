@@ -56,6 +56,7 @@ func newContainerCommand(pollingOpts *pollingOptions, newClient authenticatedCli
 	containerCmd.AddCommand(newContainerMetricsCommand(newClient, &containerMetricsOptions{}))
 	containerCmd.AddCommand(newContainerHostsCommand(newClient, outputOpts))
 	containerCmd.AddCommand(newContainerConnectCommand(newClient, &containerConnectOptions{}, &proxyOptions{}, rootOpts, &trustOptions{}))
+	containerCmd.AddCommand(newContainerConfigCommand())
 	return containerCmd
 }
 

@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	tinfoilconfig "github.com/tinfoilsh/tinfoil-config"
 	"github.com/tinfoilsh/tinfoil-go/verify"
 )
 
@@ -194,4 +196,235 @@ func TestSSHProxyPreservesLocalConfigPath(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, data, forwarded)
 	require.NotContains(t, args, "--repo")
+}
+
+const (
+	// earlierConfigVersion is the last cvm-version whose config stays YAML.
+	earlierConfigVersion = "0.15.5-rc.0"
+	jsonConfigImage      = "ghcr.io/acme/app@sha256:" + registryConfigDigest
+)
+
+var jsonConfigVersion = strings.TrimPrefix(tinfoilconfig.JSONConfigMinVersion, "v")
+
+// yamlConfigFixture is a config as a person writes it, pinning version.
+func yamlConfigFixture(version string) string {
+	return `# Written by hand.
+cvm-version: ` + version + `@sha256:` + registryConfigDigest + `
+cpus: 2
+memory: 2048
+containers:
+  - name: app
+    image: "` + jsonConfigImage + `"
+    cpus: 1.5
+    env:
+      - PORT: 8080
+shim:
+  upstream-port: 8080
+`
+}
+
+// jsonConfigFixture is the JSON config of yamlConfigFixture(version).
+func jsonConfigFixture(version string) string {
+	return `{"containers":[{"cpus":"1.5","env":[{"PORT":"8080"}],"image":"` + jsonConfigImage + `","name":"app"}],"cpus":2,"cvm-version":"` + version + `@sha256:` + registryConfigDigest + `","memory":2048,"shim":{"upstream-port":8080}}`
+}
+
+// indentedConfigFixture is jsonConfigFixture(version) as an editor saves it.
+func indentedConfigFixture(version string) string {
+	return "{\n\t\"shim\": {\"upstream-port\": 8080},\n\t\"memory\": 2048,\n\t\"cvm-version\": \"" + version + "@sha256:" + registryConfigDigest + "\",\n\t\"cpus\": 2,\n" +
+		"\t\"containers\": [{\"name\": \"app\", \"image\": \"" + jsonConfigImage + "\", \"cpus\": \"1.5\", \"env\": [{\"PORT\": \"8080\"}]}]\n}\n"
+}
+
+func writeLocalConfig(t *testing.T, content string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "tinfoil-config.yml")
+	require.NoError(t, os.WriteFile(path, []byte(content), 0600))
+	return path
+}
+
+func translationNotice(path, config string) string {
+	return "Translated " + path + " to its JSON config, sha256:" + storageHash([]byte(config)) + "\n"
+}
+
+func TestLocalConfigIsReadAsItsJSONConfig(t *testing.T) {
+	want := jsonConfigFixture(jsonConfigVersion)
+	for _, test := range []struct {
+		name       string
+		file       string
+		want       string
+		translated bool
+	}{
+		{name: "YAML at the first JSON version", file: yamlConfigFixture(jsonConfigVersion), want: want, translated: true},
+		{name: "JSON config", file: want, want: want},
+		{name: "JSON in another form", file: indentedConfigFixture(jsonConfigVersion), want: want, translated: true},
+		{name: "YAML before the first JSON version", file: yamlConfigFixture(earlierConfigVersion), want: yamlConfigFixture(earlierConfigVersion)},
+		{name: "JSON before the first JSON version", file: indentedConfigFixture(earlierConfigVersion), want: indentedConfigFixture(earlierConfigVersion)},
+		{name: "earlier YAML that the config library refuses", file: yamlConfigFixture(earlierConfigVersion) + "unknown: 1\n", want: yamlConfigFixture(earlierConfigVersion) + "unknown: 1\n"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var notices bytes.Buffer
+			rootOpts := &rootOptions{localConfigFile: writeLocalConfig(t, test.file), notices: func() io.Writer { return &notices }}
+			data, err := readLocalConfig(rootOpts)
+			require.NoError(t, err)
+			require.Equal(t, test.want, string(data))
+
+			// The digest check and the embedded config both use the JSON config.
+			require.NoError(t, checkLocalConfigDigest(rootOpts, storageHash([]byte(test.want))))
+			input, err := verificationInput(rootOpts, verify.Pin{}, "")
+			require.NoError(t, err)
+			require.Equal(t, test.want, string(input.Config.Bytes()))
+			_, err = input.Options()
+			require.NoError(t, err)
+			if test.translated {
+				require.ErrorContains(t, checkLocalConfigDigest(rootOpts, storageHash([]byte(test.file))), "does not match")
+				require.Equal(t, translationNotice(rootOpts.localConfigFile, test.want), notices.String())
+			} else {
+				require.Empty(t, notices.String())
+			}
+		})
+	}
+}
+
+func TestLocalConfigRejectsWhatHasNoJSONConfig(t *testing.T) {
+	source, config := yamlConfigFixture(jsonConfigVersion), jsonConfigFixture(jsonConfigVersion)
+	for name, file := range map[string]string{
+		"unknown field":      source + "unknown: 1\n",
+		"malformed YAML":     source + "containers: [\n",
+		"ambiguous value":    strings.Replace(source, "PORT: 8080", "PORT: 0x50", 1),
+		"JSON fraction":      strings.Replace(config, `"cpus":2`, `"cpus":2.5`, 1),
+		"JSON null":          strings.Replace(config, `"memory":2048`, `"memory":null`, 1),
+		"JSON unknown field": strings.Replace(config, `"memory"`, `"unknown"`, 1),
+	} {
+		t.Run(name, func(t *testing.T) {
+			var notices bytes.Buffer
+			rootOpts := &rootOptions{localConfigFile: writeLocalConfig(t, file), notices: func() io.Writer { return &notices }}
+			_, err := readLocalConfig(rootOpts)
+			require.ErrorContains(t, err, "invalid config "+rootOpts.localConfigFile)
+			require.ErrorContains(t, checkLocalConfigDigest(rootOpts, storageHash([]byte(file))), "invalid config")
+			_, err = verificationInput(rootOpts, verify.Pin{}, "")
+			require.ErrorContains(t, err, "invalid config")
+			require.Empty(t, notices.String())
+		})
+	}
+}
+
+func TestCreateLocalConfigSendsItsJSONConfig(t *testing.T) {
+	commandState := newCommandFixture()
+
+	want := jsonConfigFixture(jsonConfigVersion)
+	for _, test := range []struct {
+		name       string
+		file       string
+		want       string
+		translated bool
+	}{
+		{name: "YAML at the first JSON version", file: yamlConfigFixture(jsonConfigVersion), want: want, translated: true},
+		{name: "JSON config", file: want, want: want},
+		{name: "JSON in another form", file: indentedConfigFixture(jsonConfigVersion), want: want, translated: true},
+		{name: "YAML before the first JSON version", file: yamlConfigFixture(earlierConfigVersion), want: yamlConfigFixture(earlierConfigVersion)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			path := writeLocalConfig(t, test.file)
+			var sent []any
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var body map[string]any
+				if !assert.NoError(t, json.NewDecoder(r.Body).Decode(&body)) {
+					return
+				}
+				sent = append(sent, body["config"])
+				io.WriteString(w, `{"id":"`+testContainerID+`","name":"app","source":"local","status":"deploying"}`)
+			}))
+			defer server.Close()
+			configureContainerPromotionTest(commandState, t, server.URL)
+			commandState.containerCreateOpts.createRepo, commandState.containerCreateOpts.createTag = "", ""
+			stderr, err := captureTestStderr(func() error {
+				_, err := captureTestStdout(func() error {
+					return executeLifecycleCLI(commandState, t, "container", "create", "app", "--config", path, "--no-wait")
+				})
+				return err
+			})
+			require.NoError(t, err)
+			require.Equal(t, []any{base64.StdEncoding.EncodeToString([]byte(test.want))}, sent)
+			if test.translated {
+				require.Equal(t, 1, strings.Count(string(stderr), translationNotice(path, test.want)))
+			} else {
+				require.NotContains(t, string(stderr), "Translated")
+			}
+		})
+	}
+
+	t.Run("config with no JSON form", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			t.Errorf("unexpected API request: %s", r.URL)
+			w.WriteHeader(http.StatusInternalServerError)
+		}))
+		defer server.Close()
+		configureContainerPromotionTest(commandState, t, server.URL)
+		commandState.containerCreateOpts.createRepo, commandState.containerCreateOpts.createTag = "", ""
+		path := writeLocalConfig(t, yamlConfigFixture(jsonConfigVersion)+"unknown: 1\n")
+		require.ErrorContains(t, executeLifecycleCLI(commandState, t, "container", "create", "app", "--config", path, "--no-wait"), "invalid config "+path)
+	})
+}
+
+func TestSSHReportsATranslatedConfigOnce(t *testing.T) {
+	commandState := newCommandFixture()
+
+	configureContainerPromotionTest(commandState, t, "https://unused.example")
+	config := jsonConfigFixture(jsonConfigVersion)
+	path := writeLocalConfig(t, yamlConfigFixture(jsonConfigVersion))
+	var notices bytes.Buffer
+	rootOpts := &rootOptions{localConfigFile: path, notices: func() io.Writer { return &notices }}
+	_, err := proxyCommand(rootOpts, &tunnelOptions{}, &tunnelTarget{host: "app.example.com"}, defaultSSHPort)
+	require.NoError(t, err)
+	require.Equal(t, translationNotice(path, config), notices.String())
+
+	// An invalid register stops each command after it reads the config and
+	// before it dials the enclave.
+	forward := func(mode ...string) string {
+		stderr, err := captureTestStderr(func() error {
+			return executeLifecycleCLI(commandState, t, append([]string{"forward", "--enclave", "app.example.com", "--config", path, "--sealed-to", "invalid"}, mode...)...)
+		})
+		require.Error(t, err)
+		return string(stderr)
+	}
+	require.NotContains(t, forward("--stdio", "22", "--"+configReportedFlag), "Translated")
+	require.Contains(t, forward("--stdio", "22"), translationNotice(path, config))
+	require.Contains(t, forward("--local", "8022:22"), translationNotice(path, config))
+}
+
+func TestContainerConfigPrintsTheJSONConfig(t *testing.T) {
+	commandState := newCommandFixture()
+
+	want := jsonConfigFixture(jsonConfigVersion)
+	run := func(t *testing.T, file string) (stdout, stderr string, err error) {
+		path := writeLocalConfig(t, file)
+		diagnostics, err := captureTestStderr(func() error {
+			output, err := captureTestStdout(func() error { return executeLifecycleCLI(commandState, t, "container", "config", path) })
+			stdout = string(output)
+			return err
+		})
+		return stdout, string(diagnostics), err
+	}
+	for name, file := range map[string]string{
+		"YAML at the first JSON version": yamlConfigFixture(jsonConfigVersion),
+		"JSON config":                    want,
+		"JSON in another form":           indentedConfigFixture(jsonConfigVersion),
+	} {
+		t.Run(name, func(t *testing.T) {
+			stdout, stderr, err := run(t, file)
+			require.NoError(t, err)
+			require.Equal(t, want, stdout)
+			require.Equal(t, "sha256:"+storageHash([]byte(want))+"\n", stderr)
+		})
+	}
+	for name, test := range map[string]struct{ file, message string }{
+		"YAML before the first JSON version": {yamlConfigFixture(earlierConfigVersion), "has no JSON config"},
+		"JSON before the first JSON version": {jsonConfigFixture(earlierConfigVersion), "has no JSON config"},
+		"YAML with no JSON form":             {yamlConfigFixture(jsonConfigVersion) + "unknown: 1\n", "invalid config"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			stdout, _, err := run(t, test.file)
+			require.ErrorContains(t, err, test.message)
+			require.Empty(t, stdout)
+		})
+	}
 }
