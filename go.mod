@@ -17,7 +17,7 @@ require (
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/pflag v1.0.10
 	github.com/stretchr/testify v1.11.1
-	github.com/tinfoilsh/tinfoil-config v0.2.1
+	github.com/tinfoilsh/tinfoil-config v0.3.0
 	github.com/tinfoilsh/tinfoil-go v0.17.0-rc.11
 	github.com/zalando/go-keyring v0.2.8
 	go.yaml.in/yaml/v3 v3.0.4
